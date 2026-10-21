@@ -223,6 +223,18 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // The custom-time dialog's moment, as a `time_t` value (date and time
     // together).
     "e_date_edit_get_time",
+    // The info bar after a collection delete: an alert with an Undo button and
+    // a timer, shown in the content of the shell view.
+    "e_alert_new",
+    "e_alert_set_primary_text",
+    "e_alert_add_widget",
+    "e_alert_start_timer",
+    "e_alert_response",
+    "e_alert_get_type",
+    "e_alert_sink_get_type",
+    "e_alert_sink_submit_alert",
+    // Only for `tests/alert.rs`: the shell content is the sink of the alert.
+    "e_shell_content_get_type",
 ];
 
 /// The GTK calls, named one at a time instead of by prefix. A prefix like
@@ -321,6 +333,10 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_combo_box_text_get_type",
     "gtk_text_view_get_type",
     "gtk_text_buffer_get_type",
+    // The Undo button of the info bar after a collection delete.
+    "gtk_button_new_with_mnemonic",
+    "gtk_button_get_type",
+    "gtk_widget_show",
 ];
 
 /// Types that already exist in eds-sys. This crate must not generate them a
@@ -439,6 +455,8 @@ const BLOCKED_EVO_TYPES: &[&str] = &[
     "_?EUIActionGroup",
     // A `GtkHBox` subclass.
     "_?EDateEdit[A-Za-z]*",
+    // The alert and the interface of its sink, reached only as pointers.
+    "_?EAlert[A-Za-z]*",
     // The object an `EConfigLookupWorker` registers against. No wildcard
     // tail, so `EConfigLookupWorker` and
     // `EConfigLookupResult`/`EConfigLookupResultSimple` stay generatable.
@@ -504,6 +522,9 @@ const EVO_HANDLES: &[&str] = &[
     "EUIActionGroup",
     // The vacation page's date fields.
     "EDateEdit",
+    // The info bar after a collection delete.
+    "EAlert",
+    "EAlertSink",
 ];
 
 /// The GTK classes the calls above mention, as opaque handles. Each is one
@@ -534,6 +555,8 @@ const GTK_HANDLES: &[&str] = &[
     "GtkMessageDialog",
     "GtkDialog",
     "GtkWindow",
+    // The Undo button of the info bar after a collection delete.
+    "GtkButton",
 ];
 
 fn main() {
@@ -668,7 +691,9 @@ fn main() {
         .raw_line("pub const GTK_BUTTONS_CLOSE: GtkButtonsType = 2;")
         // `gtk_dialog_run`'s answer, for the custom-time dialog.
         .raw_line("pub const GTK_RESPONSE_OK: ::std::os::raw::c_int = -5;")
-        .raw_line("pub const GTK_RESPONSE_CANCEL: ::std::os::raw::c_int = -6;");
+        .raw_line("pub const GTK_RESPONSE_CANCEL: ::std::os::raw::c_int = -6;")
+        // The response that closes an alert in the info bar.
+        .raw_line("pub const GTK_RESPONSE_CLOSE: ::std::os::raw::c_int = -7;");
 
     // Evolution's handles need the struct tag as well as the typedef. A
     // blocklisted `EMailConfigServicePage` comes through as

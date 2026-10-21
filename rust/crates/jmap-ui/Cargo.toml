@@ -3,7 +3,7 @@
 
 [package]
 name = "jmap-ui"
-description = "JMAP-only features in Evolution's UI: vacation, scheduled send, snooze"
+description = "JMAP-only features in Evolution's UI: vacation, scheduled send, snooze, undo of a delete"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -29,12 +29,15 @@ eds-sys = { workspace = true }
 # the eds-sys types, through the re-export of that crate.
 evo-sys = { workspace = true }
 evolution-jmap-client = { workspace = true }
+# The undo window of a collection delete, and its due time on the source.
+evolution-jmap-collection-sync = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 # GTask (the async submit pair) and GCancellable.
 gio-sys = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
+jmap-config = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 

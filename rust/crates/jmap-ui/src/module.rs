@@ -17,7 +17,7 @@ use jmap_backend_core::i18n::bind;
 use jmap_backend_core::subclass::register_dynamic;
 use jmap_backend_core::trampoline::guard;
 
-use crate::{send_later, snooze, vacation};
+use crate::{send_later, snooze, undo_delete, vacation};
 
 /// Register the types of this crate against `type_module`.
 ///
@@ -46,8 +46,11 @@ pub unsafe fn load(type_module: *mut GTypeModule) {
             register_dynamic::<send_later::extension::JmapSendLaterExtension>(type_module);
             register_dynamic::<snooze::shell_ext::JmapSnoozeShellExtension>(type_module);
             register_dynamic::<snooze::browser_ext::JmapSnoozeBrowserExtension>(type_module);
+            register_dynamic::<undo_delete::shell_ext::JmapUndoDeleteShellExtension>(type_module);
         }
-        tracing::trace!("jmap-ui loaded: vacation, scheduled send and snooze registered");
+        tracing::trace!(
+            "jmap-ui loaded: vacation, scheduled send, snooze and undo of a delete registered"
+        );
     });
 }
 

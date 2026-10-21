@@ -70,5 +70,7 @@ rust/crates/jmap-ui/src/send_later/extension.rs
 rust/crates/jmap-ui/src/send_later/schedule.rs
 rust/crates/jmap-ui/src/send_later/submit.rs
 rust/crates/jmap-ui/src/snooze/action.rs
+rust/crates/jmap-ui/src/undo_delete/notice.rs
+rust/crates/jmap-ui/src/undo_delete/shell_ext.rs
 rust/crates/jmap-ui/src/vacation/form.rs
 rust/crates/jmap-ui/src/vacation/page.rs
