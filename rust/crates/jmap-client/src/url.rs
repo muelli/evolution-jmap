@@ -124,11 +124,54 @@ pub(crate) fn same_origin(a: &str, b: &str) -> bool {
 
 /// Whether a redirect from `current` to `next` leaves TLS behind.
 pub(crate) fn downgrades(current: &str, next: &str) -> bool {
-    let on_tls = |url: &str| {
-        url.get(..8)
-            .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
-    };
     on_tls(current) && !on_tls(next)
+}
+
+/// Whether `url` uses TLS.
+fn on_tls(url: &str) -> bool {
+    url.get(..8)
+        .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+}
+
+/// Whether the host of `url` is a loopback name or address.
+///
+/// The authority ends at the first `/`, `?`, `#` or `\`, and the host follows the last `@`, as in the WHATWG URL parser.
+/// A host that this function cannot read is not loopback.
+pub(crate) fn is_loopback(url: &str) -> bool {
+    let Some(scheme_end) = url.find("://") else {
+        return false;
+    };
+    let rest = &url[scheme_end + 3..];
+    let authority = &rest[..rest.find(['/', '?', '#', '\\']).unwrap_or(rest.len())];
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let host = match host_port.strip_prefix('[') {
+        Some(bracketed) => match bracketed.find(']') {
+            Some(end) => &bracketed[..end],
+            None => return false,
+        },
+        None => &host_port[..host_port.rfind(':').unwrap_or(host_port.len())],
+    };
+    let host = host.strip_suffix('.').unwrap_or(host);
+    if host.eq_ignore_ascii_case("localhost") || host.eq_ignore_ascii_case("localhost.localdomain")
+    {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(address) => address.is_loopback(),
+        Err(_) => false,
+    }
+}
+
+/// Whether a session endpoint may receive the credentials of `session_url`.
+///
+/// The endpoint must use TLS or a loopback host.
+/// A plain-http endpoint is also accepted on the origin of a plain-http `session_url`: the account settings already accepted that origin.
+/// An empty endpoint names no endpoint.
+pub(crate) fn may_carry_credentials(session_url: &str, endpoint: &str) -> bool {
+    endpoint.is_empty()
+        || on_tls(endpoint)
+        || is_loopback(endpoint)
+        || (!on_tls(session_url) && same_origin(session_url, endpoint))
 }
 
 /// Resolves a redirect location against the current URL.
@@ -172,8 +215,53 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        downgrades, encode_template_value, origin_of, rebase_origin, resolve_redirect, same_origin,
+        downgrades, encode_template_value, is_loopback, may_carry_credentials, origin_of,
+        rebase_origin, resolve_redirect, same_origin,
     };
+
+    #[test]
+    fn only_a_loopback_host_is_loopback() {
+        for url in [
+            "http://localhost/jmap",
+            "http://LOCALHOST:8080/jmap",
+            "http://localhost./jmap",
+            "http://127.0.0.1:8080",
+            "http://127.9.9.9/jmap",
+            "http://[::1]:8080/jmap",
+            "http://user@127.0.0.1/jmap",
+        ] {
+            assert!(is_loopback(url), "{url} should be loopback");
+        }
+        for url in [
+            "http://evil.example#@127.0.0.1/",
+            "http://evil.example?@localhost/",
+            "http://evil.example\\@localhost/",
+            "http://localhost.example.net/",
+            "http://127.0.0.1.example.net/",
+            "http://localhost@evil.example/",
+            "http://10.0.0.5/jmap",
+            "http://[::1/jmap",
+            "localhost",
+        ] {
+            assert!(!is_loopback(url), "{url} should not be loopback");
+        }
+    }
+
+    #[test]
+    fn credentials_stay_on_tls_loopback_or_the_configured_plain_origin() {
+        let tls = "https://jmap.example.com/.well-known/jmap";
+        let plain = "http://jmap.example.com/.well-known/jmap";
+        assert!(may_carry_credentials(tls, "https://other.example.net/jmap"));
+        assert!(may_carry_credentials(tls, "http://127.0.0.1:9/jmap"));
+        assert!(may_carry_credentials(tls, ""));
+        assert!(!may_carry_credentials(tls, "http://jmap.example.com/jmap"));
+        assert!(may_carry_credentials(plain, "http://jmap.example.com/jmap"));
+        assert!(!may_carry_credentials(
+            plain,
+            "http://other.example.net/jmap"
+        ));
+        assert!(!may_carry_credentials(plain, "ftp://jmap.example.com/jmap"));
+    }
 
     #[test]
     fn unreserved_characters_pass_through() {
@@ -449,6 +537,11 @@ mod tests {
         #[test]
         fn same_origin_never_panics_on_hostile_input(a in ".*", b in ".*") {
             let _ = same_origin(&a, &b);
+        }
+
+        #[test]
+        fn is_loopback_never_panics_on_hostile_input(url in ".*") {
+            let _ = is_loopback(&url);
         }
 
         #[test]
