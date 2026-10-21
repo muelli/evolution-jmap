@@ -25,3 +25,10 @@ The `#[cfg(evolution_eui_manager)]` variant of `ui_definition` survives replaced
 with `Default::default()` on a 3.52 build, because that build does not compile
 it. On a 3.55+ build, `the_menu_definition_names_every_action` tests it. Out of
 scope on 3.52.
+
+## `src/snooze/action.rs`
+
+`warn_dialog` survives replaced with `()`. The function shows a modal GTK
+dialog and runs it until the user closes it. No test in this crate makes a
+widget, and a modal dialog blocks a test. Tests of `snooze_all` cover the
+error that goes into the dialog. Out of scope.

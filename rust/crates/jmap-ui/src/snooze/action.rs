@@ -791,3 +791,89 @@ pub(crate) unsafe fn reader_of_content(content: *mut EShellContent) -> *mut EMai
         view.cast()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use jmap_client::{Client, Credentials};
+    use jmap_mock::MockServer;
+    use jmap_proto::Id;
+    use jmap_proto::mail::{EmailImport, role};
+
+    use super::snooze_all;
+    use crate::link::AccountLink;
+    use crate::session_cache::AccountFeatures;
+
+    const UNTIL: &str = "2026-01-02T08:00:00Z";
+
+    /// A link to `server` and the ids of `count` messages in its inbox.
+    fn seeded(server: &MockServer, count: usize) -> (AccountLink, Vec<String>) {
+        let account_id = server.account_id();
+        let inbox = {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            account.seed_mailbox("Inbox", Some(role::INBOX))
+        };
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let uids = (0..count)
+            .map(|n| {
+                let message = format!("From: a@example.com\r\nSubject: {n}\r\n\r\nHi\r\n");
+                let upload = client
+                    .upload_blob(&account_id, "message/rfc822", message.into_bytes())
+                    .unwrap();
+                let import = EmailImport::new(upload.blob_id, inbox.clone());
+                let imported = client.email_import(&account_id, &import).unwrap();
+                imported.id.unwrap().to_string()
+            })
+            .collect();
+        let features = AccountFeatures::from_session(client.session()).unwrap();
+        (AccountLink::without_refresh(client, features), uids)
+    }
+
+    /// The mailbox ids of each message, in the order of `uids`.
+    fn mailboxes_of(server: &MockServer, uids: &[String]) -> Vec<Vec<Id>> {
+        let state = server.state();
+        let state = state.lock().unwrap();
+        let account = state.account(&server.account_id()).unwrap();
+        uids.iter()
+            .map(|uid| {
+                let email = account.emails.get(&Id::new(uid.clone())).unwrap();
+                email
+                    .mailbox_ids
+                    .as_ref()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_selected_message_moves_to_the_snoozed_mailbox() {
+        let server = MockServer::builder().snooze_extension().start();
+        let (link, uids) = seeded(&server, 2);
+
+        assert_eq!(snooze_all(&link, &uids, UNTIL), Ok(2));
+
+        let snoozed = link
+            .client
+            .snoozed_mailbox(&server.account_id())
+            .unwrap()
+            .id
+            .unwrap();
+        for mailboxes in mailboxes_of(&server, &uids) {
+            assert_eq!(mailboxes, vec![snoozed.clone()]);
+        }
+    }
+
+    #[test]
+    fn a_server_without_the_extension_refuses_and_moves_nothing() {
+        let server = MockServer::builder().start();
+        let (link, uids) = seeded(&server, 1);
+        let before = mailboxes_of(&server, &uids);
+
+        assert!(snooze_all(&link, &uids, UNTIL).is_err());
+        assert_eq!(mailboxes_of(&server, &uids), before);
+    }
+}
