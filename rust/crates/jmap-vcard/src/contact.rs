@@ -1679,10 +1679,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 notes.insert(entry_key(entry, "n", &notes), note);
             }
             "URL" | X_EVOLUTION_BLOG_URL | X_EVOLUTION_VIDEO_URL => {
-                // Read as one value, which is what calcard makes of a URI:
-                // neither the comma nor the semicolon inside it separates
-                // anything, so a query string listing tags arrives as the URI
-                // the line stated rather than as a fragment of it.
+                // Read URI text as one value.
+                // `calcard` does not split URI commas or semicolons.
+                // Query tags stay inside the URI the line states.
                 let mut kind = if name_upper == "URL" {
                     None
                 } else if name_upper == X_EVOLUTION_BLOG_URL {
@@ -1766,8 +1765,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 media.insert(entry_key(entry, "m", &media), photo);
             }
-            // Keep every related-name line EDS shows so save does not drop it.
-            // Keys follow line text here, and this path ignores `X-JMAP-KEY`.
+            // Keep each related-name line EDS exposes, or save can drop it.
+            // This path keys by line text and ignores `X-JMAP-KEY`.
             X_EVOLUTION_SPOUSE
             | X_EVOLUTION_MANAGER
             | X_EVOLUTION_ASSISTANT
@@ -1918,10 +1917,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     }
                 }
             }
-            // This is one of the `X-` lines where EDS stores IM handles.
-            // Ignore lines for services this mapping does not state.
-            // Do not read `TYPE`: this slot name, not contexts, selects the
-            // service.
+            // EDS stores IM handles on these `X-` lines.
+            // Ignore services this mapping does not state.
+            // Do not read `TYPE`: this slot name selects the service.
             name => {
                 let Some(service) = service_of(name) else {
                     continue;
@@ -1942,7 +1940,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         }
     }
 
-    // Process `LABEL` after `ADR` so labels can attach to parsed addresses.
+    // Read `LABEL` after `ADR` so labels attach to parsed addresses.
     for entry in card
         .entries
         .iter()
@@ -2459,9 +2457,9 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
     let full = find("FN").map(entry_text).filter(|f| !f.is_empty());
     let fields = find("N").map(entry_components).unwrap_or_default();
 
-    // Each component reads only the kind and value that `N` states.
-    // RFC 9553 §2.2.1 `phonetic` data has no vCard 3.0 slot here, so the save
-    // path is responsible for restoring it on the right component.
+    // Read only the kind and value each `N` field states.
+    // RFC 9553 §2.2.1 `phonetic` data has no vCard 3.0 slot here.
+    // The save path restores it on the right component.
     let mut components = Vec::new();
     for (kind, index) in NAME_COMPONENTS {
         let Some(value) = fields.get(index).filter(|value| !value.is_empty()) else {
@@ -2480,8 +2478,9 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
         extra.insert("fileAs".to_string(), Value::String(file_as));
     }
 
-    // No FN, no usable N, and no fileAs means the card does not name anyone.
-    // Do not split FN to guess N fields. A wrong guess can be saved on the next write.
+    // No FN, no usable N, and no fileAs means the card names nobody.
+    // Do not split FN to guess N fields.
+    // A wrong guess can be saved on the next write.
     if full.is_none() && components.is_empty() && extra.is_empty() {
         return None;
     }
