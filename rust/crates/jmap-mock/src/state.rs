@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! In-memory mock server state.
-//! Keep typed objects per account, allocate ids, and track per-type counters.
+//! In-memory state for the mock server.
+//! Store typed objects per account, allocate ids, and track type counters.
 //! Keep an append-only change log.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,7 +18,7 @@ pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
-    /// Method names in call order, used for request-shape assertions.
+    /// Method names in call order for request-shape assertions.
     pub method_calls: Vec<String>,
     /// Authenticated API requests dispatched to method handlers.
     pub api_requests: usize,
@@ -30,11 +30,11 @@ pub struct ServerState {
     pub omit_primary_accounts: bool,
     /// Optional `maxCallsInRequest` at `/api`. `None` means unlimited.
     pub calls_in_request: Option<u64>,
-    /// Optional max ids per `/changes` response. `None` returns all ids.
+    /// Optional max ids in each `/changes` response. `None` returns all ids.
     pub changes_page_size: Option<u64>,
     /// Whether invalid `/changes` `sinceState` uses Stalwart-style `invalidArguments`.
     pub stalwart_shaped_unrecognized_changes_state: bool,
-    /// Optional `Email/get` ids limit; `None` uses [`crate::DEFAULT_OBJECTS_IN_GET`].
+    /// Optional `Email/get` id limit. `None` uses [`crate::DEFAULT_OBJECTS_IN_GET`].
     pub objects_in_get: Option<u64>,
     /// Optional max ids per `Email/query` page. `None` returns all ids.
     pub query_page_size: Option<u64>,
@@ -67,7 +67,7 @@ pub struct ServerState {
     /// If true, reject `sendSchedulingMessages` in `CalendarEvent/set` as unknown.
     /// See RFC 8620 section 3.9.
     pub without_scheduling: bool,
-    /// Whether collection create omits echoed `name` and keeps server values.
+    /// Whether collection create omits echoed `name` and keeps the server value.
     pub terse_collection_create: bool,
     /// Whether collection create omits `id` to model an RFC-violating server.
     pub id_omitting_collection_create: bool,
@@ -168,7 +168,7 @@ impl ServerState {
             .collect()
     }
 
-    /// Effective `maxObjectsInGet` for session advertisement and request checks.
+    /// Effective `maxObjectsInGet` for session output and request checks.
     pub fn objects_in_get(&self) -> u64 {
         self.objects_in_get.unwrap_or(crate::DEFAULT_OBJECTS_IN_GET)
     }
@@ -230,7 +230,7 @@ impl EventSourceHub {
 }
 
 /// Return `change` narrowed to `types`. `None` keeps all types.
-/// Returns `None` when no account has any matching type.
+/// Return `None` when no account has a matching type.
 fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<StateChange> {
     let Some(types) = types else {
         return Some(change.clone());
@@ -255,19 +255,19 @@ pub struct AccountState {
     pub name: String,
     pub mailboxes: Store<jmap_proto::mail::Mailbox>,
     pub emails: Store<jmap_proto::mail::Email>,
-    /// `Thread` objects (RFC 8621 §3), kept in lockstep with `emails`.
+    /// `Thread` objects (RFC 8621 §3), updated with `emails`.
     pub threads: Store<jmap_proto::mail::Thread>,
     pub identities: Store<jmap_proto::mail::Identity>,
     pub submissions: Store<jmap_proto::mail::EmailSubmission>,
     /// `VacationResponse` singleton (RFC 8621 §8.1), seeded as `"singleton"`.
     pub vacation_response: Store<jmap_proto::mail::VacationResponse>,
-    /// `Quota` objects (RFC 9425 §2), seeded once and read-only to clients.
+    /// `Quota` objects (RFC 9425 §2), seeded once and read only for clients.
     pub quotas: Store<jmap_proto::quota::Quota>,
     /// `SieveScript` objects (RFC 9661 §2.1), seeded empty.
     pub sieve_scripts: Store<jmap_proto::sieve::SieveScript>,
     /// Accepted `EmailSubmission` records for test assertions.
     pub outbox: Vec<RecordedSubmission>,
-    /// iTIP scheduling messages from `CalendarEvent/set`, kept for assertions.
+    /// iTIP scheduling messages from `CalendarEvent/set`, stored for assertions.
     pub scheduling_outbox: Vec<RecordedSchedulingMessage>,
     /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3), seeded in tests.
     pub participant_identities: Store<jmap_proto::calendars::ParticipantIdentity>,
@@ -397,7 +397,7 @@ pub enum ChangeKind {
     Destroyed,
 }
 
-/// One change-log entry: object `id` changed when state reached `state`.
+/// One change-log entry: object `id` changed at state `state`.
 #[derive(Debug, Clone)]
 pub struct Change {
     pub state: u64,
@@ -470,7 +470,7 @@ impl<T> Store<T> {
         id
     }
 
-    /// Insert under a caller-chosen id without touching state.
+    /// Insert under a caller-chosen id without a state bump.
     pub fn seed_with_id(&mut self, id: Id, value: T) {
         self.objects.insert(id, value);
     }
