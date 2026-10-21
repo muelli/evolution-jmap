@@ -9,7 +9,9 @@
 //!
 //! - a vacation autoresponder page in the account editor,
 //! - scheduled send in the composer,
-//! - snooze in the message list.
+//! - snooze in the message list,
+//! - an info bar with "Undo" after the delete of a calendar or an address
+//!   book.
 //!
 //! Evolution has no concept of these server features and no backend hook for
 //! them. Upstream, scheduled send is GNOME/evolution#411 and snooze is
@@ -30,4 +32,5 @@ pub mod module;
 pub mod send_later;
 pub mod session_cache;
 pub mod snooze;
+pub mod undo_delete;
 pub mod vacation;

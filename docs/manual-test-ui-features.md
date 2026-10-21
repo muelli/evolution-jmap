@@ -6,6 +6,7 @@ the `jmap-ui` extensions:
 - a vacation autoresponder page in the account editor
 - scheduled send in the composer
 - snooze in the context menu of the message list
+- an info bar with **Undo** after you delete a calendar or an address book
 
 Each test needs a running Evolution, the installed module and an account whose
 server offers the feature.
@@ -29,7 +30,9 @@ only where the server supports the feature.
 - Gate logic without a display (`jmap-ui/src/session_cache.rs`,
   `jmap-ui/src/send_later/schedule.rs`).
 - The FFI types that the widgets use (`evo-sys/tests/gtk.rs`,
-  `evo-sys/tests/layout.rs`).
+  `evo-sys/tests/alert.rs`, `evo-sys/tests/layout.rs`).
+- The text, the time and the undo of the info bar after a delete
+  (`jmap-ui/tests/undo_delete.rs`).
 - `docs/gui-smoke-test.md` checks that the controls are present against
   `jmap-mockd`.
 
@@ -105,3 +108,23 @@ decision.
    time. They return to the inbox at that time. The message window
    (double-click a message) has the same submenu.
 4. Check that the messages come back at the wake time.
+
+## Undo after a delete
+
+The registry does not destroy a deleted calendar or address book at once. It
+waits for one minute. In this time, an info bar shows the **Undo** button.
+
+1. In the Calendar view, right-click a JMAP calendar and click **Delete**.
+   Confirm the delete.
+2. The calendar disappears from the list. An info bar shows at the top of the
+   view: "Calendar "name" is deleted." For a calendar that another user shares
+   with you, the text says that it is deleted for all users who share it.
+3. Click **Undo**. The calendar comes back. The info bar closes.
+4. On the server (or in the web UI), check that the calendar is still there.
+   For a shared calendar, check it as the owner too.
+5. Delete the calendar again, and do not click **Undo**. After one minute, the
+   info bar closes. Check that the server no longer has the calendar.
+6. Do steps 1 to 5 again in the Contacts view, with a JMAP address book.
+7. Delete a calendar, then quit Evolution before the minute ends. Start
+   Evolution again. If the minute did not end, the info bar shows again with
+   the time that is left.

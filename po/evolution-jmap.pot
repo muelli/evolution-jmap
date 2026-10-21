@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-21 07:31+0000\n"
+"POT-Creation-Date: 2026-10-21 09:36+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -218,14 +218,14 @@ msgstr ""
 #. TRANSLATORS: shown when Evolution asks a JMAP account to
 #. delete something that is not one of the address books or
 #. calendars that account created.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:148
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:150
 msgid "this is not an address book or a calendar of this JMAP account"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
 #. the JMAP server behind an account offers no account of that
 #. kind at all, so the collection cannot be there to delete.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:159
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:161
 #, c-format
 msgid "this account's JMAP server has no %1$s to delete"
 msgstr ""
@@ -233,7 +233,7 @@ msgstr ""
 #. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
 #. the user deletes a JMAP address book or calendar that someone
 #. shared with them, and that person no longer shares it.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:166
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:168
 #, c-format
 msgid ""
 "this %1$s is no longer shared with this JMAP account, so it cannot be deleted"
@@ -242,7 +242,7 @@ msgstr ""
 #. TRANSLATORS: %1$s is a developer-facing reason from Evolution
 #. Data Server. Shown when the collection was deleted on the
 #. server and the local source describing it stayed behind.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:178
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:180
 #, c-format
 msgid ""
 "the collection was deleted on the server, but the source for it could not be "
@@ -635,6 +635,54 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/snooze/action.rs:706
 msgid "the server named no id for the snoozed mailbox"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the name of the calendar.
+#: rust/crates/jmap-ui/src/undo_delete/notice.rs:90
+#: rust/crates/jmap-ui/src/undo_delete/notice.rs:97
+#, c-format
+msgid "Calendar \"%1$s\" is deleted."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/undo_delete/notice.rs:92
+msgid ""
+"The calendar is deleted for all users who share it. To keep it, click Undo "
+"before this message closes."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/undo_delete/notice.rs:99
+msgid ""
+"The calendar is deleted on the server. To keep it, click Undo before this "
+"message closes."
+msgstr ""
+
+#. TRANSLATORS: %1$s is the name of the address book.
+#: rust/crates/jmap-ui/src/undo_delete/notice.rs:104
+#: rust/crates/jmap-ui/src/undo_delete/notice.rs:111
+#, c-format
+msgid "Address book \"%1$s\" is deleted."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/undo_delete/notice.rs:106
+msgid ""
+"The address book is deleted for all users who share it. To keep it, click "
+"Undo before this message closes."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/undo_delete/notice.rs:113
+msgid ""
+"The address book is deleted on the server. To keep it, click Undo before "
+"this message closes."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:279
+msgid "_Undo"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the reason from the registry.
+#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:353
+#, c-format
+msgid "The delete could not be undone: %1$s"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/vacation/form.rs:28
