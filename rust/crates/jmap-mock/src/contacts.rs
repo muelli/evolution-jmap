@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Contact methods (`AddressBook/get`, `ContactCard/get|set|query`,
-//! RFC 9610) and contact seeding helpers.
+//! Implement contact methods (`AddressBook/get`, `ContactCard/get|set|query`,
+//! RFC 9610) and contact seed helpers.
 
 use std::collections::BTreeMap;
 
@@ -19,7 +19,7 @@ use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
 
 /// `caller` comes from [`crate::auth::AuthConfig::identity_for`].
-/// `None` means owner access. Non-owners only see shared books.
+/// `None` means owner access. Non-owners see only shared books.
 pub fn address_book_get(
     state: &mut ServerState,
     arguments: Value,
@@ -73,7 +73,7 @@ pub fn address_book_get(
     })
 }
 
-/// Return the rights that `book.share_with` grants to `principal`.
+/// Return rights that `book.share_with` grants to `principal`.
 fn book_rights_for(
     book: &AddressBook,
     principal: &Id,
@@ -81,7 +81,7 @@ fn book_rights_for(
     book.share_with.as_ref()?.get(principal).cloned()
 }
 
-/// Owners see every book unchanged.
+/// Owners see all books unchanged.
 /// Non-owners see only shared books with caller-specific `myRights`.
 fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Option<AddressBook> {
     if is_owner {
@@ -95,7 +95,7 @@ fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Opti
 }
 
 /// `AddressBook/set` (RFC 9610 §2): create, update, and destroy books.
-/// This mock requires a non-empty `name` and server-set `id` on create.
+/// This mock requires a non-empty `name` and a server-set `id` on create.
 pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
@@ -158,7 +158,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let mut result = to_result(&response)?;
 
     // RFC 8620 §5.3 allows omitting client-supplied `created` properties.
-    // With `terse_collection_create`, keep only `id`, `isDefault`, and `myRights`.
+    // `terse_collection_create` keeps only `id`, `isDefault`, and `myRights`.
     if terse_collection_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -186,7 +186,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
 pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // Enforce `maxObjectsInGet` like other `/get` handlers.
+    // Enforce `maxObjectsInGet`, like other `/get` handlers.
     let limit = state.objects_in_get();
     if request
         .ids
