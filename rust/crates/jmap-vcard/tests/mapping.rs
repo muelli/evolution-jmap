@@ -626,7 +626,8 @@ fn multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip() {
 
 #[test]
 fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully() {
-    // ORG component order tracks EDS slots: org name, department, office, then extra units.
+    // Keep ORG component order to match EDS slots.
+    // Order is organization name, department, office, then extra units.
     let card = ContactCard {
         organizations: Some(
             [(
@@ -661,7 +662,7 @@ fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.organizations, card.organizations);
 
-    // Unkeyed ORG input still keeps all four components on generated key `o1`.
+    // Keep unkeyed ORG components under generated key `o1`.
     let unkeyed_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG:Acme Ltd;Research;Optics;Lenses\r\n",
@@ -686,7 +687,7 @@ fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully
 
 #[test]
 fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_roundtrip() {
-    // 1. Deep 6-component hierarchy: OrgName + 5 units.
+    // Keep a deep hierarchy with one name and five units.
     let deep_card = ContactCard {
         organizations: Some(
             [(
@@ -715,7 +716,8 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
     let deep_back = vcard_to_card(&deep_vcard).expect("parse");
     assert_eq!(deep_back.organizations, deep_card.organizations);
 
-    // 2. Nameless organisation with 4 units: leading semicolon preserves unit positions.
+    // Keep unit positions for nameless organizations.
+    // The writer uses a leading semicolon to hold the empty name slot.
     let nameless_card = ContactCard {
         organizations: Some(
             [(
@@ -743,7 +745,8 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
     let nameless_back = vcard_to_card(&nameless_vcard).expect("parse");
     assert_eq!(nameless_back.organizations, nameless_card.organizations);
 
-    // EDS can clear the office slot in place. Readback drops empty units and keeps the position order stable.
+    // EDS can clear the office slot in place.
+    // Readback drops empty units and keeps stable unit order.
     let cleared_office_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;;Lenses\r\n",
