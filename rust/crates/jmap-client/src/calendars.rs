@@ -158,7 +158,9 @@ impl Client {
                 .next()
                 .ok_or_else(|| Error::Protocol("no CalendarEvent/get response".to_owned()))?;
             let arguments = Self::unwrap_invocation(invocation, "CalendarEvent/get")?;
-            let chunk_response: GetResponse<CalendarEvent> = serde_json::from_value(arguments)?;
+            let mut chunk_response: GetResponse<CalendarEvent> = serde_json::from_value(arguments)?;
+            Self::keep_requested(&mut chunk_response.list, chunk, |event| event.id.as_ref());
+            Self::keep_requested(&mut chunk_response.not_found, chunk, |id| Some(id));
             match &mut combined {
                 None => combined = Some(chunk_response),
                 Some(combined) => {

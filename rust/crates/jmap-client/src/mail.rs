@@ -338,7 +338,8 @@ impl Client {
                 .next()
                 .ok_or_else(|| Error::Protocol("no Email/get response".to_owned()))?;
             let arguments = Self::unwrap_invocation(invocation, "Email/get")?;
-            let get_response: GetResponse<Email> = serde_json::from_value(arguments)?;
+            let mut get_response: GetResponse<Email> = serde_json::from_value(arguments)?;
+            Self::keep_requested(&mut get_response.list, chunk, |email| email.id.as_ref());
             fetched.extend(get_response.list);
 
             rest = remaining;
@@ -597,7 +598,8 @@ impl Client {
             let request = GetRequest::ids(account_id.clone(), chunk.iter().cloned());
             let arguments =
                 self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Thread/get", &request)?;
-            let response: GetResponse<Thread> = serde_json::from_value(arguments)?;
+            let mut response: GetResponse<Thread> = serde_json::from_value(arguments)?;
+            Self::keep_requested(&mut response.list, chunk, |thread| thread.id.as_ref());
             fetched.extend(response.list);
             rest = remaining;
             if rest.is_empty() {
@@ -642,7 +644,8 @@ impl Client {
                 "SearchSnippet/get",
                 &request,
             )?;
-            let response: SearchSnippetGetResponse = serde_json::from_value(arguments)?;
+            let mut response: SearchSnippetGetResponse = serde_json::from_value(arguments)?;
+            Self::keep_requested(&mut response.list, chunk, |snippet| Some(&snippet.email_id));
             fetched.extend(response.list);
             rest = remaining;
             if rest.is_empty() {
@@ -896,7 +899,10 @@ impl Client {
                 "EmailSubmission/get",
                 &request,
             )?;
-            let response: GetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
+            let mut response: GetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
+            Self::keep_requested(&mut response.list, chunk, |submission| {
+                submission.id.as_ref()
+            });
             fetched.extend(response.list);
             rest = remaining;
             if rest.is_empty() {

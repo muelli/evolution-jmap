@@ -678,6 +678,19 @@ impl Client {
         })
     }
 
+    /// Remove each object whose id is not in `requested` (RFC 8620 §5.1).
+    ///
+    /// A `/get` answer must hold only the requested objects. Call this for
+    /// each chunk, so that extra objects do not stay in memory.
+    pub(crate) fn keep_requested<T>(
+        list: &mut Vec<T>,
+        requested: &[Id],
+        id: impl Fn(&T) -> Option<&Id>,
+    ) {
+        let requested: std::collections::HashSet<&Id> = requested.iter().collect();
+        list.retain(|object| id(object).is_some_and(|id| requested.contains(id)));
+    }
+
     /// Extract arguments from an invocation, mapping `error` responses to
     /// [`Error::Method`].
     pub fn unwrap_invocation(invocation: &Invocation, method: &str) -> Result<Value, Error> {
