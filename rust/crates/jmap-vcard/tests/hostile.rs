@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Hostile-input tests for server-provided `ContactCard` data.
+//! Test hostile server input for `ContactCard` data.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Media};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 
-/// Remove line breaks before writing map keys as parameter text.
+/// Strip line breaks before writing map keys as parameter text.
 fn card_with_email_key(key: &str) -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
@@ -101,7 +101,7 @@ fn inbound_photo_value_uri_data_payload_stays_mapped() {
     assert_eq!(photo.media_type.as_deref(), Some("image/png"));
 }
 
-/// Keep the save path from emitting local bytes from `file://` URIs.
+/// Keep save output from emitting local bytes from `file://` URIs.
 #[test]
 fn inbound_file_uri_photo_does_not_turn_into_outbound_inline_data() {
     let inbound = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nPHOTO;VALUE=uri:file:///dev/zero\r\nEMAIL:vera@example.com\r\nEND:VCARD\r\n";
@@ -202,7 +202,7 @@ fn x_jmap_key_parameter_text_uses_rfc_6868_caret_escapes() {
     );
 }
 
-/// Decode RFC 6868 caret escapes from inbound parameter text on read.
+/// Decode inbound RFC 6868 caret escapes on read.
 #[test]
 fn x_jmap_key_caret_escapes_decode_on_read() {
     let vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nEMAIL;X-JMAP-KEY=\"x^'^^y\":vera@example.com\r\nEND:VCARD\r\n";
@@ -265,7 +265,7 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
 use jmap_vcard::VCardError;
 use std::time::{Duration, Instant};
 
-/// Reject truncated input with typed errors, without panic or hang.
+/// Return typed errors for truncated input. Do not panic or hang.
 #[test]
 fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     let not_vcard_cases = ["", "   ", "\r\n", "\n", "\t"];
@@ -307,7 +307,7 @@ fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     }
 }
 
-/// Unbalanced parameter quoting must not panic, hang, or inject properties.
+/// Reject unbalanced parameter quoting. Do not panic, hang, or inject properties.
 #[test]
 fn unbalanced_quoting_in_vcard_parameters_matrix() {
     let hostile_quoted = [
@@ -332,7 +332,7 @@ fn unbalanced_quoting_in_vcard_parameters_matrix() {
     }
 }
 
-/// Extreme folding patterns must not panic or misparse root fields.
+/// Parse extreme folding patterns without panic or root-field drift.
 #[test]
 fn absurd_folding_every_second_octet_matrix() {
     let mut folded = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:\r\n");
@@ -429,7 +429,7 @@ fn deeply_nested_agent_robustness() {
     }
 }
 
-/// Accept LF and CRLF endings, and reject bare CR endings.
+/// Accept LF and CRLF endings. Reject bare CR endings.
 #[test]
 fn crlf_lf_cr_mixed_line_endings_matrix() {
     let pure_lf = "BEGIN:VCARD\nVERSION:3.0\nFN:Alice Smith\nEMAIL:alice@example.com\nNOTE:Line 1\n Line 2\nEND:VCARD\n";
@@ -493,7 +493,7 @@ fn malformed_photo_base64_and_corrupt_data_uri_matrix() {
     }
 }
 
-/// Multibyte UTF-8 in parsed fields must not panic at byte boundaries.
+/// Parse multibyte UTF-8 fields without panic at byte boundaries.
 #[test]
 fn adversarial_multibyte_utf8_slice_boundary_matrix() {
     let multi_byte_chars = [
