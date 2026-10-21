@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Handle `Blob/get`, `Blob/upload`, and `Blob/lookup` from RFC 9404.
-//! Handle `Blob/copy` from RFC 8620 section 5.7.
+//! Support `Blob/get`, `Blob/upload`, and `Blob/lookup` from RFC 9404.
+//! Support `Blob/copy` from RFC 8620 section 5.7.
 
 use std::collections::BTreeMap;
 
@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256, Sha512};
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::AccountState;
 
-/// Use these `Blob/get` properties when a request omits `properties`.
+/// Use these `Blob/get` properties when the request omits `properties`.
 const DEFAULT_PROPERTIES: &[&str] = &["data:asBase64", "size"];
 
 fn slice_bytes(data: &[u8], offset: Option<u64>, length: Option<u64>) -> &[u8] {
@@ -38,7 +38,7 @@ fn to_hex(bytes: &[u8]) -> String {
 }
 
 /// Handle `Blob/get` from RFC 9404 section 2.1.
-/// Slice bytes by `offset` and `length` before size and digest calculation.
+/// Apply `offset` and `length` before size and digest calculation.
 pub fn blob_get(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -82,8 +82,8 @@ pub fn blob_get(
     to_result(&BlobGetResponse::new(request.account_id, list).with_not_found(not_found))
 }
 
-/// Resolve one `Blob/upload` create entry into bytes.
-/// Return the first `SetError` from invalid source data.
+/// Resolve one `Blob/upload` create entry to bytes.
+/// Return the first `SetError` for invalid source data.
 fn resolve_data(account: &AccountState, sources: &[DataSource]) -> Result<Vec<u8>, SetError> {
     let mut bytes = Vec::new();
     for source in sources {
@@ -153,7 +153,7 @@ pub fn blob_upload(
 }
 
 /// Handle `Blob/lookup` from RFC 9404 section 2.3.
-/// This mock has no reverse reference index, so `matchedIds` stays empty.
+/// This mock has no reverse reference index. Keep `matchedIds` empty.
 pub fn blob_lookup(
     state: &mut crate::state::ServerState,
     arguments: Value,
