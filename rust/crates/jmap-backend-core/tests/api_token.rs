@@ -15,8 +15,10 @@ use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, ESource, e_source_authentication_get_type,
-    e_source_authentication_set_method, e_source_get_extension, e_source_new_with_uid,
+    e_source_authentication_set_method, e_source_get_extension, e_source_has_extension,
+    e_source_new_with_uid,
 };
+use glib_sys::GFALSE;
 use gobject_sys::g_object_unref;
 use jmap_backend_core::api_token::{API_TOKEN_METHOD, method_is_api_token, source_uses_api_token};
 
@@ -94,4 +96,16 @@ fn the_method_is_read_off_the_source() {
         TestSource::new("jmap-api-token-yes").with_method(API_TOKEN_METHOD.to_str().unwrap());
     // SAFETY: a live source.
     assert!(unsafe { source_uses_api_token(token.0) });
+}
+
+/// The read must not add an `[Authentication]` group to a source that has none.
+#[test]
+fn the_read_does_not_add_the_extension_to_a_source_without_it() {
+    let absent = TestSource::new("jmap-api-token-untouched");
+    // SAFETY: a live source.
+    assert!(!unsafe { source_uses_api_token(absent.0) });
+    // SAFETY: a live source and an EDS constant.
+    let added =
+        unsafe { e_source_has_extension(absent.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) };
+    assert_eq!(added, GFALSE, "the read created the extension");
 }

@@ -122,3 +122,12 @@ plain `cargo test` never runs it either. Closing this gap for real needs a
 fake `GResolver` (a GObject subclass overriding `lookup_service`) to force
 the success path hermetically, which is its own `unsafe`/vtable-correctness
 undertaking, not a one-file mutation-testing session.
+
+## `src/api_token.rs`
+
+`source_uses_api_token` survives with its `e_source_authentication_get_type()`
+call removed (a hand mutant: cargo-mutants skips an `unsafe fn`). The call is
+insurance only. The contract asks for a valid `ESource`, and `ESource`'s class
+init registers every built-in extension type, `ESourceAuthentication` too
+(EDS 3.52 `e-source.c`, "Register built-in ESourceExtension types"). So the
+type is always registered before the call, and no test can see a difference.
