@@ -104,14 +104,16 @@ fn attendees_survive_a_local_create_against_the_real_server() {
     let account_id = direct
         .primary_account(CAPABILITY_CALENDARS)
         .expect("the write-test account needs the calendars capability");
+    // The backend writes to the calendar that the server flags as default,
+    // not to the first one in the list.
     let calendar_id = direct
         .calendars(&account_id)
         .expect("Calendar/get failed against the real server")
         .into_iter()
-        .next()
+        .find(|calendar| calendar.is_default == Some(true))
         .expect("the write-test account needs a default calendar")
         .id
-        .expect("the server named the calendar");
+        .expect("the server named the default calendar");
 
     let authority = origin
         .trim_start_matches("https://")
