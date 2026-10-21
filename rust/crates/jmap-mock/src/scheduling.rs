@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Builds scheduling outbox messages for `CalendarEvent/set`.
+//! Build scheduling outbox messages for `CalendarEvent/set`.
 //! Origin accounts send `REQUEST` and `CANCEL`; non-origin accounts send `REPLY`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use crate::patch::apply_patch;
 use crate::state::{AccountState, RecordedSchedulingMessage};
 
-/// Who a message is about: the whole event, or one occurrence of it.
+/// Message scope: the whole event or one occurrence.
 type Scope = Option<String>;
 
 /// One event transition from `CalendarEvent/set`.
@@ -36,7 +36,7 @@ pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
         .collect()
 }
 
-/// Whether all required scheduling recipients expose an address.
+/// Return whether all required scheduling recipients expose an address.
 pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     if !is_origin(event, own) {
         // Non-origin updates reply only to the organizer.
@@ -83,7 +83,7 @@ fn messages_for(change: &EventChange, own: &BTreeSet<String>) -> Vec<RecordedSch
     }
 }
 
-/// The account is origin when organizer is absent or one of its own addresses (§10.9.5).
+/// Treat the account as origin when organizer is absent or local (§10.9.5).
 pub(crate) fn is_origin(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     match event.organizer_calendar_address.as_deref() {
         None => true,
@@ -126,9 +126,9 @@ fn origin_messages(
             }
         }
         (Some(before), Some(after)) => {
-            // Series removals send one series-level CANCEL per recipient.
+            // Send one series-level CANCEL per recipient for series removals.
             let mut withdrawn: BTreeSet<String> = BTreeSet::new();
-            // Track scoped cancels so override-only edits do not trigger REQUEST.
+            // Track scoped CANCEL so override-only edits do not trigger REQUEST.
             let mut cancelled_occurrence = false;
             let current = participants(after);
             for (id, participant) in participants(before) {
@@ -143,7 +143,7 @@ fn origin_messages(
                 }
             }
 
-            // Override-only removals send occurrence-scoped CANCEL.
+            // Send occurrence-scoped CANCEL for override-only removals.
             for recurrence_id in overridden_ids(Some(before), Some(after)) {
                 let was = instance_addresses(before, &recurrence_id, own);
                 let is = instance_addresses(after, &recurrence_id, own);
@@ -160,7 +160,7 @@ fn origin_messages(
                 }
             }
 
-            // Newly excluded overrides also send scoped CANCEL.
+            // Send scoped CANCEL for newly excluded overrides.
             let excluded = newly_excluded(before, after);
             cancelled_occurrence |= !excluded.is_empty();
             for recurrence_id in &excluded {
@@ -176,7 +176,7 @@ fn origin_messages(
                 }
             }
 
-            // Shared changes re-invite everyone unless this was only override cancellation.
+            // Re-invite all recipients for shared changes except override-only cancellation.
             let changed = changed_shared_properties(before, after);
             let invited = invitation_scopes(after, own);
             let cancelling_overrides =
@@ -186,7 +186,7 @@ fn origin_messages(
                     send(scheduling_method::REQUEST, &recipient, recurrence_id);
                 }
             } else {
-                // Keep sending REQUEST for newly added scoped recipients.
+                // Send REQUEST for newly added scoped recipients.
                 for (recipient, recurrence_id) in
                     invited.difference(&invitation_scopes(before, own))
                 {
@@ -206,7 +206,7 @@ fn reply_messages(
     own: &BTreeSet<String>,
 ) -> Vec<RecordedSchedulingMessage> {
     let Some(organizer) = subject.organizer_calendar_address.clone() else {
-        // Without an organizer this event is origin-owned.
+        // Without an organizer, this event belongs to the origin account.
         return Vec::new();
     };
 
@@ -219,7 +219,7 @@ fn reply_messages(
             continue;
         }
         let answer = match (&change.before, &change.after) {
-            // Create and destroy can carry an immediate answer.
+            // Create and destroy can include an immediate answer.
             (None, Some(_)) | (Some(_), None) => participation_status(participant),
             // Updates send only a changed status.
             (Some(before), Some(_)) => {
@@ -319,7 +319,7 @@ fn overridden_ids(
         .collect()
 }
 
-/// Build one occurrence's participants by applying its override paths.
+/// Build occurrence participants by applying override paths.
 fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<String, Value> {
     let mut participants = Value::Object(base.clone());
     for (path, new_value) in override_.as_object().into_iter().flatten() {
@@ -339,7 +339,7 @@ fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<St
             continue;
         };
         let patch = Map::from_iter([(tail.to_owned(), new_value.clone())]);
-        // Invalid paths leave participants unchanged.
+        // Ignore invalid paths and keep participants unchanged.
         let _ = apply_patch(&mut participants, &patch);
     }
     match participants {
@@ -348,7 +348,7 @@ fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<St
     }
 }
 
-/// Participants for one occurrence, or series participants when unoverridden.
+/// Return participants for one occurrence, or for the series when unoverridden.
 fn participants_at(event: &CalendarEvent, recurrence_id: &str) -> Map<String, Value> {
     let base: Map<String, Value> = participants(event)
         .into_iter()
@@ -385,7 +385,7 @@ fn build_ical(
     }
 }
 
-/// Rewrite overrides so recipient-missing instances become `excluded`.
+/// Rewrite overrides so instances missing the recipient become `excluded`.
 fn occurrences_excluded_for(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
     let recipient = normalize_uri(recipient);
     let in_series = participants(event).values().any(|participant| {
@@ -485,7 +485,7 @@ fn pinned_status(
         .map(str::to_owned)
 }
 
-/// Recipients with either series-level or occurrence-level scope.
+/// Return recipients with series-level or occurrence-level scope.
 fn invitation_scopes(event: &CalendarEvent, own: &BTreeSet<String>) -> BTreeSet<(String, Scope)> {
     let series = outward_addresses(event, own);
     let normalized: BTreeSet<String> = series
@@ -545,7 +545,7 @@ fn participation_status(participant: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// Recurrence IDs that newly gained `excluded: true` in this change.
+/// Return recurrence IDs that newly gained `excluded: true` in this change.
 fn newly_excluded(before: &CalendarEvent, after: &CalendarEvent) -> Vec<String> {
     let was_excluded = |event: &CalendarEvent, key: &str| {
         event
@@ -565,7 +565,7 @@ fn newly_excluded(before: &CalendarEvent, after: &CalendarEvent) -> Vec<String> 
         .collect()
 }
 
-/// Changed top-level properties, excluding per-user fields.
+/// Return changed top-level properties, excluding per-user fields.
 fn changed_shared_properties(before: &CalendarEvent, after: &CalendarEvent) -> BTreeSet<String> {
     let as_object = |event: &CalendarEvent| match serde_json::to_value(event) {
         Ok(Value::Object(map)) => map,
@@ -626,7 +626,7 @@ fn normalize_uri(uri: &str) -> String {
     normalized
 }
 
-/// RFC 3986 unreserved set.
+/// Return whether a byte is in the RFC 3986 unreserved set.
 fn is_unreserved(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
 }
