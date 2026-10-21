@@ -1187,8 +1187,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // Emit one line per service on the matching EDS slot property, and always
-    // include a slot type so Evolution maps it to a visible field.
+    // Emit one line per service on its matching EDS slot property.
+    // Always include the slot type so Evolution maps the line to a visible field.
     for (key, service) in card.online_services.iter().flatten() {
         let Some((property, handle)) = drawn_service(service) else {
             continue;
@@ -1218,8 +1218,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                     .with_value(date),
             );
         } else if anniversary.kind == "wedding" {
-            // Emit both X-EVOLUTION-ANNIVERSARY (for EDS 3.52 compatibility)
-            // and standard ANNIVERSARY (for EDS 3.60+ compatibility).
+            // Emit both X-EVOLUTION-ANNIVERSARY for EDS 3.52 and
+            // ANNIVERSARY for EDS 3.60 and later.
             entries.push(
                 VCardEntry::new(VCardProperty::Other(X_EVOLUTION_ANNIVERSARY.to_owned()))
                     .with_param(VCardParameter::new(
@@ -1239,9 +1239,10 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // Emit only spouse, manager, and assistant relations because EDS exposes
-    // those three slots. These lines carry no `X-JMAP-KEY`: RFC 9553 keys
-    // `relatedTo` by the related entity name itself.
+    // Emit only spouse, manager, and assistant relations.
+    // EDS exposes only those relation slots.
+    // These lines carry no `X-JMAP-KEY`.
+    // RFC 9553 keys `relatedTo` by the related entity name.
     for (key, relation) in card.related_to.iter().flatten() {
         if states_spouse(key, relation) {
             entries.push(
@@ -1290,10 +1291,10 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
 /// octets, excluding the line break.
 const MAX_LINE_OCTETS: usize = 75;
 
-/// Folds physical lines longer than [`MAX_LINE_OCTETS`] at UTF-8 boundaries.
+/// Fold physical lines longer than [`MAX_LINE_OCTETS`] at UTF-8 boundaries.
 ///
-/// calcard already folds. This pass enforces the 75-octet RFC 2426 limit and
-/// avoids splitting escaped pairs.
+/// `calcard` already folds lines.
+/// This pass enforces RFC 2426's 75-octet limit and keeps escaped pairs together.
 fn fold_overlong_lines(vcard: String) -> String {
     if vcard
         .split("\r\n")
@@ -1307,7 +1308,7 @@ fn fold_overlong_lines(vcard: String) -> String {
             out.push_str("\r\n");
         }
         let mut rest = line;
-        // A continuation line's leading space spends one of its 75 octets.
+        // The continuation-line space uses one of the 75 octets.
         let mut budget = MAX_LINE_OCTETS;
         while rest.len() > budget {
             if rest.is_empty() {
@@ -1317,9 +1318,9 @@ fn fold_overlong_lines(vcard: String) -> String {
             while cut > 0 && !rest.is_char_boundary(cut) {
                 cut -= 1;
             }
-            // If the cut ends with an odd run of backslashes, the last slash
+            // If the cut ends with an odd backslash run, the final slash
             // escapes the next octet.
-            // Move the cut into the run so the pair stays on one line.
+            // Move the cut into that run so the escaped pair stays on one line.
             if rest[..cut]
                 .bytes()
                 .rev()
@@ -1331,8 +1332,9 @@ fn fold_overlong_lines(vcard: String) -> String {
                 cut -= 1;
             }
             if cut == 0 {
-                // Defensive fallback: pick the first UTF-8 boundary so the loop
-                // always advances. Unfolding restores the octets either way.
+                // Defensive fallback: pick the first UTF-8 boundary.
+                // This keeps the loop moving.
+                // Unfolding restores the octets in either case.
                 cut = (1..=rest.len())
                     .find(|&i| rest.is_char_boundary(i))
                     .unwrap_or(rest.len());
