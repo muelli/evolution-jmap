@@ -27,9 +27,8 @@ cd "$(dirname "$0")/.."
 
 toolchain=${LEAK_TOOLCHAIN:-nightly}
 
-# eds-sys is not in the list yet. Its probe tests do not release most of the
-# EDS objects that they make.
 DEFAULT_PACKAGES=(
+    eds-sys
     jmap-mail
     evolution-jmap-ical
     jmap-config
