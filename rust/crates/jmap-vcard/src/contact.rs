@@ -727,9 +727,9 @@ pub fn states_organization(organization: &Organization) -> bool {
     organization_components(organization).is_some()
 }
 
-/// Whether the `ORG` line written for an organisation states this unit.
+/// Whether this org unit appears in the emitted `ORG` line.
 ///
-/// Units with empty names are not emitted and are therefore invisible to edits.
+/// Do not emit units with empty names. They cannot round-trip through edits.
 pub fn states_org_unit(unit: &OrgUnit) -> bool {
     !unit.name.is_empty()
 }
@@ -741,13 +741,12 @@ pub fn states_anniversary(anniversary: &Anniversary) -> bool {
     anniversary_property(&anniversary.kind).is_some() && anniversary_date(anniversary).is_some()
 }
 
-/// The day a vCard anniversary line states, if one can be read.
+/// Return the day from an anniversary line, if parsing succeeds.
 ///
-/// Save compares this canonical day so equivalent JSContact day shapes stay equal.
+/// Save compares this canonical day, so equivalent JSContact day shapes stay equal.
 pub fn anniversary_date(anniversary: &Anniversary) -> Option<String> {
     let date = anniversary.date.as_ref()?;
-    // A `Timestamp` states a point in time. The day it falls on is read in
-    // UTC, which is the only zone the card names.
+    // Read timestamp days in UTC. The vCard line names no other zone.
     let day = if let Some(utc) = date.get("utc").and_then(Value::as_str) {
         read_day(utc)?
     } else {
@@ -761,9 +760,9 @@ pub fn anniversary_date(anniversary: &Anniversary) -> Option<String> {
     day.survives_the_field_it_lands_in().then(|| day.text())
 }
 
-/// Whether an anniversary value is a point-in-time `Timestamp`.
+/// Whether an anniversary value uses point-in-time `Timestamp` shape.
 ///
-/// Save logic patches timestamps differently from calendar-day objects.
+/// Save logic patches timestamps and calendar days in different ways.
 pub fn states_a_point_in_time(anniversary: &Anniversary) -> bool {
     anniversary
         .date
@@ -779,11 +778,11 @@ fn anniversary_property(kind: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// The earliest year `e_contact_date_to_string()` will write, measured against
-/// libebook-contacts 3.52. See [`Day::survives_the_field_it_lands_in`].
+/// Earliest year `e_contact_date_to_string()` writes in libebook-contacts 3.52.
+/// See [`Day::survives_the_field_it_lands_in`].
 const EARLIEST_YEAR: u32 = 1000;
 
-/// One calendar day: the whole of what a vCard 3.0 date line can state.
+/// One calendar day, which is all a vCard 3.0 day line can state.
 struct Day {
     year: u32,
     month: u32,
@@ -825,7 +824,7 @@ impl Day {
     }
 }
 
-/// The day an anniversary line states, or `None` when none is present.
+/// Return the day from an anniversary line, or `None`.
 ///
 /// Accepts `YYYY-MM-DD` and `YYYYMMDD` because
 /// `e_contact_date_from_string()` accepts both.
@@ -854,7 +853,7 @@ fn member(date: &Value, name: &str) -> Option<u32> {
 }
 
 /// Return the inner label from an Apple `_$!<LabelName>!$_` marker.
-/// Return trimmed input text when no marker is present.
+/// Return trimmed input text when no marker exists.
 fn clean_apple_label(raw: &str) -> &str {
     let trimmed = raw.trim();
     if let Some(inner) = trimmed
