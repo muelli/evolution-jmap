@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `GET /eventsource` behavior (RFC 8620 §7.1/§7.3).
-//! Uses a raw stream because this crate has no SSE-capable client dependency.
+//! Test `GET /eventsource` behavior (RFC 8620 §7.1 and §7.3).
+//! Use a raw stream because this crate has no SSE client dependency.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -13,7 +13,7 @@ use jmap_mock::MockServer;
 use jmap_proto::push::StateChange;
 use jmap_proto::{Id, State};
 
-/// Open `GET /eventsource?{query}` and return the connected stream.
+/// Open `GET /eventsource?{query}`. Return the connected stream.
 fn open_eventsource(server: &MockServer, query: &str) -> TcpStream {
     let address = server
         .origin()
@@ -36,7 +36,7 @@ fn a_pushed_state_change_arrives_as_an_sse_state_event() {
     let server = MockServer::builder().start();
     let mut stream = open_eventsource(&server, "types=*&closeafter=state&ping=0");
 
-    // `closeafter=state` ends the stream after one state event.
+    // `closeafter=state` closes the stream after one state event.
     let reader = std::thread::spawn(move || {
         let mut response = String::new();
         stream
@@ -72,13 +72,13 @@ fn a_subscriber_filtered_by_types_only_receives_matching_pushes() {
 
     server.wait_for_event_source_subscriber(Duration::from_secs(5));
 
-    // Non-matching types must emit no event at all.
+    // Pushes with non-matching types must emit no state event.
     server.push_state_change(&StateChange::new(BTreeMap::from([(
         Id::new("a1"),
         BTreeMap::from([("Mailbox".to_owned(), State::new("1"))]),
     )])));
 
-    // Matching types still arrive.
+    // A push with a matching type must still arrive.
     let mut changed = BTreeMap::new();
     changed.insert(
         Id::new("a1"),
