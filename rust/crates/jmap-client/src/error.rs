@@ -476,4 +476,37 @@ mod tests {
         });
         assert!(method.source().is_none());
     }
+
+    fn partially_applied(cause: Error) -> Error {
+        Error::SetPartiallyApplied {
+            committed: Box::new(jmap_proto::methods::SetResponse::new("a", "s")),
+            cause: Box::new(cause),
+        }
+    }
+
+    #[test]
+    fn a_partial_set_reports_the_401_of_its_failed_part() {
+        let error = partially_applied(Error::Http {
+            status: 401,
+            problem: None,
+        });
+        assert!(error.is_unauthorized());
+        let error = partially_applied(Error::Transport("connection reset".into()));
+        assert!(!error.is_unauthorized());
+    }
+
+    #[test]
+    fn a_partial_set_reports_the_rate_limit_of_its_failed_part() {
+        let retry_after = Some(std::time::Duration::from_secs(7));
+        let error = partially_applied(Error::RateLimited {
+            retry_after,
+            method: Some("CalendarEvent/set".into()),
+            problem: None,
+        });
+        assert!(error.is_rate_limited());
+        assert_eq!(error.rate_limit_retry_after(), retry_after);
+        let error = partially_applied(Error::Transport("connection reset".into()));
+        assert!(!error.is_rate_limited());
+        assert_eq!(error.rate_limit_retry_after(), None);
+    }
 }
