@@ -13,3 +13,15 @@ mutant, each closed info bar leaks these two objects. Only `show` makes an
 `UndoData`, and `show` needs a live `EShellView` with its shell content. No test
 in this crate makes a widget (see `evo-sys/tests/gtk.rs`), and `jmap-functional`
 runs EDS without Evolution. Thus no test here can see the leak. Out of scope.
+
+## `src/send_later/extension.rs`
+
+`dispatch_activation` survives replaced with `()`. The function only gives the
+choice of `chosen` to `activate` or `activate_custom`. Both need a live
+composer, and no test in this crate makes a widget. Tests of `chosen` cover the
+decision. Out of scope.
+
+The `#[cfg(evolution_eui_manager)]` variant of `ui_definition` survives replaced
+with `Default::default()` on a 3.52 build, because that build does not compile
+it. On a 3.55+ build, `the_menu_definition_names_every_action` tests it. Out of
+scope on 3.52.
