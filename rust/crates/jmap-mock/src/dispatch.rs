@@ -11,14 +11,15 @@ use serde_json::{Map, Value};
 
 use crate::state::{ServerState, TypeStateSnapshot};
 
-/// Handle one JMAP API POST and return HTTP status with JSON body.
+/// Handle one JMAP API POST.
+/// Return an HTTP status code and JSON body.
 /// Use `caller` as the authenticated principal. `None` means anonymous access.
 pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> (u16, Value) {
     if let Ok(text) = std::str::from_utf8(body) {
         println!("--> POST /jmap\n{text}");
     }
 
-    // Count each HTTP round trip, including requests rejected before parsing.
+    // Count each HTTP request, including requests rejected before parsing.
     state.api_requests += 1;
 
     // RFC 8620 §2: reject requests over `maxSizeRequest` before parsing method calls.
@@ -70,10 +71,10 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
     let mut created_ids: std::collections::BTreeMap<String, jmap_proto::Id> =
         std::collections::BTreeMap::new();
     // Snapshot type states before dispatch.
-    // Use this snapshot to emit one `StateChange` for all request mutations (RFC 8620 §7.1).
+    // Emit one `StateChange` for all request mutations (RFC 8620 §7.1).
     let type_states_before = state.type_state_snapshot();
     for call in &request.method_calls {
-        // Record each attempted method call, even if handling later fails.
+        // Record each attempted method call, even when handling fails later.
         state.method_calls.push(call.name.clone());
         let invocation = match resolve_references(call, &responses) {
             Ok(arguments) => {
@@ -122,7 +123,7 @@ fn error_invocation(error: MethodError, call_id: &str) -> Invocation {
 }
 
 /// Resolve `#argument` result references from earlier responses in this request.
-/// This follows RFC 8620 §3.7.
+/// Follow RFC 8620 §3.7.
 fn resolve_references(call: &Invocation, responses: &[Invocation]) -> Result<Value, MethodError> {
     let Value::Object(arguments) = &call.arguments else {
         return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
@@ -390,7 +391,8 @@ fn handle_method(
     }
 }
 
-/// Parse method arguments into a typed request. Return `invalidArguments` on parse failure.
+/// Parse method arguments into a typed request.
+/// Return `invalidArguments` when parsing fails.
 pub(crate) fn parse_arguments<T: serde::de::DeserializeOwned>(
     arguments: Value,
 ) -> Result<T, MethodError> {
@@ -399,7 +401,8 @@ pub(crate) fn parse_arguments<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// Serialize a typed response. Treat serialization failure as a server bug.
+/// Serialize a typed response.
+/// Treat serialization failure as a server bug.
 pub(crate) fn to_result(response: &impl serde::Serialize) -> Result<Value, MethodError> {
     serde_json::to_value(response).map_err(|serialize_error| {
         MethodError::new(error::method::SERVER_FAIL).with_description(serialize_error.to_string())
