@@ -101,6 +101,36 @@ fn inbound_photo_value_uri_data_payload_stays_mapped() {
     assert_eq!(photo.media_type.as_deref(), Some("image/png"));
 }
 
+/// Save-path roundtrip must not emit local photo bytes from `file://` URIs.
+#[test]
+fn inbound_file_uri_photo_does_not_turn_into_outbound_inline_data() {
+    let inbound = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nPHOTO;VALUE=uri:file:///dev/zero\r\nEMAIL:vera@example.com\r\nEND:VCARD\r\n";
+
+    let parsed = vcard_to_card(inbound).expect("parse inbound file URI photo");
+    assert!(
+        parsed.media.is_none(),
+        "local file URI must not become media on read"
+    );
+
+    let saved = card_to_vcard(&parsed);
+    assert!(
+        !saved.contains("\r\nPHOTO"),
+        "save path must not emit PHOTO from a dropped file URI: {saved}"
+    );
+    assert!(
+        !saved.contains("file:///dev/zero"),
+        "save path must not preserve local file URI text: {saved}"
+    );
+    assert!(
+        !saved.contains("data:"),
+        "save path must not emit inline data from a local URI: {saved}"
+    );
+    assert!(
+        saved.contains("EMAIL"),
+        "control field must stay present after save-path roundtrip: {saved}"
+    );
+}
+
 /// A CRLF in a map key must not terminate `EMAIL` or inject `FN`.
 #[test]
 fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
