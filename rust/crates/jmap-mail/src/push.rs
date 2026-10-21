@@ -1,88 +1,89 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Turning a server-pushed `StateChange` into the folder refresh Camel
-//! already runs — the mail half of JMAP Push.
+//! The mail half of JMAP Push: it changes a `StateChange` from the server into
+//! the folder refresh that Camel already does.
 //!
-//! [`jmap_backend_core::push`] is the account-independent half of this and is
-//! reused unchanged: it owns the EventSource subscription, decides which
-//! pushes concern this account, and calls an injected C function on the
-//! backend object. What differs here is what that function can *be*.
+//! [`jmap_backend_core::push`] is the half that does not depend on the account
+//! type. This module uses it without changes. That half owns the EventSource
+//! subscription, decides which pushes are for this account, and calls an
+//! injected C function on the backend object. This module supplies a
+//! different kind of function.
 //!
-//! ## Why this is not the address book's shape
+//! ## Why the address book design does not apply
 //!
-//! The EDS backends hand a push straight to
-//! `e_book_meta_backend_schedule_refresh`, which returns immediately: EDS
-//! queues a custom operation, coalesces a second call into the running one,
-//! and reaches `get_changes_sync` on a thread of its own. **Camel has no such
-//! call.** Its refresh entry point is `camel_folder_refresh_info_sync`, which
-//! is exactly what its name says — synchronous, per folder, and a network
-//! round trip.
+//! The EDS backends give a push directly to
+//! `e_book_meta_backend_schedule_refresh`, which returns immediately. EDS
+//! queues a custom operation, merges a second call into the running one, and
+//! calls `get_changes_sync` on a separate thread. **Camel has no equivalent
+//! call.** Its refresh entry point is `camel_folder_refresh_info_sync`. That
+//! function is synchronous, works on one folder, and makes a network round
+//! trip.
 //!
-//! evolution-ews hit the same wall, and its answer is the precedent this
-//! module follows. In `src/EWS/camel/camel-ews-store.c`,
-//! `camel_ews_store_server_notification_cb`
-//! does *not* refresh anything on the notification thread. It sorts the
-//! notification, then `schedule_folder_update` coalesces onto a low-priority
-//! one-second timeout (removing any pending one first, so a burst is one
-//! update), and `run_update_thread` spawns a **detached** `GThread` which
-//! walks the affected folders calling `camel_store_get_folder_sync` and
-//! `camel_folder_refresh_info_sync`.
+//! evolution-ews has the same problem, and this module follows its solution.
+//! In `src/EWS/camel/camel-ews-store.c`,
+//! `camel_ews_store_server_notification_cb` does *not* refresh on the
+//! notification thread. It sorts the notification. Then
+//! `schedule_folder_update` merges the request into a low-priority one-second
+//! timeout. It removes a pending timeout first, so a burst gives one update.
+//! `run_update_thread` then starts a **detached** `GThread`. That thread calls
+//! `camel_store_get_folder_sync` and `camel_folder_refresh_info_sync` for each
+//! affected folder.
 //!
-//! Both halves of that are load-bearing here, for a reason the EDS side does
-//! not have: [`PushRefresh::stop`](jmap_backend_core::push::PushRefresh::stop)
-//! *joins* its pump thread, so a refresh run inline in the pump's callback
-//! would make `disconnect_sync` — and therefore Evolution's shutdown — wait
-//! out an uninterruptible network round trip per open folder. So:
+//! Both parts are necessary here, for a reason that the EDS side does not
+//! have. [`PushRefresh::stop`](jmap_backend_core::push::PushRefresh::stop)
+//! *joins* its pump thread. A refresh in the callback of the pump would make
+//! `disconnect_sync`, and thus the shutdown of Evolution, wait for one
+//! network round trip per open folder. That round trip cannot be interrupted.
+//! Thus:
 //!
-//! - the refresh runs on a thread of its own, never on the pump, which is
-//!   what keeps `stop` prompt; and
-//! - [`FolderRefresh`] coalesces the way EWS's timeout does, but by
-//!   book-keeping rather than by clock: while a pass is in flight, further
-//!   pushes set a flag that makes the running worker do **exactly one** more
-//!   pass. Not zero — a change that arrived while a pass was reading the
-//!   server may not be in what that pass read — and not one per push, which
-//!   is the refresh storm a client's own writes would otherwise cause, since
-//!   a server pushes our `Email/set` back at us like anyone else's.
+//! - the refresh runs on a separate thread, never on the pump, so `stop`
+//!   returns quickly; and
+//! - [`FolderRefresh`] merges requests as the EWS timeout does, but with
+//!   book-keeping, not with a clock. While a pass runs, more pushes set a
+//!   flag. The flag makes the running worker do **exactly one** more pass.
+//!   Zero passes is not sufficient: a change that arrives while a pass reads
+//!   the server can be missing from what that pass read. One pass per push is
+//!   too many: the server also pushes each `Email/set` of this client back
+//!   to it, so the writes of the client would cause a refresh storm.
 //!
-//! The worker reaches the store through a
-//! [`WeakBackend`](jmap_backend_core::weak::WeakBackend), so a store Camel
-//! released between two passes ends the worker rather than being touched, and
-//! a store released *during* one cannot be: the strong reference is held
-//! across the whole pass.
+//! The worker gets the store through a
+//! [`WeakBackend`](jmap_backend_core::weak::WeakBackend). If Camel releases
+//! the store between two passes, the worker stops and does not touch it. A
+//! store cannot be released *during* a pass, because the worker holds the
+//! strong reference for the full pass.
 //!
 //! ## Which folders, and which types
 //!
-//! An RFC 8620 §7.1 `StateChange` names types per *account*; there is no
-//! mailbox in it, so unlike EWS's `folder_id` there is nothing to narrow to.
-//! What [`refresh_open_folders`] refreshes is
-//! `camel_store_dup_opened_folders` — the folders something is actually
-//! holding a `CamelFolder` for, which is the set whose summaries a refresh
-//! can change anything about. A folder nobody has opened is listed fresh when
-//! somebody does.
+//! An RFC 8620 §7.1 `StateChange` names types per *account*. It names no
+//! mailbox, so unlike the EWS `folder_id`, it gives nothing to narrow to.
+//! [`refresh_open_folders`] refreshes the result of
+//! `camel_store_dup_opened_folders`. These are the folders that something
+//! holds a `CamelFolder` for. A refresh can change only their summaries.
+//! Camel lists a folder that nobody has opened when somebody opens it.
 //!
-//! [`PUSHED_TYPES`] is the message half. The folder-list half — a `Mailbox`
-//! change — needs a different Camel call, `camel_store_folder_info_stale`,
-//! but not on every such push: RFC 8621 puts a mailbox's `totalEmails` and
-//! `unreadEmails` on the `Mailbox` object itself, so a delivery bumps the
-//! type's state exactly as visibly as a folder being created, destroyed,
-//! renamed, moved or (un)subscribed does. Camel's folder *tree* only needs to
-//! hear about the second kind — the open folder's own refresh already
-//! carries counts to Camel — so [`refresh_folder_list_if_structural`] fetches
-//! the tree again and calls `camel_store_folder_info_stale` only if
-//! [`FolderTree::same_shape`](jmap_mail_sync::FolderTree::same_shape) says it
-//! changed shape. That fetch is a network round trip, so it runs on
-//! [`FolderRefresh`]'s worker beside the message refresh rather than on the
-//! pump thread, for the same reason the message refresh does.
+//! [`PUSHED_TYPES`] is the message half. The folder-list half is a `Mailbox`
+//! change. It needs a different Camel call, `camel_store_folder_info_stale`,
+//! but not for each such push. RFC 8621 puts the `totalEmails` and
+//! `unreadEmails` of a mailbox on the `Mailbox` object. Thus a delivery
+//! changes the type state as visibly as a folder that is created, destroyed,
+//! renamed, moved, subscribed or unsubscribed. The folder *tree* of Camel must
+//! know only about the second kind, because the refresh of the open folder
+//! already gives the counts to Camel. Thus
+//! [`refresh_folder_list_if_structural`] gets the tree again. It calls
+//! `camel_store_folder_info_stale` only if
+//! [`FolderTree::same_shape`](jmap_mail_sync::FolderTree::same_shape) shows a
+//! change of shape. That request is a network round trip. Thus it runs on the
+//! worker of [`FolderRefresh`] with the message refresh, not on the pump
+//! thread, for the same reason.
 //!
-//! Telling a `Mailbox` push apart from an `Email`/`EmailDelivery` one needs
-//! [`jmap_backend_core::push::start_for_with`], which hands the action the
-//! matched JMAP types instead of the bare fn pointer
-//! [`jmap_backend_core::push::start_for`] uses — [`dispatch`] is that action,
-//! and [`Work`] is the two kinds of pass it can ask the worker for.
-//! [`PUSHED_TYPES`] therefore no longer names every type the subscription
-//! asks about; see [`start_push`](crate::store::JmapStore) for the combined
-//! list.
+//! To tell a `Mailbox` push from an `Email` or `EmailDelivery` push, this
+//! module uses [`jmap_backend_core::push::start_for_with`]. That function gives
+//! the matched JMAP types to the action. The bare fn pointer of
+//! [`jmap_backend_core::push::start_for`] does not get them. [`dispatch`] is
+//! that action, and [`Work`] holds the two kinds of pass that it can request.
+//! Thus [`PUSHED_TYPES`] does not name each type that the subscription
+//! requests. See [`start_push`](crate::store::JmapStore) for the full list.
 
 use std::ptr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -100,32 +101,32 @@ use jmap_backend_core::owned::Owned;
 
 use crate::store::JmapStore;
 
-/// The JMAP data types that ask for a message-level refresh — a pass through
-/// [`FolderRefresh`], same as before this module learned to tell types apart.
+/// The JMAP data types that request a message refresh, which is a pass
+/// through [`FolderRefresh`].
 ///
-/// `EmailDelivery` is RFC 8621 §5's delivery-only pseudo-type: its state moves
-/// when mail *arrives* and not when a flag changes, which is the one push a
-/// mail client exists to react to. `Email` covers the rest — another client
-/// marking something read or filing it — which a refresh must also pick up.
-/// `jmap-mock` tracks only `Email` of the two, so that is the one the tests
-/// exercise; asking for both is what a real server needs.
+/// `EmailDelivery` is the delivery-only pseudo-type of RFC 8621 §5. Its state
+/// changes when mail *arrives*, not when a flag changes. A mail client must
+/// react to this push most of all. `Email` covers the other changes, for
+/// example another client that marks a message as read or moves it. A refresh
+/// must also get these. Of the two, `jmap-mock` tracks only `Email`, so the
+/// tests use only `Email`. A real server needs both.
 pub const PUSHED_TYPES: &[&str] = &["Email", "EmailDelivery"];
 
-/// The JMAP data type that may ask Camel to mark the folder *list* stale —
-/// `camel_store_folder_info_stale`, not [`FolderRefresh`]'s message-level
-/// pass. "May", because most `Mailbox` pushes are a delivery's count bump;
-/// see this module's own docs and [`refresh_folder_list_if_structural`] for
-/// which ones actually do.
+/// The JMAP data type that can make Camel mark the folder *list* stale with
+/// `camel_store_folder_info_stale`, not with the message pass of
+/// [`FolderRefresh`]. Most `Mailbox` pushes only change the counts of a
+/// delivery, so most do not. See the module docs and
+/// [`refresh_folder_list_if_structural`] for which pushes do.
 pub const FOLDER_LIST_TYPES: &[&str] = &["Mailbox"];
 
-/// What a coalesced pass on [`FolderRefresh`]'s worker should do. A single
-/// `StateChange` can ask for either, both, or (or `dispatch` would not have
-/// scheduled a pass at all) — see [`Actions`] for where these come from.
+/// The work that a merged pass on the worker of [`FolderRefresh`] must do.
+/// One `StateChange` can request one kind, both kinds or neither. For
+/// neither, no pass starts. See [`Actions`] for the source of these values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Work {
-    /// Refresh every open folder's messages — [`refresh_open_folders`].
+    /// Refresh the messages of each open folder, with [`refresh_open_folders`].
     pub refresh_messages: bool,
-    /// Check whether the folder list changed shape —
+    /// Check if the folder list changed shape, with
     /// [`refresh_folder_list_if_structural`].
     pub check_folder_list: bool,
 }
@@ -143,39 +144,38 @@ impl Work {
     }
 }
 
-/// The coalescing worker described in this module's docs: EWS's
-/// `schedule_folder_update` and `run_update_thread`, as one object.
+/// The merging worker that the module docs describe. It does the work of
+/// `schedule_folder_update` and `run_update_thread` in EWS, as one object.
 ///
-/// Cheap to drop from any thread — dropping it neither cancels nor joins a
-/// pass in flight, which is the point: the caller that drops it is
-/// `disconnect_sync` or `finalize`, and neither may block. A pass already
-/// running holds its own reference to the shared state and its own strong
-/// reference to the store, so it finishes against a consistent store and then
-/// simply stops.
+/// Any thread can drop it at low cost. A drop does not cancel or join a
+/// running pass. This is necessary, because the caller that drops it is
+/// `disconnect_sync` or `finalize`, and these must not block. A running pass
+/// holds its own reference to the shared state and its own strong reference
+/// to the store. Thus it completes on a consistent store and then stops.
 pub struct FolderRefresh {
     inner: Arc<Inner>,
 }
 
-/// What a worker thread and the [`FolderRefresh`] that spawned it share.
+/// The state that a worker thread shares with the [`FolderRefresh`] that
+/// started it.
 struct Inner {
-    /// How the worker reaches the store after the push callback that started
-    /// it has long returned.
+    /// Gives the worker the store after the push callback that started it
+    /// returns.
     weak: WeakStore,
     runs: Mutex<Runs>,
-    /// One pass, told which [`Work`] it owes. Injected rather than hard-wired
-    /// so the coalescing above can be tested against a plain `GObject`, with
-    /// no Camel store, no `CamelSession` and no network — see this module's
-    /// own tests.
+    /// One pass, which gets the [`Work`] that it must do. It is injected, so
+    /// the tests in this module can test the merge on a plain `GObject`,
+    /// without a Camel store, a `CamelSession` or a network.
     pass: Box<dyn Fn(*mut GObject, Work) + Send + Sync>,
 }
 
-/// Whether a pass is running, and what further [`Work`] has been asked for
-/// since it started.
+/// Whether a pass runs, and which more [`Work`] pushes requested after it
+/// started.
 ///
-/// `pending` accumulates rather than counts on purpose: every push that
-/// arrives during one pass is answered by the same following pass, which
-/// reads the server's current state rather than a queue of deltas, so all
-/// that needs remembering is the union of what was asked for.
+/// `pending` collects a union, not a count. One next pass answers all pushes
+/// that arrive during a pass. That pass reads the current state of the
+/// server, not a queue of deltas. Thus only the union of the requests is
+/// necessary.
 #[derive(Default)]
 struct Runs {
     running: bool,
@@ -183,9 +183,9 @@ struct Runs {
 }
 
 impl FolderRefresh {
-    /// Prepare to refresh `store`'s open folders on demand. `pass` is one
-    /// refresh of everything the [`Work`] it is given asks for, called with a
-    /// strong reference to `store` held.
+    /// Prepares to refresh the open folders of `store` on request. `pass` is
+    /// one refresh of all that its [`Work`] requests. It gets called while a
+    /// strong reference to `store` is held.
     ///
     /// # Safety
     ///
@@ -208,13 +208,13 @@ impl FolderRefresh {
         }
     }
 
-    /// Ask for a refresh doing at least `work`, and return immediately.
+    /// Requests a refresh that does at least `work`, and returns immediately.
     ///
-    /// Starts a worker if none is running; otherwise folds `work` into the
-    /// running one's next pass. A no-op for empty `work`, so a caller need not
-    /// check first. Never blocks on a pass, and never waits on the lock for
-    /// longer than the book-keeping — which is what makes it safe to call from
-    /// [`jmap_backend_core::push`]'s pump thread.
+    /// Starts a worker if no worker runs. Otherwise adds `work` to the next
+    /// pass of the running worker. Empty `work` does nothing, so a caller need
+    /// not check it first. It never blocks on a pass. It holds the lock only
+    /// for the book-keeping. Thus the pump thread of
+    /// [`jmap_backend_core::push`] can safely call it.
     pub fn request(&self, work: Work) {
         if work.is_empty() {
             return;
@@ -232,13 +232,13 @@ impl FolderRefresh {
             runs.running = true;
         }
         let inner = Arc::clone(&self.inner);
-        // Detached, like EWS's own update thread: nothing joins it, and
-        // nothing may — see the module docs.
+        // Detached, as the EWS update thread is. Nothing joins it, and nothing
+        // must join it (see the module docs).
         thread::spawn(move || inner.run(work));
     }
 
-    /// Whether a pass is in flight or owed. For the tests, which have no
-    /// other way to see a detached thread's book-keeping.
+    /// Whether a pass runs or is pending. The tests have no other way to see
+    /// the book-keeping of a detached thread.
     #[cfg(test)]
     fn busy(&self) -> bool {
         let runs = lock(&self.inner.runs);
@@ -247,31 +247,30 @@ impl FolderRefresh {
 }
 
 impl Inner {
-    /// One worker's whole life: pass, then either another pass or done.
+    /// The full life of one worker: a pass, then another pass or the end.
     ///
-    /// A panicking pass is caught rather than allowed to end the thread. Not
-    /// for the thread's sake — a worker is detached and nothing waits on it —
-    /// but for the book-keeping's: unwinding out of here would leave `running`
-    /// set with nobody left to clear it, and [`FolderRefresh::request`] would
-    /// then coalesce into a worker that no longer exists, silently disabling
-    /// push for the rest of the account's life. Rare, silent and permanent is
-    /// the combination worth spending a `catch_unwind` on.
+    /// This function catches a panic in a pass, so the panic does not end the
+    /// thread. The thread is detached and nothing waits for it, so the reason
+    /// is the book-keeping. An unwind from here leaves `running` set, and
+    /// nothing clears it. [`FolderRefresh::request`] then merges each request
+    /// into a worker that does not exist. This silently disables push for the
+    /// remaining life of the account. A failure that is rare, silent and
+    /// permanent justifies a `catch_unwind`.
     fn run(&self, mut work: Work) {
         loop {
             let reached = jmap_backend_core::trampoline::guard(
                 "push folder refresh",
-                // A pass that panicked is treated as one that ran: the store
-                // was there, and whatever it did to the folders it got to is
-                // done. What must not happen is retrying it forever.
+                // A pass that panicked counts as a pass that ran. The store was
+                // there, and the changes to the folders that it reached stay.
+                // The worker must not try it again without end.
                 Some(()),
                 || self.weak.with_strong(|store| (self.pass)(store, work)),
             );
             if reached.is_none() {
-                // Camel released the store between two passes. There is
-                // nothing to refresh, and nothing to hand the book-keeping
-                // back to either — but clear it anyway, since a `Drop` order
-                // that leaves this `Inner` alive should not leave it looking
-                // permanently busy.
+                // Camel released the store between two passes. Nothing remains
+                // to refresh or to give the book-keeping to. Clear it anyway:
+                // if a `Drop` order keeps this `Inner` alive, it must not look
+                // busy permanently.
                 *lock(&self.runs) = Runs::default();
                 tracing::debug!("the mail store went away; stopping its folder refresh");
                 return;
@@ -288,7 +287,7 @@ impl Inner {
     }
 }
 
-/// A `WeakBackend` under a name that says what it points at here.
+/// A `WeakBackend` with a name that tells what it points to here.
 struct WeakStore(jmap_backend_core::weak::WeakBackend);
 
 impl WeakStore {
@@ -297,53 +296,54 @@ impl WeakStore {
     }
 }
 
-/// One refresh pass: every folder the store currently has open, listed again
-/// against the server.
+/// One refresh pass: the server lists again each folder that the store has
+/// open now.
 ///
-/// Errors are logged and skipped rather than propagated, and the walk carries
-/// on past one: push is an accelerator, so a folder that could not be
-/// refreshed is a folder Camel's own periodic refresh will get to, not an
-/// account failure to report. Nobody is waiting for an answer from here.
+/// This function logs and skips errors and does not propagate them. After an
+/// error, it continues with the next folder. Push only makes updates faster.
+/// The periodic refresh of Camel gets to a folder that this pass could not
+/// refresh, so it is not an account failure. Nothing waits for a result
+/// from here.
 ///
-/// No `GCancellable` is passed. There is none to pass — this runs from a
-/// server push and not from an operation the user could cancel — and
-/// `camel_folder_refresh_info_sync` accepts NULL for exactly that case.
+/// This function gives no `GCancellable`. It has none, because a server push
+/// starts it, not an operation that the user can cancel.
+/// `camel_folder_refresh_info_sync` accepts NULL for this case.
 ///
 /// # Safety
 ///
 /// `store` must be a live `CamelStore` with a strong reference held for the
-/// length of this call, which is what [`FolderRefresh`] holds across a pass.
+/// length of this call. [`FolderRefresh`] holds this reference for a pass.
 pub unsafe fn refresh_open_folders(store: *mut CamelStore) {
-    // SAFETY: a live `CamelStore` by this function's contract. The array and
-    // a reference to every folder in it are transferred to us — freed below,
-    // in the shape `camel_store_dup_opened_folders`' own documentation gives.
+    // SAFETY: a live `CamelStore` by the contract of this function. The call
+    // transfers the array and a reference to each folder in it to this code.
+    // The code below frees them as `camel_store_dup_opened_folders` documents.
     let folders = unsafe { camel_store_dup_opened_folders(store) };
     if folders.is_null() {
         return;
     }
-    // SAFETY: a `GPtrArray` just handed over, so both fields are readable.
+    // SAFETY: this code now owns this `GPtrArray`, so both fields are readable.
     let count = unsafe { (*folders).len } as usize;
     tracing::debug!(
         count,
         "refreshing the mail store's open folders after a push"
     );
     for index in 0..count {
-        // SAFETY: `index` is below the array's own length, every element of
-        // this particular array is a `CamelFolder *` (`transfer full`), and
-        // the reference moves into `folder`, released on drop rather than by
-        // a manual `g_object_unref` at the bottom of the loop.
+        // SAFETY: `index` is less than the length of the array. Each element
+        // of this array is a `CamelFolder *` (`transfer full`). The reference
+        // moves into `folder`, and its drop releases it, not a manual
+        // `g_object_unref` at the end of the loop.
         let folder =
             unsafe { Owned::from_raw((*(*folders).pdata.add(index)).cast::<CamelFolder>()) };
         let Some(folder) = folder else { continue };
         let mut error: *mut GError = ptr::null_mut();
-        // SAFETY: a live folder from the array, no cancellable (documented
-        // above), and a valid place to put an error.
+        // SAFETY: a live folder from the array, no cancellable (see above),
+        // and a valid location for an error.
         let refreshed = unsafe {
             camel_folder_refresh_info_sync(folder.as_ptr(), ptr::null_mut(), &raw mut error)
         };
         if refreshed == GFALSE {
-            // SAFETY: `error` is NULL or a `GError` this call now owns, whose
-            // `message` is a NUL-terminated string owned by it.
+            // SAFETY: `error` is NULL or a `GError` that this call now owns.
+            // Its `message` is a NUL-terminated string that it owns.
             let message =
                 unsafe { error.as_ref() }.and_then(|error| unsafe { read_string(error.message) });
             tracing::debug!(
@@ -354,17 +354,17 @@ pub unsafe fn refresh_open_folders(store: *mut CamelStore) {
             unsafe { g_clear_error(&raw mut error) };
         }
     }
-    // SAFETY: freeing the array itself, whose elements we have already
-    // released; `TRUE` frees the backing storage, which is ours now.
+    // SAFETY: this frees the array itself. The loop already released its
+    // elements. `TRUE` frees the backing storage, which this code now owns.
     unsafe { g_ptr_array_free(folders, GTRUE) };
 }
 
-/// The folder-list half of [`Work`]: re-fetches the tree and tells Camel it
-/// is stale only if what changed was structural, per this module's docs.
+/// The folder-list half of [`Work`]. It gets the tree again and tells Camel
+/// that the tree is stale only for a structural change (see the module docs).
 ///
-/// A network round trip ([`crate::store::JmapStore::folders`], via
-/// `Mailbox/changes`), so this belongs on [`FolderRefresh`]'s worker and never
-/// on the pump thread — the same reason [`refresh_open_folders`] does.
+/// This is a network round trip ([`crate::store::JmapStore::folders`], with
+/// `Mailbox/changes`). Thus it runs on the worker of [`FolderRefresh`], never
+/// on the pump thread, for the same reason as [`refresh_open_folders`].
 ///
 /// # Safety
 ///
@@ -377,39 +377,39 @@ pub unsafe fn refresh_folder_list_if_structural(store: *mut CamelStore) {
     };
     if jmap_store.folder_list_changed_structurally() {
         tracing::debug!("a pushed Mailbox change was structural; marking the folder list stale");
-        // SAFETY: `store` is a live `CamelStore`, by this function's
-        // contract; `camel_store_folder_info_stale` only requires
-        // `CAMEL_IS_STORE(store)`, which a live `JmapStore` satisfies.
+        // SAFETY: `store` is a live `CamelStore`, by the contract of this
+        // function. `camel_store_folder_info_stale` only requires
+        // `CAMEL_IS_STORE(store)`, and a live `JmapStore` satisfies it.
         unsafe { camel_store_folder_info_stale(store) };
     }
 }
 
-/// The Camel half of a push, told which of the pushed JMAP types actually
-/// changed — the action [`jmap_backend_core::push::start_for_with`] calls,
-/// since a single `StateChange` can name both a message and a folder-list
-/// change at once and the two ask the worker for different [`Work`].
+/// The Camel half of a push. It gets the pushed JMAP types that changed.
+/// [`jmap_backend_core::push::start_for_with`] calls this action. One
+/// `StateChange` can name a message change and a folder-list change together,
+/// and the two request different [`Work`] from the worker.
 ///
-/// It cannot carry the coalescing state itself, so it finds it where the rest
-/// of the store's state lives: on the instance the push was started for.
+/// This function cannot keep the merge state itself. It finds that state
+/// with the other store state, on the instance that the push started for.
 ///
 /// # Safety
 ///
-/// `object` must be a live [`JmapStore`], which is what
-/// [`jmap_backend_core::push::start_for_with`] guarantees: it only calls this
-/// under a strong reference taken from a `GWeakRef` on the instance it was
-/// given.
+/// `object` must be a live [`JmapStore`].
+/// [`jmap_backend_core::push::start_for_with`] guarantees this: it calls this
+/// function only under a strong reference from a `GWeakRef` on the instance
+/// that it got.
 pub unsafe fn dispatch(object: *mut GObject, types: &[String]) {
     let actions = actions_for(types);
     let work = Work {
         refresh_messages: actions.request_message_refresh,
         check_folder_list: actions.mark_folder_list_stale,
     };
-    // A panic here must not take the whole pump thread down with it, the
-    // same reason `Inner::run`'s pass above is wrapped in `catch_unwind`.
+    // A panic here must not stop the pump thread. This is the same reason
+    // that `catch_unwind` wraps the pass in `Inner::run`.
     jmap_backend_core::trampoline::guard("push dispatch", (), || {
         if !work.is_empty()
-            // SAFETY: a live instance of this crate's store type, by this
-            // function's contract.
+            // SAFETY: a live instance of the store type of this crate, by the
+            // contract of this function.
             && let Some(store) = unsafe { JmapStore::borrow(object.cast::<CamelStore>()) }
         {
             store.request_folder_refresh(work);
@@ -417,17 +417,17 @@ pub unsafe fn dispatch(object: *mut GObject, types: &[String]) {
     });
 }
 
-/// Which Camel calls a pushed `StateChange`'s matched `types` ask for — the
-/// decision half of [`dispatch`], kept pure and separate from it so it is
-/// testable without a live `CamelStore`/`JmapStore` GObject, neither of which
-/// this crate's test environment can construct (see this module's own tests,
-/// and `tests/push.rs`'s doc comment for why).
+/// The Camel calls that the matched `types` of a pushed `StateChange`
+/// request. This is the decision half of [`dispatch`]. It is pure and
+/// separate, so tests do not need a live `CamelStore` or `JmapStore` GObject.
+/// The test environment of this crate cannot make either (see the tests in
+/// this module and the doc comment of `tests/push.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Actions {
-    /// A `Mailbox` change: the folder list itself may have changed.
+    /// A `Mailbox` change: the folder list can have changed.
     mark_folder_list_stale: bool,
-    /// An `Email` or `EmailDelivery` change: some open folder's messages may
-    /// have changed.
+    /// An `Email` or `EmailDelivery` change: the messages of an open folder
+    /// can have changed.
     request_message_refresh: bool,
 }
 
@@ -442,10 +442,10 @@ fn actions_for(types: &[String]) -> Actions {
     }
 }
 
-/// A poisoned lock means a worker panicked mid-pass. What it guards is two
-/// booleans, which that cannot damage, so the book-keeping carries on rather
-/// than taking the account down with whatever already went wrong — the same
-/// rule [`crate::store`]'s own locks follow.
+/// A poisoned lock means that a worker panicked during a pass. The lock
+/// guards two booleans, and a panic cannot damage them. Thus the book-keeping
+/// continues and does not stop the account after the first failure. The locks
+/// of [`crate::store`] follow the same rule.
 fn lock(runs: &Mutex<Runs>) -> MutexGuard<'_, Runs> {
     runs.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -464,8 +464,8 @@ mod tests {
         names.iter().map(|name| (*name).to_owned()).collect()
     }
 
-    /// The property the whole split exists for: a `Mailbox` change asks Camel
-    /// to mark the folder list stale, and nothing else.
+    /// The main property of the split: a `Mailbox` change makes Camel mark the
+    /// folder list stale, and does nothing else.
     #[test]
     fn a_mailbox_change_marks_the_folder_list_stale_only() {
         assert_eq!(
@@ -477,8 +477,8 @@ mod tests {
         );
     }
 
-    /// An `Email` or `EmailDelivery` change asks for a message refresh, and
-    /// does not touch the folder list.
+    /// An `Email` or `EmailDelivery` change requests a message refresh, and
+    /// does not change the folder list.
     #[test]
     fn a_message_change_requests_a_refresh_only() {
         for kind in ["Email", "EmailDelivery"] {
@@ -493,8 +493,8 @@ mod tests {
         }
     }
 
-    /// A single push can name both — the whole reason `dispatch` needs to be
-    /// told which types matched, instead of one bare fn pointer.
+    /// One push can name both kinds. For this reason, `dispatch` must get the
+    /// matched types, not only a bare fn pointer.
     #[test]
     fn a_push_naming_both_kinds_asks_for_both_actions() {
         assert_eq!(
@@ -506,9 +506,9 @@ mod tests {
         );
     }
 
-    /// A type this module does not watch for — unreachable in practice, since
-    /// `start_push` only ever asks the subscription to match `PUSHED_TYPES`
-    /// plus `FOLDER_LIST_TYPES` — asks for nothing rather than guessing.
+    /// A type that this module does not watch requests nothing. In practice
+    /// this does not occur, because `start_push` makes the subscription match
+    /// only `PUSHED_TYPES` and `FOLDER_LIST_TYPES`.
     #[test]
     fn an_unwatched_type_asks_for_nothing() {
         assert_eq!(
@@ -520,27 +520,27 @@ mod tests {
         );
     }
 
-    /// A bare `GObject` to hang the weak reference on: [`FolderRefresh`] says
-    /// nothing about *which* object, and a real `CamelJmapStore` needs a
-    /// `CamelSession` over a source registry on the session bus, which no
-    /// test environment here has.
+    /// A bare `GObject` for the weak reference. [`FolderRefresh`] does not
+    /// require a specific object type. A real `CamelJmapStore` needs a
+    /// `CamelSession` with a source registry on the session bus, and no test
+    /// environment here has one.
     fn plain_object() -> *mut GObject {
-        // SAFETY: no properties are being set, so the count is zero and both
-        // arrays may be NULL.
+        // SAFETY: this sets no properties, so the count is zero and both
+        // arrays can be NULL.
         unsafe { g_object_new_with_properties(G_TYPE_OBJECT, 0, ptr::null_mut(), ptr::null()) }
     }
 
-    /// A pass that reports when it starts and then blocks until the test lets
-    /// it finish, so the overlap the coalescing is about is arranged rather
-    /// than raced for.
+    /// A pass that reports its start and then blocks until the test releases
+    /// it. Thus the test controls the overlap that the merge handles, without
+    /// a race.
     struct Gate {
         started: Receiver<()>,
         release: Sender<()>,
         passes: Arc<AtomicUsize>,
     }
 
-    /// The `Work` these tests ask for when the mechanics under test do not
-    /// care which kind — the coalescing they exercise is the same either way.
+    /// The `Work` that these tests request when the kind is not important.
+    /// The merge that they test is the same for each kind.
     const ANY_WORK: Work = Work {
         refresh_messages: true,
         check_folder_list: false,
@@ -586,20 +586,20 @@ mod tests {
         }
     }
 
-    /// The property the whole module exists for: N pushes arriving while one
-    /// pass is in flight cost exactly one more pass, not N and not none.
+    /// The main property of this module: N pushes that arrive during one pass
+    /// cause exactly one more pass, not N passes and not zero.
     #[test]
     fn pushes_arriving_during_a_pass_coalesce_into_exactly_one_more() {
         let object = plain_object();
         let (gate, pass) = gated();
-        // SAFETY: freshly constructed, one reference held here.
+        // SAFETY: a new object, and this test holds one reference.
         let refresh = unsafe { FolderRefresh::new(object, pass) };
 
         refresh.request(ANY_WORK);
         gate.await_start();
         assert_eq!(gate.passes(), 1, "the first request runs a pass");
 
-        // Three more pushes, all while the first pass is still blocked.
+        // Three more pushes, while the first pass is still blocked.
         refresh.request(ANY_WORK);
         refresh.request(ANY_WORK);
         refresh.request(ANY_WORK);
@@ -624,17 +624,17 @@ mod tests {
         }
         assert_eq!(gate.passes(), 2, "and no further pass runs unasked");
 
-        // SAFETY: releasing this test's own reference, the last one.
+        // SAFETY: this releases the last reference, which this test owns.
         unsafe { g_object_unref(object) };
     }
 
-    /// Requests that do not overlap each get their own pass — the coalescing
-    /// must not swallow a push that arrived after the last pass finished.
+    /// Each request that does not overlap gets its own pass. The merge must
+    /// not lose a push that arrives after the last pass completes.
     #[test]
     fn requests_that_do_not_overlap_each_run_a_pass() {
         let object = plain_object();
         let (gate, pass) = gated();
-        // SAFETY: freshly constructed, one reference held here.
+        // SAFETY: a new object, and this test holds one reference.
         let refresh = unsafe { FolderRefresh::new(object, pass) };
 
         for expected in 1..=3 {
@@ -649,31 +649,31 @@ mod tests {
             }
         }
 
-        // SAFETY: releasing this test's own reference, the last one.
+        // SAFETY: this releases the last reference, which this test owns.
         unsafe { g_object_unref(object) };
     }
 
-    /// Asking for nothing must not start a worker at all — [`dispatch`] relies
-    /// on this to make an all-false [`Actions`] a true no-op.
+    /// A request for no work must not start a worker. [`dispatch`] needs this,
+    /// so an [`Actions`] with only false values does nothing.
     #[test]
     fn requesting_no_work_starts_no_pass() {
         let object = plain_object();
         let (_gate, pass) = gated();
-        // SAFETY: freshly constructed, one reference held here.
+        // SAFETY: a new object, and this test holds one reference.
         let refresh = unsafe { FolderRefresh::new(object, pass) };
 
         refresh.request(Work::default());
         assert!(!refresh.busy(), "no work was asked for");
 
-        // SAFETY: releasing this test's own reference, the last one.
+        // SAFETY: this releases the last reference, which this test owns.
         unsafe { g_object_unref(object) };
     }
 
-    /// What [`gated_recording`] hands back the passes it observed in.
+    /// The type in which [`gated_recording`] gives back the passes it saw.
     type Seen = Arc<Mutex<Vec<Work>>>;
 
-    /// Like [`gated`], but also records which [`Work`] each pass actually
-    /// received — what the union test below checks.
+    /// Like [`gated`], but also records the [`Work`] that each pass got. The
+    /// union test below checks these records.
     fn gated_recording() -> (
         Gate,
         Seen,
@@ -706,15 +706,14 @@ mod tests {
         )
     }
 
-    /// A `Mailbox` push and an `Email` push both arriving while one pass is
-    /// already running must not have either kind of work lost to the other:
-    /// the single coalesced pass that answers both has to actually do both,
-    /// which is what `Work::union` is for and this pins.
+    /// A `Mailbox` push and an `Email` push arrive while one pass runs. Neither
+    /// kind of work must get lost. The one merged pass that answers both must
+    /// do both. `Work::union` does this, and this test pins it.
     #[test]
     fn work_requested_during_a_pass_unions_into_the_next_one() {
         let object = plain_object();
         let (gate, seen, pass) = gated_recording();
-        // SAFETY: freshly constructed, one reference held here.
+        // SAFETY: a new object, and this test holds one reference.
         let refresh = unsafe { FolderRefresh::new(object, pass) };
 
         let check_only = Work {
@@ -729,9 +728,8 @@ mod tests {
         refresh.request(check_only);
         gate.await_start();
 
-        // Both arrive while the first pass is still blocked, so the pass
-        // coalesced from them owes the union, not just the last one asked
-        // for.
+        // Both arrive while the first pass is still blocked. Thus the merged
+        // pass must do the union, not only the last request.
         refresh.request(messages_only);
         refresh.request(check_only);
         gate.release_one();
@@ -756,18 +754,18 @@ mod tests {
             "the coalesced pass must do both kinds of work, not just one"
         );
 
-        // SAFETY: releasing this test's own reference, the last one.
+        // SAFETY: this releases the last reference, which this test owns.
         unsafe { g_object_unref(object) };
     }
 
-    /// A pass that panics must not take the account's push with it: the
-    /// worker's book-keeping is unwound, so the *next* push still starts one.
+    /// A pass that panics must not stop push for the account. The worker
+    /// resets its book-keeping, so the *next* push still starts a pass.
     #[test]
     fn a_panicking_pass_does_not_wedge_the_account() {
         let object = plain_object();
         let passes = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&passes);
-        // SAFETY: freshly constructed, one reference held here.
+        // SAFETY: a new object, and this test holds one reference.
         let refresh = unsafe {
             FolderRefresh::new(object, move |_, _| {
                 counter.fetch_add(1, Ordering::SeqCst);
@@ -789,8 +787,9 @@ mod tests {
             );
         }
 
-        // Each panicking pass keeps the reference `WeakBackend::with_strong`
-        // took, by design. This test releases those two and its own.
+        // By design, each panicking pass keeps the reference that
+        // `WeakBackend::with_strong` took. This test releases those two and
+        // its own.
         // SAFETY: the object is live, and this test holds all three references.
         unsafe {
             assert_eq!((*object).ref_count, 3, "each panicking pass keeps one");
@@ -800,21 +799,21 @@ mod tests {
         }
     }
 
-    /// A push that arrives after Camel released the store refreshes nothing —
-    /// the use-after-free this reaches the store weakly to avoid.
+    /// A push that arrives after Camel released the store refreshes nothing.
+    /// The weak reference to the store prevents this use-after-free.
     #[test]
     fn a_request_after_the_store_is_gone_runs_no_pass() {
         let object = plain_object();
         let passes = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&passes);
-        // SAFETY: freshly constructed, one reference held here.
+        // SAFETY: a new object, and this test holds one reference.
         let refresh = unsafe {
             FolderRefresh::new(object, move |_, _| {
                 counter.fetch_add(1, Ordering::SeqCst);
             })
         };
-        // SAFETY: releasing this test's own reference, the last one, so the
-        // object is gone before the push arrives.
+        // SAFETY: this releases the last reference, which this test owns.
+        // Thus the object is gone before the push arrives.
         unsafe { g_object_unref(object) };
 
         refresh.request(ANY_WORK);
