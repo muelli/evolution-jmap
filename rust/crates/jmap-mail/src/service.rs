@@ -4,62 +4,58 @@
 //! The `CamelService` vfuncs: `connect_sync`, `authenticate_sync` and
 //! `disconnect_sync`.
 //!
-//! Three slots, one operation. Camel's division of labour is not the obvious
-//! one — a service does *not* open its connection in `connect_sync`. It asks
-//! its `CamelSession` to authenticate it, and the session, which is the only
-//! object that may touch a stored password or put a prompt in front of the
-//! user, calls `authenticate_sync` back: once if the password it had works,
-//! once more for every password the user types after that. Every Camel store
-//! in tree is built this way (IMAPX and POP3 both call
-//! `camel_session_authenticate_sync` from their `connect_sync`), and the reason
-//! is the re-prompt: a service that opened its own connection would have
-//! nowhere to send the user when the password turned out to be wrong.
+//! Three slots do one operation. A Camel service does *not* open its connection
+//! in `connect_sync`. It asks its `CamelSession` to authenticate it. The session
+//! is the only object that can read a stored password or show a prompt. It
+//! calls `authenticate_sync` back: once if its password works, and once more for
+//! each password that the user types after that. Each Camel store in tree works
+//! this way (IMAPX and POP3 both call `camel_session_authenticate_sync` from
+//! their `connect_sync`). The reason is the new prompt: a service that opens its
+//! own connection cannot ask the user again when the password is wrong.
 //!
-//! So `connect_sync` here is a short-circuit and a delegation, and everything
-//! that actually happens happens in `authenticate_sync`: read the server off
-//! the settings, take the password the session has just put on the service,
-//! open the account, install it on the store. Which is why the two functions
-//! this module exports — the ones a test can reach without a `CamelSession`,
-//! an `EMailSession`, a source registry and a session bus — are exactly those
-//! steps minus the GObject: [`authenticate`] and [`report_authentication`].
+//! Thus `connect_sync` here only does a short-circuit and a delegation.
+//! `authenticate_sync` does the work: it reads the server from the settings,
+//! takes the password that the session put on the service, opens the account,
+//! and installs it on the store. Two exported functions do these steps without
+//! the GObject: [`authenticate`] and [`report_authentication`]. A test can call
+//! them without a `CamelSession`, an `EMailSession`, a source registry and a
+//! session bus.
 //!
-//! The one thing `connect_sync` decides on its way there is *which mechanism*
-//! it names, and for an OAuth 2.0 account that decides whether the session
-//! calls `authenticate_sync` back at all before it puts a consent window in
-//! front of the user. [`crate::sasl`] is where that mechanism, and the reasoning
-//! behind it, lives.
+//! `connect_sync` also selects *which mechanism* it names. For an OAuth 2.0
+//! account, the mechanism decides if the session calls `authenticate_sync`
+//! before it shows a consent window. [`crate::sasl`] holds that mechanism and
+//! the reasons for it.
 //!
 //! ## The verdict, and when it comes with a `GError`
 //!
-//! `authenticate_sync` answers twice: a [`CamelAuthenticationResult`] and,
-//! optionally, an error. The two are not independent.
+//! `authenticate_sync` gives two answers: a [`CamelAuthenticationResult`] and,
+//! optionally, an error. The two answers are not independent.
 //! `camel_session_authenticate_sync` reads `REJECTED` as "ask the user for
-//! another password and call me again" and keeps looping; it only gives up, and
-//! only propagates a `GError`, on `ERROR`. An error set alongside a `REJECTED`
-//! is therefore reported for an attempt that has not failed yet — in the best
-//! case leaked, in the worst case shown to a user who is being asked for a
-//! password at the same time. [`report_authentication`] is where that rule
-//! lives, and it is the only place either answer is produced.
+//! another password and call me again", and continues its loop. It stops, and
+//! gives a `GError` to its caller, only on `ERROR`. Thus an error set with a
+//! `REJECTED` reports an attempt that has not failed yet. In the best case, the
+//! error leaks. In the worst case, the user sees it during a password prompt.
+//! [`report_authentication`] applies that rule, and it is the only place that
+//! makes either answer.
 //!
 //! ## Two services, one set of vfuncs
 //!
-//! Camel gives an account two services: the [`crate::store`] it reads from and
-//! the [`crate::transport`] it sends through. Both are `CamelService`s, both are
-//! configured through the same settings class, and both connect by exactly the
-//! steps above — so the vfuncs are written once here and installed on both, over
-//! the [`Connected`] trait that says which of the two the instance pointer is.
-//! What the trait carries is the only thing that differs: where the connection
-//! that opening the account produced is put.
+//! Camel gives an account two services: the [`crate::store`] that it reads
+//! from, and the [`crate::transport`] that it sends through. Both are
+//! `CamelService`s, both use the same settings class, and both connect with the
+//! steps above. Thus this module writes the vfuncs once and installs them on
+//! both. The [`Connected`] trait tells which of the two the instance pointer
+//! is. The only difference is in the trait: where the new connection goes.
 //!
-//! ## And the fourth vfunc, which is not about connecting
+//! ## The fourth vfunc, which is not about connecting
 //!
-//! `get_name` is what Camel calls the account in its own sentences — "Cannot
-//! get folder … from store …", the progress the user watches, the line an error
-//! dialog puts the failure on. `CamelService` provides no default for it: the
+//! `get_name` gives the name that Camel uses for the account in its own
+//! messages: "Cannot get folder … from store …", the progress text, and the
+//! failure line in an error dialog. `CamelService` gives no default for it. The
 //! accessor is a `g_return_val_if_fail (class->get_name != NULL, NULL)`, so a
-//! store that leaves the slot empty answers NULL and logs a critical every time
-//! Camel mentions it. [`describe`] is the answer, and it is a pure function of
-//! the three fields the settings carry so that it can be tested as one.
+//! store with an empty slot gives NULL and logs a critical each time. [`describe`]
+//! gives the name. It is a pure function of three settings fields, so a test can
+//! call it directly.
 
 use std::ptr;
 
@@ -91,52 +87,48 @@ use crate::server::{ServerConfig, network, take_string};
 /// A service of this provider that holds a JMAP connection: the store, and the
 /// transport.
 ///
-/// The three methods are the whole of what the vfuncs below need to know about
-/// the instance they were dispatched on. Everything else — reading the settings,
-/// asking the session to authenticate, opening the account, classifying the
-/// failure — is the same operation on either service, and is written once.
+/// The vfuncs below need only these three methods from their instance. The
+/// other steps (read the settings, ask the session to authenticate, open the
+/// account, classify the failure) are the same on both services.
 ///
-/// The connection is *held* rather than returned because the two services keep
-/// it differently: the store drops its folder listing with it, and a later
-/// increment's transport may keep more beside it. What neither may do is share
-/// one, and the trait is why that is not even expressible here — each
-/// implementer names its own slot.
+/// The service *holds* the connection, and does not return it, because the two
+/// services keep it differently. The store drops its folder listing with it.
+/// The two services must never share one connection: each implementer names
+/// its own slot, so the trait cannot express a shared one.
 ///
 /// # Safety
 ///
-/// The instance struct of the `GType` an implementer registers must be `Self`,
-/// and that type must derive from `CamelService`: the vfuncs are dispatched on
-/// a `CamelService *` and read `Self` straight through it, which is the same
-/// cast every `G_DEFINE_TYPE` service makes.
+/// The instance struct of the `GType` that an implementer registers must be
+/// `Self`, and that type must derive from `CamelService`. The vfuncs get a
+/// `CamelService *` and read `Self` directly through it. Each `G_DEFINE_TYPE`
+/// service does the same cast.
 pub unsafe trait Connected: ObjectSubclass<Instance = Self> {
-    /// Installs `sync` as the live connection, replacing whatever was there.
+    /// Installs `sync` as the live connection, and replaces the previous one.
     fn hold_connection(&self, sync: MailSync);
-    /// Drops the connection, if there is one. Not having one is not a failure:
-    /// Camel disconnects every service on shutdown, connected or not.
+    /// Drops the connection, if there is one. No connection is not a failure:
+    /// Camel disconnects each service on shutdown, connected or not.
     fn release_connection(&self);
-    /// Whether an operation would find a connection.
+    /// Tells if an operation finds a connection.
     fn holds_connection(&self) -> bool;
 }
 
-/// Opens the account `config` names and installs it on `service`.
+/// Opens the account that `config` names, and installs it on `service`.
 ///
-/// The body of `authenticate_sync`, with the GObject taken out: everything
-/// above it is reading the two arguments off a `CamelService`, everything below
-/// it is [`open_mail`].
+/// This is the body of `authenticate_sync` without the GObject. Before it, the
+/// vfunc reads the two arguments from a `CamelService`. Below it is
+/// [`open_mail`].
 ///
-/// A failure leaves the service exactly as it was, including a connection that
-/// was working — Camel re-authenticates a service it already has one for (a
-/// password change, a session that lost track of the account), and a store that
-/// dropped its connection on the way to being told the new password would stop
-/// serving folders it was serving a moment ago. A *success* does replace it,
-/// listing and all, because the account was re-authenticated for a reason and
-/// the tree the old connection produced may describe a different server.
+/// A failure keeps the service as it was, with its working connection. Camel
+/// authenticates a connected service again after a password change, or when
+/// the session loses track of the account. A store that dropped its connection
+/// before the new password arrives stops serving its folders. A *success*
+/// replaces the connection and the listing. The account was authenticated
+/// again for a reason, and the old tree can describe a different server.
 ///
-/// Cancellation is the caller's, and is not passed: the connection this opens
-/// outlives the call that opened it, so a flag built into it would be one this
-/// operation could set and no later operation could unset. What stops the
-/// connect is the scope the vfunc installed — see [`observe`] — which is also
-/// what stops every operation afterwards.
+/// This function does not get the caller's cancellable. The new connection
+/// lives longer than this call, so a flag in it could not be cleared by a later
+/// operation. The scope that the vfunc installs (see [`observe`]) stops the
+/// connect, and it also stops each later operation.
 pub fn authenticate<T: Connected>(
     service: &T,
     config: &ServerConfig,
@@ -147,15 +139,14 @@ pub fn authenticate<T: Connected>(
     Ok(())
 }
 
-/// Turns one attempt into the two answers `authenticate_sync` returns.
+/// Changes one attempt into the two answers that `authenticate_sync` returns.
 ///
-/// Takes ownership of the failure and, where there is one, hands the `GError`
-/// it becomes to `error` — or frees it, if the caller did not ask for one.
+/// Takes ownership of the failure. If there is a failure, it gives the
+/// resulting `GError` to `error`, or frees it if the caller did not ask for one.
 ///
-/// The rule this function exists for: only an `ERROR` verdict carries an error.
-/// `ACCEPTED` has nothing to report, and `REJECTED` is not a failure Camel is
-/// being told about — it is a request for another password, which the session
-/// answers by prompting and calling back. See the module docs.
+/// The rule: only an `ERROR` verdict carries an error. `ACCEPTED` has nothing to
+/// report. `REJECTED` is not a failure report. It requests another password, and
+/// the session answers with a prompt and a new call. See the module docs.
 ///
 /// # Safety
 ///
@@ -177,24 +168,22 @@ pub unsafe fn report_authentication(
     result
 }
 
-/// What Camel calls this account, in its two documented forms.
+/// The name of this account in Camel, in its two documented forms.
 ///
-/// `brief` is the one Camel asks for when the name goes in a folder tree or in
-/// the middle of one of its own sentences, so it is the server and nothing
-/// else; the other is documented as "complete and mostly unambiguous", which is
-/// what the user and the port are here for. JMAP is HTTP and a JMAP account is
-/// therefore quite normally one of several on a host — a local server, a test
-/// one — so a port the account names belongs in the form whose job is to tell
-/// two accounts apart, and stays out of the form whose job is to be short.
+/// Camel asks for the `brief` form for a folder tree or for the middle of its
+/// own messages, so it holds only the server. The documentation calls the
+/// other form "complete and mostly unambiguous", so it adds the user and the
+/// port. JMAP is HTTP, so one host often has several JMAP accounts (a local
+/// server, a test server). Thus the port goes in the form that tells accounts
+/// apart, and stays out of the short form.
 ///
-/// An account with no server yet is named without one. `"JMAP server "` with
-/// the host left off is a sentence about a server that is not there, and Camel
-/// asks for the name of a service long before anything has configured it.
+/// An account with no server yet gets a name without one. `"JMAP server "`
+/// without a host names a server that does not exist. Camel asks for the name
+/// of a service before any configuration is done.
 ///
-/// The strings are English and untranslated, like the provider's own name and
-/// description: there is no message catalogue under this module's domain yet,
-/// and inventing calls into one that does not exist would not make them
-/// translated.
+/// The strings are English and not translated, like the name and description
+/// of the provider. This module's domain has no message catalogue yet, and
+/// calls into a catalogue that does not exist do not translate them.
 pub fn describe(host: Option<&str>, port: u16, user: Option<&str>, brief: bool) -> String {
     let Some(host) = host else {
         return "JMAP account".to_owned();
@@ -218,17 +207,16 @@ pub fn describe(host: Option<&str>, port: u16, user: Option<&str>, brief: bool) 
 /// Installs the four service vfuncs on a class whose first member is a
 /// `CamelServiceClass`.
 ///
-/// `T` is the type being registered, and it is what the three connecting vfuncs
-/// read the instance pointer as. Naming it here rather than inferring it from
-/// the class pointer is the point: a caller that installed the store's vfuncs on
-/// the transport's class would have every connect on that service read a
-/// `CamelTransport` as a `CamelJmapStore`.
+/// `T` is the type that the caller registers. The three connect vfuncs read the
+/// instance pointer as `T`. The caller names `T` explicitly, and the class
+/// pointer does not set it. Otherwise, the store's vfuncs on the transport's
+/// class make each connect read a `CamelTransport` as a `CamelJmapStore`.
 ///
 /// # Safety
 ///
-/// `class` must point at an initialised class struct of the type `T` registers —
-/// which leads with a `CamelServiceClass`, because `T`'s contract has it derive
-/// from `CamelService`.
+/// `class` must point at an initialised class struct of the type that `T`
+/// registers. That struct starts with a `CamelServiceClass`, because the
+/// contract of `T` makes it derive from `CamelService`.
 pub unsafe fn install_vfuncs<T: Connected>(class: *mut CamelServiceClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
@@ -238,19 +226,19 @@ pub unsafe fn install_vfuncs<T: Connected>(class: *mut CamelServiceClass) {
     vfuncs.disconnect_sync = Some(disconnect_sync::<T>);
 }
 
-/// Answers what this account is called, as a string Camel frees.
+/// Gives the name of this account, as a string that Camel frees.
 ///
-/// The one vfunc here with no `GError` out-parameter and no failure value:
-/// every caller drops the answer straight into a message, and `CamelService`'s
-/// accessor turns a missing implementation into NULL and a critical. So a panic
-/// becomes the name of an account nothing is known about rather than a NULL —
-/// the guard's critical is where the bug is reported.
+/// This is the only vfunc here with no `GError` out-parameter and no failure
+/// value. Each caller puts the answer directly into a message, and the
+/// `CamelService` accessor changes a missing implementation into NULL and a
+/// critical. Thus a panic gives the name of an unknown account, not a NULL.
+/// The critical from the guard reports the bug.
 unsafe extern "C" fn get_name(service: *mut CamelService, brief: gboolean) -> *mut gchar {
     let brief = brief != GFALSE;
     let name = jmap_backend_core::trampoline::guard(
         "get_name",
         describe(None, 0, None, brief),
-        // SAFETY: Camel's contract for the vfunc — a valid instance of ours.
+        // SAFETY: Camel's contract for the vfunc: a valid instance of ours.
         || unsafe { name_of(service, brief) },
     );
     // SAFETY: the caller of `camel_service_get_name` frees the result, which is
@@ -258,26 +246,25 @@ unsafe extern "C" fn get_name(service: *mut CamelService, brief: gboolean) -> *m
     unsafe { dup_string(&name) }
 }
 
-/// Reads the three fields [`describe`] needs off the service's settings.
+/// Reads the three fields that [`describe`] needs from the service's settings.
 ///
-/// The host in the spelling the *account* uses rather than the punycoded one
-/// [`ServerConfig`] takes: nothing connects with this string, and an account
-/// configured in an internationalised domain name should be described in the
-/// name its owner typed.
+/// The host keeps the spelling of the *account*, not the punycode form that
+/// [`ServerConfig`] uses. No connection uses this string. An account with an
+/// internationalised domain name gets the name that its owner typed.
 ///
 /// # Safety
 ///
 /// `service` must be a valid `CamelService`.
 unsafe fn name_of(service: *mut CamelService, brief: bool) -> String {
-    // SAFETY: the contract above; the reference is released when `settings`
+    // SAFETY: the contract above. `settings` releases the reference when it
     // drops at the end of the scope.
     let settings = unsafe { Owned::from_raw(camel_service_ref_settings(service)) };
-    // SAFETY: `settings` is NULL or the `CamelSettings` Camel just handed over.
+    // SAFETY: `settings` is NULL or the `CamelSettings` that Camel just gave.
     let read = unsafe { network(settings.as_ref().map_or(ptr::null_mut(), Owned::as_ptr)) }.map(
         |network| {
-            // SAFETY: `network` implements the interface, checked above; the
-            // `dup_` accessors return g_malloc'd copies `take_string` frees,
-            // rather than pointers into storage another thread may replace.
+            // SAFETY: `network` implements the interface, checked above. The
+            // `dup_` accessors return g_malloc'd copies that `take_string`
+            // frees, not pointers into storage that another thread can replace.
             unsafe {
                 (
                     take_string(camel_network_settings_dup_host(network)),
@@ -292,13 +279,13 @@ unsafe fn name_of(service: *mut CamelService, brief: bool) -> String {
     describe(host.as_deref(), port, user.as_deref(), brief)
 }
 
-/// Asks the session to authenticate this service, unless it already did.
+/// Asks the session to authenticate this service, if it has no connection yet.
 ///
-/// No connection is opened here — see the module docs. The short-circuit is the
-/// same one the address book backend's `connect_sync` makes and for the same
-/// reason: Camel reconnects a service whenever it suspects the connection is
-/// gone, including when it is not, and re-opening a live one would drop a
-/// socket other threads are mid-request on.
+/// This function opens no connection (see the module docs). The address book
+/// backend's `connect_sync` does the same short-circuit, for the same reason.
+/// Camel connects a service again each time it suspects a lost connection,
+/// also when the connection is live. To open a live connection again drops a
+/// socket that other threads use for requests in progress.
 unsafe extern "C" fn connect_sync<T: Connected>(
     service: *mut CamelService,
     cancellable: *mut GCancellable,
@@ -318,41 +305,39 @@ unsafe extern "C" fn connect_sync<T: Connected>(
             }
             tracing::debug!("initiating mail service connection");
 
-            // The one object allowed to read a stored password or prompt for a
-            // new one. A service without a session is a service nothing can
-            // authenticate, which is the same dead end as having no store.
+            // The session is the only object that can read a stored password
+            // or prompt for a new one. Without a session, nothing can
+            // authenticate the service, the same failure as no store.
             // `session` releases the reference when it drops at the end of the
             // scope.
             let Some(session) = Owned::from_raw(camel_service_ref_session(service)) else {
                 return fail_disconnected(error);
             };
 
-            // Which mechanism the session is asked to authenticate under. For
-            // an OAuth 2.0 account it is [`crate::sasl::MECHANISM`], and
-            // naming it is what buys the account a silent attempt:
-            // `mail_ui_session_authenticate_sync` (e-mail-ui-session.c, 3.52)
-            // looks the string up with `camel_sasl_authtype` and, finding a
-            // mechanism that does not need a password, calls this service's
-            // own `authenticate_sync` once before any prompt — falling to the
-            // consent window only if that attempt comes back REJECTED. A NULL
-            // mechanism skips that branch entirely and prompts first, which is
-            // the consent-at-every-send behaviour GNOME/evolution#3382 reports.
+            // The mechanism for the session's authentication. For an OAuth 2.0
+            // account it is [`crate::sasl::MECHANISM`], and this name gives
+            // the account a silent attempt. `mail_ui_session_authenticate_sync`
+            // (e-mail-ui-session.c, 3.52) finds the string with
+            // `camel_sasl_authtype`. For a mechanism that needs no password, it
+            // calls this service's `authenticate_sync` once before any prompt.
+            // It shows the consent window only if that attempt gives REJECTED.
+            // A NULL mechanism skips that branch and prompts first. That is the
+            // consent window at each send that GNOME/evolution#3382 reports.
             //
-            // The mechanism is the SASL's own name and not whatever the
-            // account's `auth-mechanism` field happens to say, because
-            // `uses_oauth2` also accepts EDS's generic `"OAuth2"` spelling
-            // (`method_is_oauth2`) — a string no `CamelSasl` and no
-            // `EOAuth2Service` is named after. Passing that through would fail
-            // both of the session's lookups; passing ours makes the silent
+            // The mechanism is the name of the SASL, not the value of the
+            // account's `auth-mechanism` field. `uses_oauth2` also accepts the
+            // generic EDS spelling `"OAuth2"` (`method_is_oauth2`), and no
+            // `CamelSasl` and no `EOAuth2Service` has that name. That value
+            // fails both lookups of the session. Our name makes the silent
             // attempt *and* its `e_oauth2_services_is_oauth2_alias` recovery
-            // work for an account written either way.
+            // work for an account with either spelling.
             //
-            // Every other credential kind keeps the NULL, and the difference
-            // is not a preference: a password and an API token both have to be
-            // *typed*, so the session's prompt-first loop is where they come
-            // from. There is no SASL mechanism to name for either — Basic and
-            // Bearer are HTTP, negotiated by the client, which is also why
-            // `query_auth_types_sync` is left alone.
+            // Each other credential kind keeps the NULL, for a reason. The user
+            // must *type* a password or an API token, so they come from the
+            // prompt-first loop of the session. Neither has a SASL mechanism:
+            // Basic and Bearer are HTTP, and the client negotiates them. For
+            // the same reason, this code does not override
+            // `query_auth_types_sync`.
             let settings = Owned::from_raw(camel_service_ref_settings(service));
             let mechanism = crate::sasl::mechanism_for(
                 settings.as_ref().map_or(ptr::null_mut(), Owned::as_ptr),
@@ -369,24 +354,22 @@ unsafe extern "C" fn connect_sync<T: Connected>(
     }
 }
 
-/// Opens the account, with the password the session has just put on the
+/// Opens the account, with the password that the session just put on the
 /// service.
 unsafe extern "C" fn authenticate_sync<T: Connected>(
     service: *mut CamelService,
-    // Ignored, and deliberately: on the OAuth 2.0 path this is
-    // [`crate::sasl::MECHANISM`] handed back to us by the session, which tells
-    // us nothing [`attempt`] does not read off the settings itself, and on
-    // every other path it is NULL. What the mechanism decides is whether the
-    // session calls this vfunc at all before prompting — a question already
-    // answered by the time we are in here.
+    // Not used, on purpose. On the OAuth 2.0 path, the session gives back
+    // [`crate::sasl::MECHANISM`], and [`attempt`] reads the same fact from the
+    // settings. On each other path it is NULL. The mechanism decides if the
+    // session calls this vfunc before a prompt. When this vfunc runs, that
+    // decision is already made.
     _mechanism: *const gchar,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> CamelAuthenticationResult {
-    // A panic is the one outcome `report_authentication` cannot classify: it is
-    // a bug in this code rather than an account that failed, so it is reported
-    // separately rather than dressed up as a service error the user could act
-    // on.
+    // `report_authentication` cannot classify a panic. A panic is a bug in this
+    // code, not an account failure. Thus this code reports it separately, not
+    // as a service error that the user can correct.
     let outcome = jmap_backend_core::trampoline::guard("authenticate_sync", None, || {
         // SAFETY: Camel's contract for the vfunc, as `connect_sync`'s.
         Some(unsafe { attempt::<T>(service, cancellable) })
@@ -399,24 +382,25 @@ unsafe extern "C" fn authenticate_sync<T: Connected>(
     }
 }
 
-/// Everything `authenticate_sync` does between the guard and the verdict.
+/// The steps of `authenticate_sync` between the guard and the verdict.
 ///
 /// # Safety
 ///
-/// As the vfunc: `service` must be an instance of this type, `cancellable`
-/// NULL or valid.
+/// As the vfunc: `service` must be an instance of this type, and `cancellable`
+/// must be NULL or valid.
 unsafe fn attempt<T: Connected>(
     service: *mut CamelService,
     cancellable: *mut GCancellable,
 ) -> Result<(), StoreError> {
     let connected = unsafe { instance::<T>(service) }.ok_or(StoreError::Disconnected)?;
 
-    // Camel hands out a reference; the config is read before it is released,
-    // and nothing borrowed from the settings outlives the call. `settings`
-    // releases the reference when it drops at the end of the scope.
-    // SAFETY: `service` is a valid CamelService, so the settings it returns are
-    // a valid CamelSettings — of the class `settings_type` names, which is what
-    // `from_settings` requires.
+    // Camel gives a reference. This code reads the config before it releases
+    // the reference, and no borrow from the settings lives longer than the
+    // call. `settings` releases the reference when it drops at the end of the
+    // scope.
+    // SAFETY: `service` is a valid CamelService, so it returns a valid
+    // CamelSettings of the class that `settings_type` names. `from_settings`
+    // requires that.
     let settings = unsafe { Owned::from_raw(camel_service_ref_settings(service)) };
     let settings_ptr = settings.as_ref().map_or(ptr::null_mut(), Owned::as_ptr);
     let config = unsafe { ServerConfig::from_settings(settings_ptr) };
@@ -427,45 +411,45 @@ unsafe fn attempt<T: Connected>(
     drop(settings);
     let config = config?;
 
-    // SAFETY: the cancellable is Camel's, and it outlives the call — which is
-    // exactly the scope this observation wants.
+    // SAFETY: the cancellable is Camel's, and it lives longer than the call.
+    // This observation needs exactly that scope.
     let _cancel = unsafe { observe(cancellable) };
 
-    // Which authentication scheme this account uses is decided here, the same
-    // way `jmap_backend_core::connect::connect_with` decides it for the EDS
-    // backends — off the same field Evolution's account editor writes
-    // alongside the `ESource` side of the same choice. See `oauth2`'s module
-    // docs for why asking a second time here cannot disagree with them.
+    // This code selects the authentication scheme of the account, the same way
+    // `jmap_backend_core::connect::connect_with` does for the EDS backends. Both
+    // read the field that Evolution's account editor writes together with the
+    // `ESource` side of the same choice. The module docs of `oauth2` tell why
+    // this second check cannot disagree with them.
     let credentials = if uses_oauth2 {
         tracing::debug!(uses_oauth2 = true, "authenticating with OAuth 2.0");
-        // The one object allowed to fetch an OAuth 2.0 token, as it is the
-        // only object allowed to fetch a password. `session` releases the
-        // reference `ref_session` handed over when it drops at the end of the
+        // The session is the only object that can get an OAuth 2.0 token, as
+        // it is the only object that can get a password. `session` releases
+        // the reference from `ref_session` when it drops at the end of the
         // scope.
         // SAFETY: `service` is a valid CamelService by this function's
         // contract.
         let Some(session) = (unsafe { Owned::from_raw(camel_service_ref_session(service)) }) else {
             return Err(StoreError::Disconnected);
         };
-        // SAFETY: `service` valid by this function's contract, and
-        // `cancellable` satisfies `access_token`'s contract by this
+        // SAFETY: `service` is valid by this function's contract, and
+        // `cancellable` meets the contract of `access_token` by this
         // function's own.
         let token = unsafe { oauth2::access_token(session.as_ptr(), service, cancellable) };
         Credentials::bearer(token?)
     } else if uses_api_token {
         tracing::debug!(uses_api_token = true, "authenticating with an API token");
-        // The pasted token rides the same password prompt Basic uses — see
-        // `jmap_backend_core::api_token`'s module docs for why — so it is
-        // read exactly where the password is, just below.
+        // The pasted token uses the same password prompt as Basic (the module
+        // docs of `jmap_backend_core::api_token` tell why). Thus this code
+        // reads it from the same place as the password, below.
         // SAFETY: a borrowed, NULL-or-NUL-terminated string owned by the
         // service; `read_string` copies what it needs.
         let password = unsafe { read_string(camel_service_get_password(service)) };
         bearer_credentials(password.as_deref())
     } else {
         tracing::debug!("authenticating with a password");
-        // The session put it there before calling us, and it is the only
-        // credential this code ever sees: nothing reads a password out of the
-        // settings object, which Evolution serialises into a config file.
+        // The session puts the password there before it calls this vfunc. It
+        // is the only credential that this code sees. Nothing reads a password
+        // from the settings object, which Evolution writes to a config file.
         // SAFETY: a borrowed, NULL-or-NUL-terminated string owned by the
         // service; `read_string` copies what it needs.
         let password = unsafe { read_string(camel_service_get_password(service)) };
@@ -475,15 +459,15 @@ unsafe fn attempt<T: Connected>(
     finish_authenticate(uses_oauth2, authenticate(connected, &config, credentials))
 }
 
-/// What `attempt` reports, given what [`authenticate`] itself answered.
+/// The result of `attempt`, from the answer of [`authenticate`].
 ///
-/// Split out from `attempt` so this decision — reclassify only an OAuth 2.0
-/// attempt's rejection, leave every other outcome exactly as `authenticate`
-/// gave it — is a plain function a test can drive without a `CamelService`,
-/// the same way [`authenticate`] itself is split out from the vfunc for a
-/// `CamelSession`. See `StoreError::reclassify_oauth2_rejection`'s own doc for
-/// why a 401 on a bearer token EDS itself handed over is not "the password
-/// was wrong" the way it is for Basic or an API token.
+/// The decision is to reclassify only the rejection of an OAuth 2.0 attempt,
+/// and to keep each other outcome from `authenticate` as it is. It is a
+/// separate plain function so a test can call it without a `CamelService`.
+/// [`authenticate`] is separate from the vfunc for the same reason, for a
+/// `CamelSession`. The doc of `StoreError::reclassify_oauth2_rejection` tells
+/// why a 401 on a bearer token from EDS does not mean "wrong password", as it
+/// does for Basic or an API token.
 fn finish_authenticate(
     uses_oauth2: bool,
     outcome: Result<(), StoreError>,
@@ -502,13 +486,13 @@ fn finish_authenticate(
     outcome
 }
 
-/// Drops the connection, then lets `CamelService` do its half.
+/// Drops the connection, then lets `CamelService` do its part.
 ///
-/// Ours goes first: the parent's `disconnect_sync` is what marks the service
-/// disconnected, and a connection still in the slot after that is one a racing
-/// operation could pick up and use against a service Camel believes is closed.
-/// Dropping one that is not there is not a failure — it is what Camel asks of
-/// every service on shutdown, whether or not it ever connected.
+/// Our part goes first. The parent's `disconnect_sync` marks the service
+/// disconnected. After that, a racing operation can use a connection still in
+/// the slot, on a service that Camel thinks is closed. To drop a missing
+/// connection is not a failure. Camel asks each service for it on shutdown,
+/// connected or not.
 unsafe extern "C" fn disconnect_sync<T: Connected>(
     service: *mut CamelService,
     clean: gboolean,
@@ -524,39 +508,39 @@ unsafe extern "C" fn disconnect_sync<T: Connected>(
             }
             match parent_service_class::<T>().and_then(|class| class.disconnect_sync) {
                 Some(chain_up) => chain_up(service, clean, cancellable, error),
-                // Unreachable against any Camel that has a CamelService at all,
-                // and there is nothing left for this side to do either way.
+                // Each Camel with a CamelService has this slot. If not, this
+                // side has nothing more to do.
                 None => GTRUE,
             }
         })
     }
 }
 
-/// The Rust view of the instance pointer Camel handed us.
+/// The Rust view of the instance pointer from Camel.
 ///
 /// # Safety
 ///
-/// `service` must be NULL or point at an instance of `T`. Camel only dispatches
-/// a class's vfuncs on instances of that class, so a vfunc installed by
-/// [`install_vfuncs`] for the same `T` satisfies this — and that is the whole
-/// of what the type parameter is for.
+/// `service` must be NULL or point at an instance of `T`. Camel calls the
+/// vfuncs of a class only on instances of that class. Thus a vfunc that
+/// [`install_vfuncs`] installs for the same `T` meets this contract. The type
+/// parameter exists for that purpose only.
 unsafe fn instance<'a, T: Connected>(service: *mut CamelService) -> Option<&'a T> {
     unsafe { service.cast::<T>().as_ref() }
 }
 
-/// `T`'s parent class, as the `CamelServiceClass` it leads with, for the one
-/// vfunc that chains up — `CamelOfflineStoreClass` for the store,
+/// The parent class of `T`, as its leading `CamelServiceClass`, for the one
+/// vfunc that chains up: `CamelOfflineStoreClass` for the store,
 /// `CamelTransportClass` for the transport.
 ///
-/// `T`'s parent derives from `CamelService`, so its class leads with a
-/// `CamelServiceClass` — the trait's contract.
+/// The parent of `T` derives from `CamelService`, so its class starts with a
+/// `CamelServiceClass`. The trait's contract makes this true.
 fn parent_service_class<T: Connected>() -> Option<&'static CamelServiceClass> {
     // SAFETY: the contract above.
     unsafe { jmap_backend_core::subclass::parent_class::<CamelServiceClass>(T::parent_type()) }
 }
 
-/// What a vfunc with no store behind it reports: the code that makes Camel
-/// connect and ask again rather than showing the account as broken.
+/// The report of a vfunc with no store. Its code makes Camel connect and ask
+/// again, and not show the account as broken.
 ///
 /// # Safety
 ///
@@ -568,10 +552,10 @@ unsafe fn fail_disconnected(error: *mut *mut GError) -> gboolean {
     GFALSE
 }
 
-/// What a panicked `authenticate_sync` reports. `INVALID` rather than
-/// `UNAVAILABLE`: the server is not the problem, and telling Camel it is
-/// unreachable would have it retry the account forever over a bug that is
-/// deterministic. The critical the guard logged is where the detail is.
+/// The report of an `authenticate_sync` that panicked. It uses `INVALID`, not
+/// `UNAVAILABLE`, because the server is not the problem. With `UNAVAILABLE`,
+/// Camel tries the account again forever, but the bug always occurs again. The
+/// critical that the guard logged holds the details.
 ///
 /// # Safety
 ///

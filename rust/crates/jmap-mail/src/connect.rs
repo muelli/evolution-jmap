@@ -1,43 +1,40 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Opening the connection a JMAP store holds, with no GObject in sight.
+//! The connection of a JMAP store, without GObject code.
 //!
-//! [`crate::server`] read the account off the store's settings; this turns that
-//! into a live [`MailSync`], and classifies the ways it can fail. It is the
-//! mail-side counterpart of `jmap-backend-core`'s [`connect`] module rather
-//! than a caller of it, because both of the answers a Camel service has to give
-//! are spelled in Camel's own vocabulary:
+//! [`crate::server`] reads the account from the settings of the store. This
+//! module makes a live [`MailSync`] from that account and classifies its
+//! failures. It is the mail equivalent of the [`connect`] module of
+//! `jmap-backend-core`, not a caller of it. The reason is that a Camel service
+//! must give two answers in the terms of Camel:
 //!
-//! - **The authentication verdict.** `CamelAuthenticationResult` has three
-//!   values where `ESourceAuthenticationResult` has four, and the missing one
-//!   is `REQUIRED`. There is no way for a store to say "ask the user before I
-//!   try", so it does not try to: an account that names a user and has no
-//!   password yet connects without credentials, the server answers 401, and
-//!   that 401 is what [`CAMEL_AUTHENTICATION_REJECTED`] turns into a prompt.
-//!   The EDS side refuses in advance instead, and both are right for the
-//!   machinery they answer to.
-//! - **The error domain.** Camel does not read `E_CLIENT_ERROR`; what it
-//!   branches on is `CAMEL_SERVICE_ERROR`, and in particular
-//!   [`CAMEL_SERVICE_ERROR_UNAVAILABLE`], which is the mail-side equivalent of
-//!   `E_CLIENT_ERROR_REPOSITORY_OFFLINE` — the difference between a store that
-//!   falls back on its summary cache and one that reports the account as
-//!   broken. `G_IO_ERROR_CANCELLED` is the exception, because it belongs to
-//!   GLib and not to either stack: every caller in Camel tests for it before
-//!   deciding anything went wrong at all.
+//! - **The authentication result.** `CamelAuthenticationResult` has three
+//!   values and `ESourceAuthenticationResult` has four. The missing value is
+//!   `REQUIRED`. A store cannot say "ask the user before I try", so it tries.
+//!   An account with a user and no password connects without credentials. The
+//!   server answers 401, and [`CAMEL_AUTHENTICATION_REJECTED`] makes that 401
+//!   into a prompt. The EDS side refuses before it connects. Each side is
+//!   correct for the framework that it answers to.
+//! - **The error domain.** Camel does not read `E_CLIENT_ERROR`. It reads
+//!   `CAMEL_SERVICE_ERROR`, and specially [`CAMEL_SERVICE_ERROR_UNAVAILABLE`].
+//!   That code is the mail equivalent of `E_CLIENT_ERROR_REPOSITORY_OFFLINE`.
+//!   It makes a store use its summary cache, where other codes show the account
+//!   as broken. `G_IO_ERROR_CANCELLED` is the exception, because it belongs to
+//!   GLib and not to Camel or EDS. Each caller in Camel tests for it first.
 //!
 //! [`connect`]: jmap_backend_core::connect
 //!
-//! What the two sides must *not* answer differently is which failure means the
-//! password was wrong, so that question is
-//! [`jmap_backend_core::connect::is_wrong_password`] and is asked, not
-//! reimplemented. A store that treated a 403 as a bad password would put an
-//! account into a prompt loop no password can end.
+//! The two sides must give the same answer to one question: which failure
+//! means a wrong password. Thus this module calls
+//! [`jmap_backend_core::connect::is_wrong_password`] and does not copy it. A
+//! store that treats a 403 as a wrong password causes a prompt loop that no
+//! password can stop.
 //!
-//! The password itself is not read here, exactly as it is not read in
-//! [`crate::server`]: Camel fetches it through the `CamelSession` at connect
-//! time and hands it to the service, and a JMAP account must never take a
-//! credential from a settings object Evolution serialises into a config file.
+//! This module does not read the password, as [`crate::server`] does not.
+//! Camel gets the password through the `CamelSession` at connect time and
+//! gives it to the service. A JMAP account must never take a credential from
+//! a settings object, because Evolution writes those objects to a config file.
 
 use std::fmt;
 
@@ -67,144 +64,138 @@ pub const ACCEPTED_AUTHENTICATION: CamelAuthenticationResult = CAMEL_AUTHENTICAT
 /// A JMAP mail account that could not be opened.
 #[derive(Debug)]
 pub enum StoreError {
-    /// The settings do not describe a server that may be contacted at all.
+    /// The settings do not give a server that the store can contact.
     ///
-    /// Its own variant rather than a client error, because it is fixed by
-    /// editing the account and never by retrying: reported as
-    /// `CAMEL_SERVICE_ERROR_UNAVAILABLE` it would be a store Evolution keeps
-    /// hopefully reconnecting to forever.
+    /// This is a separate variant, not a client error, because only an edit of
+    /// the account can fix it, never a retry. As `CAMEL_SERVICE_ERROR_UNAVAILABLE`,
+    /// Evolution tries to connect the store again without end.
     Config(SourceError),
-    /// The server answered with a session that proves it never saw the
-    /// credentials this connection sent: an empty user name and no
-    /// accessible accounts, which is what [`Client::is_anonymous`] reads back.
+    /// The server answered with a session that shows that it did not see the
+    /// credentials of this connection. The session has an empty user name and
+    /// no accessible accounts. [`Client::is_anonymous`] reads this.
     ///
-    /// This is not the shape of a server with nothing to report — it is the
-    /// shape of a server this request never authenticated with at all, which
-    /// a conformant one would say with a 401, the 401 that
-    /// [`is_wrong_password`] already turns into [`CAMEL_AUTHENTICATION_REJECTED`]
-    /// below. Real Stalwart does not send that 401 (RFC 8620 §2/§8.1; Finding
-    /// 12 in `STALWART-RFC-FINDINGS.md`): it answers 200 OK with the same
-    /// anonymous session a request that supplied no `Authorization` header at
-    /// all gets, which is exactly the request `password_credentials`/
-    /// `bearer_credentials` send for an account with a user and no password
-    /// stored yet, relying on the 401 this module's own doc says should turn
-    /// into a prompt. Left unhandled, that 200 would resolve no primary
-    /// account and surface as a generic, unprompted `ERROR` — the very first
-    /// connection attempt a fresh account ever makes would dead-end instead
-    /// of asking for a password. Checked in [`open_mail`] before the account
-    /// is even looked up, so a server that merely has no mail capability
-    /// (still a real, authenticated session) is unaffected.
+    /// This is not a server with no data. It is a server that did not
+    /// authenticate this request at all. A conformant server answers 401 in
+    /// this case, and [`is_wrong_password`] makes that 401 into
+    /// [`CAMEL_AUTHENTICATION_REJECTED`] below. Real Stalwart does not send the
+    /// 401 (RFC 8620 §2/§8.1; Finding 12 in `STALWART-RFC-FINDINGS.md`). It
+    /// answers 200 OK with the anonymous session that it gives to a request with
+    /// no `Authorization` header. `password_credentials` and
+    /// `bearer_credentials` send exactly that request for an account with a user
+    /// and no stored password. They expect the 401 that the module doc says
+    /// becomes a prompt. Without this variant, the 200 gives no primary account
+    /// and a generic `ERROR` with no prompt. Thus the first connection of a new
+    /// account fails and does not ask for a password. [`open_mail`] checks for
+    /// this before it finds the account. Thus a server with no mail capability
+    /// (still an authenticated session) does not get this error.
     ///
     /// [`Client::is_anonymous`]: jmap_client::Client::is_anonymous
     Unauthenticated,
     /// The server refused, failed, or is unreachable.
     Client(Error),
-    /// The account authenticates with OAuth 2.0 and no access token could be
-    /// had — nobody has consented to it yet, or the refresh did not work. The
-    /// string is EDS's own message for the failure.
+    /// The account uses OAuth 2.0 and the store could not get an access token.
+    /// Possibly no user gave consent yet, or the refresh failed. The string is
+    /// the EDS message for the failure.
     ///
-    /// Reported as `CAMEL_AUTHENTICATION_ERROR`, the opposite of the choice
-    /// `jmap_backend_core::connect::ConnectError::OAuth2` makes for the same
-    /// failure on the EDS side. That side has a fourth
-    /// `ESourceAuthenticationResult` value, `REQUIRED`, which opens the
-    /// consent window without discarding the stored refresh token —
-    /// `CamelAuthenticationResult` has only three, and `REJECTED` is both
-    /// "ask again" *and* "the credentials were wrong" at once here, the same
-    /// overload [`Self::authentication_result`] already accepts for an
-    /// ordinary wrong password. Reporting a token fetch failure as `REJECTED`
-    /// would mean a transient failure — a network blip fetching a fresh
-    /// access token, not a revoked grant — pops the same interactive
-    /// re-consent dialog a genuinely expired refresh token would, every time
-    /// it happens; `ERROR` is the conservative choice already made for every
-    /// other non-401 failure in this file, and this is one of those rather
-    /// than a new kind of prompt this backend has never asked for.
+    /// The result is `CAMEL_AUTHENTICATION_ERROR`. This is the opposite of
+    /// the choice of `jmap_backend_core::connect::ConnectError::OAuth2` for the
+    /// same failure on the EDS side. That side has a fourth
+    /// `ESourceAuthenticationResult` value, `REQUIRED`, which opens the consent
+    /// window and keeps the stored refresh token. `CamelAuthenticationResult`
+    /// has only three values. Here, `REJECTED` means "ask again" *and* "the
+    /// credentials are wrong". [`Self::authentication_result`] accepts the same
+    /// double meaning for a usual wrong password. With `REJECTED`, a temporary
+    /// failure opens the interactive consent dialog each time it occurs. An
+    /// example is a network problem during a token fetch, not a revoked grant.
+    /// An expired refresh token opens the same dialog. `ERROR` is the safe
+    /// choice that this file makes for each other failure that is not a 401.
+    /// This failure is one of those, not a new type of prompt.
     OAuth2(String),
-    /// The store was asked to do something that needs a server, and it has no
+    /// The store got a request that needs a server, and the store has no
     /// connection.
     ///
-    /// Not a failure of the account: Camel drives a store it *believes* is
-    /// connected, and the belief goes stale — a `disconnect_sync` on another
-    /// thread, a reconnect that has not happened yet. Reported as
-    /// `CAMEL_SERVICE_ERROR_NOT_CONNECTED`, which is what makes Camel connect
-    /// and ask again rather than show the account as broken.
+    /// This is not a failure of the account. Camel uses a store that it
+    /// *thinks* is connected, and that state can become old. Examples are a
+    /// `disconnect_sync` on a different thread, or a reconnect that did not
+    /// occur yet. The code is `CAMEL_SERVICE_ERROR_NOT_CONNECTED`. With this
+    /// code, Camel connects and asks again, and does not show the account as
+    /// broken.
     Disconnected,
-    /// Camel asked to open a folder the account does not have.
+    /// Camel asked to open a folder that the account does not have.
     ///
-    /// Reported in `CAMEL_STORE_ERROR` rather than `CAMEL_SERVICE_ERROR`,
-    /// which is the one place this type leaves the service's domain: nothing
-    /// is wrong with the connection or the account, and a service error would
-    /// be a working account reported as broken because one folder went away.
+    /// The domain is `CAMEL_STORE_ERROR`, not `CAMEL_SERVICE_ERROR`. This is
+    /// the one location where this type does not use the service domain. The
+    /// connection and the account are correct. A service error shows a working
+    /// account as broken because one folder is missing.
     NoFolder(String),
-    /// Camel asked for a folder by purpose — the inbox, the trash, the junk —
-    /// and no mailbox of the account claims that role.
+    /// Camel asked for a folder by purpose (the inbox, the trash, the junk),
+    /// and no mailbox of the account has that role.
     ///
-    /// A legal account rather than a broken one — RFC 8621 §2 makes `role`
-    /// nullable on every mailbox — but the question still has no answer, and
-    /// falling back to a mailbox *named* "Inbox" or "Trash" would be the
-    /// provider guessing where the user's mail arrives and where it goes when
-    /// they delete it. Reported like [`Self::NoFolder`], whose case this is: a
-    /// folder Camel asked for that the account does not have.
+    /// The account is valid, not broken: RFC 8621 §2 lets `role` be null on
+    /// each mailbox. But the request has no answer. A mailbox *named* "Inbox"
+    /// or "Trash" is not a fallback, because then the provider guesses where
+    /// mail arrives and where deleted mail goes. The report is the same as for
+    /// [`Self::NoFolder`], because this is that case: Camel asked for a folder
+    /// that the account does not have.
     NoRole(FolderRole),
-    /// Camel asked for a message the account does not hold, by uid.
+    /// Camel asked by uid for a message that the account does not have.
     ///
-    /// The folder's own domain rather than the store's: the store is fine and
-    /// so is the folder — a uid is a claim about the last listing, and another
-    /// client deleting the message since is ordinary rather than a fault.
-    /// Reported as `CAMEL_FOLDER_ERROR_INVALID_UID`, which is what Evolution
-    /// reads as "that message is gone" instead of as a reason to take the
-    /// account offline.
+    /// The domain is the folder domain, not the store domain. The store and
+    /// the folder are correct. A uid comes from the last listing, and a
+    /// different client can delete the message after it. That is usual, not a
+    /// fault. The code is `CAMEL_FOLDER_ERROR_INVALID_UID`. Evolution reads it
+    /// as "that message is gone", not as a reason to set the account offline.
     NoMessage(String),
-    /// An append was asked to put a message into a mailbox whose last listing
-    /// says `myRights.mayAddItems` is `false` (RFC 8621 §2), such as a shared
-    /// mailbox given read-only. The string is the mailbox's display name.
+    /// An append tried to put a message into a mailbox with
+    /// `myRights.mayAddItems` `false` in its last listing (RFC 8621 §2). An
+    /// example is a read-only shared mailbox. The string is the display name of
+    /// the mailbox.
     ///
-    /// Reported as `CAMEL_FOLDER_ERROR_INSUFFICIENT_PERMISSION`, the code
-    /// `camel-nntp-folder.c`'s own `append_message_sync` uses for the same
-    /// shape of refusal. Nothing is wrong with the account or the connection,
-    /// and the server is never asked: the last listing already answered.
+    /// The code is `CAMEL_FOLDER_ERROR_INSUFFICIENT_PERMISSION`. The
+    /// `append_message_sync` of `camel-nntp-folder.c` uses this code for the
+    /// same refusal. The account and the connection are correct. The store does
+    /// not ask the server, because the last listing already gives the answer.
     NoPermission(String),
-    /// A message was to be sent from an address the account has no identity
-    /// for.
+    /// A send uses a from address for which the account has no identity.
     ///
-    /// Reported as `CAMEL_SERVICE_ERROR_INVALID`, the code
-    /// [`crate::envelope`]'s refusals use and deliberately not
-    /// `UNAVAILABLE`: nothing is wrong with the account or the connection, and
-    /// this send would fail identically against a working server. It is fixed
-    /// by sending as an address the account has — never by retrying.
+    /// The code is `CAMEL_SERVICE_ERROR_INVALID`, as for the refusals of
+    /// [`crate::envelope`], and intentionally not `UNAVAILABLE`. The account
+    /// and the connection are correct, and the send fails the same way on a
+    /// working server. Only a send from an address of the account fixes it,
+    /// never a retry.
     NoIdentity(String),
-    /// A message was to be sent and the account has no mailbox an outgoing
-    /// message may be put in.
+    /// A send needs a mailbox for the outgoing message, and the account has no
+    /// such mailbox.
     ///
-    /// Reported as `CAMEL_SERVICE_ERROR_INVALID`, like [`Self::NoIdentity`] and
-    /// for its reasons — nothing is wrong with the account or the connection,
-    /// and retrying cannot help. Deliberately *not* the store's `NO_FOLDER`
-    /// that [`Self::NoRole`] uses, although both are about a role no mailbox
-    /// claims: this one is answered by a `CamelTransport`, which is not a
-    /// store, and there is no folder Camel asked for to report as missing.
+    /// The code is `CAMEL_SERVICE_ERROR_INVALID`, as for [`Self::NoIdentity`]
+    /// and for the same reasons. The account and the connection are correct,
+    /// and a retry does not help. This is intentionally *not* the store code
+    /// `NO_FOLDER` of [`Self::NoRole`], although both are about a role that no
+    /// mailbox has. A `CamelTransport` gives this error, and a transport is not
+    /// a store. Also, Camel did not ask for a folder that can be missing.
     NoOutgoingFolder,
-    /// `get_quota_info_sync` was called and the account's `Quota` objects
-    /// have none that applies to Mail.
+    /// A call to `get_quota_info_sync` found no `Quota` object of the account
+    /// that applies to Mail.
     ///
-    /// Not a failure of the connection or the account — a server that omits
-    /// the `urn:ietf:params:jmap:quota` capability, or advertises it with
-    /// nothing scoped to Mail, has correctly answered "no quota information
-    /// available", the same case `camel-imapx-folder.c`'s own
-    /// `get_quota_info_sync` reports this way. Reported as
-    /// `G_IO_ERROR_NOT_SUPPORTED`, that file's own domain and code for it,
-    /// so the folder-properties dialog that reads this vfunc treats a JMAP
-    /// account exactly like an IMAP one with quotas turned off.
+    /// This is not a failure of the connection or the account. A server
+    /// without the `urn:ietf:params:jmap:quota` capability, or with no quota
+    /// for Mail, correctly answers "no quota information available". The
+    /// `get_quota_info_sync` of `camel-imapx-folder.c` reports the same case
+    /// in the same way. The code is `G_IO_ERROR_NOT_SUPPORTED`, the domain and
+    /// code of that file. Thus the folder-properties dialog, which reads this
+    /// vfunc, shows a JMAP account as it shows an IMAP account without quotas.
     NoQuota,
-    /// `get_filename` was called and this folder has no local message cache
-    /// to compute a path from — the account's cache directory could not be
-    /// made when the folder was built (see `crate::cache`) — or was given a
-    /// uid that names no local file this cache would ever create.
+    /// A call to `get_filename` found no local message cache for a path in
+    /// this folder, or got a uid for which this cache never makes a file. The
+    /// cache is missing when the folder could not make the cache directory of
+    /// the account at build time (see `crate::cache`).
     ///
-    /// Not a failure of the connection or the account: every caller of
-    /// `camel_folder_get_filename` already treats a NULL answer as "no local
-    /// copy" and falls back to reading the message another way
-    /// (`e-mail-formatter-source.c`'s "View Source" is exactly this
-    /// fallback). Reported as `G_IO_ERROR_NOT_SUPPORTED`, [`Self::NoQuota`]'s
-    /// own code for the same shape of "nothing to report".
+    /// This is not a failure of the connection or the account. Each caller of
+    /// `camel_folder_get_filename` reads a NULL answer as "no local copy" and
+    /// reads the message in a different way. "View Source" in
+    /// `e-mail-formatter-source.c` is an example. The code is
+    /// `G_IO_ERROR_NOT_SUPPORTED`, the code of [`Self::NoQuota`] for the same
+    /// type of "no data".
     NoLocalFile,
 }
 
@@ -215,31 +206,28 @@ impl From<SourceError> for StoreError {
 }
 
 impl From<SyncError> for StoreError {
-    /// A sync failure is a client failure: `SyncError` exists to keep
-    /// [`jmap_client::Error`] intact across the crate boundary, and this is the
-    /// end of that journey — the point where it becomes a `CAMEL_SERVICE_ERROR`.
+    /// A sync failure is a client failure. `SyncError` keeps
+    /// [`jmap_client::Error`] unchanged across the crate boundary. Here it
+    /// becomes a `CAMEL_SERVICE_ERROR`.
     fn from(error: SyncError) -> Self {
         match error {
             SyncError::Client(error) => Self::Client(error),
-            // Not a client failure and not flattened into one: the sync layer
-            // gave this a variant of its own so that the mapping below could
-            // exist, and collapsing it here would undo that at the last step.
+            // Not a client failure. The sync layer gives this its own variant
+            // for the mapping below, so do not merge it into a client failure.
             SyncError::NoSuchMessage(uid) => Self::NoMessage(uid.as_str().to_owned()),
-            // The same, one level up. `NoFolder` carries a *path* everywhere
-            // else, because that is what Camel asked with; here it carries the
-            // mailbox id, because that is what the caller named and the path it
-            // came from may since have moved. Both are the store telling Camel
-            // that a folder it still lists is not there, which is the only part
-            // a caller in C reads.
+            // The same, one level up. At other locations `NoFolder` holds a
+            // *path*, because Camel asks with a path. Here it holds the mailbox
+            // id, because the caller gave the id, and the path can be different
+            // now. In both cases the store tells Camel that a listed folder is
+            // missing. A caller in C reads only that part.
             SyncError::NoSuchFolder(id) => Self::NoFolder(id.as_str().to_owned()),
-            // And again: an address the account cannot send as is a sentence
-            // for the user naming that address, not a server failure, so it
-            // keeps its shape all the way to the `GError`.
+            // An address that the account cannot send from is a message for the
+            // user with that address, not a server failure. It stays unchanged
+            // up to the `GError`.
             SyncError::NoIdentity(address) => Self::NoIdentity(address),
-            // And once more, for the account that cannot send at all rather
-            // than cannot send as one address. It carries nothing in either
-            // crate, because the thing that is missing is a mailbox that does
-            // not exist and so has no id or path to name.
+            // This account cannot send at all, not only from one address. The
+            // variant holds no data in either crate, because the missing mailbox
+            // does not exist and thus has no id or path.
             SyncError::NoOutgoingFolder => Self::NoOutgoingFolder,
         }
     }
@@ -307,47 +295,43 @@ impl fmt::Display for StoreError {
 impl std::error::Error for StoreError {}
 
 impl StoreError {
-    /// What the `authenticate_sync` vfunc answers with.
+    /// The answer of the `authenticate_sync` vfunc.
     ///
-    /// Only `REJECTED` makes Camel forget the stored password and ask again, so
-    /// it is reserved for the one failure asking again can fix — which is the
-    /// same rule the EDS backends follow, asked of the same function.
+    /// Only `REJECTED` makes Camel discard the stored password and ask again.
+    /// Thus it is only for the one failure that a new password can fix. The EDS
+    /// backends use the same rule, through the same function.
     pub fn authentication_result(&self) -> CamelAuthenticationResult {
         match self {
             Self::Client(error) if is_wrong_password(error) => CAMEL_AUTHENTICATION_REJECTED,
-            // The same verdict a real 401 would get, for the server's
-            // Finding-12-shaped substitute for one — see the variant's own
-            // doc comment.
+            // The same result as a real 401, for the Finding 12 replacement of
+            // a 401. See the doc comment of the variant.
             Self::Unauthenticated => CAMEL_AUTHENTICATION_REJECTED,
-            // `Self::OAuth2` falls in here on purpose — see its own doc
-            // comment for why this is the safer of the two values Camel has
-            // to choose between.
+            // `Self::OAuth2` comes here intentionally. Its doc comment tells
+            // why this is the safer one of the two possible values.
             _ => CAMEL_AUTHENTICATION_ERROR,
         }
     }
 
-    /// Turns a server's 401 on an OAuth 2.0 bearer token into the same
-    /// `OAuth2` failure a failed *fetch* of that token already gets.
+    /// Changes a server 401 on an OAuth 2.0 bearer token into the `OAuth2`
+    /// failure that a failed *fetch* of that token gets.
     ///
-    /// Call only where the credentials just tried were themselves an OAuth
-    /// 2.0 access token — `service::attempt` is the one caller, and
-    /// it already knows that from the same account field [`oauth2::uses_oauth2`]
-    /// reads. A 401 on a Basic or API-token attempt is left alone: there,
-    /// [`is_wrong_password`] correctly means the password was wrong, and
-    /// `REJECTED` (ask again) is the right answer.
+    /// Call this only when the last credentials were an OAuth 2.0 access token.
+    /// `service::attempt` is the one caller. It knows this from the account
+    /// field that [`oauth2::uses_oauth2`] reads. This function keeps a 401 on a
+    /// Basic or API-token attempt. There, [`is_wrong_password`] correctly means
+    /// a wrong password, and `REJECTED` (ask again) is the correct answer.
     ///
-    /// For OAuth 2.0 it is not. `access_token`'s own doc explains why a
-    /// failure to *obtain* a token is reported as `OAuth2`/`ERROR` rather than
-    /// `REJECTED`: `CamelAuthenticationResult` has no fourth value for "ask
-    /// again without discarding what you have" the way `ESourceAuthentication
-    /// Result::REQUIRED` does, so `REJECTED` here means the credentials
-    /// prompter discards the stored refresh token and opens a fresh consent
-    /// screen — the right response to a grant that was genuinely revoked, and
-    /// a disruptive overreaction to a token the server merely rejected once,
-    /// e.g. transiently or moments before EDS itself would have refreshed it.
-    /// A 401 *after* a token was obtained is exactly as ambiguous between
-    /// those two as a *failure to obtain one* already is, so it gets the same
-    /// answer: report it, do not discard.
+    /// For OAuth 2.0, `REJECTED` is not correct. The doc of `access_token`
+    /// tells why a failure to *get* a token is `OAuth2`/`ERROR`, not
+    /// `REJECTED`. `CamelAuthenticationResult` has no fourth value for "ask
+    /// again and keep the stored data", as `ESourceAuthentication
+    /// Result::REQUIRED` has. Thus with `REJECTED`, the credentials prompter
+    /// discards the stored refresh token and opens a new consent screen. That
+    /// is correct for a revoked grant. It is too disruptive for a token that
+    /// the server refused one time, for example temporarily or just before EDS
+    /// refreshes it. A 401 *after* the store got a token has the same two
+    /// possible causes as a *failure to get one*. Thus it gets the same answer:
+    /// report it, and do not discard the token.
     ///
     /// [`oauth2::uses_oauth2`]: crate::oauth2::uses_oauth2
     /// [`is_wrong_password`]: jmap_backend_core::connect::is_wrong_password
@@ -358,8 +342,8 @@ impl StoreError {
         }
     }
 
-    /// Allocates a `GError` describing this failure. Ownership passes to the
-    /// caller, who must `g_error_free` it or hand it to a C caller that will.
+    /// Allocates a `GError` for this failure. The caller owns it. Free it with
+    /// `g_error_free`, or give it to a C caller that frees it.
     pub fn to_gerror(&self) -> *mut GError {
         let message = cstring_lossy(&self.to_string());
         let (domain, code) = self.gerror_code();
@@ -372,10 +356,9 @@ impl StoreError {
     /// The domain and code a caller in C branches on.
     fn gerror_code(&self) -> (GQuark, i32) {
         match self {
-            // The user pressed Stop. Not Camel's domain and not ours: this is
-            // the one code every layer above agrees on, and reporting a service
-            // error instead would turn a cancelled folder refresh into an
-            // alert.
+            // The user pressed Stop. This domain belongs to GLib, not to Camel
+            // or to this crate. Each layer above reads this code. A service error makes
+            // a cancelled folder refresh into an alert.
             //
             // SAFETY: the quark functions take no arguments and register
             // themselves on first use.
@@ -410,18 +393,18 @@ impl StoreError {
                     CAMEL_FOLDER_ERROR_INSUFFICIENT_PERMISSION as i32,
                 )
             },
-            // A message over the account's `maxSizeUpload`. The account is
-            // fine, the connection is fine, and the message is what could not
-            // be used — so it is reported the way a message Camel could not
-            // write out is, and not as a service error, which is what Evolution
-            // reads to decide an account is unusable. The sentence carries the
-            // limit; the code only has to not lie about whose fault it is.
+            // A message larger than the `maxSizeUpload` of the account. The
+            // account and the connection are correct, and only the message is
+            // unusable. Thus the code is the code for a message that Camel
+            // cannot write, not a service error. Evolution reads a service
+            // error as an unusable account. The message text gives the limit.
+            // The code must only show the correct cause.
             //
-            // Deliberately not `Error::RequestTooLarge`, which reaches the
-            // wildcard below and is reported as a service error: that one means
-            // the server handed out an id too long to fit in a request of the
-            // size the server itself named, which is the account being
-            // inconsistent rather than one message being unusable.
+            // This is intentionally not `Error::RequestTooLarge`. That error
+            // goes to the wildcard below and becomes a service error. It means
+            // that the server gave an id too long for a request of the size
+            // that the server set. That is an inconsistent account, not one
+            // unusable message.
             //
             // SAFETY: as above.
             Self::Client(Error::TooLarge { .. }) => unsafe {
@@ -444,39 +427,38 @@ impl StoreError {
         match self {
             Self::Config(_) => CAMEL_SERVICE_ERROR_URL_INVALID,
             Self::Disconnected => CAMEL_SERVICE_ERROR_NOT_CONNECTED,
-            // The server could not be reached. This is the code Camel reads to
-            // decide the store goes offline rather than the account being
-            // wrong, so it is the one that must not be generic.
+            // The server is not reachable. Camel reads this code to set the
+            // store offline instead of showing a wrong account. Thus this code
+            // must not be generic.
             Self::Client(Error::Transport(_)) => CAMEL_SERVICE_ERROR_UNAVAILABLE,
             Self::Client(error) if is_wrong_password(error) => {
                 CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE
             }
-            // Same code as the line above, for the same reason: see
-            // `Self::Unauthenticated`'s own doc comment.
+            // The same code as above, for the same reason. See the doc comment
+            // of `Self::Unauthenticated`.
             Self::Unauthenticated => CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
-            // Not a wrong password, but the same shape of problem: the
-            // account cannot prove who it is, which is what this code — not
-            // `INVALID`'s generic "something about this account is wrong" — is
-            // for.
+            // Not a wrong password, but the same type of problem: the account
+            // cannot prove its identity. This code is for that case. `INVALID`
+            // only means "a part of this account is wrong".
             Self::OAuth2(_) => CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
-            // A 403, a method error, a malformed response: the server answered,
-            // so it is reachable and the credentials were taken. The message
-            // carries the detail.
+            // A 403, a method error, a malformed response: the server answered.
+            // Thus it is reachable and it accepted the credentials. The message
+            // gives the details.
             _ => CAMEL_SERVICE_ERROR_INVALID,
         }
     }
 }
 
-/// What to authenticate as, given the account's user name and whatever Camel
-/// got out of its session — the password half of the decision `attempt`
-/// makes once per connect, alongside [`crate::oauth2::access_token`] for the
-/// OAuth 2.0 half.
+/// The credentials from the user name of the account and the password that
+/// Camel got from its session. `attempt` makes this password decision once
+/// for each connect. [`crate::oauth2::access_token`] makes the OAuth 2.0
+/// decision.
 ///
-/// `password` is `None` for an account nobody has been prompted for yet — and,
-/// deliberately, for an account that names no user at all. The two cases
-/// produce the same request, because there is nothing to send in either: a
-/// user name with an empty password is not a weaker credential, it is a wrong
-/// one, and a server that counts failed attempts would count it.
+/// `password` is `None` for an account that had no prompt yet. Intentionally,
+/// an account with no user also gets no credentials. The two cases send the
+/// same request, because neither has data to send. A user name with an empty
+/// password is not a weak credential, it is a wrong credential. A server that
+/// counts failed attempts counts it.
 pub fn password_credentials(user: Option<&str>, password: Option<&str>) -> Credentials {
     match (user, password) {
         (Some(user), Some(password)) => Credentials::basic(user, password),
@@ -484,12 +466,12 @@ pub fn password_credentials(user: Option<&str>, password: Option<&str>) -> Crede
     }
 }
 
-/// The API-token sibling of [`password_credentials`], for
-/// [`crate::api_token::uses_api_token`] accounts — see that module's docs for
-/// why `attempt` asks the same `auth-mechanism` field a third way. There is
-/// no user-name half to a token, so an account nobody has been prompted for
-/// yet produces the same no-credentials request `password_credentials` sends
-/// for one, and lets the server's 401 turn into the retry prompt.
+/// The API-token version of [`password_credentials`], for
+/// [`crate::api_token::uses_api_token`] accounts. The docs of that module tell
+/// why `attempt` reads the `auth-mechanism` field for a third value. A token
+/// has no user name. Thus an account that had no prompt yet sends the same
+/// request with no credentials as `password_credentials`. The 401 of the
+/// server then becomes the retry prompt.
 pub fn bearer_credentials(password: Option<&str>) -> Credentials {
     match password {
         Some(password) => Credentials::bearer(password),
@@ -497,38 +479,36 @@ pub fn bearer_credentials(password: Option<&str>) -> Credentials {
     }
 }
 
-/// Connects to the server `config` names and resolves the account its mail
-/// lives in.
+/// Connects to the server of `config` and finds the account that holds its
+/// mail.
 ///
-/// `credentials` are already resolved: whether this account authenticates
-/// with a password out of Camel's session or an OAuth 2.0 bearer token is
-/// `attempt`'s decision, taken once so that a store and a transport on one
-/// account cannot disagree about it — see [`crate::oauth2`].
+/// `credentials` are already known. `attempt` decides between a password from
+/// the Camel session and an OAuth 2.0 bearer token. It decides one time, so
+/// that a store and a transport on one account use the same decision. See
+/// [`crate::oauth2`].
 pub fn open_mail(config: &ServerConfig, credentials: Credentials) -> Result<MailSync, StoreError> {
-    // No cancellation flag is built into the client, and that is deliberate: a
-    // client lives as long as the account and a flag can only ever be set, so
-    // one taken from the operation that opened the connection would be a Stop
-    // pressed once and honoured forever. What cancels a JMAP operation is the
-    // scope its vfunc installs — `jmap_backend_core::cancel::observe` — which
-    // the client checks in preference to anything it was built with.
-    // `false`: Camel keeps this account's server on `CamelNetworkSettings`,
-    // not an `ESource` extension (see `crate::server`'s own docs on why), so
-    // there is nowhere here to read the per-source rebase opt-in
-    // (`jmap_backend_core::rebase::rebase_urls`) from. `JMAP_LIVE_SERVER_
-    // REBASE_URLS` still applies, unchanged, through `source::connect`'s own
-    // OR with the environment variable.
+    // The client intentionally has no cancellation flag. A client lives as long
+    // as the account, and nothing can clear a flag. Thus a flag from the
+    // operation that opened the connection stays set forever after one Stop.
+    // The scope that the vfunc installs (`jmap_backend_core::cancel::observe`)
+    // cancels a JMAP operation. The client checks that scope first.
+    // `false`: Camel keeps the server of this account in `CamelNetworkSettings`,
+    // not in an `ESource` extension (the docs of `crate::server` tell why).
+    // Thus there is no per-source rebase opt-in
+    // (`jmap_backend_core::rebase::rebase_urls`) to read here.
+    // `JMAP_LIVE_SERVER_REBASE_URLS` still applies through the OR with the
+    // environment variable in `source::connect`.
     let client = source::connect(&config.target, false, credentials)?;
-    // Checked before the account is even looked up: a session this
-    // anonymous answers no capability at all, so resolving one first would
-    // report it as "no mail capability" rather than as the unauthenticated
-    // connection it actually is. See `StoreError::Unauthenticated`.
+    // Check this before the account lookup. An anonymous session has no
+    // capability. Thus a lookup first reports "no mail capability", not the
+    // unauthenticated connection. See `StoreError::Unauthenticated`.
     if client.is_anonymous() {
         return Err(StoreError::Unauthenticated);
     }
-    // Under `urn:ietf:params:jmap:mail`, the way the address book backend
-    // resolves its own account under `:contacts`. An account that offers the
-    // one and not the other is not a mail account, and a store that ignored
-    // the capability would present it as one with no folders in it.
+    // Under `urn:ietf:params:jmap:mail`, as the address book backend finds its
+    // account under `:contacts`. An account with `:contacts` and without
+    // `:mail` is not a mail account. Without this check, the store shows it as
+    // a mail account with no folders.
     let account_id = client.primary_account(CAPABILITY_MAIL)?;
 
     Ok(MailSync::new(client, account_id))
