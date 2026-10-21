@@ -1,20 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Authenticate requests with optional HTTP Basic and Bearer checks.
+//! Authenticate requests with optional Basic and Bearer credentials.
 
 use std::collections::BTreeMap;
 
 use base64::Engine as _;
 use jmap_proto::Id;
 
-/// Accepted authorization header values. If none are configured, every request passes.
+/// Accepted `Authorization` header values.
+/// Accept every request when this list is empty.
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
     accepted: Vec<String>,
-    /// Principal identity for an accepted bearer token, if scoped.
+    /// Principal identity for one accepted bearer token.
     identities: BTreeMap<String, Id>,
-    /// Remaining accepted requests for configured credentials, when bounded.
+    /// Remaining successful matches for accepted credentials.
     remaining_uses: Option<usize>,
 }
 
@@ -36,24 +37,26 @@ impl AuthConfig {
         self.identities.insert(header, principal);
     }
 
-    /// Return the principal from [`Self::allow_bearer_as`], when present.
+    /// Return the principal from [`Self::allow_bearer_as`], if set.
     pub fn identity_for(&self, authorization: Option<&str>) -> Option<Id> {
         authorization.and_then(|value| self.identities.get(value).cloned())
     }
 
-    /// Replace accepted bearer tokens with `token`. Keep Basic credentials.
+    /// Replace accepted bearer tokens with `token`.
+    /// Keep accepted Basic credentials.
     pub fn replace_bearer(&mut self, token: &str) {
         self.accepted.retain(|value| !value.starts_with("Bearer "));
         self.allow_bearer(token);
         self.remaining_uses = None;
     }
 
-    /// Expire accepted credentials after `remaining` successful matches.
+    /// Stop accepting credentials after `remaining` successful matches.
     pub fn expire_after(&mut self, remaining: usize) {
         self.remaining_uses = Some(remaining);
     }
 
-    /// Check an `Authorization` header value. Consume one remaining use on success.
+    /// Check one `Authorization` header value.
+    /// Consume one remaining use on success.
     pub fn authorized(&mut self, authorization: Option<&str>) -> bool {
         if self.accepted.is_empty() {
             return true;
