@@ -32,3 +32,11 @@ scope on 3.52.
 dialog and runs it until the user closes it. No test in this crate makes a
 widget, and a modal dialog blocks a test. Tests of `snooze_all` cover the
 error that goes into the dialog. Out of scope.
+
+## `src/send_later/schedule.rs`
+
+In `resolve`, the filter `*seconds > 0` survives replaced with `>=`. The two
+helpers `next_at_hour` and `next_workday` return only a target that is strictly
+later than `now` in whole Unix seconds. Thus `hold` is always 1 or more, and
+the filter never sees 0. The filter is a guard against a defective clock.
+Equivalent.
