@@ -151,6 +151,38 @@ fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     assert_eq!(emails.values().next().unwrap().address, "vera@example.com");
 }
 
+/// Parameter text with `"` or `^` must use RFC 6868 caret escapes.
+#[test]
+fn x_jmap_key_parameter_text_uses_rfc_6868_caret_escapes() {
+    let key = "x\"^y";
+    let vcard = card_to_vcard(&card_with_email_key(key));
+    assert!(
+        vcard.contains("X-JMAP-KEY=x^'^^y"),
+        "parameter text must use RFC 6868 caret escapes: {vcard}"
+    );
+    assert!(
+        !vcard.contains("x\\\"^y"),
+        "parameter text must not use backslash-quote escaping: {vcard}"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse emitted card");
+    assert!(
+        parsed.emails.expect("emails").contains_key(key),
+        "decoded map key must match source text"
+    );
+}
+
+/// RFC 6868 caret escapes from inbound parameter text must decode on read.
+#[test]
+fn x_jmap_key_caret_escapes_decode_on_read() {
+    let vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nEMAIL;X-JMAP-KEY=\"x^'^^y\":vera@example.com\r\nEND:VCARD\r\n";
+    let parsed = vcard_to_card(vcard).expect("parse card with escaped parameter text");
+    assert!(
+        parsed.emails.expect("emails").contains_key("x\"^y"),
+        "RFC 6868 escapes must decode into the key text"
+    );
+}
+
 #[test]
 fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     let mut phones = BTreeMap::new();

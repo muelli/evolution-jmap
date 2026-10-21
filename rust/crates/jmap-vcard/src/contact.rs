@@ -937,7 +937,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Nickname)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(nickname.name.clone()),
         );
@@ -951,18 +951,14 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
         let mut params = vec![VCardParameter::new(
             VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-            VCardParameterValue::Text(key.clone()),
+            param_value_text(key),
         )];
         for type_name in type_names(&CONTEXTS, email.contexts.as_ref()) {
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                type_name.to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text(type_name)));
         }
         if email.pref.is_some() {
             // vCard 3.0 has no ranking, only a preferred flag.
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                "PREF".to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text("PREF")));
         }
         entries.push(
             VCardEntry::new(VCardProperty::Email)
@@ -979,22 +975,16 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
         let mut params = vec![VCardParameter::new(
             VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-            VCardParameterValue::Text(key.clone()),
+            param_value_text(key),
         )];
         if let Some(type_name) = context_slot(phone.contexts.as_ref()) {
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                type_name.to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text(type_name)));
         }
         if let Some(type_name) = feature_slot(phone.features.as_ref()) {
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                type_name.to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text(type_name)));
         }
         if phone.pref.is_some() {
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                "PREF".to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text("PREF")));
         }
         entries.push(
             VCardEntry::new(VCardProperty::Tel)
@@ -1008,19 +998,15 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     for (key, address) in addresses {
         let mut type_params = Vec::new();
         if let Some(slot) = context_slot(address.contexts.as_ref()) {
-            type_params.push(VCardParameter::typ(VCardParameterValue::Text(
-                slot.to_owned(),
-            )));
+            type_params.push(VCardParameter::typ(param_value_text(slot)));
         }
         if address_pref(address).is_some() {
-            type_params.push(VCardParameter::typ(VCardParameterValue::Text(
-                "PREF".to_owned(),
-            )));
+            type_params.push(VCardParameter::typ(param_value_text("PREF")));
         }
         if let Some(fields) = address_fields(address) {
             let mut params = vec![VCardParameter::new(
                 VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                VCardParameterValue::Text(key.clone()),
+                param_value_text(key),
             )];
             params.extend(type_params.clone());
             entries.push(
@@ -1035,7 +1021,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         if let Some(full) = address_label(address) {
             let mut params = vec![VCardParameter::new(
                 VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                VCardParameterValue::Text(key.clone()),
+                param_value_text(key),
             )];
             params.extend(type_params);
             entries.push(
@@ -1054,7 +1040,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Org)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_values(components.into_iter().map(VCardValue::Text).collect()),
         );
@@ -1079,7 +1065,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(prop)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(title.name.clone()),
         );
@@ -1093,7 +1079,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Note)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(note.note.clone()),
         );
@@ -1113,7 +1099,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(prop)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(link.uri.clone()),
         );
@@ -1137,7 +1123,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(prop)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(calendar.uri.clone()),
         );
@@ -1152,7 +1138,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Caladruri)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(address.uri.clone()),
         );
@@ -1168,16 +1154,14 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             Some(Photo::Inline { subtype, base64 }) => {
                 let mut params = vec![VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 )];
                 if let Some(subtype) = subtype {
-                    params.push(VCardParameter::typ(VCardParameterValue::Text(
-                        subtype.to_owned(),
-                    )));
+                    params.push(VCardParameter::typ(param_value_text(subtype)));
                 }
                 params.push(VCardParameter::new(
                     VCardParameterName::Other("ENCODING".to_owned()),
-                    VCardParameterValue::Text("b".to_owned()),
+                    param_value_text("b"),
                 ));
                 entries.push(
                     VCardEntry::new(VCardProperty::Photo)
@@ -1192,11 +1176,11 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                     VCardEntry::new(VCardProperty::Photo)
                         .with_param(VCardParameter::new(
                             VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                            VCardParameterValue::Text(key.clone()),
+                            param_value_text(key),
                         ))
                         .with_param(VCardParameter::new(
                             VCardParameterName::Value,
-                            VCardParameterValue::Text("uri".to_owned()),
+                            param_value_text("uri"),
                         ))
                         .with_value(uri.to_owned()),
                 );
@@ -1214,11 +1198,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Other(property.to_owned()))
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
-                .with_param(VCardParameter::typ(VCardParameterValue::Text(
-                    service_slot(service).to_owned(),
-                )))
+                .with_param(VCardParameter::typ(param_value_text(service_slot(service))))
                 .with_value(handle.to_owned()),
         );
     }
@@ -1232,7 +1214,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                 VCardEntry::new(VCardProperty::Bday)
                     .with_param(VCardParameter::new(
                         VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                        VCardParameterValue::Text(key.clone()),
+                        param_value_text(key),
                     ))
                     .with_value(date),
             );
@@ -1243,7 +1225,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                 VCardEntry::new(VCardProperty::Other(X_EVOLUTION_ANNIVERSARY.to_owned()))
                     .with_param(VCardParameter::new(
                         VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                        VCardParameterValue::Text(key.clone()),
+                        param_value_text(key),
                     ))
                     .with_value(date.clone()),
             );
@@ -1251,7 +1233,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                 VCardEntry::new(VCardProperty::Other("ANNIVERSARY".to_owned()))
                     .with_param(VCardParameter::new(
                         VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                        VCardParameterValue::Text(key.clone()),
+                        param_value_text(key),
                     ))
                     .with_value(date),
             );
@@ -2549,9 +2531,53 @@ fn read_phone_flags(entry: &VCardEntry) -> Option<Value> {
     (!flags.is_empty()).then_some(Value::Object(flags))
 }
 
+/// A vCard parameter value with RFC 6868 caret escapes applied.
+fn param_value_text(value: impl AsRef<str>) -> VCardParameterValue {
+    VCardParameterValue::Text(caret_encoded(value.as_ref()))
+}
+
+/// A parameter value with RFC 6868 section 3 caret escapes applied.
+fn caret_encoded(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '^' => out.push_str("^^"),
+            '"' => out.push_str("^'"),
+            '\n' => out.push_str("^n"),
+            '\r' => {
+                chars.next_if_eq(&'\n');
+                out.push_str("^n");
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// A parameter value with RFC 6868 section 3 caret escapes resolved.
+fn caret_decoded(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let decoded = match (ch, chars.peek()) {
+            ('^', Some('^')) => '^',
+            ('^', Some('\'')) => '"',
+            ('^', Some('n' | 'N')) => '\n',
+            _ => {
+                out.push(ch);
+                continue;
+            }
+        };
+        chars.next();
+        out.push(decoded);
+    }
+    out
+}
+
 fn param_text(value: &VCardParameterValue) -> String {
     match value {
-        VCardParameterValue::Text(text) => text.clone(),
+        VCardParameterValue::Text(text) => caret_decoded(text),
         VCardParameterValue::Integer(number) => number.to_string(),
         VCardParameterValue::Timestamp(stamp) => stamp.to_string(),
         VCardParameterValue::Bool(true) => "TRUE".to_owned(),
