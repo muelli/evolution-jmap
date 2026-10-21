@@ -13,11 +13,13 @@
 
 use std::ffi::CString;
 use std::ptr;
+use std::sync::Once;
 
 use eds_sys::{
     CamelNetworkSettings, CamelSettings, camel_network_settings_set_auth_mechanism,
-    camel_network_settings_set_host,
+    camel_network_settings_set_host, camel_offline_settings_get_type,
 };
+use glib_sys::{G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, g_log_set_always_fatal};
 use gobject_sys::{g_object_new, g_object_unref};
 use jmap_mail::api_token::uses_api_token;
 use jmap_mail::settings::settings_type;
@@ -89,4 +91,29 @@ fn the_api_token_method_is_read_off_the_auth_mechanism_field() {
 fn a_null_settings_object_is_not_api_token() {
     // SAFETY: a NULL settings pointer is documented as accepted.
     assert!(!unsafe { uses_api_token(ptr::null_mut()) });
+}
+
+/// Configure GLib critical and warning logs to abort the test process.
+fn glib_complaints_are_failures() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: no preconditions; the call returns the previous mask.
+        unsafe { g_log_set_always_fatal(G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_WARNING) };
+    });
+}
+
+/// Settings of another class are not API-token settings. The answer must come
+/// without a critical from Camel's accessor, so a critical aborts this test.
+#[test]
+fn settings_that_carry_no_network_are_not_api_token() {
+    glib_complaints_are_failures();
+    // SAFETY: `CamelOfflineSettings` is instantiable and has no construct
+    // properties. It does not implement `CamelNetworkSettings`.
+    let settings = unsafe { g_object_new(camel_offline_settings_get_type(), ptr::null()) };
+    assert!(!settings.is_null(), "g_object_new returned NULL");
+    let settings = settings.cast::<CamelSettings>();
+    // SAFETY: a live settings object, freed below.
+    assert!(!unsafe { uses_api_token(settings) });
+    // SAFETY: this test owns the only reference.
+    unsafe { free(settings) };
 }

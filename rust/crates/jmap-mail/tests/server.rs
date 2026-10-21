@@ -18,6 +18,7 @@
 
 use std::ffi::{CStr, CString};
 use std::ptr;
+use std::sync::Once;
 
 use eds_sys::{
     CAMEL_NETWORK_SECURITY_METHOD_NONE, CAMEL_NETWORK_SECURITY_METHOD_SSL_ON_ALTERNATE_PORT,
@@ -26,6 +27,7 @@ use eds_sys::{
     camel_network_settings_set_security_method, camel_network_settings_set_user,
     camel_offline_settings_get_type,
 };
+use glib_sys::{G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, g_log_set_always_fatal};
 use gobject_sys::{g_object_new, g_object_unref};
 use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_mail::server::ServerConfig;
@@ -51,6 +53,15 @@ fn settings(
         }
         object.cast::<CamelSettings>()
     }
+}
+
+/// Configure GLib critical and warning logs to abort the test process.
+fn glib_complaints_are_failures() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: no preconditions; the call returns the previous mask.
+        unsafe { g_log_set_always_fatal(G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_WARNING) };
+    });
 }
 
 fn config_of(settings: *mut CamelSettings) -> Result<ServerConfig, SourceError> {
@@ -219,6 +230,8 @@ fn a_user_nobody_filled_in_is_absent_rather_than_empty() {
 /// without the critical warnings. It must not crash a process full of mail.
 #[test]
 fn settings_that_carry_no_network_name_no_server() {
+    // The accessors give the same answer with a critical. Only an abort shows the difference.
+    glib_complaints_are_failures();
     // SAFETY: `CamelOfflineSettings` is instantiable and has no construct
     // properties. It does not implement `CamelNetworkSettings`.
     let settings = unsafe { g_object_new(camel_offline_settings_get_type(), ptr::null()) };

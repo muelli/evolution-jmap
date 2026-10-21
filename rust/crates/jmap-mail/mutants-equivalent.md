@@ -529,3 +529,13 @@ documents. No action needed beyond this note.
   `State` answer regardless of what the server holds; a test polling for a
   message to appear (the shape `tests/message.rs`'s own live-server tests
   use) spins forever against a `State` that never changes.
+
+## `src/server.rs`
+
+cargo-mutants makes no mutants here: every function is an `unsafe fn`. The
+mutants below were made by hand.
+
+- `take_string`: remove the `g_free` call. A leak only, as in `changes.rs`:
+  the returned value is the same, and no sanitizer runs in `ci/checks.sh`.
+- `take_string`: `!s.is_null()` replaced with `s.is_null()`. `g_free(NULL)`
+  does nothing, so this mutant also only leaks the copy. Same reason.
