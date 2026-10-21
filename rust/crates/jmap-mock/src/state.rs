@@ -14,11 +14,11 @@ use jmap_proto::{Id, State};
 /// Per-account type counters from [`ServerState::type_state_snapshot`].
 pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 
-/// Global mock-server state for fixture seeding and assertions.
+/// Mock server state for fixture seeding and assertions.
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
-    /// Method names answered, in call order, for request-shape assertions.
+    /// Method names returned, in call order, for request-shape assertions.
     pub method_calls: Vec<String>,
     /// Authenticated API requests dispatched to method handlers.
     pub api_requests: usize,
@@ -44,13 +44,13 @@ pub struct ServerState {
     pub size_request: Option<u64>,
     /// Optional `maxSizeUpload` in bytes; `None` means unlimited.
     pub size_upload: Option<u64>,
-    /// Whether `/.well-known/jmap` redirects to `/jmap/session` in auth redirect tests.
+    /// Whether auth redirect tests route `/.well-known/jmap` to `/jmap/session`.
     pub session_via_redirect: bool,
     /// Optional origin override for `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
     pub advertise_origin: Option<String>,
     /// Optional redirect origin for `GET /download/...`. `None` serves blobs.
     pub download_via_redirect_to: Option<String>,
-    /// Whether `GET /download/...` with `Accept: application/json` is rejected as `406`.
+    /// Whether `GET /download/...` rejects `Accept: application/json` with `406`.
     pub reject_download_accept_json: bool,
     /// Whether `EmailSubmission/set` create omits echoed `identityId` and `emailId`.
     pub terse_submission_create: bool,
@@ -64,19 +64,19 @@ pub struct ServerState {
     /// Whether `CalendarEvent/set` create returns only `id` in `created`.
     pub terse_calendar_event_create: bool,
     /// Whether this server disables scheduling.
-    /// When true, reject `sendSchedulingMessages` in `CalendarEvent/set` as unknown.
+    /// If true, reject `sendSchedulingMessages` in `CalendarEvent/set` as unknown.
     /// See RFC 8620 section 3.9.
     pub without_scheduling: bool,
     /// Whether collection create omits echoed `name` and keeps server values.
     pub terse_collection_create: bool,
-    /// Whether collection create omits `id` to model an RFC-violating server.
+    /// Whether collection create omits `id` to model an RFC violating server.
     pub id_omitting_collection_create: bool,
     /// Whether collection creates fail with `notCreated/forbidden`.
     pub reject_collection_create: bool,
     /// Optional `maxDelayedSend` value in the submission capability.
     pub max_delayed_send: Option<u64>,
     /// Whether the Cyrus snooze extension is advertised.
-    /// When true, the server accepts `Email.snoozed`.
+    /// If true, the server accepts `Email.snoozed`.
     pub snooze_extension: bool,
     /// Connected `/eventsource` subscribers for state-change delivery.
     pub event_source: EventSourceHub,
@@ -197,7 +197,7 @@ impl EventSourceHub {
         Self::default()
     }
 
-    /// Register a subscriber and return its SSE byte receiver.
+    /// Register one subscriber and return its SSE byte receiver.
     /// `None` means the subscriber listens to all types.
     pub fn subscribe(
         &mut self,
@@ -223,8 +223,8 @@ impl EventSourceHub {
         );
     }
 
-    /// Return the number of connected `/eventsource` clients for
-    /// [`crate::MockServer::wait_for_event_source_subscriber`].
+    /// Return the number of connected `/eventsource` clients.
+    /// [`crate::MockServer::wait_for_event_source_subscriber`] uses this value.
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.len()
     }
@@ -278,10 +278,10 @@ pub struct AccountState {
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
     pub principals: Store<jmap_proto::principals::Principal>,
     /// `ShareNotification` records (RFC 9670 §4), keyed by recipient id.
-    /// Store this per account because this mock maps bearer tokens to one account.
+    /// Keep this per account because this mock maps each bearer token to one account.
     pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
     /// `CalendarEventNotification` records keyed by recipient id.
-    /// This store uses the same one-account model.
+    /// This store uses the same one account model.
     pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
     /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5).
     /// `None` omits it.
