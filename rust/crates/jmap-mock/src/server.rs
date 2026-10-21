@@ -248,8 +248,8 @@ impl MockServerBuilder {
         self
     }
 
-    /// Refuse a `ContactCard/set` create whose card is more than `bytes`
-    /// octets of JSON as `tooLarge`, as a server with a per-card limit does.
+    /// Reject a `ContactCard/set` create larger than `bytes` JSON octets as
+    /// `tooLarge`, like a server with a per-card size limit.
     pub fn max_contact_size(mut self, bytes: u64) -> Self {
         self.max_contact_size = Some(bytes);
         self
@@ -267,9 +267,9 @@ impl MockServerBuilder {
         self
     }
 
-    /// Act as a server that does not send scheduling messages: a
-    /// `CalendarEvent/set` carrying `sendSchedulingMessages` is refused with
-    /// `invalidArguments` (RFC 8620 section 3.9) and nothing in it is applied.
+    /// Simulate a server that sends no scheduling messages.
+    /// Reject `CalendarEvent/set` with `sendSchedulingMessages` as
+    /// `invalidArguments` (RFC 8620 section 3.9), and apply nothing.
     pub fn without_scheduling(mut self) -> Self {
         self.without_scheduling = true;
         self
@@ -427,7 +427,7 @@ impl MockServer {
         jmap_proto::Id::new(DEFAULT_ACCOUNT_ID)
     }
 
-    /// Shared state handle for fixture seeding and white-box assertions.
+    /// Shared state handle for fixture seeding and white box assertions.
     pub fn state(&self) -> Arc<Mutex<ServerState>> {
         Arc::clone(&self.state)
     }
@@ -448,7 +448,7 @@ impl MockServer {
             .expire_after(remaining);
     }
 
-    /// Method call names seen so far, copied in request order.
+    /// Method call names seen so far, in request order.
     pub fn method_calls(&self) -> Vec<String> {
         let state = self
             .state
@@ -484,7 +484,7 @@ impl MockServer {
         state.event_source.broadcast(change);
     }
 
-    /// Wait for at least one `/eventsource` subscriber or panic on timeout.
+    /// Wait for one `/eventsource` subscriber, or panic on timeout.
     pub fn wait_for_event_source_subscriber(&self, timeout: Duration) {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -539,7 +539,7 @@ fn handle_request(
     oauth: &OAuthHandlers,
     origin: &str,
 ) {
-    // RFC 8414 metadata is public, so this route bypasses auth.
+    // RFC 8414 metadata is public. This route bypasses auth.
     if request.method() == &tiny_http::Method::Get
         && request.url().split('?').next().unwrap_or_default()
             == "/.well-known/oauth-authorization-server"
@@ -555,7 +555,7 @@ fn handle_request(
         return;
     }
 
-    // Registration also bypasses auth.
+    // Client registration also bypasses auth.
     if request.method() == &tiny_http::Method::Post
         && request.url().split('?').next().unwrap_or_default() == "/oauth/register"
     {
@@ -606,7 +606,7 @@ fn handle_request(
         return;
     }
 
-    // In redirect mode, both discovery routes run before the normal 401 gate.
+    // In redirect mode, serve both discovery routes before the normal 401 gate.
     let session_via_redirect = state.lock().expect("mock state lock").session_via_redirect;
     if session_via_redirect {
         let path_only = request.url().split('?').next().unwrap_or_default();
@@ -981,7 +981,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             .unwrap_or_default()
     };
 
-    // Build core dynamically so optional limits can be omitted.
+    // Build core dynamically so this code can omit optional limits.
     let mut core = json!({
         "maxConcurrentUpload": 4,
         "maxConcurrentRequests": 4,
