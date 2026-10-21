@@ -222,8 +222,9 @@ impl Child {
 impl Child {
     /// The child source for one collection of the shared `account`.
     ///
-    /// The display name has the owner, `<collection> (<account name>)`, so the
-    /// user does not confuse a shared "Calendar" with the user's own. Rights
+    /// The display name starts with the owner, `<account name>: <collection>`.
+    /// The sharer controls the collection name, so it cannot hide or replace the
+    /// owner, and a shared "Calendar" does not look like the user's own. Rights
     /// narrow as for the user's own collections. Evolution offers deletion
     /// only when `myRights.mayDelete` is true. A deletion removes the
     /// collection of the owner for all users. Thus, when the server gives no
@@ -236,7 +237,7 @@ impl Child {
     ) -> Self {
         Self {
             resource_id: kind.shared_resource_id(&account.id, &resource.id),
-            display_name: format!("{} ({})", resource.name, account.name),
+            display_name: format!("{}: {}", plain(&account.name), plain(&resource.name)),
             remote_deletable: resource.deletable == Some(true),
             ..Self::for_resource(kind, account, resource)
         }
@@ -250,6 +251,27 @@ impl Child {
             .split_once(':')
             .map_or(self.collection_id.as_str(), |(_, identity)| identity)
     }
+}
+
+/// `name` without control characters, line or paragraph separators and bidi
+/// formatting characters. These can put text on a new line or move it before
+/// the owner.
+fn plain(name: &str) -> String {
+    name.chars()
+        .filter(|&c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{061c}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{2028}'
+                        | '\u{2029}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                )
+        })
+        .collect()
 }
 
 /// Reads `resource_id` back into the kind and the identity of its child.
@@ -606,8 +628,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 ("addressbook:AB1", "Personal"),
-                ("addressbook:A2/AB1", "Contacts (bob@example.com)"),
-                ("calendar:A2/C1", "Team (bob@example.com)"),
+                ("addressbook:A2/AB1", "bob@example.com: Contacts"),
+                ("calendar:A2/C1", "bob@example.com: Team"),
             ],
             "the owner's AB1 is not the user's AB1: ids are per account"
         );
@@ -651,6 +673,35 @@ mod tests {
                 // owner's collection for deletion.
                 ("calendar:A2/C3", false),
             ]
+        );
+    }
+
+    #[test]
+    fn a_sharer_cannot_make_a_shared_child_read_as_the_users_own() {
+        let mut fanout = fanout(vec![], vec![]);
+        fanout.shared = vec![shared(
+            "A2",
+            None,
+            Some(vec![
+                resource("C1", "Work (me)"),
+                resource("C2", "Team\n\u{2028}Work"),
+                resource("C3", "\u{202e}krow\u{2066}\u{200f}"),
+            ]),
+        )];
+        fanout.shared[0].account.name = "bob@\u{202e}example.com\r".to_owned();
+
+        assert_eq!(
+            fanout
+                .children()
+                .iter()
+                .map(|child| child.display_name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "bob@example.com: Work (me)",
+                "bob@example.com: TeamWork",
+                "bob@example.com: krow",
+            ],
+            "the owner comes first, and no line break or direction mark moves it"
         );
     }
 
