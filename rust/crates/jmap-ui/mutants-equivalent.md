@@ -40,3 +40,10 @@ helpers `next_at_hour` and `next_workday` return only a target that is strictly
 later than `now` in whole Unix seconds. Thus `hold` is always 1 or more, and
 the filter never sees 0. The filter is a guard against a defective clock.
 Equivalent.
+
+## `src/link.rs`
+
+`AccountLink::refresh_token` survives replaced with `false`. To kill it, a test
+must get a new OAuth 2.0 access token for a source. Only a running EDS registry
+with its OAuth 2.0 service gives one, and `jmap-functional` does not load this
+crate. `tests/link.rs` kills the `true` variant. Out of scope.

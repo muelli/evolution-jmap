@@ -394,3 +394,32 @@ mod send_source_tests {
         unsafe { g_object_unref(object.cast()) };
     }
 }
+
+#[cfg(test)]
+mod gerror_message_tests {
+    use std::ffi::CString;
+
+    use glib_sys::{g_error_new_literal, g_quark_from_static_string};
+
+    use super::gerror_message;
+
+    #[test]
+    fn the_text_is_the_message_of_the_error() {
+        let message = CString::new("the host is not a URL").expect("no NUL in a literal");
+        // SAFETY: a static domain string, and a NUL-terminated message that
+        // the call copies. The new error goes to `gerror_message`, which frees it.
+        let error = unsafe {
+            g_error_new_literal(
+                g_quark_from_static_string(c"jmap-ui-test".as_ptr()),
+                1,
+                message.as_ptr(),
+            )
+        };
+        assert_eq!(gerror_message(error), "the host is not a URL");
+    }
+
+    #[test]
+    fn a_null_error_gives_a_placeholder_text() {
+        assert!(!gerror_message(std::ptr::null_mut()).is_empty());
+    }
+}
