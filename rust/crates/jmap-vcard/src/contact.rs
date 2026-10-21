@@ -1143,9 +1143,10 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     // Emit the contact photo on `PHOTO`.
-    // Inline media keeps subtype metadata; references use `VALUE=uri`.
-    // Selection rules come from libebook-contacts 3.52; see [`photo`] for
-    // media kinds that emit no line.
+    // Inline media keeps subtype metadata.
+    // URI references use `VALUE=uri`.
+    // libebook-contacts 3.52 uses the same selection rules.
+    // See [`photo`] for media kinds that emit no line.
     for (key, media) in card.media.iter().flatten() {
         match photo(media) {
             None => continue,
@@ -1167,8 +1168,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                         .with_value(base64),
                 );
             }
-            // Without `VALUE=uri` EDS reaches no field at all, so the user is
-            // shown no picture rather than one fetched from the URI.
+            // EDS ignores URI photos without `VALUE=uri`.
+            // Without it, the user sees no picture.
             Some(Photo::Uri(uri)) => {
                 entries.push(
                     VCardEntry::new(VCardProperty::Photo)
@@ -1989,8 +1990,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         media: (!media.is_empty()).then_some(media),
         online_services: (!online_services.is_empty()).then_some(online_services),
         keywords: read_keywords(&card.entries),
-        // Keep only relations represented by mapped vCard lines on read. Other
-        // relation kinds stay absent here and are preserved through extras.
+        // Keep only relations represented by mapped vCard lines on read.
+        // Keep other relation kinds in extras.
         related_to: (!related_to.is_empty()).then_some(related_to),
         crypto_keys: None,
         directories: None,
@@ -2007,8 +2008,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 /// Decode one `PHOTO` line into one media entry.
 ///
 /// Support URI references (`VALUE=uri`) and inline image bytes.
-/// `calcard` already applies transfer decoding, so `Text` and `Binary` are used
-/// as-is. Media type follows EDS behavior from `MEDIATYPE` or normalized `TYPE`.
+/// `calcard` already applies transfer decoding.
+/// Read `Text` and `Binary` values as they are.
+/// Derive media type from `MEDIATYPE` or normalized `TYPE`.
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
     let raw_text = entry_text(entry);
     let states_value_uri =
