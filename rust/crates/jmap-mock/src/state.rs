@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! In-memory mock server state.
-//! Store typed objects per account, allocate ids, and keep per-type state counters.
-//! Keep an append-only changes log.
+//! Keep typed objects per account, allocate ids, and track per-type counters.
+//! Keep an append-only change log.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::Sender;
@@ -18,7 +18,7 @@ pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
-    /// Method names returned, in call order, for request-shape assertions.
+    /// Method names in call order, used for request-shape assertions.
     pub method_calls: Vec<String>,
     /// Authenticated API requests dispatched to method handlers.
     pub api_requests: usize,
@@ -28,7 +28,7 @@ pub struct ServerState {
     pub omitted_capabilities: BTreeSet<String>,
     /// Whether `primaryAccounts` is omitted from the session document.
     pub omit_primary_accounts: bool,
-    /// Optional `maxCallsInRequest` at `/api`; `None` means unlimited.
+    /// Optional `maxCallsInRequest` at `/api`. `None` means unlimited.
     pub calls_in_request: Option<u64>,
     /// Optional max ids per `/changes` response. `None` returns all ids.
     pub changes_page_size: Option<u64>,
@@ -69,14 +69,14 @@ pub struct ServerState {
     pub without_scheduling: bool,
     /// Whether collection create omits echoed `name` and keeps server values.
     pub terse_collection_create: bool,
-    /// Whether collection create omits `id` to model an RFC violating server.
+    /// Whether collection create omits `id` to model an RFC-violating server.
     pub id_omitting_collection_create: bool,
     /// Whether collection creates fail with `notCreated/forbidden`.
     pub reject_collection_create: bool,
     /// Optional `maxDelayedSend` value in the submission capability.
     pub max_delayed_send: Option<u64>,
     /// Whether the Cyrus snooze extension is advertised.
-    /// If true, the server accepts `Email.snoozed`.
+    /// When true, the server accepts `Email.snoozed`.
     pub snooze_extension: bool,
     /// Connected `/eventsource` subscribers for state-change delivery.
     pub event_source: EventSourceHub,
@@ -137,7 +137,7 @@ impl ServerState {
         State::new(self.session_state.to_string())
     }
 
-    /// Current per-account state counters for pushed types and `/changes`.
+    /// Per-account state counters for pushed types and `/changes`.
     pub fn type_state_snapshot(&self) -> TypeStateSnapshot {
         self.accounts
             .iter()
@@ -168,7 +168,7 @@ impl ServerState {
             .collect()
     }
 
-    /// Effective `maxObjectsInGet` used in session advertisement and request checks.
+    /// Effective `maxObjectsInGet` for session advertisement and request checks.
     pub fn objects_in_get(&self) -> u64 {
         self.objects_in_get.unwrap_or(crate::DEFAULT_OBJECTS_IN_GET)
     }
@@ -180,7 +180,7 @@ impl Default for ServerState {
     }
 }
 
-/// One `/eventsource` subscriber and optional `types` filter.
+/// One `/eventsource` subscriber with an optional `types` filter.
 struct Subscriber {
     sender: Sender<Vec<u8>>,
     types: Option<BTreeSet<String>>,
@@ -197,7 +197,7 @@ impl EventSourceHub {
         Self::default()
     }
 
-    /// Register one subscriber and return its SSE byte receiver.
+    /// Register one subscriber and return the SSE byte receiver.
     /// `None` means the subscriber listens to all types.
     pub fn subscribe(
         &mut self,
@@ -209,8 +209,7 @@ impl EventSourceHub {
     }
 
     /// Send `change` after optional type filtering.
-    /// Drop disconnected subscribers.
-    /// Keep connected subscribers when no type matches.
+    /// Drop disconnected subscribers and keep connected non-matches.
     pub fn broadcast(&mut self, change: &StateChange) {
         self.subscribers.retain(
             |subscriber| match filter_for(change, subscriber.types.as_ref()) {
@@ -224,13 +223,13 @@ impl EventSourceHub {
     }
 
     /// Return the number of connected `/eventsource` clients.
-    /// [`crate::MockServer::wait_for_event_source_subscriber`] uses this value.
+    /// [`crate::MockServer::wait_for_event_source_subscriber`] reads this value.
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.len()
     }
 }
 
-/// Return `change` narrowed to `types`; `None` keeps all types.
+/// Return `change` narrowed to `types`. `None` keeps all types.
 /// Returns `None` when no account has any matching type.
 fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<StateChange> {
     let Some(types) = types else {
@@ -278,10 +277,10 @@ pub struct AccountState {
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
     pub principals: Store<jmap_proto::principals::Principal>,
     /// `ShareNotification` records (RFC 9670 §4), keyed by recipient id.
-    /// Keep this per account because this mock maps each bearer token to one account.
+    /// Keep this per account because this mock maps one bearer token to one account.
     pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
     /// `CalendarEventNotification` records keyed by recipient id.
-    /// This store uses the same one account model.
+    /// This store uses the same one-account model.
     pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
     /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5).
     /// `None` omits it.
@@ -398,7 +397,7 @@ pub enum ChangeKind {
     Destroyed,
 }
 
-/// One changes log entry: object `id` changed when state reached `state`.
+/// One change-log entry: object `id` changed when state reached `state`.
 #[derive(Debug, Clone)]
 pub struct Change {
     pub state: u64,
