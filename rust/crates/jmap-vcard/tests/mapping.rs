@@ -1543,9 +1543,9 @@ fn one_note(key: &str, note: &str) -> ContactCard {
 
 #[test]
 fn maps_notes_onto_note_lines() {
-    // RFC 9553 §2.8.3 keys the notes like every other JSContact map; RFC
-    // 2426 §3.6.2's NOTE is plain text, so the key rides in X-JMAP-KEY as it
-    // does on an EMAIL.
+    // RFC 9553 §2.8.3 keys notes like other JSContact maps.
+    // RFC 2426 §3.6.2 defines NOTE as plain text.
+    // Store the key in X-JMAP-KEY as for EMAIL.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "NOTE"), "NOTE;X-JMAP-KEY=n1:met at FOSDEM");
 
@@ -1557,9 +1557,8 @@ fn maps_notes_onto_note_lines() {
 
 #[test]
 fn a_note_keeps_the_line_breaks_and_separators_it_was_written_with() {
-    // A note is the one mapped property that routinely holds prose, so the
-    // characters vCard gives structural meaning to are exactly the ones a
-    // user types into it.
+    // Notes often contain prose.
+    // Escape vCard structural characters because users can type them in note text.
     let card = one_note("n1", "met at FOSDEM;\nbuys the next round, apparently");
     let vcard = card_to_vcard(&card);
     assert_eq!(
@@ -1587,8 +1586,8 @@ fn a_note_with_no_text_is_skipped_in_both_directions() {
 
 #[test]
 fn invents_a_key_for_a_note_that_has_none() {
-    // Evolution has one Notes field per contact and writes no X-JMAP-KEY,
-    // so a note it typed arrives needing a key of its own.
+    // Evolution stores one Notes field per contact and writes no X-JMAP-KEY.
+    // Create a key when such a note arrives.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "NOTE:met at FOSDEM\r\n",
@@ -1622,7 +1621,8 @@ fn one_anniversary(kind: &str, date: serde_json::Value) -> ContactCard {
 
 #[test]
 fn maps_a_birthday_onto_the_bday_line() {
-    // RFC 9553 maps memorable dates by `kind`; BDAY carries only the birthday.
+    // RFC 9553 maps memorable dates by `kind`.
+    // BDAY carries only birthdays.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "BDAY"), "BDAY;X-JMAP-KEY=y1:1964-03-27");
 
@@ -1637,8 +1637,8 @@ fn maps_a_birthday_onto_the_bday_line() {
 
 #[test]
 fn maps_a_wedding_day_onto_the_line_evolution_reads_as_the_anniversary() {
-    // vCard 3.0 has no ANNIVERSARY property, so Evolution's anniversary field
-    // is fed through X-EVOLUTION-ANNIVERSARY.
+    // vCard 3.0 has no ANNIVERSARY property.
+    // Use X-EVOLUTION-ANNIVERSARY for Evolution's anniversary field.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-EVOLUTION-ANNIVERSARY"),
@@ -1681,7 +1681,8 @@ fn a_date_that_names_no_single_day_gets_no_line() {
 
 #[test]
 fn a_date_before_the_year_eds_can_write_gets_no_line() {
-    // `e_contact_date_to_string()` clamps years to 1000..=9999, so older years emit no line.
+    // `e_contact_date_to_string()` writes years only in 1000..=9999.
+    // Do not emit a line for older years.
     for date in [
         json!({"year": 800, "month": 6, "day": 21}),
         json!({"year": 999, "month": 12, "day": 31}),
@@ -1702,7 +1703,8 @@ fn a_date_before_the_year_eds_can_write_gets_no_line() {
 
 #[test]
 fn an_anniversary_stated_as_a_point_in_time_crosses_as_the_day_it_names() {
-    // Timestamps map to a day-only vCard date; time-of-day is intentionally not encoded.
+    // Timestamps map to day-only vCard dates.
+    // Do not encode time-of-day.
     let vcard = card_to_vcard(&one_anniversary(
         "birth",
         json!({"@type": "Timestamp", "utc": "1953-10-15T23:10:00Z"}),
@@ -1731,7 +1733,7 @@ fn a_date_line_that_states_no_day_is_skipped_in_both_directions() {
     let card = one_anniversary("birth", json!({}));
     assert!(!card_to_vcard(&card).contains("\r\nBDAY"));
 
-    // Empty, free text, and impossible dates state no valid day.
+    // Empty text, free text, and impossible dates state no valid day.
     for value in ["", "sometime in March", "1964-13-45", "1964-03"] {
         let back = vcard_to_card(&format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:{value}\r\nEND:VCARD\r\n"
