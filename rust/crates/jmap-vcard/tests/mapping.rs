@@ -888,7 +888,8 @@ fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.organizations, card.organizations);
 
-    // Expected titles in roundtrip: t1, t2, r1, r2 with canonical kind (None for default title).
+    // Expect four title keys after roundtrip: t1, t2, r1, r2.
+    // Canonical kind is None for default titles.
     let expected_titles = [
         (
             "t1".to_owned(),
@@ -1003,8 +1004,7 @@ fn maps_addresses_onto_the_structured_adr_property() {
 
 #[test]
 fn maps_every_field_the_adr_value_has() {
-    // A vCard straight from Evolution carries no X-JMAP-KEY, and fills in
-    // fields the fixture leaves empty.
+    // Evolution omits X-JMAP-KEY and fills empty ADR slots.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ADR;TYPE=HOME:PO Box 12;Apt 4;Hauptstraße 1;Berlin;Brandenburg;10115;Germany\r\n",
@@ -1035,7 +1035,7 @@ fn maps_every_field_the_adr_value_has() {
 
 #[test]
 fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
-    // Kinds like floor and room have no ADR field in vCard 3.0, so they are not emitted.
+    // vCard 3.0 has no ADR field for floor or room.
     let card = one_address(
         "a1",
         Address {
@@ -1093,7 +1093,7 @@ fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
     let vcard = card_to_vcard(&german);
     assert_eq!(line(&vcard, "ADR"), "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1;;;;");
 
-    // Readback keeps one `name` component because `Hauptstraße 1` is locale-ambiguous.
+    // Readback keeps one `name` component. `Hauptstraße 1` is locale-ambiguous.
     let back = vcard_to_card(&vcard).expect("parse");
     let addresses = back.addresses.expect("addresses");
     assert_eq!(
@@ -1104,7 +1104,7 @@ fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
 
 #[test]
 fn an_address_that_states_only_a_house_number_is_on_the_line() {
-    // A standalone house number is still address data, so it gets an ADR line.
+    // A standalone house number is valid address data, so emit ADR.
     let card = one_address(
         "a1",
         Address {
