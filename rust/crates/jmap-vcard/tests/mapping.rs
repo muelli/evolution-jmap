@@ -2820,7 +2820,8 @@ fn tagged(tags: &[&str]) -> ContactCard {
 
 #[test]
 fn maps_keywords_onto_one_categories_line() {
-    // Keywords serialize to one `CATEGORIES` line to avoid hidden duplicate category fields in EDS.
+    // Serialize keywords on one `CATEGORIES` line.
+    // This avoids hidden duplicate category fields in EDS.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:hiking");
     assert_eq!(vcard.matches("\r\nCATEGORIES").count(), 1, "{vcard}");
@@ -2835,7 +2836,7 @@ fn maps_keywords_onto_one_categories_line() {
 
 #[test]
 fn every_tag_goes_on_the_one_line_in_sorted_order() {
-    // Set members serialize in sorted map order so repeated renders stay stable.
+    // Serialize set members in sorted map order so repeated renders stay stable.
     let vcard = card_to_vcard(&tagged(&["Work", "Friends", "hiking"]));
     assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:Friends,Work,hiking");
 }
@@ -2902,7 +2903,7 @@ fn a_keyword_set_to_anything_but_true_gets_no_line() {
 #[test]
 fn states_keyword_answers_for_the_tag_the_line_left_off() {
     // Visibility is evaluated per tag, not for the full set.
-    // Hidden tags are restored on save, matching the emitter predicate.
+    // Save restores hidden tags to match the emitter predicate.
     for tag in ["", "two\rlines", " leading", "trailing ", "\u{b}vertical"] {
         assert!(
             !states_keyword(tag, &json!(true)),
@@ -2931,7 +2932,7 @@ fn a_card_with_no_tags_states_none() {
 
 #[test]
 fn reads_the_tags_of_every_categories_line() {
-    // EDS UI shows only the first categories line, but preserves the rest.
+    // The EDS UI shows only the first categories line, but preserves the rest.
     // Read all lines so hidden tags survive; duplicates collapse and empty items drop.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
@@ -2997,7 +2998,7 @@ fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
 #[test]
 fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
     // vCard 3.0 has no `IMPP`, so this mapping uses EDS `X-*` IM lines.
-    // Set `TYPE` so the handle lands in one HOME or WORK editor slot.
+    // Set `TYPE` so the handle uses one HOME or WORK editor slot.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-JABBER"),
@@ -3019,7 +3020,7 @@ fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
 fn every_service_eds_has_a_field_for_gets_its_own_line() {
     // Write one line for each service that has an EDS HOME or WORK slot.
     // Match service names case-insensitively and punctuation-insensitively.
-    // This keeps save behavior stable across spelling variants.
+    // Keep save behavior stable across spelling variants.
     for (service, property) in [
         ("AIM", "X-AIM"),
         ("aim", "X-AIM"),
@@ -3047,7 +3048,7 @@ fn every_service_eds_has_a_field_for_gets_its_own_line() {
 #[test]
 fn a_service_eds_has_no_field_for_gets_no_line() {
     // Skip services without an editable EDS slot.
-    // A hidden line would make save logic treat unseen data as visible data.
+    // A hidden line would make save logic treat unseen data as visible.
     // Skip missing service names because no property line can be selected.
     for service in [Some("Signal"), Some("Twitter"), Some("SIP"), Some(""), None] {
         let vcard = card_to_vcard(&on_service(service, Some("handle")));
@@ -3060,7 +3061,7 @@ fn a_service_eds_has_no_field_for_gets_no_line() {
 
 #[test]
 fn unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader() {
-    // libebook-contacts 3.52 treats X-TWITTER and X-SIP as unslotted EContactAttrList fields.
+    // libebook-contacts 3.52 treats X-TWITTER and X-SIP as unslotted `EContactAttrList` fields.
     // No _HOME_1..3 or _WORK_1..3 slot exists for these properties.
     // Reader logic ignores X-TWITTER, X-SIP, and unknown X-SIGNAL.
     // This avoids unmodeled `online_services` entries.
