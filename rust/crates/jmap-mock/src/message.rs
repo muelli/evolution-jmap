@@ -3,12 +3,12 @@
 
 //! Minimal RFC 5322 reader used by `Email/import`.
 //!
-//! Most of this crate serializes structured `Email` values to message bytes.
-//! `Email/import` is the reverse path, so this module reads a narrow subset
+//! Most modules serialize structured `Email` values to message bytes.
+//! `Email/import` is the reverse path. This module reads a small subset
 //! from raw bytes.
 //!
 //! Scope: unfolded headers, address lists, message IDs, and preview text.
-//! It intentionally skips MIME trees, RFC 2047 encoded words, temporal headers,
+//! It skips MIME trees, RFC 2047 encoded words, temporal headers,
 //! and address groups. Tests that need those features should seed messages
 //! directly.
 
@@ -36,7 +36,7 @@ impl Message {
             if line.is_empty() {
                 continue;
             }
-            // Leading whitespace means a folded continuation line.
+            // A leading space or tab marks a folded continuation line.
             if line.starts_with([' ', '\t']) {
                 let (_, value) = fields.last_mut()?;
                 value.push(' ');
