@@ -158,7 +158,8 @@ test_session_get_password (CamelSession *session,
  * `EMailSession` replaces it with a full prompt loop. This is a minimal
  * replacement: one attempt, and on `REJECTED` one more attempt with the value
  * from `get_password`. For the first attempt of `PHASE_PASSWORD_PROMPT`, that
- * value is empty. */
+ * value is empty. A second `REJECTED` sets an error, or the connect returns
+ * TRUE with the store not connected. */
 static gboolean
 test_session_authenticate_sync (CamelSession *session,
 				CamelService *service,
@@ -187,6 +188,11 @@ test_session_authenticate_sync (CamelSession *session,
 
 		result = camel_service_authenticate_sync (service, mechanism, cancellable, error);
 	}
+
+	if (result == CAMEL_AUTHENTICATION_REJECTED && error && !*error)
+		g_set_error_literal (error, CAMEL_SERVICE_ERROR,
+				     CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
+				     "the server rejected the password");
 
 	return result == CAMEL_AUTHENTICATION_ACCEPTED;
 }
