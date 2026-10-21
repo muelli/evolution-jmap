@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
-//! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
+//! JSContact `ContactCard` ↔ vCard 3.0 mapping for the minimal property set.
+//! The address book backend needs UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
 //! ORG, TITLE, ROLE, NOTE, BDAY, URL, CALADRURI, CALURI, FBURL, PHOTO,
-//! CATEGORIES and the
-//! `X-` lines EDS keeps instant-messaging handles and the spouse on.
+//! CATEGORIES, and `X-` lines for EDS instant-messaging handles and spouse data.
 
 use std::collections::BTreeMap;
 
@@ -59,7 +58,7 @@ fn emits_a_vcard_30_envelope() {
 
 #[test]
 fn uid_is_the_jmap_id_and_the_jscontact_uid_is_kept_aside() {
-    // EDS keys and returns contacts by vCard UID, so UID must carry the JMAP id.
+    // EDS indexes and returns contacts by vCard UID. UID must carry the JMAP id.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "UID:"), "UID:C1");
     assert_eq!(
@@ -85,7 +84,7 @@ fn a_card_without_a_jscontact_uid_omits_the_extra_property() {
     assert_eq!(line(&vcard, "UID:"), "UID:C9");
     assert!(!vcard.contains("X-JMAP-UID"), "{vcard}");
 
-    // Reading it back, the JMAP id is the only identifier there is.
+    // After readback, the JMAP id is the only identifier.
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.id.as_ref().unwrap().as_str(), "C9");
     assert_eq!(back.uid, None);
@@ -124,7 +123,7 @@ fn uid_parsing_is_case_insensitive_and_stabilizes_duplicate_uid_lines() {
 
 #[test]
 fn a_vcard_from_evolution_has_no_jmap_id_yet() {
-    // Evolution invents this UID locally, so callers must not treat it as a JMAP id.
+    // Evolution invents this UID locally. Callers must not treat it as a JMAP id.
     let vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:pas-id-6890AB\r\nFN:Vera\r\nEND:VCARD\r\n";
     let card = vcard_to_card(vcard).expect("parse");
     assert_eq!(card.id.as_ref().unwrap().as_str(), "pas-id-6890AB");
@@ -158,7 +157,7 @@ fn maps_name_components_onto_the_structured_n_property() {
 
 #[test]
 fn derives_the_missing_half_of_the_name() {
-    // No `full`: derive it from components in reading order for display.
+    // If `full` is absent, derive it from components in display order.
     let components = ContactCard {
         name: Some(Name {
             components: Some(vec![
@@ -174,7 +173,7 @@ fn derives_the_missing_half_of_the_name() {
         "FN:Vera Oldenburg"
     );
 
-    // No N in the vCard: keep `components` unset instead of guessing.
+    // If the vCard has no N value, keep `components` unset instead of guessing.
     let card = vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera Oldenburg\r\nEND:VCARD\r\n")
         .expect("parse");
     let name = card.name.unwrap();
@@ -224,7 +223,7 @@ fn maps_phones_with_their_features() {
 
 #[test]
 fn keys_survive_the_round_trip_so_patches_address_the_right_entry() {
-    // JSContact patches address map keys, so roundtrip keeps them stable.
+    // JSContact patches address map keys. Roundtrip must keep them stable.
     let card = fixture_card();
     let back = vcard_to_card(&card_to_vcard(&card)).expect("parse");
     assert_eq!(
@@ -235,7 +234,7 @@ fn keys_survive_the_round_trip_so_patches_address_the_right_entry() {
 
 #[test]
 fn invents_keys_for_entries_that_have_none() {
-    // A vCard straight from Evolution carries no X-JMAP-KEY.
+    // A vCard from Evolution carries no X-JMAP-KEY line.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "EMAIL;TYPE=HOME:vera@example.org\r\n",
@@ -255,7 +254,7 @@ fn invents_keys_for_entries_that_have_none() {
             .values()
             .any(|e| e.contexts == Some(json!({"private": true})))
     );
-    // No TYPE at all means no contexts, not an empty object.
+    // No TYPE means no context, not an empty context object.
     assert!(emails.values().any(|e| e.contexts.is_none()));
 
     let phone = card.phones.expect("phones").into_values().next().unwrap();
