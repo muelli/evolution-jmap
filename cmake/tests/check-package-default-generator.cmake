@@ -1,17 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Regression test for the `package` target itself. `.github/workflows/
-# release.yml` builds the .deb with `cmake --build build --target package`,
-# which runs cpack against CPACK_GENERATOR's full configured list. That is a
-# different invocation from the package-deb* tests above, which all call
-# `cpack -G DEB` directly and so never notice a generator added to that list
-# whose toolchain is not installed (RPM without rpmbuild did exactly this on
-# the release image, which has no rpmbuild: cpack aborted the whole run,
-# taking the .deb down with it, while `-G DEB` runs stayed green). This
-# exercises the exact command the release workflow runs instead.
+# Regression test for the `package` target. `.github/workflows/release.yml`
+# builds the .deb with `cmake --build build --target package`.
+# That command runs cpack with all generators in CPACK_GENERATOR.
+# The package-deb* tests in cmake/Packaging.cmake call `cpack -G DEB`.
+# Thus they do not see a generator in that list whose tool is not installed.
+# History: the release image has no rpmbuild, but RPM was in the list.
+# cpack stopped the full run and made no .deb, but the `-G DEB` tests passed.
+# Thus this test runs the same command as the release workflow.
 #
-#   BUILD_DIR   the CMake build tree to package out of
+#   BUILD_DIR   the CMake build tree to package
 
 cmake_minimum_required(VERSION 3.14)
 

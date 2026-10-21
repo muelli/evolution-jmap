@@ -1,21 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Cargo integration: reproducibility plumbing, test registration, and
-# `add_cargo_cdylib()` — the install rule for the backend modules EDS and
-# Camel dlopen out of their own module directories.
+# Cargo integration: reproducible-build settings, test registration, and
+# `add_cargo_cdylib()`. That function is the install rule for the backend
+# modules that EDS and Camel dlopen from their module directories.
 
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
 set(CARGO_TARGET_DIR "${CMAKE_BINARY_DIR}/cargo-target")
 
-# Reproducible builds: deterministic timestamp from the environment or the
-# last commit, and source/cargo paths remapped out of the binaries.
+# Reproducible builds: a fixed timestamp from the environment or the last
+# commit. The binaries get remapped source and cargo paths.
 #
-# SOURCE_DATE_EPOCH must be a valid integer or entirely absent: clang
-# hard-errors on a malformed value, which surfaces as an inscrutable
-# "libclang error" from bindgen (this happened in CI, where git refuses
-# differently-owned checkouts and used to leave the variable empty).
+# SOURCE_DATE_EPOCH must be a valid integer or not set. clang stops with an
+# error on an incorrect value, which bindgen shows only as "libclang error".
+# This occurred in CI: git refuses checkouts with a different owner, and the
+# variable was then empty.
 if(DEFINED ENV{SOURCE_DATE_EPOCH} AND NOT "$ENV{SOURCE_DATE_EPOCH}" STREQUAL "")
 	set(SOURCE_DATE_EPOCH "$ENV{SOURCE_DATE_EPOCH}")
 else()
@@ -27,14 +27,15 @@ else()
 	)
 endif()
 
-# The directory the modules look for their translation catalogues in.
+# EVOLUTION_JMAP_LOCALEDIR: the directory where the modules find their
+# translation catalogues.
 #
-# jmap-backend-core's build.rs bakes this into the binaries, because a
-# dlopened module cannot work out where it was installed and gettext's
-# compiled-in default (/usr/share/locale) is right only when the prefix is
-# /usr. Deliberately not passed to the test invocations below: a test binary
-# is not installed anywhere, and the fallback build.rs applies without this
-# variable is the same /usr/share/locale gettext would have used.
+# The build.rs of jmap-backend-core puts this value into the binaries. A
+# dlopened module cannot find its install location, and the gettext default
+# (/usr/share/locale) is correct only for the /usr prefix. The test commands
+# below intentionally do not get this variable. A test binary has no install
+# location, and without the variable build.rs uses /usr/share/locale, the
+# same as gettext.
 set(CARGO_ENV
 	"CARGO_INCREMENTAL=0"
 	"EVOLUTION_JMAP_LOCALEDIR=${LANGUAGE_SUPPORT_DIRECTORY}"
@@ -54,10 +55,10 @@ else()
 		"timestamp) — the build will work but will not be reproducible")
 endif()
 
-# Build the whole workspace (all members — needs Evolution headers for the
-# example module). Part of ALL because the cdylibs add_cargo_cdylib()
-# installs are files, not CMake targets: nothing else would build them, and
-# `cmake --install` would find nothing to copy.
+# Build all workspace members (the example module needs the Evolution
+# headers). This target is part of ALL because the cdylibs that
+# add_cargo_cdylib() installs are files, not CMake targets. No other target
+# builds them, and `cmake --install` would find nothing to copy.
 add_custom_target(rust-build ALL
 	COMMAND ${CMAKE_COMMAND} -E env ${CARGO_ENV}
 		${CARGO_EXECUTABLE} build --workspace --locked --release
@@ -67,7 +68,7 @@ add_custom_target(rust-build ALL
 	VERBATIM
 )
 
-# Run the Rust test suite through CTest (`ctest` or `make test`).
+# Run the Rust tests through CTest (`ctest` or `make test`).
 add_test(
 	NAME rust-test
 	COMMAND ${CARGO_EXECUTABLE} test --locked
@@ -79,11 +80,10 @@ if(SCCACHE_EXECUTABLE)
 endif()
 set_tests_properties(rust-test PROPERTIES ENVIRONMENT "${_test_env}")
 
-# Crates kept out of the workspace's default-members because they need the
+# These crates are not in the workspace default-members because they need the
 # EDS/Evolution development headers, so plain `cargo test` skips them. CMake
-# has already established the headers are present, so run them here — this is
-# the only place the g_type_query layout checks in eds-sys and evo-sys get
-# exercised.
+# has already found the headers, so run them here. This is the only test that
+# runs the g_type_query layout checks in eds-sys and evo-sys.
 add_test(
 	NAME rust-test-eds
 	COMMAND ${CARGO_EXECUTABLE} test --locked -p eds-sys -p evo-sys
@@ -95,7 +95,7 @@ add_test(
 set_tests_properties(rust-test-eds PROPERTIES ENVIRONMENT "${_test_env}")
 
 # Plain `cargo clippy` lints only the default members. This test lints the
-# whole workspace, so the EDS-gated crates get the same -D warnings gate.
+# full workspace, so the crates that need EDS also get the -D warnings check.
 add_test(
 	NAME rust-clippy-workspace
 	COMMAND ${CARGO_EXECUTABLE} clippy --workspace --all-targets --locked
@@ -104,12 +104,12 @@ add_test(
 )
 set_tests_properties(rust-clippy-workspace PROPERTIES ENVIRONMENT "${_test_env}")
 
-# Install a cdylib built by `rust-build` as a loadable module of some host —
-# EDS names its address book backends libebookbackend<name>.so and looks for
-# them in one directory, Camel has its own convention, and cargo knows about
-# neither. Also registers a CTest that stages the install and checks the
-# module came out the far end loadable, because an install rule that quietly
-# copies nothing looks exactly like one that works.
+# Install a cdylib from `rust-build` as a loadable module of a host. EDS
+# names its address book backends libebookbackend<name>.so and finds them in
+# one directory. Camel has its own convention. cargo knows neither.
+# The function also registers a CTest that stages the install and checks that
+# the module is loadable. An install rule that silently copies nothing looks
+# the same as one that works.
 #
 #   add_cargo_cdylib(<cargo-lib-name>
 #       OUTPUT_NAME <installed file name>
@@ -119,10 +119,10 @@ set_tests_properties(rust-clippy-workspace PROPERTIES ENVIRONMENT "${_test_env}"
 #       [DATA <file> ...]
 #       [VERIFY_DESTINATION_FROM <pkg-config module> <variable>])
 #
-# DATA names files installed beside the module and checked to have arrived —
-# Camel's `.urls` file is one, and it is not optional decoration: Camel reads
-# it to decide whether to dlopen the module at all, so a component that
-# installs the `.so` alone is a provider that is never loaded.
+# DATA gives files that go next to the module; the test checks that they are
+# installed. Camel's `.urls` file is one, and it is necessary: Camel reads it
+# to decide whether to dlopen the module. Without it, Camel never loads the
+# provider.
 function(add_cargo_cdylib _lib_name)
 	cmake_parse_arguments(_arg "" "OUTPUT_NAME;DESTINATION;COMPONENT" "SYMBOLS;DATA;VERIFY_DESTINATION_FROM" ${ARGN})
 
@@ -131,33 +131,31 @@ function(add_cargo_cdylib _lib_name)
 			message(FATAL_ERROR "add_cargo_cdylib(${_lib_name}): ${_required} is required and must not be empty")
 		endif()
 	endforeach()
-	# The destinations come from pkg_check_variable(), which reports a
-	# missing variable as the empty string; that would silently install
-	# into the prefix root.
+	# The destinations come from pkg_check_variable(), which gives an empty
+	# string for a missing variable. The install would then silently go into
+	# the prefix root.
 	if(NOT IS_ABSOLUTE "${_arg_DESTINATION}")
 		message(FATAL_ERROR "add_cargo_cdylib(${_lib_name}): DESTINATION '${_arg_DESTINATION}' is not an absolute path")
 	endif()
 
-	# PROGRAMS rather than FILES: a shared module wants mode 0755.
+	# PROGRAMS, not FILES: a shared module needs mode 0755.
 	install(PROGRAMS "${CARGO_TARGET_DIR}/release/lib${_lib_name}.so"
 		DESTINATION "${_arg_DESTINATION}"
 		RENAME "${_arg_OUTPUT_NAME}"
 		COMPONENT "${_arg_COMPONENT}"
 	)
 
-	# lintian's unstripped-binary-or-object: this is `install(PROGRAMS ...)`,
-	# not `install(TARGETS ...)`, which is the only install() form CMake's own
-	# STRIP option applies to (CPack's CPACK_STRIP_FILES was tried first and
-	# left these five untouched, for the same reason). Stripping by hand in an
-	# install(CODE) block runs it wherever the file lands — a real
-	# `cmake --install`, and CPack's own re-run of the install rules into its
-	# staging tree alike.
+	# lintian's unstripped-binary-or-object. CMake's STRIP option applies only
+	# to `install(TARGETS ...)`, not to `install(PROGRAMS ...)`. CPack's
+	# CPACK_STRIP_FILES did not strip these five modules, for the same reason.
+	# An install(CODE) block strips the file at its install location. This
+	# applies to a real `cmake --install` and to the CPack staging tree.
 	install(CODE
 		"execute_process(COMMAND \"${CMAKE_STRIP}\" \"\$ENV{DESTDIR}${_arg_DESTINATION}/${_arg_OUTPUT_NAME}\")"
 		COMPONENT "${_arg_COMPONENT}"
 	)
 
-	# FILES rather than PROGRAMS: these are read, not executed.
+	# FILES, not PROGRAMS: these are read, not executed.
 	set(_expected_data)
 	foreach(_data IN LISTS _arg_DATA)
 		if(NOT EXISTS "${_data}")
@@ -171,9 +169,9 @@ function(add_cargo_cdylib _lib_name)
 		list(APPEND _expected_data "${_arg_DESTINATION}/${_data_name}")
 	endforeach()
 
-	# Let the test re-derive the directory from pkg-config, so DESTINATION
-	# is checked against its source. Not under FORCE_INSTALL_PREFIX, where
-	# the point is that the destination has deliberately been moved.
+	# The test gets the directory from pkg-config again, to check DESTINATION
+	# against its source. Not with FORCE_INSTALL_PREFIX, which intentionally
+	# moves the destination.
 	set(_pkg_args)
 	if(_arg_VERIFY_DESTINATION_FROM AND NOT FORCE_INSTALL_PREFIX)
 		list(LENGTH _arg_VERIFY_DESTINATION_FROM _count)

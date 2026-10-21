@@ -1,38 +1,34 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The release workflow, read as a document rather than run (M8). Run with
+# Reads the release workflow as a document, without running it. Run with
 # `cmake -P`; the caller sets:
 #
 #   SOURCE_DIR    the checkout root, which is where the CI configs live
 #
-# A release workflow can only be *executed* by pushing a tag, so the first
-# time anyone finds out it is wrong is the moment a release is already
-# half-published. The four properties below do not need it to run, and each
-# of them is one an ordinary edit can break silently:
+# Only a pushed tag runs a release workflow. Thus an error shows only when a
+# release is already half-published. The four properties below do not need a
+# run, and an ordinary edit can silently break each one:
 #
-# 1. Everything the release publishes is attested, and everything attested is
-#    published. Sigstore provenance is worth having precisely because its
-#    absence is invisible: an artifact added to the release and forgotten in
-#    the attestation step downloads exactly like its signed neighbours and
-#    `gh attestation verify` on it fails with "no attestation found", which
-#    reads like a tooling problem rather than a gap. Keeping both sides the
-#    same glob is what makes the sets equal by construction instead of by
-#    someone remembering.
-# 2. The package is built, and reaches the release. `apt install
-#    ./evolution-jmap.deb` from a nightly is what M8 exists to deliver; a
-#    release that quietly stops carrying it is a regression nothing else
-#    notices.
-# 3. Every CI config that pins the shared image pins the *same* image. The
-#    .deb's dependencies are derived by dpkg-shlibdeps from the EDS in that
-#    image, so a release built in a stale one would declare dependencies
-#    against a distribution nobody is testing against.
-# 4. The package's SBOM is attested against the package. The SBOM file is a
-#    release artifact like any other, so (1) already gives it provenance; what
-#    (1) cannot show is which package it describes. An `actions/attest-sbom`
-#    step whose subject is the .deb and whose SBOM is the one collected in
-#    dist/ is what lets `gh attestation verify --predicate-type
-#    https://cyclonedx.org/bom` answer that.
+# 1. The release attests all that it publishes, and publishes all that it
+#    attests. A missing Sigstore provenance is invisible. An artifact that is
+#    in the release but not in the attestation step downloads like the signed
+#    artifacts. `gh attestation verify` on it fails with "no attestation
+#    found", which looks like a tool problem, not a gap. The same glob on
+#    both sides makes the two sets equal by construction.
+# 2. The workflow builds the package and releases it. The purpose of the
+#    release workflow is `apt install ./evolution-jmap.deb` from a nightly.
+#    If a release silently stops carrying the package, no other check finds
+#    the regression.
+# 3. Each CI config that pins the shared image pins the *same* image.
+#    dpkg-shlibdeps derives the .deb dependencies from the EDS in that image.
+#    A release built in an old image declares dependencies on a distribution
+#    that no test uses.
+# 4. The package SBOM is attested against the package. The SBOM file is a
+#    release artifact, so (1) gives it provenance. But (1) cannot show which
+#    package the SBOM describes. An `actions/attest-sbom` step with the .deb
+#    as subject and the SBOM from dist/ lets `gh attestation verify
+#    --predicate-type https://cyclonedx.org/bom` show that.
 
 cmake_minimum_required(VERSION 3.14)
 
@@ -48,8 +44,9 @@ if(NOT EXISTS "${SOURCE_DIR}/${RELEASE_WORKFLOW}")
 endif()
 file(READ "${SOURCE_DIR}/${RELEASE_WORKFLOW}" _release_text)
 
-# Line-oriented from here on. Semicolons would become list separators, and a
-# workflow has none; brackets would, and it has plenty.
+# From here, read line by line. Semicolons are list separators, but a
+# workflow has none. Brackets also change list splitting, and a workflow has
+# many, so escape them.
 string(REPLACE "[" "\\[" _release_text_escaped "${_release_text}")
 string(REPLACE "\n" ";" _lines "${_release_text_escaped}")
 
@@ -57,18 +54,16 @@ string(REPLACE "\n" ";" _lines "${_release_text_escaped}")
 # 1. Attested set == published set.
 #
 
-# `subject-path:` takes either one value on the key's own line or a block
-# scalar whose entries are the more-indented lines below it. Both spellings
-# are in the wild, so both are read, and the entries are compared as written:
-# two globs that happen to cover the same files today are exactly the drift
-# this is meant to catch.
+# `subject-path:` takes one value on the same line as the key, or a block
+# scalar with more-indented lines below it. Workflows use both forms, so read
+# both. Compare the entries as written: two different globs that match the
+# same files today are the drift that this check must find.
 #
-# Only the build provenance step's subjects count here. Other attest actions
-# take a `subject-path:` too, and the SBOM one (4) names just the package, so
-# reading every `subject-path:` in the file would mix a deliberate subset
-# into the set that has to equal what is published. A step starts at a list
-# entry whose first key is one a step can open with; the action it runs is
-# its `uses:`.
+# Only the subjects of the build provenance step count here. Other attest
+# actions also take `subject-path:`, and the SBOM step (4) names only the
+# package. That subset must not enter the set that must equal the published
+# set. A step starts at a list entry whose first key can open a step. Its
+# `uses:` gives its action.
 set(_attested)
 set(_in_subject_block FALSE)
 set(_subject_indent "")
@@ -81,8 +76,8 @@ foreach(_line IN LISTS _lines)
 	if(_line MATCHES "^[ \t]*-?[ \t]*uses:[ \t]*([^ \t#]+)")
 		set(_step_action "${CMAKE_MATCH_1}")
 	endif()
-	# The step test comes first: a second MATCHES in the same condition would
-	# overwrite the CMAKE_MATCH_<n> the key's own match leaves.
+	# Test the step first: a second MATCHES in the same condition overwrites
+	# the CMAKE_MATCH_<n> of the key match.
 	if(_step_action MATCHES "^actions/attest-build-provenance@"
 			AND _line MATCHES "^([ \t]*)subject-path:[ \t]*(.*)$")
 		set(_found_subject_path TRUE)
@@ -96,7 +91,7 @@ foreach(_line IN LISTS _lines)
 		endif()
 	elseif(_in_subject_block)
 		if(_line MATCHES "^[ \t]*$")
-			# Blank lines inside a block scalar are content, not its end.
+			# A blank line in a block scalar is content, not its end.
 		elseif(_line MATCHES "^${_subject_indent}[ \t]+(.*)$")
 			set(_entry "${CMAKE_MATCH_1}")
 			string(REGEX REPLACE "^-[ \t]+" "" _entry "${_entry}")
@@ -115,10 +110,9 @@ if(NOT _found_subject_path)
 		"to carry Sigstore provenance (see docs/verifying-artifacts.md)")
 endif()
 
-# What `gh release create` uploads. Taken as the tokens naming something under
-# dist/ on that command's logical line — the tag and `--generate-notes` are not
-# files, and the release directory is the one thing every artifact passes
-# through.
+# What `gh release create` uploads: the tokens with dist/ on the logical line
+# of that command. The tag and `--generate-notes` are not files, and each
+# artifact goes through the release directory.
 string(REGEX REPLACE "\\\\\n[ \t]*" " " _joined "${_release_text}")
 string(REPLACE "[" "\\[" _joined "${_joined}")
 string(REPLACE "\n" ";" _joined_lines "${_joined}")
@@ -204,8 +198,8 @@ set(_referring_files)
 foreach(_config IN LISTS _ci_configs)
 	file(READ "${_config}" _text)
 	file(RELATIVE_PATH _relative "${SOURCE_DIR}" "${_config}")
-	# ci-image.yml is the workflow that *builds* the image, so a digest it
-	# mentions is an output, not a pin.
+	# ci-image.yml *builds* the image, so a digest in it is an output, not a
+	# pin.
 	if(_relative MATCHES "ci-image\\.yml$")
 		continue()
 	endif()
@@ -235,9 +229,8 @@ if(NOT _digest_count EQUAL 1)
 		"distribution than CI tests.")
 endif()
 
-# The release workflow must be one of the configs that pins it: the package's
-# Depends come from dpkg-shlibdeps reading the modules against the libraries in
-# that image.
+# The release workflow must pin the image too: dpkg-shlibdeps makes the
+# package Depends from the modules and the libraries in that image.
 set(_release_pins FALSE)
 foreach(_entry IN LISTS _referring_files)
 	if(_entry MATCHES "^${RELEASE_WORKFLOW}:")
@@ -253,8 +246,8 @@ endif()
 #
 # 4. The SBOM is attested against the package.
 #
-# Single-line values only: the SBOM step names one package glob and one file,
-# and a block scalar here would be a change worth a reviewer's look anyway.
+# Single-line values only: the SBOM step names one package glob and one file.
+# A block scalar here is a change that a reviewer must examine.
 set(_step_action "")
 set(_sbom_subjects)
 set(_sbom_paths)
@@ -268,8 +261,8 @@ foreach(_line IN LISTS _lines)
 	if(NOT _step_action MATCHES "^actions/attest-sbom@")
 		continue()
 	endif()
-	# Whole values: the SBOM's name carries `${{ github.ref_name }}`, spaces
-	# and all.
+	# Read the full value: the SBOM name contains `${{ github.ref_name }}`,
+	# with its spaces.
 	if(_line MATCHES "^[ \t]*(subject-path|sbom-path):[ \t]*(.*)$")
 		set(_key "${CMAKE_MATCH_1}")
 		string(STRIP "${CMAKE_MATCH_2}" _value)

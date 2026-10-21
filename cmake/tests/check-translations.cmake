@@ -1,22 +1,22 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# End-to-end check of add_translations(): configure, build and install the
-# fixture project in cmake/tests/translations/ once per scenario, and hold the
-# result against what each scenario is supposed to produce.
+# End-to-end check of add_translations(). For each scenario, configure, build
+# and install the fixture project in cmake/tests/translations/, then compare
+# the result with the expected result.
 #
 # Run with `cmake -P`; the caller sets:
 #
 #   PROJECT_DIR  the fixture project's source directory
-#   MODULE       path to cmake/Translations.cmake, the code under test
+#   MODULE       path to cmake/AddTranslations.cmake, the code under test
 #   PO_COMPILE   the po-compile binary built by the outer build
 #   STAGE_DIR    scratch directory for the fixture builds and install trees
 #   GENERATOR    the generator the outer build is using
 #
-# Four scenarios, because the interesting behaviour is not "it works": a
-# language whose catalogue is missing, a catalogue the compiler refuses, and
-# an empty LINGUAS are the three states this repository will actually be in,
-# and only one of them may be silent.
+# Four scenarios: the success case, and three cases that occur in this
+# repository. These are a language with no catalogue, a catalogue that the
+# compiler refuses, and an empty LINGUAS. Of the three, only the empty
+# LINGUAS can pass silently.
 
 cmake_minimum_required(VERSION 3.14)
 
@@ -34,9 +34,9 @@ endif()
 
 file(REMOVE_RECURSE "${STAGE_DIR}")
 
-# Configure the fixture project against one of the fixture `po/` directories.
-# Answers with the exit status and the combined output, so a scenario that
-# expects failure can say what it wanted to read in it.
+# Configure the fixture project with one of the fixture `po/` directories.
+# Returns the exit status and the combined output, so a scenario that
+# expects a failure can examine the output.
 function(configure_fixture _scenario _result_var _output_var)
 	set(_build "${STAGE_DIR}/${_scenario}/build")
 	set(_prefix "${STAGE_DIR}/${_scenario}/prefix")
@@ -80,11 +80,10 @@ function(install_fixture _scenario _result_var _output_var)
 	set(${_output_var} "${_stdout}${_stderr}" PARENT_SCOPE)
 endfunction()
 
-# A compiled catalogue, checked as gettext would find it: the magic number
-# first, then the translation itself. The magic is the format's own
-# 0x950412de, stored little-endian on every architecture this is built on, so
-# reading it back proves the file is a `.mo` and not, say, the `.po` copied
-# across.
+# Check a compiled catalogue as gettext reads it: first the magic number, then
+# the translation. The magic number is 0x950412de, stored little-endian on
+# each architecture that builds this project. Thus it proves that the file is
+# a `.mo`, not a copy of the `.po`.
 function(assert_catalogue _path _marker)
 	if(NOT EXISTS "${_path}")
 		message(FATAL_ERROR "no catalogue at ${_path}")
@@ -104,7 +103,7 @@ function(assert_catalogue _path _marker)
 endfunction()
 
 #
-# Scenario 1 — two languages, both installed where gettext looks.
+# Scenario 1: two languages, both installed where gettext looks.
 #
 configure_fixture(translated _result _output)
 if(NOT _result EQUAL 0)
@@ -123,16 +122,16 @@ set(_prefix "${STAGE_DIR}/translated/prefix")
 assert_catalogue("${_prefix}/share/locale/xx/LC_MESSAGES/evolution-jmap.mo" "FIXTURE-XX-DESCRIPTION")
 assert_catalogue("${_prefix}/share/locale/zz_ZZ/LC_MESSAGES/evolution-jmap.mo" "FIXTURE-ZZ-PROTOCOL")
 
-# The two languages must be two catalogues: a build that compiled xx.po into
-# both paths would pass the check above for xx and fail here.
+# The two languages must be two catalogues. If a build compiles xx.po into
+# both paths, the check above passes for xx, but this check fails.
 file(STRINGS "${_prefix}/share/locale/zz_ZZ/LC_MESSAGES/evolution-jmap.mo" _leaked
 	REGEX "FIXTURE-XX-")
 if(_leaked)
 	message(FATAL_ERROR "the zz_ZZ catalogue holds the xx translation: ${_leaked}")
 endif()
 
-# What the function reported back is what packaging declares, so it has to
-# name exactly the two files that arrived.
+# Packaging uses the list that the function returns, so the list must name
+# exactly the two installed files.
 file(STRINGS "${STAGE_DIR}/translated/build/installed-catalogues.txt" _reported)
 set(_expected
 	"${_prefix}/share/locale/xx/LC_MESSAGES/evolution-jmap.mo"
@@ -146,7 +145,7 @@ if(NOT _reported STREQUAL _expected)
 endif()
 
 #
-# Scenario 2 — LINGUAS names a language with no catalogue.
+# Scenario 2: LINGUAS names a language with no catalogue.
 #
 configure_fixture(missing _result _output)
 if(_result EQUAL 0)
@@ -160,7 +159,7 @@ endif()
 message(STATUS "a language with no .po fails to configure, naming it")
 
 #
-# Scenario 3 — no languages at all, which is this repository today.
+# Scenario 3: no languages.
 #
 configure_fixture(empty _result _output)
 if(NOT _result EQUAL 0)
@@ -185,7 +184,7 @@ endif()
 message(STATUS "an empty LINGUAS builds and installs nothing")
 
 #
-# Scenario 4 — a catalogue the compiler refuses.
+# Scenario 4: a catalogue that the compiler refuses.
 #
 configure_fixture(broken _result _output)
 if(NOT _result EQUAL 0)

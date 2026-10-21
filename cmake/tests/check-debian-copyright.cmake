@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Track C2: docs/packaging/copyright's own-source stanzas are generated from
-# REUSE.toml, and docs/packaging/third-party-notices from `cargo metadata`,
-# both by tools/generate-debian-copyright.py, not hand-maintained. This keeps
-# the committed files from drifting out of sync with the generator (or with
-# REUSE.toml / Cargo.lock) the way hand-edited copies silently could. Run
-# with `cmake -P`; the caller sets:
+# Track C2: tools/generate-debian-copyright.py generates two files.
+# It makes the own-source stanzas of docs/packaging/copyright from REUSE.toml.
+# It makes docs/packaging/third-party-notices from `cargo metadata`.
+# Nobody edits these files by hand. This test makes sure that the committed
+# files agree with the generator, REUSE.toml and Cargo.lock.
+# Run with `cmake -P`. The caller sets:
 #
 #   SOURCE_DIR         the repository root
 #   PYTHON3_EXECUTABLE the python3 binary

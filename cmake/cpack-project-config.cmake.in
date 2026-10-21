@@ -1,27 +1,26 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# CPACK_PROJECT_CONFIG_FILE: CPack includes this once per generator, inside the
-# `cpack` process, before it stages the install tree and writes the archive.
-# That makes it the only place from which the package's timestamps can be fixed
-# — CPackConfig.cmake carries variables, and this carries the one thing that has
-# to be an *environment* variable by the time the archive is written.
+# CPACK_PROJECT_CONFIG_FILE: CPack includes this file once for each generator,
+# in the `cpack` process, before it stages the install tree and writes the
+# archive. Only here can the package timestamps be set. CPackConfig.cmake
+# contains variables, but SOURCE_DATE_EPOCH must be an *environment* variable
+# when CPack writes the archive.
 #
-# Why it has to be here at all: `cpack` re-runs the install into a fresh staging
-# tree, so without this the directory entries and the ar member headers are
-# dated by the packaging clock, and the file entries by whenever the modules
-# happened to be linked. Two packages built from one tree then differ, and the
-# `.deb` cannot be one of the artifacts this project asks people to verify
-# against a published digest.
+# Reason: `cpack` installs again into a new staging tree. Without this file,
+# the packaging clock dates the directory entries and the ar member headers,
+# and the link times of the modules date the file entries. Two packages from
+# one tree are then different. Users could not verify the `.deb` against a
+# published digest, as this project asks for its artifacts.
 #
-# The value is the one this build resolved at configure time — the exported
-# SOURCE_DATE_EPOCH if there was one, else the last commit's timestamp — so the
-# package is dated by the same instant as the binaries inside it. Deliberately
-# *not* deferring to whatever is exported when `cpack` runs: that would let the
-# person packaging redate a build they did not make, which is the difference
-# between a timestamp and a fact.
+# The value is the one this build resolved at configure time: the exported
+# SOURCE_DATE_EPOCH, or else the timestamp of the last commit. Thus the
+# package and its binaries have the same date. This file intentionally ignores
+# a value exported when `cpack` runs. That value would let the packager
+# change the date of a build that they did not make.
 #
-# Generated from cmake/cpack-project-config.cmake.in; edit that, not this.
+# Generated from cmake/cpack-project-config.cmake.in.
+# Edit that file, not this one.
 
 set(_epoch "@SOURCE_DATE_EPOCH@")
 if(_epoch MATCHES "^[0-9]+$")

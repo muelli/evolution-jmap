@@ -1,25 +1,25 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Checks for the release SBOM's system-library half. Run with `cmake -P`; the
-# caller sets:
+# Checks for the system-library part of the release SBOM. Run with `cmake -P`.
+# The caller sets:
 #
 #   SOURCE_DIR  the source tree (for ci/deb-dependencies.sh and ci/sbom.sh)
-#   STAGE_DIR   a scratch directory for the throwaway packages and outputs
+#   STAGE_DIR   a scratch directory for the temporary packages and outputs
 #   PART        "dependencies" or "sbom"
 #
-# The packages are built here with dpkg-deb from a control file alone, so the
-# Depends are chosen by the test and not by whatever this build links against.
-# They name packages every Debian-family host has installed (libc6, dpkg,
-# coreutils), and versions are compared with what dpkg-query reports for them.
+# The test builds its packages with dpkg-deb from only a control file. Thus the
+# test sets the Depends, not the libraries that this build links to.
+# The Depends use packages that all Debian-family hosts have (libc6, dpkg,
+# coreutils). The test compares the versions with the dpkg-query output.
 #
-# PART=dependencies: ci/deb-dependencies.sh records, per Depends clause, the
-# installed version of the alternative that satisfies it, and refuses a clause
-# nothing installed satisfies.
+# PART=dependencies: for each Depends clause, ci/deb-dependencies.sh records
+# the installed version of the alternative that satisfies it. It refuses a
+# clause that no installed package satisfies.
 #
-# PART=sbom: ci/sbom.sh puts those versions into the pkg:deb components,
-# refuses a resolution recorded for a different package, and two runs with the
-# same SOURCE_DATE_EPOCH are byte-identical. Needs cargo-cyclonedx.
+# PART=sbom: ci/sbom.sh puts those versions into the pkg:deb components.
+# It refuses a resolution recorded for a different package. Two runs with the
+# same SOURCE_DATE_EPOCH give byte-identical output. Needs cargo-cyclonedx.
 
 cmake_minimum_required(VERSION 3.14)
 
@@ -36,7 +36,7 @@ find_program(JQ jq REQUIRED)
 file(REMOVE_RECURSE "${STAGE_DIR}")
 file(MAKE_DIRECTORY "${STAGE_DIR}")
 
-# Builds ${STAGE_DIR}/<name>.deb whose only content is a control file with the
+# Builds ${STAGE_DIR}/<name>.deb that contains only a control file with the
 # given Depends.
 function(fake_deb name depends)
 	set(_root "${STAGE_DIR}/${name}-root")
@@ -106,9 +106,9 @@ installed_version(libc6 _libc6)
 installed_version(dpkg _dpkg)
 installed_version(coreutils _coreutils)
 
-# The first alternative of the second clause is not a package anywhere, so the
-# clause must resolve to the second one. libc6 is bounded from both sides, as
-# this project's Depends bound libevolution: two clauses, one package.
+# The first alternative of the second clause is not a real package, so the
+# clause must resolve to dpkg. libc6 has a lower and an upper limit, as
+# libevolution has in the Depends of this project: two clauses, one package.
 set(_good_depends "libc6 (>= 2.17), not-a-real-package-sbom-test | dpkg, coreutils, libc6 (<< 99999)")
 fake_deb(good "${_good_depends}")
 resolve(good _result)
@@ -202,15 +202,15 @@ if(_crates LESS 1)
 	message(FATAL_ERROR "the SBOM lists no Rust crates")
 endif()
 
-# A resolution recorded for another package must not be folded in silently.
+# sbom.sh must refuse a resolution recorded for a different package.
 fake_deb(other "libc6")
 sbom("${STAGE_DIR}/other.deb" "${_good_json}" "${STAGE_DIR}/stale.cdx.json" _result)
 if(_result EQUAL 0)
 	message(FATAL_ERROR "sbom.sh accepted a dependency resolution made for a different package")
 endif()
 
-# The per-crate files cargo-cyclonedx writes into the source tree are scratch,
-# on success and on failure alike.
+# sbom.sh must remove the per-crate files that cargo-cyclonedx writes into the
+# source tree, after success and after failure.
 file(GLOB_RECURSE _leftovers "${SOURCE_DIR}/rust/*.cdx.json")
 if(_leftovers)
 	message(FATAL_ERROR "sbom.sh left files in the source tree: ${_leftovers}")
