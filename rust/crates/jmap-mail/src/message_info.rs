@@ -1,84 +1,83 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CamelJmapMessageInfo`: one summary row, as the object Camel keeps it in.
+//! `CamelJmapMessageInfo`: one summary row, in the object form that Camel keeps.
 //!
-//! `jmap-mail-sync`'s [`MessageSummary`] is the same row read off an
-//! `Email/get`, and most of what happens here is copying it across. Three
-//! columns are not a copy, and they are what this module is for:
+//! The [`MessageSummary`] of `jmap-mail-sync` is the same row, read from an
+//! `Email/get`. This module copies most of its columns. Three columns are not
+//! a copy:
 //!
-//! - **The flags word.** Camel keeps a message's state as bits in one `guint32`
-//!   where JMAP keeps it as a set of keywords. The sync layer has already
-//!   sorted the keywords into the ones Camel has a bit for and the ones it does
-//!   not; turning the first into the word is `flags_word`, and the second
-//!   become Camel's user flags, which is what Evolution shows as labels.
+//! - **The flags word.** Camel keeps the state of a message as bits in one
+//!   `guint32`. JMAP keeps it as a set of keywords. The sync layer divides the
+//!   keywords into two groups: keywords that have a Camel bit, and keywords
+//!   that do not. `flags_word` turns the first group into the word. The second
+//!   group becomes the Camel user flags, which Evolution shows as labels.
 //! - **The address columns.** JMAP sends `from`, `to` and `cc` as structured
-//!   name/address pairs; Camel's summary stores one display string per header.
-//!   Formatting that string is `CamelInternetAddress`'s job — RFC 5322's
-//!   quoting rules live there — so `address_list` builds one and asks it.
-//! - **The threading columns.** Camel does not store a `Message-ID`; it stores
-//!   64 bits of an MD5 over it, per `CamelSummaryMessageID`, and an array of
-//!   the same for the ancestors. There is no public function to compute one,
-//!   so `message_id_digest` computes it — and it computes exactly what
-//!   Camel's own `camel_message_info_new_from_headers` would have, because
-//!   those two paths meet: a message Camel parses locally lands in the same
-//!   summary as a row built here, and digests that disagreed would thread one
-//!   conversation as two. `tests/message_info.rs` pins that against Camel
-//!   itself rather than against a constant.
+//!   name/address pairs. The Camel summary keeps one display string per header.
+//!   `CamelInternetAddress` formats that string and applies the RFC 5322
+//!   quoting rules, so `address_list` builds one and uses it.
+//! - **The threading columns.** Camel does not keep a `Message-ID`. It keeps
+//!   64 bits of an MD5 of it (`CamelSummaryMessageID`), and an array of these
+//!   digests for the ancestors. No public function computes a digest, so
+//!   `message_id_digest` computes it. Its result must be equal to the result of
+//!   `camel_message_info_new_from_headers`: a message that Camel parses locally
+//!   goes into the same summary as a row from this module. Different digests
+//!   would show one conversation as two threads. `tests/message_info.rs`
+//!   compares the result with Camel itself, not with a constant.
 //!
-//! There is a fourth column, and it is neither a copy nor a computation: it is
-//! something only this provider knows, so Camel has no field for it and the row
-//! has to be a subclass to carry it.
+//! A fourth column is not a copy and not a computation. Only this provider
+//! knows its value, so Camel has no field for it. Thus the row must be a
+//! subclass.
 //!
-//! ## The keywords the server was last seen holding
+//! ## The keywords that the server held at the last listing
 //!
-//! A flag change is a *difference* on the wire — `jmap-mail-sync`'s
-//! `KeywordChange` — because a whole-set write would speak for every keyword on
-//! the message, including the ones no client here has heard of. A difference
-//! needs both ends, and the row only has one of them: the user marks a message
-//! read by mutating the flags word in place, which is the *after*. The before —
-//! the keywords the last listing found — is gone the moment that mark is made,
-//! unless the row keeps it.
+//! On the wire, a flag change is a *difference* (`KeywordChange` in
+//! `jmap-mail-sync`). A write of the full set would also speak for keywords
+//! that no client here knows. A difference needs two ends, but the row has only
+//! one. When the user marks a message read, the flags word changes in place:
+//! that is the *after*. The *before* (the keywords from the last listing) is
+//! lost at that moment, unless the row keeps it.
 //!
-//! So [`JmapMessageInfo`] is a `CamelMessageInfoBase` with the listing's keyword
-//! set beside it, written by [`new_message_info`] and renewed by
-//! [`update_message_info`]. It is the shape IMAPX's own message info takes for
-//! the same reason — it keeps a `server_flags` word next to Camel's — and it
-//! survives a restart the only way Camel offers a provider: the summary
-//! database row's `bdata`, one string per row that the class chain appends to on
-//! the way out and reads back in the same order on the way in. (The row struct
-//! is `CamelMIRecord` up to EDS 3.52 and `CamelStoreDBMessageRecord` from 3.58;
-//! nothing but its name changed, so the two vfuncs below name it through
-//! [`eds_sys::compat::CamelSummaryMessageRecord`] and are otherwise the same
-//! functions on both.)
+//! Thus [`JmapMessageInfo`] is a `CamelMessageInfoBase` that also holds the
+//! keyword set of the listing. [`new_message_info`] writes the set and
+//! [`update_message_info`] renews it. The IMAPX message info has the same shape
+//! for the same reason: it keeps a `server_flags` word next to the Camel flags.
+//! The column survives a restart through the only method that Camel gives a
+//! provider: the `bdata` of the summary database row. `bdata` is one string per
+//! row. Each class in the chain appends to it on save, and reads it back in the
+//! same order on load. (The row struct is `CamelMIRecord` up to EDS 3.52 and
+//! `CamelStoreDBMessageRecord` from 3.58. Only the name changed, so the two
+//! vfuncs below use [`eds_sys::compat::CamelSummaryMessageRecord`] and are the
+//! same functions on both.)
 //!
-//! Two things follow from what the column is *for*, and both are tested:
+//! The purpose of the column gives two rules. Tests examine both:
 //!
-//! - **A row that lost it remembers nothing rather than failing to load.** The
-//!   empty set is the conservative answer and not merely a tolerable one: a
-//!   difference from nothing only ever adds keywords, so a row whose stored data
-//!   predates this column takes none off.
-//! - **A clone into a summary of ours carries it.** A copy that dropped the
-//!   column would be a row whose next flag change looked like the removal of
-//!   every keyword the message has. Which summary the copy is being made for is
-//!   what decides whether it is a row of ours at all — see `clone`.
+//! - **A row without the column remembers nothing, and loads correctly.** The
+//!   empty set is the safe answer: a difference from nothing only adds
+//!   keywords. Thus a row whose stored data is older than this column removes
+//!   no keywords.
+//! - **A clone into a summary of this provider keeps the column.** Without it,
+//!   the next flag change of the copy would look like the removal of all the
+//!   keywords of the message. The target summary of the copy decides whether
+//!   the copy is a row of this type (see `clone`).
 //!
-//! The row is still built detached, with no summary behind it — nothing about
-//! the column needs one — but which class a *summary* instantiates is no longer
-//! a question that answers itself. [`crate::summary`]'s subclass declares this
-//! type, which is what a row read back out of the database comes back as, and
-//! `tests/summary.rs` pins the two answers together.
+//! The row is still built detached, with no summary: the column does not need
+//! one. But the class that a *summary* instantiates is a separate question. The
+//! subclass in [`crate::summary`] declares this type, so a row read back from
+//! the database has this type. `tests/summary.rs` makes sure that the two
+//! answers agree.
 //!
-//! ## The thread id the server told us
+//! ## The thread id from the server
 //!
-//! A fifth column, stored the same way and for the same reason: Camel has no
-//! field for a server-assigned thread, only its own digest-based guess at one
-//! (`message_id_digest`, above). Unlike the keywords, it is immutable — RFC
-//! 8621 §4.1.1 does not let a message change thread — so [`new_message_info`]
-//! is its only writer and there is no `update_message_info` side to it. Stored
-//! rather than merely held in [`MessageSummary`] so it survives a restart the
-//! keywords column does; consulting it where the summary groups messages into
-//! threads is not yet attempted.
+//! A fifth column, stored in the same way for the same reason. Camel has no
+//! field for a thread that the server assigns, only its own guess from digests
+//! (`message_id_digest`, above). The thread id does not change: RFC 8621
+//! §4.1.1 does not let a message change thread. Thus [`new_message_info`] is
+//! the only function that sets it from a listing, and `update_message_info`
+//! does not write it. (`load` and `clone` only restore or copy it.) It is
+//! stored, not only held in [`MessageSummary`], so that it survives a restart
+//! as the keywords column does. The summary does not yet use it to group
+//! messages into threads.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -120,58 +119,56 @@ use jmap_proto::mail::EmailAddress;
 
 use crate::folder_info::c_string;
 
-/// The instance struct: Camel's row, and the one thing about it Camel has no
-/// field for.
+/// The instance struct: the Camel row, plus the data that Camel has no field
+/// for.
 #[repr(C)]
 pub struct JmapMessageInfo {
     parent: CamelMessageInfoBase,
-    /// The keywords the last listing found on the message.
+    /// The keywords that the last listing found on the message.
     ///
-    /// A [`Slot`] for the reason every other instance field in this crate is
-    /// one — the struct arrives zeroed and is freed without a destructor
-    /// running over it — and a [`Mutex`] because, unlike a folder's mailbox id,
-    /// this one is written more than once: every refresh renews it, and Camel
-    /// drives a folder from more than one thread.
+    /// A [`Slot`], as all instance fields in this crate: the struct arrives
+    /// zeroed and is freed without a destructor. A [`Mutex`] because, unlike
+    /// the mailbox id of a folder, this field gets many writes: each refresh
+    /// renews it, and Camel uses a folder from more than one thread.
     server: Slot<Mutex<Keywords>>,
-    /// The thread id `Email/get` reported for this message, or `None` for a
-    /// row this provider has not heard one for.
+    /// The thread id that `Email/get` gave for this message, or `None` if this
+    /// provider has no thread id for the row.
     thread: Slot<Mutex<Option<Id>>>,
 }
 
 impl JmapMessageInfo {
-    /// The Rust view of a row Camel handed over, or `None` for a row that is
-    /// not one of ours.
+    /// The Rust view of a row from Camel, or `None` if the row is not of this
+    /// type.
     ///
-    /// Checked rather than assumed, unlike a vfunc's own first argument: a row
-    /// reaches this crate from a summary, and a summary that was written before
-    /// this type existed hands back a plain `CamelMessageInfoBase`. Reading one
-    /// of those as this type would be undefined behaviour rather than a wrong
-    /// answer.
+    /// This function checks the type. A vfunc can assume the type of its first
+    /// argument, but a row comes to this crate from a summary. A summary written
+    /// before this type existed gives a plain `CamelMessageInfoBase`. To read
+    /// such a row as this type is undefined behaviour.
     ///
     /// # Safety
     ///
     /// `info` must be NULL or point at a live `CamelMessageInfo`.
     unsafe fn borrow<'a>(info: *mut CamelMessageInfo) -> Option<&'a Self> {
-        // SAFETY: the contract above is what makes the type check itself
-        // legal, and the check is what makes the cast inside sound.
+        // SAFETY: the contract above makes the type check legal, and the
+        // check makes the cast inside sound.
         unsafe { checked_borrow(info, message_info_type()) }
     }
 }
 
-/// The class struct, carrying the parent's vfunc slots with our functions in
-/// three of them.
+/// The class struct: the vfunc slots of the parent, with functions of this
+/// module in three of them.
 #[repr(C)]
 pub struct JmapMessageInfoClass {
     parent_class: CamelMessageInfoBaseClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the CamelMessageInfoBase
-// instance and class structs, whose layouts eds-sys's tests/layout.rs checks
-// against `g_type_query`; CamelMessageInfoBase derives from CamelMessageInfo,
-// from GObject.
+// SAFETY: both structs are #[repr(C)] and start with the CamelMessageInfoBase
+// instance and class structs. The eds-sys test tests/layout.rs checks their
+// layouts against `g_type_query`. CamelMessageInfoBase derives from
+// CamelMessageInfo, which derives from GObject.
 unsafe impl ObjectSubclass for JmapMessageInfo {
-    /// `CamelJmapMessageInfo`, matching the store and the folder: Camel's own
-    /// providers name theirs `Camel<Protocol>MessageInfo`.
+    /// `CamelJmapMessageInfo`, as the store and the folder: the Camel
+    /// providers use the name `Camel<Protocol>MessageInfo`.
     const NAME: &'static CStr = c"CamelJmapMessageInfo";
     type Instance = JmapMessageInfo;
     type Class = JmapMessageInfoClass;
@@ -182,8 +179,8 @@ unsafe impl ObjectSubclass for JmapMessageInfo {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: the class leads with CamelMessageInfoBaseClass, which leads
-        // with CamelMessageInfoClass — the contract above.
+        // SAFETY: the class starts with CamelMessageInfoBaseClass, which
+        // starts with CamelMessageInfoClass (the contract above).
         let class = unsafe { &mut (*class).parent_class.parent_class };
         class.load = Some(load);
         class.save = Some(save);
@@ -191,11 +188,11 @@ unsafe impl ObjectSubclass for JmapMessageInfo {
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
-        // Filled here rather than left empty, because an empty slot and a slot
-        // holding an empty set are different answers: the first is a row this
-        // crate cannot speak for, and every reader treats it as one.
+        // Fill the slot now. An empty slot and a slot with an empty set are
+        // different answers: an empty slot is a row that this crate cannot
+        // speak for, and all readers treat it so.
         //
-        // SAFETY: the instance is being constructed, so this is the only
+        // SAFETY: the instance is in construction, so this is the only
         // reference to it.
         unsafe { (*instance).server.init(Mutex::new(Keywords::default())) };
         // SAFETY: as above.
@@ -203,9 +200,9 @@ unsafe impl ObjectSubclass for JmapMessageInfo {
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
-        // SAFETY: the instance is being finalized, so nothing can still reach
-        // it and no borrow handed out by `get` is alive. Without this the set
-        // leaks — once per row the folder ever listed.
+        // SAFETY: the instance is in finalization, so nothing can still get
+        // to it and no borrow from `get` is alive. Without this, the set
+        // leaks once for each row that the folder listed.
         unsafe { (*instance).server.clear() };
         // SAFETY: as above.
         unsafe { (*instance).thread.clear() };
@@ -214,19 +211,18 @@ unsafe impl ObjectSubclass for JmapMessageInfo {
 
 /// Registers the row type, or returns it if it is already registered.
 ///
-/// Statically, like the store's and the folder's: a Camel provider is not a
-/// `GTypeModule`, so there is no unload for a dynamic type to be unregistered
-/// by.
+/// The registration is static, as for the store and the folder: a Camel
+/// provider is not a `GTypeModule`, so it never unloads a dynamic type.
 pub fn message_info_type() -> GType {
     register_static::<JmapMessageInfo>()
 }
 
-/// The keywords `info` last saw the server holding, or `None` if it is not a row
-/// this provider built.
+/// The keywords that the server held when `info` last saw them, or `None` if
+/// this provider did not build the row.
 ///
-/// A copy rather than a borrow: the set lives behind a mutex the row hands out
-/// nothing from, so that a refresh renewing it cannot be interleaved with a
-/// synchronisation reading it.
+/// The return value is a copy, not a borrow. The set is behind a mutex, and
+/// the row gives no borrow from it. Thus a refresh that renews the set cannot
+/// interleave with a synchronisation that reads it.
 ///
 /// # Safety
 ///
@@ -242,27 +238,26 @@ pub unsafe fn server_keywords(info: *mut CamelMessageInfo) -> Option<Keywords> {
     Some(keywords.clone())
 }
 
-/// The keyword set the row claims *now* — the other end of a flag change.
+/// The keyword set that the row shows *now*: the other end of a flag change.
 ///
-/// [`server_keywords`] is the before and this is the after, and the asymmetry
-/// between them is the point: the before is a column only this provider keeps,
-/// while the after is read straight back out of Camel's own two — the flags word
-/// and the user flags — because those are what the user's click changed. It is
-/// `flags_word` and `set_user_flags` run backwards, over the same bits and
-/// the same names, so that a row nobody touched produces the set it was built
-/// from and therefore no change at all.
+/// [`server_keywords`] is the before and this is the after. The before is a
+/// column that only this provider keeps. The after comes from two Camel
+/// columns, the flags word and the user flags, because the click of the user
+/// changes those. This function is `flags_word` and `set_user_flags` in
+/// reverse, over the same bits and names. Thus an unchanged row gives the set
+/// that built it, and no change.
 ///
-/// `attachments` is read out of the word for symmetry and contributes nothing:
-/// [`Keywords::new`] leaves it out, because `hasAttachment` is a property RFC
-/// 8621 §4.1.4 has the server compute rather than a label a client may set.
+/// The function reads `attachments` from the word for symmetry, but it has no
+/// effect: [`Keywords::new`] ignores it. RFC 8621 §4.1.4 makes `hasAttachment`
+/// a property that the server computes, not a label that a client can set.
 ///
 /// # Safety
 ///
 /// `info` must point at a live `CamelMessageInfo`.
 pub unsafe fn row_keywords(info: *mut CamelMessageInfo) -> Keywords {
-    // SAFETY: the contract above; `dup_user_flags` hands over a copy this
-    // function owns and frees, which is what makes reading it here safe without
-    // holding the row's property lock across the walk.
+    // SAFETY: the contract above. `dup_user_flags` gives a copy that this
+    // function owns and frees. Thus it is safe to read the copy without the
+    // property lock of the row during the walk.
     unsafe {
         let flags = message_flags(camel_message_info_get_flags(info));
         let user_flags = camel_message_info_dup_user_flags(info);
@@ -277,15 +272,15 @@ pub unsafe fn row_keywords(info: *mut CamelMessageInfo) -> Keywords {
     }
 }
 
-/// Records what one listing found, replacing whatever the row remembered.
+/// Records the result of one listing, and replaces the set that the row had.
 ///
-/// Wholesale, for the reason the user flags are replaced wholesale: a
-/// `keywords` object is the whole truth about the message's keywords, so a
-/// keyword the listing did not mention is one that is no longer there.
+/// The function replaces the full set, as for the user flags: a `keywords`
+/// object is the full truth about the keywords of the message. Thus a keyword
+/// that the listing does not include is no longer on the message.
 ///
-/// Silently does nothing for a row that is not ours — a row loaded from a
-/// summary written before this column existed — which is the same degradation
-/// an empty set is: the difference from nothing adds keywords and removes none.
+/// For a row of a different type (a row from a summary that is older than this
+/// column), the function does nothing. That is the same as an empty set: the
+/// difference from nothing adds keywords and removes none.
 ///
 /// # Safety
 ///
@@ -302,8 +297,8 @@ pub(crate) unsafe fn set_server_keywords(info: *mut CamelMessageInfo, keywords: 
     }
 }
 
-/// The thread id `info` was last told the server assigned it, or `None` for a
-/// row this provider has not heard one for.
+/// The thread id that the server assigned to `info`, or `None` if this
+/// provider has no thread id for the row.
 ///
 /// # Safety
 ///
@@ -318,11 +313,12 @@ pub unsafe fn server_thread_id(info: *mut CamelMessageInfo) -> Option<Id> {
         .clone()
 }
 
-/// Records the thread id [`new_message_info`] built the row from.
+/// Records the thread id of the row: from the listing in [`new_message_info`],
+/// or from the stored data or the original row in `load` and `clone`.
 ///
-/// Silently does nothing for a row that is not ours, the same degradation
-/// [`set_server_keywords`] uses for a row loaded from a summary written before
-/// this column existed.
+/// For a row of a different type, the function does nothing. This is the same
+/// fallback that [`set_server_keywords`] uses for a row from a summary that is
+/// older than this column.
 ///
 /// # Safety
 ///
@@ -339,26 +335,27 @@ unsafe fn set_server_thread_id(info: *mut CamelMessageInfo, thread_id: Option<Id
     }
 }
 
-/// `CamelMessageInfoClass.save`: appends the column to the row's stored data.
+/// `CamelMessageInfoClass.save`: appends the two columns to the stored data of
+/// the row.
 ///
-/// The count first, then the names, because that is what [`load`] reads and the
-/// two are one format. Written through `camel_util_bdata_put_string` rather than
-/// joined here: `bdata` is one string for the whole class chain, and a keyword
-/// may contain a space, a digit or a dash — Camel's own length-prefixed encoding
-/// is what keeps one keyword from coming back as two.
+/// The keyword count comes first, then the names, because [`load`] reads this
+/// format. The function writes each name with `camel_util_bdata_put_string`
+/// and does not join them. `bdata` is one string for the full class chain, and
+/// a keyword can contain a space, a digit or a dash. The length-prefixed Camel
+/// encoding prevents a keyword from coming back as two.
 ///
 /// # Safety
 ///
-/// Called by Camel with a live row of this type, a record to fill and the
-/// string the chain is building.
+/// Camel calls this with a live row of this type, a record to fill and the
+/// string that the chain builds.
 unsafe extern "C" fn save(
     info: *const CamelMessageInfo,
     record: *mut CamelSummaryMessageRecord,
     bdata: *mut GString,
 ) -> gboolean {
     guard_row("save", info.cast_mut(), GFALSE, || {
-        // SAFETY: chaining up to the parent's own save, on an instance of a type
-        // derived from it, with the arguments Camel passed through untouched.
+        // SAFETY: a chain-up to the save of the parent, on an instance of a
+        // type derived from it, with the unchanged arguments from Camel.
         let chained = unsafe { parent_class() }
             .and_then(|class| class.save)
             .map_or(GFALSE, |save| unsafe { save(info, record, bdata) });
@@ -366,9 +363,9 @@ unsafe extern "C" fn save(
             return GFALSE;
         }
 
-        // SAFETY: `info` is a row of this type, so the set is there; `bdata` is
-        // the live GString Camel is building and each name is NUL-terminated
-        // and copied by the call.
+        // SAFETY: `info` is a row of this type, so the set is there. `bdata`
+        // is the live GString that Camel builds. Each name is NUL-terminated,
+        // and the call copies it.
         unsafe {
             let keywords = server_keywords(info.cast_mut()).unwrap_or_default();
             camel_util_bdata_put_number(bdata, keywords.len() as i64);
@@ -377,8 +374,8 @@ unsafe extern "C" fn save(
             }
         }
 
-        // SAFETY: `info` is a row of this type, so the field is there; `bdata`
-        // is the same live GString the keywords were just appended to.
+        // SAFETY: `info` is a row of this type, so the field is there. `bdata`
+        // is the same live GString that has the keywords.
         unsafe {
             match server_thread_id(info.cast_mut()) {
                 Some(id) => {
@@ -392,26 +389,26 @@ unsafe extern "C" fn save(
     })
 }
 
-/// `CamelMessageInfoClass.load`: reads the column back out of it.
+/// `CamelMessageInfoClass.load`: reads the two columns back from the stored
+/// data.
 ///
-/// A count that runs past the end of the string is a truncated or foreign
-/// record rather than an error to report: the reads stop at the first name that
-/// is not there, and what the row is left with is the keywords that *were*
-/// stored. Reporting failure instead would drop the whole row — every other
-/// column included — over the one column nothing else needs.
+/// If the count goes past the end of the string, the record is truncated or
+/// foreign. This is not an error. The reads stop at the first missing name, and
+/// the row keeps the keywords that *were* stored. A failure result would drop
+/// the full row, with all its other columns, because of one optional column.
 ///
 /// # Safety
 ///
-/// Called by Camel with a live row of this type, the record it was stored as,
-/// and the cursor the chain is reading through.
+/// Camel calls this with a live row of this type, its stored record, and the
+/// cursor that the chain reads through.
 unsafe extern "C" fn load(
     info: *mut CamelMessageInfo,
     record: *const CamelSummaryMessageRecord,
     cursor: *mut *mut gchar,
 ) -> gboolean {
     guard_row("load", info, GFALSE, || {
-        // SAFETY: chaining up first, because the cursor is read in the order it
-        // was written and the parent's fields come first.
+        // SAFETY: chain up first. The cursor reads in the order of the write,
+        // and the fields of the parent come first.
         let chained = unsafe { parent_class() }
             .and_then(|class| class.load)
             .map_or(GFALSE, |load| unsafe { load(info, record, cursor) });
@@ -419,9 +416,9 @@ unsafe extern "C" fn load(
             return GFALSE;
         }
 
-        // SAFETY: the cursor is Camel's own, pointing into the record's `bdata`;
-        // `get_string` advances it and hands back a `g_malloc`ed string, or NULL
-        // once there is nothing left to read.
+        // SAFETY: the cursor belongs to Camel and points into the `bdata` of
+        // the record. `get_string` moves it forward and returns a `g_malloc`ed
+        // string, or NULL when no data remains.
         let names: Vec<String> = unsafe {
             let count = camel_util_bdata_get_number(cursor, 0).max(0) as u64;
             (0..count)
@@ -437,11 +434,11 @@ unsafe extern "C" fn load(
                 .collect()
         };
 
-        // SAFETY: `info` is a row of this type, by the guard above.
+        // SAFETY: `info` is a row of this type, because of the guard above.
         unsafe { set_server_keywords(info, names.into_iter().collect()) };
 
-        // SAFETY: the cursor is positioned right after the keywords column by
-        // the reads above, which is where `save` left the thread-id column.
+        // SAFETY: after the reads above, the cursor is immediately after the
+        // keywords column. `save` wrote the thread-id column at that position.
         let thread_id = unsafe {
             let present = camel_util_bdata_get_number(cursor, 0) != 0;
             present
@@ -453,42 +450,42 @@ unsafe extern "C" fn load(
                     Id::new(text)
                 })
         };
-        // SAFETY: `info` is a row of this type, by the guard above.
+        // SAFETY: `info` is a row of this type, because of the guard above.
         unsafe { set_server_thread_id(info, thread_id) };
         GTRUE
     })
 }
 
-/// `CamelMessageInfoClass.clone`: hands the column to the copy.
+/// `CamelMessageInfoClass.clone`: gives the two columns to the copy.
 ///
-/// Which copies those are is not this function's choice. The parent's clone
-/// builds its result out of the *summary* it is told to assign the copy to — it
-/// is `camel_message_info_new` on that summary — so a row cloned into a summary
-/// of ours comes back as one of ours and a row cloned into no summary at all
-/// comes back a plain `CamelMessageInfoBase`. The second is left exactly as the
-/// parent made it, which is why the write below goes through the checked
-/// accessor rather than through the instance struct: a copy that is not of this
-/// type is a copy in a folder that has no JMAP keywords to be asked about.
+/// This function does not select which copies get them. The clone of the parent
+/// builds its result from the *summary* of the copy: it is
+/// `camel_message_info_new` on that summary. Thus a row cloned into a summary of
+/// this provider comes back as this type. A row cloned into no summary comes
+/// back as a plain `CamelMessageInfoBase`, and this function does not change it.
+/// For this reason, the write uses the checked accessor, not the instance
+/// struct. A copy of a different type is in a folder that has no JMAP keywords.
 ///
-/// Overriding the whole thing to force the type would mean rebuilding every
-/// column of the row here, which is the parent's job and would silently stop
-/// copying whatever column Camel adds next.
+/// To override the full clone and force the type, this function must rebuild
+/// all columns of the row. That is the work of the parent, and the override
+/// would silently not copy a column that Camel adds in the future.
 ///
 /// # Safety
 ///
-/// Called by Camel with a live row of this type.
+/// Camel calls this with a live row of this type.
 unsafe extern "C" fn clone(
     info: *const CamelMessageInfo,
     summary: *mut CamelFolderSummary,
 ) -> *mut CamelMessageInfo {
     guard_row("clone", info.cast_mut(), ptr::null_mut(), || {
-        // SAFETY: chaining up to the parent's clone with Camel's own arguments;
-        // the row it returns is owned by the caller.
+        // SAFETY: a chain-up to the clone of the parent with the arguments from
+        // Camel. The caller owns the row that it returns.
         let copy = unsafe { parent_class() }
             .and_then(|class| class.clone)
             .map_or(ptr::null_mut(), |clone| unsafe { clone(info, summary) });
 
-        // SAFETY: `copy` is NULL or a live row; both accessors check the type.
+        // SAFETY: `copy` is NULL or a live row, and both accessors check the
+        // type.
         unsafe {
             if let Some(keywords) = server_keywords(info.cast_mut()) {
                 set_server_keywords(copy, keywords);
@@ -501,37 +498,37 @@ unsafe extern "C" fn clone(
     })
 }
 
-/// The class our overrides chain up to.
+/// The class that the overrides of this module chain up to.
 ///
-/// `g_type_class_peek` of the parent type rather than of the instance's own
-/// class: a further subclass of ours would make the second point back at these
-/// same functions and recurse until the stack ran out — the same rule the
-/// finalize trampoline in `jmap-backend-core` follows.
+/// This is `g_type_class_peek` of the parent type, not the class of the
+/// instance. With a subclass of this type, the class of the instance points
+/// back at these same functions, and the recursion overflows the stack. The
+/// finalize trampoline in `jmap-backend-core` uses the same rule.
 ///
 /// # Safety
 ///
-/// An instance of this type must exist, which is what guarantees its parent's
-/// class is initialised and alive.
+/// An instance of this type must exist. This makes sure that the class of its
+/// parent is initialised and alive.
 unsafe fn parent_class<'a>() -> Option<&'a CamelMessageInfoClass> {
     // SAFETY: the contract above.
     unsafe { subclass::parent_class::<CamelMessageInfoClass>(JmapMessageInfo::parent_type()) }
 }
 
-/// Runs one vfunc body, refusing to run it at all on a row that is not ours.
+/// Runs one vfunc body, but not on a row of a different type.
 ///
-/// The type check is not defensive about Camel — it only dispatches a class's
-/// vfuncs on instances of that class — it is what makes the *bodies* above able
-/// to reach the instance struct without a check of their own. The panic guard is
-/// the rule every `extern "C"` in this repository follows: a Rust panic must
-/// never cross into C.
+/// The type check is not a defence against Camel, which dispatches the vfuncs
+/// of a class only on instances of that class. The check lets the *bodies*
+/// above use the instance struct without a check of their own. The panic guard
+/// applies the rule for all `extern "C"` functions in this repository: a Rust
+/// panic must never cross into C.
 fn guard_row<T>(
     what: &str,
     info: *mut CamelMessageInfo,
     fallback: T,
     body: impl FnOnce() -> T,
 ) -> T {
-    // SAFETY: `info` is the argument Camel dispatched on, so it is NULL or a
-    // live instance.
+    // SAFETY: `info` is the argument that Camel dispatched on, so it is NULL or
+    // a live instance.
     if unsafe { JmapMessageInfo::borrow(info) }.is_none() {
         log_critical(&format!(
             "CamelJmapMessageInfo::{what} called on a row of another type"
@@ -541,43 +538,40 @@ fn guard_row<T>(
     guard(what, fallback, body)
 }
 
-/// The summary row for one message, owned by the caller.
+/// The summary row for one message. The caller owns it.
 ///
-/// Never NULL in practice — `camel_message_info_new` is a `g_object_new` on a
-/// concrete type — but the pointer is returned as Camel's own functions return
-/// it rather than unwrapped into a reference, because its only caller hands it
-/// straight back to a summary.
+/// It is never NULL in practice: `g_object_new` on a concrete type does not
+/// fail. But the function returns the pointer as the Camel functions do, not as
+/// a reference, because its only caller gives it directly to a summary.
 pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
-    // Constructed directly rather than through `camel_message_info_new`, which
-    // reads the type to instantiate off a *summary* and has none to read here:
-    // the row is built before it is added, and the summary it is added to
-    // declares this same type ([`crate::summary`]), so the two answers agree by
-    // being the same function.
+    // Construct the row directly, not through `camel_message_info_new`. That
+    // function reads the type from a *summary*, and there is no summary here:
+    // the row is built before it is added. The summary that gets the row
+    // declares this same type ([`crate::summary`]), so the two answers agree.
     //
     // SAFETY: a variadic construct call on a registered type, with NULL for the
-    // first property name — a row is constructed with none.
+    // first property name: a row has no construct properties.
     let info = unsafe { g_object_new(message_info_type(), ptr::null::<gchar>()) }
         .cast::<CamelMessageInfo>();
     if info.is_null() {
         return info;
     }
 
-    // Every setter below emits a property notification and marks the row as
-    // having to reach the server, which is what [`without_queueing`] is for and
-    // is why the whole build is inside it rather than only the two columns
-    // `update_message_info` writes: a row that came out of a listing carries no
-    // change of the user's, so it must not arrive on the folder's work list.
-    // A fresh row's bit is unset, so restoring it leaves it unset.
+    // Each setter below emits a property notification and marks the row as
+    // waiting for the server. [`without_queueing`] prevents this, so the full
+    // build is inside it, not only the two columns of `update_message_info`.
+    // A row from a listing has no change from the user, so it must not go on
+    // the work list of the folder. The bit of a new row is clear, so the
+    // restore keeps it clear.
     //
-    // SAFETY: `info` is a fresh info this function owns; every string passed
-    // is NUL-terminated and copied by the setter, and the references array is
-    // handed over to `take_references` along with its ownership.
+    // SAFETY: `info` is a new info that this function owns. Each string is
+    // NUL-terminated, and the setter copies it. `take_references` gets the
+    // references array and its ownership.
     unsafe {
         without_queueing(info, || {
             camel_message_info_set_uid(info, c_string(message.uid.as_str()).as_ptr());
-            // Whether the two mutable columns "changed" is meaningless on a row
-            // that did not exist a line ago; the whole row is the change, and
-            // its caller reports it as an addition.
+            // The "changed" result is not meaningful for a new row. The full
+            // row is the change, and the caller reports it as an addition.
             let _ = update_message_info(info, message);
 
             set_string(
@@ -624,47 +618,44 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
     info
 }
 
-/// Writes the columns a later listing of the same message may have changed.
+/// Writes the columns that a later listing of the same message can change.
 ///
-/// Every property of a JMAP `Email` is immutable except `keywords` and
-/// `mailboxIds` (RFC 8621 §4.1) — a message does not get a new subject, a new
-/// sender or a new `Message-ID` — and the mailbox it is in is not a column of
-/// the row, it is which folder the row is in. So a refresh is these two
-/// columns and nothing else, which is both what the server can honestly be
-/// said to have changed and what [`crate::summary`] rewrites when it meets a
-/// row that is already there. Everything else is written once, by
-/// [`new_message_info`], which calls this for the rest of the row.
+/// All properties of a JMAP `Email` are immutable, except `keywords` and
+/// `mailboxIds` (RFC 8621 §4.1). A message never gets a new subject, sender
+/// or `Message-ID`. The mailbox is not a column of the row: it is
+/// the folder that holds the row. Thus a refresh writes only the flags and the
+/// labels. The server can change only these, and [`crate::summary`] rewrites
+/// only these for a row that exists. [`new_message_info`] writes all other
+/// columns once, and calls this function for these two.
 ///
-/// Reports whether either column actually moved, which is Camel's own answer
-/// rather than a comparison made here: both setters return whether they changed
-/// the value, and the summary needs that to decide whether the row belongs in
-/// the diff a refresh emits. Written as two statements and an `||` rather than
-/// the other way round, because `||` short-circuits — and a row whose flags
-/// moved must still have its labels written.
+/// Returns whether one of the two columns changed. The two Camel setters give
+/// this answer: each returns whether it changed the value. The summary uses it
+/// to decide whether the row goes into the diff of the refresh. The two setters
+/// run as two statements before the `||`, because `||` short-circuits: if the
+/// flags change, the labels must still be written.
 ///
-/// Written inside `without_queueing`, because a listing is the server
-/// speaking and the bit it would otherwise set means the opposite.
+/// The writes are inside `without_queueing`. A listing comes from the server,
+/// and the bit that the setters set means the opposite.
 ///
-/// ## What the listing is written *over*
+/// ## The data below the listing
 ///
-/// Not the row, if the row still has something to say — see
-/// `outstanding_change`. A refresh timer that goes off between the user's
-/// click and the synchronisation brings back a listing the server made before
-/// the click, and writing that whole would undo the click on screen and, worse,
-/// leave the row claiming exactly what it remembers the server holding: the next
-/// synchronisation would diff those two into nothing and the change would never
-/// be sent. So what is written is the listing with the row's outstanding change
-/// replayed on top of it.
+/// If the row has a change that is not sent yet, the listing does not replace
+/// it (see `outstanding_change`). A refresh timer can fire between the click of
+/// the user and the synchronisation. Its listing is from before the click. To
+/// write that listing as it is would undo the click on screen. Also, the row
+/// would then show the same set that it remembers from the server. The next
+/// synchronisation would find no difference, and would never send the change.
+/// Thus the function writes the listing with the outstanding change applied
+/// again on top.
 ///
-/// The remembered set is renewed to the *listing* either way, never to what the
-/// row ends up claiming. That is what keeps the two ends of the next difference
-/// honest — and it is why a change the server has meanwhile made itself settles
-/// rather than being sent again: replayed onto a listing that already has it,
-/// it changes nothing, and the diff against the listing is then empty.
+/// In both cases, the remembered set becomes the *listing*, never the set that
+/// the row shows. This keeps the two ends of the next difference correct. Thus
+/// a change that the server already has does not go again: applied to a
+/// listing that has it, it changes nothing, and the diff is empty.
 ///
-/// `attachments` is taken from the listing on both paths. It is the one bit of
-/// the word that is not a keyword — RFC 8621 §4.1.4 has the server compute
-/// `hasAttachment` — so the keyword set the replay works with cannot carry it.
+/// `attachments` comes from the listing in both cases. It is the only bit of the
+/// word that is not a keyword (RFC 8621 §4.1.4 makes the server compute
+/// `hasAttachment`), so the keyword set of the replay cannot hold it.
 ///
 /// # Safety
 ///
@@ -672,9 +663,9 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
 pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &MessageSummary) -> bool {
     let listed = Keywords::new(&message.flags, &message.tags);
 
-    // SAFETY: the caller guarantees the info; the mask keeps the setter off the
-    // bits this provider is not the authority on, and the flag set below is
-    // handed over along with its ownership.
+    // SAFETY: the caller guarantees the info. The mask keeps the setter away
+    // from the bits that this provider does not control. `set_user_flags`
+    // gives its flag set to Camel with its ownership.
     unsafe {
         let (mut flags, tags) = listed.patched(&outstanding_change(info)).split();
         flags.attachments = message.flags.attachments;
@@ -684,37 +675,35 @@ pub unsafe fn update_message_info(info: *mut CamelMessageInfo, message: &Message
             let labels = set_user_flags(info, &tags);
             (word, labels)
         });
-        // Renewed alongside them, and deliberately not part of the answer: what
-        // the server was last seen holding is not a column the message list
-        // draws, so a listing that only re-spelled a keyword is not a change to
-        // announce. A keyword the server really added arrives as a flag or a
-        // label too, and is reported as one of those.
+        // Renew the remembered set too, but do not include it in the result.
+        // The message list does not show it, so a listing that only spells a
+        // keyword differently is not a change. A keyword that the server
+        // really added also changes a flag or a label, and the result
+        // includes that change.
         set_server_keywords(info, listed);
         word != GFALSE || labels != GFALSE
     }
 }
 
-/// The change of the user's this row is still carrying — what a listing has to
-/// be written *around* rather than over.
+/// The user change that the row still holds: a listing must keep it, not
+/// replace it.
 ///
-/// The two ends are the row's own two columns, and they are the same two
-/// [`crate::synchronize`] takes: the keywords the last listing found and the
-/// keywords the row claims now. So this is precisely the patch the next
-/// synchronisation would send, read as something still owed rather than
-/// something to make happen.
+/// The two ends are the two columns of the row, which are also the two that
+/// [`crate::synchronize`] uses: the keywords of the last listing and the
+/// keywords that the row shows now. Thus this is the same patch that the next
+/// synchronisation sends, read as a change that is still waiting.
 ///
-/// Empty for a row Camel does not hold as needing to reach the server, and the
-/// bit is what decides it rather than the two sets: a row with nothing
-/// outstanding takes the server's answer whole, which is the ordinary case and
-/// the only thing that ever brings a row that has drifted back into line. A row
-/// whose sets happen to differ with the bit clear is one whose difference nobody
-/// is waiting to send.
+/// The result is empty if Camel does not mark the row as waiting for the
+/// server. The bit decides, not the two sets. A row with no waiting change
+/// takes the full answer from the server. This is the usual case, and the only
+/// way that a row with old data becomes correct again. If the sets differ but
+/// the bit is clear, nothing waits to send that difference.
 ///
 /// # Safety
 ///
 /// `info` must be a live message info.
 unsafe fn outstanding_change(info: *mut CamelMessageInfo) -> KeywordChange {
-    // SAFETY: the contract above; both accessors read the row's own columns.
+    // SAFETY: the contract above. Both accessors read the columns of the row.
     unsafe {
         if camel_message_info_get_folder_flagged(info) == GFALSE {
             return KeywordChange::default();
@@ -726,19 +715,17 @@ unsafe fn outstanding_change(info: *mut CamelMessageInfo) -> KeywordChange {
     }
 }
 
-/// Takes a row off the folder's work list.
+/// Removes a row from the work list of the folder.
 ///
-/// For the caller that has just put it on without meaning to.
-/// `camel_folder_summary_add` marks every row it is handed as having to reach
-/// the server, which is right for the caller it was written for — appending a
-/// message the user composed — and wrong for [`crate::summary`], which adds
-/// rows the server has just described. A row added by a listing has no change of
-/// the user's on it by definition: it did not exist a moment ago.
+/// Use it after an unwanted add to the work list. `camel_folder_summary_add`
+/// marks each row as waiting for the server. That is correct for its usual
+/// caller, which appends a message that the user wrote. It is not correct for
+/// [`crate::summary`], which adds rows that the server just sent. A row from a
+/// listing has no user change: it did not exist a moment before.
 ///
-/// Separate from [`without_queueing`] because the two answer different
-/// questions. That one preserves whatever was there, for a row that already
-/// existed and may already have been waiting; this one asserts there is nothing
-/// to wait for.
+/// This is not [`without_queueing`], because the two have different purposes.
+/// That function keeps the bit as it was, for a row that existed and possibly
+/// waits already. This function sets the bit to "nothing waits".
 ///
 /// # Safety
 ///
@@ -748,41 +735,37 @@ pub(crate) unsafe fn clear_pending_write(info: *mut CamelMessageInfo) {
     unsafe { camel_message_info_set_folder_flagged(info, GFALSE) };
 }
 
-/// Writes a row's columns from a listing, leaving its place on the folder's
-/// work list exactly as it was found.
+/// Writes the columns of a row from a listing, and keeps the position of the
+/// row on the work list of the folder unchanged.
 ///
-/// Every one of Camel's column setters marks the row `FOLDER_FLAGGED` when it
-/// changes anything. The bit means "this row has to reach the server", which is
-/// right for the setter's usual caller — the user clicking on a message — and
-/// exactly backwards here: this is the server *telling* us. A listing that left
-/// the bit behind would put every row it wrote on the work list
-/// [`crate::synchronize`] walks, so a refresh would queue the whole mailbox to
-/// be written straight back to the server it came from.
+/// Each Camel column setter sets `FOLDER_FLAGGED` on the row when it changes a
+/// value. The bit means "this row must go to the server". That is correct for
+/// the usual caller of the setter (a user click on a message), but here the
+/// data *comes* from the server. If a listing kept the bit, each row that it
+/// wrote would go on the work list that [`crate::synchronize`] walks. A refresh
+/// would then send the full mailbox back to the server.
 ///
-/// Put back the way it was found rather than cleared, and the difference is the
-/// row whose flags the user changed a moment before the refresh arrived. That
-/// row is still waiting to be written, and clearing the bit would take it off
-/// the work list and lose the change in silence. What the listing does to such a
-/// row's columns is [`update_message_info`]'s side of the same question — it
-/// replays the outstanding change over the listing rather than writing the
-/// listing whole — and the two together are what let a refresh and a
-/// synchronisation interleave without either one undoing the other.
+/// The function restores the bit, and does not clear it. The difference is
+/// important for a row whose flags the user changed just before the refresh.
+/// That row still waits for its write. To clear the bit would remove it from the
+/// work list and silently lose the change. [`update_message_info`] handles the
+/// columns of such a row: it applies the outstanding change on top of the
+/// listing. Together, the two functions let a refresh and a synchronisation
+/// interleave, and neither undoes the other.
 ///
-/// The notifications are frozen around the write for a second reason, which is
-/// the one Camel's own builders freeze for: a row rewritten column by column
-/// while a summary watched would be a handful of separate changes to one
-/// message. It is not what makes the restore work — the bit is set by each
-/// setter as it runs, not on thaw — but the restore has to happen before the
-/// thaw all the same, so that what the folder is told about is the row as it
-/// ends up.
+/// The function also freezes the notifications during the write, for the same
+/// reason as the Camel builders: a column-by-column rewrite would show as many
+/// separate changes to one message. The freeze does not make the restore work,
+/// because each setter sets the bit when it runs, not on thaw. But the restore
+/// must occur before the thaw, so that the folder gets the final state of the
+/// row.
 ///
 /// # Safety
 ///
 /// `info` must be a live message info.
 unsafe fn without_queueing<T>(info: *mut CamelMessageInfo, write: impl FnOnce() -> T) -> T {
-    // SAFETY: the caller guarantees the info; the freeze and the thaw are a
-    // matched pair, and the two flag calls are the same accessor read and
-    // written.
+    // SAFETY: the caller guarantees the info. The freeze and the thaw are a
+    // matched pair, and the two flag calls read and write the same accessor.
     unsafe {
         camel_message_info_freeze_notifications(info);
         let queued = camel_message_info_get_folder_flagged(info);
@@ -793,27 +776,25 @@ unsafe fn without_queueing<T>(info: *mut CamelMessageInfo, write: impl FnOnce() 
     }
 }
 
-/// Replaces the row's user flags — Evolution's labels — with the ones the
-/// listing carries.
+/// Replaces the user flags of the row (the Evolution labels) with the labels of
+/// the listing.
 ///
-/// Wholesale rather than name by name, because the keyword set is the whole
-/// truth about a message's labels: a keyword the server has stopped sending is
-/// one that was taken off somewhere else, and Camel is told about it only by
-/// its absence. Handing over an empty set is therefore right rather than
-/// merely harmless — unlike the text columns, where an empty value and an
-/// absent one are different things in the summary database, user flags are
-/// stored as one joined string with no way to spell "absent".
+/// The function replaces the full set, not each name, because the keyword set
+/// is the full truth about the labels of a message. If the server stops sending
+/// a keyword, another client removed it, and only its absence tells Camel. Thus
+/// an empty set is correct. The text columns are different: there, the summary
+/// database keeps an empty value and an absent value as different things. User
+/// flags are one joined string, which cannot show "absent".
 ///
-/// Reports Camel's own verdict on whether the set it was handed differed from
-/// the one it had.
+/// Returns the Camel result: whether the new set is different from the old set.
 ///
 /// # Safety
 ///
 /// `info` must be a live message info.
 unsafe fn set_user_flags(info: *mut CamelMessageInfo, tags: &[String]) -> glib_sys::gboolean {
-    // SAFETY: the set is built here and handed to `take_user_flags`, which
-    // consumes it whether or not it turned out to be a change; every name is a
-    // NUL-terminated string the set copies.
+    // SAFETY: this function builds the set and gives it to `take_user_flags`,
+    // which consumes it in all cases. Each name is a NUL-terminated string, and
+    // the set copies it.
     unsafe {
         let flags = camel_named_flags_new();
         for tag in tags {
@@ -823,16 +804,16 @@ unsafe fn set_user_flags(info: *mut CamelMessageInfo, tags: &[String]) -> glib_s
     }
 }
 
-/// Sets one text column, or leaves it unset when the message did not carry it.
+/// Sets one text column, or keeps it unset if the message does not have it.
 ///
-/// The distinction is not cosmetic: Camel writes the summary to a database and
-/// reads it back, where an empty string is a header that was present and blank
-/// rather than one that was absent.
+/// The difference is important. Camel writes the summary to a database and
+/// reads it back. There, an empty string is a header that was present and
+/// blank, not an absent header.
 ///
 /// # Safety
 ///
-/// `info` must be a live message info, and `setter` one of Camel's own column
-/// setters for it.
+/// `info` must be a live message info, and `setter` must be a Camel column
+/// setter for it.
 unsafe fn set_string(
     info: *mut CamelMessageInfo,
     setter: unsafe extern "C" fn(
@@ -842,17 +823,17 @@ unsafe fn set_string(
     value: Option<&str>,
 ) {
     let Some(value) = value else { return };
-    // SAFETY: the copy lives across the call, and the setter copies the string.
+    // SAFETY: the copy stays alive during the call, and the setter copies the
+    // string.
     unsafe { setter(info, c_string(value).as_ptr()) };
 }
 
-/// The bits of the flags word this provider is the authority on.
+/// The bits of the flags word that this provider controls.
 ///
-/// Passed as the mask to `camel_message_info_set_flags` so that a row being
-/// refreshed keeps everything else Camel put in the word — `DELETED` and
-/// `FOLDER_FLAGGED` are local marks the user made, and clearing them because
-/// the server said nothing about them would undo a deletion the user is
-/// waiting to have expunged.
+/// This is the mask for `camel_message_info_set_flags`. Thus a refresh keeps
+/// all other bits that Camel put in the word. `DELETED` and `FOLDER_FLAGGED`
+/// are local marks. If a refresh cleared them because the server did not send
+/// them, it would undo a deletion that waits for an expunge.
 const FLAGS_FROM_JMAP: CamelMessageFlags = CAMEL_MESSAGE_SEEN
     | CAMEL_MESSAGE_ANSWERED
     | CAMEL_MESSAGE_FLAGGED
@@ -862,12 +843,12 @@ const FLAGS_FROM_JMAP: CamelMessageFlags = CAMEL_MESSAGE_SEEN
     | CAMEL_MESSAGE_NOTJUNK
     | CAMEL_MESSAGE_ATTACHMENTS;
 
-/// The keywords Camel has a bit for, as that word.
+/// The keywords that have a Camel bit, as a flags word.
 ///
-/// One arm per field of [`MessageFlags`], which is one arm per bit the sync
-/// layer can honestly speak to. Everything else in the word is Camel's:
-/// `DELETED` because JMAP has no deleted keyword, `SECURE` and `ANSWERED_ALL`
-/// because they are conclusions drawn from a message that has been fetched.
+/// One pair for each field of [`MessageFlags`], which is one pair for each bit
+/// that the sync layer controls. Camel controls all other bits: `DELETED`
+/// because JMAP has no deleted keyword, `SECURE` and `ANSWERED_ALL` because
+/// they come from the analysis of a fetched message.
 fn flags_word(flags: &MessageFlags) -> CamelMessageFlags {
     let mut word = 0;
     for (set, bit) in [
@@ -887,13 +868,13 @@ fn flags_word(flags: &MessageFlags) -> CamelMessageFlags {
     word
 }
 
-/// The same table read the other way: which of the keywords Camel has a bit for
-/// this word says are set.
+/// The reverse of [`flags_word`]: the keywords with a Camel bit that this word
+/// sets.
 ///
-/// Written as one loop over the same pairs [`flags_word`] uses rather than as a
-/// second list of them, because the two have to stay each other's inverse: a bit
-/// named in one and not the other would be a flag the folder writes to the
-/// server and never reads back, or reads back and never writes.
+/// The list of pairs is a second copy of the list in `flags_word`. Keep the two
+/// lists identical, so that each function is the inverse of the other. A bit
+/// in only one list is a flag that the folder writes to the server and never
+/// reads back, or the opposite.
 fn message_flags(word: CamelMessageFlags) -> MessageFlags {
     let mut flags = MessageFlags::default();
     for (field, bit) in [
@@ -911,22 +892,22 @@ fn message_flags(word: CamelMessageFlags) -> MessageFlags {
     flags
 }
 
-/// One address header, in the single string Camel's summary keeps it as.
+/// One address header, as the single string that the Camel summary keeps.
 ///
-/// Built through `CamelInternetAddress` rather than by joining the parts here:
-/// a display name may hold a comma, a quote or a backslash, and the rules for
-/// which of those have to be quoted are RFC 5322's, already implemented once in
-/// Camel. `None` for a header the message did not carry, which is not the same
-/// as one Camel would store as empty.
+/// The function uses `CamelInternetAddress` and does not join the parts here.
+/// A display name can contain a comma, a quote or a backslash. RFC 5322 gives
+/// the quoting rules for these, and Camel already implements them. `None` for a
+/// header that the message does not have. This is different from a header that
+/// Camel keeps as empty.
 fn address_list(addresses: &[EmailAddress]) -> Option<String> {
     if addresses.is_empty() {
         return None;
     }
 
-    // SAFETY: the address object is constructed, filled here and released when
-    // `address` drops at the end of the scope, and reaches nothing else; every
-    // string handed over is NUL-terminated and copied, and `camel_address_format`
-    // returns a `g_malloc`ed string this function frees.
+    // SAFETY: this scope constructs and fills the address object, and releases
+    // it when `address` drops at the end. Nothing else gets the object. Each
+    // string is NUL-terminated and copied. `camel_address_format` returns a
+    // `g_malloc`ed string that this function frees.
     unsafe {
         let address = Owned::from_raw(camel_internet_address_new())?;
         for entry in addresses {
@@ -949,25 +930,25 @@ fn address_list(addresses: &[EmailAddress]) -> Option<String> {
     }
 }
 
-/// The 64 bits Camel stores instead of a `Message-ID`.
+/// The 64 bits that Camel keeps in place of a `Message-ID`.
 ///
-/// `CamelSummaryMessageID` is a union over a `guint64` and eight bytes, and
-/// Camel fills the bytes from the front of an MD5 over the header value with
-/// the angle brackets already off — which is precisely what JMAP's `messageId`
-/// property is. Reading the union back as the integer is therefore a
-/// native-endian load of those eight bytes, and `from_ne_bytes` is that load
-/// written down.
+/// `CamelSummaryMessageID` is a union of a `guint64` and eight bytes. Camel
+/// fills the bytes from the start of an MD5 of the header value without the
+/// angle brackets. The JMAP `messageId` property is exactly that value. Thus
+/// the union read as an integer is a native-endian load of those eight bytes,
+/// which is what `from_ne_bytes` does.
 ///
-/// MD5 is not a security decision here and is not ours to make: it is the
-/// digest already in every Camel summary on disk, and the only thing this value
-/// is ever compared against is another one of them.
+/// MD5 is not a security decision here, and this module does not select it.
+/// All Camel summaries on disk use this digest, and this value is compared only
+/// with other values of the same kind.
 fn message_id_digest(message_id: &str) -> u64 {
     let mut digest = [0u8; 16];
     let mut length = digest.len();
 
-    // SAFETY: the checksum is created, updated and freed here; the buffer is
-    // ours and `length` is its true size, which is what `g_checksum_get_digest`
-    // requires (it aborts on a buffer too small for the algorithm).
+    // SAFETY: this block creates, updates and frees the checksum. The buffer
+    // belongs to this function and `length` is its true size, as
+    // `g_checksum_get_digest` requires (it refuses a buffer too small for the
+    // algorithm and writes no digest).
     unsafe {
         let checksum = g_checksum_new(G_CHECKSUM_MD5);
         g_checksum_update(checksum, message_id.as_ptr(), message_id.len() as isize);
@@ -982,26 +963,25 @@ fn message_id_digest(message_id: &str) -> u64 {
     )
 }
 
-/// The ancestors, as the `GArray` of digests Camel threads on — or NULL for a
-/// message with none, because an empty array is one the threader walks for
-/// nothing on every rebuild.
+/// The ancestors, as the `GArray` of digests that the Camel threader uses. NULL
+/// for a message with no ancestors, because the threader walks an empty array
+/// for no result at each rebuild.
 ///
-/// Reversed on the way in. `references` arrives oldest first, with the
-/// `In-Reply-To` parent last, which is the order the headers put it in;
-/// Camel's own builder stores the chain the other way round, nearest ancestor
-/// first, and its threader walks from the front taking the first ancestor the
-/// folder actually holds. Filled in header order, every reply in a long thread
-/// would hang off the root of its conversation instead of off its parent.
+/// The function reverses the order. `references` comes oldest first, with the
+/// `In-Reply-To` parent last, as in the headers. The Camel builder keeps the
+/// chain nearest ancestor first. Its threader starts at the front and takes the
+/// first ancestor that the folder has. In header order, each reply in a long
+/// thread would attach to the root of the conversation, not to its parent.
 ///
-/// The array is returned with its ownership, for `take_references`.
+/// The caller gets the array and its ownership, for `take_references`.
 fn references_array(references: &[String]) -> *mut GArray {
     if references.is_empty() {
         return ptr::null_mut();
     }
 
-    // SAFETY: the array is allocated here with `guint64` elements, which is
-    // what `camel_message_info_take_references` documents them to be, and each
-    // append copies eight bytes out of a local.
+    // SAFETY: this block allocates the array with `guint64` elements, as the
+    // documentation of `camel_message_info_take_references` specifies. Each
+    // append copies eight bytes from a local.
     unsafe {
         let array = g_array_sized_new(
             GFALSE,
