@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-20 13:47+0000\n"
+"POT-Creation-Date: 2026-10-21 04:34+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -25,15 +25,22 @@ msgid ""
 "contact was not saved. Choose a smaller picture and save it again."
 msgstr ""
 
+#. TRANSLATORS: shown when an invitation or import tries to change a meeting that the user organizes.
+#: rust/crates/jmap-backend-cal/src/ops.rs:450
+msgid ""
+"You organize this meeting. A received invitation or an import cannot change "
+"its guests or its organizer, or delete it."
+msgstr ""
+
 #. TRANSLATORS: shown when the server refused to send a meeting's invitations.
-#: rust/crates/jmap-backend-cal/src/ops.rs:454
+#: rust/crates/jmap-backend-cal/src/ops.rs:463
 msgid ""
 "The server cannot send meeting invitations to every guest, so the change was "
 "not saved. Check that each guest has a valid email address."
 msgstr ""
 
 #. TRANSLATORS: shown when the server refused to send a meeting's invitations. %1$s is a comma-separated list of guest addresses.
-#: rust/crates/jmap-backend-cal/src/ops.rs:458
+#: rust/crates/jmap-backend-cal/src/ops.rs:467
 #, c-format
 msgid ""
 "The server cannot send meeting invitations to every guest, so the change was "
@@ -41,7 +48,7 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when the server does not send meeting invitations itself. "Server handles meeting invitations" is the calendar's setting of that name.
-#: rust/crates/jmap-backend-cal/src/ops.rs:463
+#: rust/crates/jmap-backend-cal/src/ops.rs:472
 msgid ""
 "This server does not send meeting invitations itself, so the change was not "
 "saved. Turn off “Server handles meeting invitations” for this calendar, and "
@@ -49,7 +56,7 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.
-#: rust/crates/jmap-backend-cal/src/ops.rs:473
+#: rust/crates/jmap-backend-cal/src/ops.rs:482
 #, c-format
 msgid ""
 "This event repeats until %1$s, and the time zone it is in, %2$s, is not "
@@ -59,7 +66,7 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.
-#: rust/crates/jmap-backend-cal/src/ops.rs:478
+#: rust/crates/jmap-backend-cal/src/ops.rs:487
 msgid ""
 "This event repeats in a way that cannot be stored on the server, so it was "
 "not created. Stating the recurrence as a repeat count is the spelling that "
@@ -185,15 +192,15 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when Evolution asks a JMAP account to
-#. create a collection whose kind the request does not state.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:172
+#. create a collection, and the request does not give the kind.
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:177
 msgid "the new collection is neither an address book nor a calendar"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
 #. the JMAP server behind an account offers no account of that
 #. kind at all, so there is nowhere to create one.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:184
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:189
 #, c-format
 msgid "this account's JMAP server has no place to create %1$s in"
 msgstr ""
@@ -202,7 +209,7 @@ msgstr ""
 #. developer-facing description of the setting that could not be
 #. written. Shown when the collection was made on the server and
 #. the local source describing it could not be completed.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:193
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:198
 #, c-format
 msgid ""
 "the %1$s was created on the server, but the source for it could not be "
@@ -212,14 +219,14 @@ msgstr ""
 #. TRANSLATORS: shown when Evolution asks a JMAP account to
 #. delete something that is not one of the address books or
 #. calendars that account created.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:146
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:148
 msgid "this is not an address book or a calendar of this JMAP account"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
 #. the JMAP server behind an account offers no account of that
 #. kind at all, so the collection cannot be there to delete.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:157
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:159
 #, c-format
 msgid "this account's JMAP server has no %1$s to delete"
 msgstr ""
@@ -227,7 +234,7 @@ msgstr ""
 #. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
 #. the user deletes a JMAP address book or calendar that someone
 #. shared with them, and that person no longer shares it.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:164
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:166
 #, c-format
 msgid ""
 "this %1$s is no longer shared with this JMAP account, so it cannot be deleted"
@@ -236,7 +243,7 @@ msgstr ""
 #. TRANSLATORS: %1$s is a developer-facing reason from Evolution
 #. Data Server. Shown when the collection was deleted on the
 #. server and the local source describing it stayed behind.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:176
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:178
 #, c-format
 msgid ""
 "the collection was deleted on the server, but the source for it could not be "
