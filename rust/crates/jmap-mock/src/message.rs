@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Minimal RFC 5322 reader used by `Email/import`.
+//! Read a minimal RFC 5322 subset for `Email/import`.
 //!
 //! Most modules serialize structured `Email` values to message bytes.
 //! `Email/import` is the reverse path. This module reads a small subset
@@ -9,24 +9,23 @@
 //!
 //! Scope: unfolded headers, address lists, message IDs, and preview text.
 //! It skips MIME trees, RFC 2047 encoded words, temporal headers,
-//! and address groups. Tests that need those features should seed messages
-//! directly.
+//! and address groups. Tests that need those features seed messages directly.
 
 use jmap_proto::mail::EmailAddress;
 
 /// Preview character limit, matching seeded messages.
 const PREVIEW: usize = 64;
 
-/// Parsed message fields consumed by this server.
+/// Parsed message fields that this server uses.
 pub(crate) struct Message {
-    /// Header fields in wire order as lowercase name and unfolded value.
+    /// Header fields in wire order as lowercase names and unfolded values.
     fields: Vec<(String, String)>,
     /// Message body after the header block, interpreted as UTF-8 text.
     body: String,
 }
 
 impl Message {
-    /// Parses `source`, returning `None` for invalid UTF-8 or invalid header syntax.
+    /// Parse `source`, return `None` for invalid UTF-8 or header syntax.
     pub(crate) fn read(source: &[u8]) -> Option<Self> {
         let source = std::str::from_utf8(source).ok()?;
         let (headers, body) = split(source);
@@ -36,7 +35,7 @@ impl Message {
             if line.is_empty() {
                 continue;
             }
-            // A leading space or tab marks a folded continuation line.
+            // A leading space or tab marks a folded continuation.
             if line.starts_with([' ', '\t']) {
                 let (_, value) = fields.last_mut()?;
                 value.push(' ');
@@ -59,7 +58,7 @@ impl Message {
         })
     }
 
-    /// Returns the first value of a lowercase header name.
+    /// Return the first value for a lowercase header name.
     fn field(&self, name: &str) -> Option<&str> {
         self.fields
             .iter()
@@ -120,7 +119,7 @@ fn split(source: &str) -> (&str, &str) {
     }
 }
 
-/// Whether `byte` is valid RFC 5322 `ftext` for a field name.
+/// Return true if `byte` is valid RFC 5322 `ftext` for a field name.
 fn is_field_name(byte: u8) -> bool {
     (33..=57).contains(&byte) || (59..=126).contains(&byte)
 }
