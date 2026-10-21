@@ -100,6 +100,7 @@ paths are relative to `rust/crates/`.
 
 | ID | Problem | Resolution |
 |---|---|---|
+| L2 | A link in a calendar event from the server could name a local file (`file:`). The client wrote that link into the iCalendar component, and Evolution and EDS then read the local file. | Fixed. The client does not write a `file:` link into the component, as it does not read one from the component. The server keeps its link. `jmap-ical/tests/hostile.rs`, `a_file_href_from_the_server_is_not_drawn_as_an_attach_line`. `jmap-cal-sync/tests/save.rs`, `a_server_file_link_is_not_loaded_and_an_edit_leaves_it_on_the_server`. |
 | L3 | A calendar component that Evolution received in a mail or imported from a file was saved like a change that the user made. The server could then send meeting messages in the user's name for data from another person. | Fixed. The backend marks each change that comes through `receive_objects`. For such a change, the server schedules only the user's answer to an organizer that is not the user. The change cannot set the organizer. It cannot change the guests or the organizer of a meeting that the user organizes, or delete that meeting. While the backend is offline, it refuses received components. `jmap-cal-sync/tests/received.rs`, `a_received_request_that_names_the_user_as_organizer_is_saved_without_scheduling` and related tests. `jmap-functional/tests/calendar-received.rs`, `received_components_never_make_the_server_invite_anyone_in_the_users_name`. |
 
 ### FFI soundness audit, 2026-08-19

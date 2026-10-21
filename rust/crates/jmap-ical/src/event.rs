@@ -884,11 +884,14 @@ pub fn drawn_links(event: &CalendarEvent) -> Vec<ICalendarEntry> {
 /// entry of the server's map it is a drawing of. Position could not do that job :
 /// an editor that drops a line it has no URI for would slide every later
 /// resource onto the wrong entry.
+///
+/// A `file:` link is dropped, as `read_links` drops it. Evolution and EDS read
+/// that path on the local machine when they load or save the component.
 pub fn drawn_link(key: &str, link: &Value) -> Option<ICalendarEntry> {
     let href = link
         .get("href")?
         .as_str()
-        .filter(|href| names_a_uri(href))?;
+        .filter(|href| names_a_uri(href) && !fetched_locally(href))?;
     let media_type = media_type(link);
     if link.get("rel").and_then(Value::as_str) == Some(ICON_REL) {
         // `VALUE=URI` because RFC 7986 §5.10's `image` grammar makes it REQUIRED
