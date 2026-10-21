@@ -1247,10 +1247,10 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // Emit only spouse, manager, and assistant relations.
-    // EDS exposes only those relation slots.
-    // These lines carry no `X-JMAP-KEY`.
-    // RFC 9553 keys `relatedTo` by the related entity name.
+    // Emit spouse, manager, and assistant relations only.
+    // EDS exposes only these relation slots.
+    // Omit `X-JMAP-KEY` on these lines.
+    // RFC 9553 keys `relatedTo` by related-entity name.
     for (key, relation) in card.related_to.iter().flatten() {
         if states_spouse(key, relation) {
             entries.push(
@@ -1272,8 +1272,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // Emit all mappable tags on one `CATEGORIES` line, matching EDS behavior.
-    // Tags are self-identifying, so this line carries no `X-JMAP-KEY`.
+    // Emit all mappable tags on one `CATEGORIES` line.
+    // Tags are self-identifying, so this line omits `X-JMAP-KEY`.
     let tags = drawn_tags(card);
     if !tags.is_empty() {
         entries.push(
@@ -1340,9 +1340,9 @@ fn fold_overlong_lines(vcard: String) -> String {
                 cut -= 1;
             }
             if cut == 0 {
-                // Defensive fallback: pick the first UTF-8 boundary.
-                // This keeps the loop moving.
-                // Unfolding restores the octets in either case.
+                // Fallback: cut at the first UTF-8 boundary.
+                // Keep the loop moving.
+                // Unfolding restores octets in both cases.
                 cut = (1..=rest.len())
                     .find(|&i| rest.is_char_boundary(i))
                     .unwrap_or(rest.len());
