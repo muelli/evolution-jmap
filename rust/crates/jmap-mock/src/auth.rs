@@ -8,14 +8,14 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use jmap_proto::Id;
 
-/// Accepted `Authorization` header values.
-/// Accept every request when this list is empty.
+/// Store accepted `Authorization` header values.
+/// Allow every request when this list is empty.
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
     accepted: Vec<String>,
-    /// Principal identity for one accepted bearer token.
+    /// Principal identity for one accepted bearer token value.
     identities: BTreeMap<String, Id>,
-    /// Remaining successful matches for accepted credentials.
+    /// Remaining successful authorizations for accepted credentials.
     remaining_uses: Option<usize>,
 }
 
@@ -37,7 +37,7 @@ impl AuthConfig {
         self.identities.insert(header, principal);
     }
 
-    /// Return the principal from [`Self::allow_bearer_as`], if set.
+    /// Return the principal from [`Self::allow_bearer_as`] when present.
     pub fn identity_for(&self, authorization: Option<&str>) -> Option<Id> {
         authorization.and_then(|value| self.identities.get(value).cloned())
     }
@@ -50,12 +50,12 @@ impl AuthConfig {
         self.remaining_uses = None;
     }
 
-    /// Stop accepting credentials after `remaining` successful matches.
+    /// Stop accepting credentials after `remaining` successful authorizations.
     pub fn expire_after(&mut self, remaining: usize) {
         self.remaining_uses = Some(remaining);
     }
 
-    /// Check one `Authorization` header value.
+    /// Validate one `Authorization` header value.
     /// Consume one remaining use on success.
     pub fn authorized(&mut self, authorization: Option<&str>) -> bool {
         if self.accepted.is_empty() {
