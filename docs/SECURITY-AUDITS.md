@@ -48,6 +48,7 @@ re-audit also runs the regression test of every earlier finding again.
 | 2026-10-17 | Changes since 2026-10-15. | F33, F32 fixed |
 | 2026-10-20 | Changes since 2026-10-17, with meeting guests and shared collections. | F34 to F39 |
 | 2026-10-21 | Logic review with a hostile server or a hostile sender of mail. | L1 to L7 |
+| 2026-10-21 | Changes since 2026-10-20, with the deferred delete of a collection. | F40 to F46 |
 
 ## Findings
 
@@ -95,6 +96,13 @@ paths are relative to `rust/crates/`.
 | F37 | A `"` in a vCard parameter value from the server, such as a JSContact map key, is written with a backslash. EDS then drops the complete property. | Open. The fix is the same as F34. |
 | F38 | The push (EventSource) reader reads a line with no length limit. A server can use all memory with one long line. | Fixed. The reader refuses a line longer than 1 MiB and connects again. `jmap-client/src/eventsource.rs`, `an_endless_line_ends_the_connection_and_the_next_one_delivers` and `stream_events_refuses_a_data_line_longer_than_the_cap`. |
 | F39 | When a `/set` request is split into parts, a creation id is replaced by a text match, and the result of a part is lost when a later part fails. No caller sends more than one object today. | Fixed. Each part sends the earlier creation ids as `createdIds`, and the server resolves the references. The client does not change the objects. A failed later part keeps the results of the earlier parts. `jmap-client/src/set.rs`, `a_patch_key_that_starts_with_a_shorter_creation_id_is_sent_unchanged` and `a_failing_later_chunk_keeps_the_results_of_the_applied_chunks`. |
+| F40 | A pending collection delete waited until the wall clock reached the stored due time. When the clock moved back, the collection stayed hidden after the info bar closed. | Fixed. The first wait sets an end on the monotonic clock, as the timer of the info bar does. `jmap-backend-collection/tests/deferred_delete.rs`, `a_clock_that_moves_back_during_the_wait_does_not_extend_it`. |
+| F41 | The push (EventSource) request writes the path of `eventSourceUrl` as it is. A CR or LF in the path adds request lines, and the request has the credentials. | Open. |
+| F42 | The push (EventSource) connection reads the host of `eventSourceUrl` differently from the TLS check. A URL such as `http://localhost?.example.org/` passes as loopback and connects to another name. | Open. Fix together with F41. |
+| F43 | The id budget of L6 does not count the objects of a `/get` answer. A server can add objects that the client did not ask for, up to the size limit of each response. | Open. |
+| F44 | No caller uses the results that a partly applied `/set` returns. The error also hides a 401 or 429 of a later part from the retry logic. No caller sends more than one object today. | Open. |
+| F45 | A received cancellation and an imported file can make the server send the user's answer to the organizer. The guests get no message. | Open. This needs a product decision. |
+| F46 | When the calendar backend goes offline during a received change, EDS can keep the change and upload it later as a change that the user made. | Open. |
 
 ### Logic review, 2026-10-21
 
