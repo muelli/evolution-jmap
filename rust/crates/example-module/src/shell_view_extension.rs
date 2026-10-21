@@ -24,7 +24,7 @@ unsafe extern "C" fn free_private(ptr: *mut c_void) {
     }
 }
 
-/// Return private instance state.
+/// Get private instance state.
 ///
 /// # Safety
 /// `obj` must be a live extension with attached private data.
@@ -36,7 +36,7 @@ unsafe fn get_private(obj: *mut ffi::GObject) -> &'static mut Private {
     }
 }
 
-// Keep strings NUL-terminated for `gtk_ui_manager_add_ui_from_string`.
+// Keep each UI definition NUL-terminated for `gtk_ui_manager_add_ui_from_string`.
 
 const MAIL_UI_DEF: &str = "\
 <menubar name='main-menu'>\
@@ -99,12 +99,12 @@ unsafe extern "C" fn action_calendar_menu_cb(
     eprintln!("action_calendar_menu_cb: My Calendar Action executed");
 }
 
-/// Read `G_TYPE_FROM_INSTANCE`.
+/// Read the GType from an instance.
 unsafe fn instance_gtype(instance: *mut c_void) -> ffi::GType {
     unsafe { (*(*instance.cast::<ffi::GTypeInstance>()).g_class).g_type }
 }
 
-/// Register per-view actions and return matching UI XML.
+/// Register actions for each view and return matching UI XML.
 unsafe fn init_view_ui(
     shell_view: *mut ffi::EShellView,
     shell_window: *mut ffi::EShellWindow,
@@ -181,7 +181,7 @@ unsafe fn init_view_ui(
     }
 }
 
-/// Handles `EShellView::toggled`.
+/// Handle `EShellView::toggled`.
 unsafe extern "C" fn shell_view_toggled_cb(
     shell_view: *mut ffi::EShellView,
     extension: *mut ffi::GObject,
@@ -237,7 +237,7 @@ unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
         }
 
         let extensible = ffi::e_extension_get_extensible(object as *mut c_void);
-        // `GCallback` uses the `void (*)(void)` ABI.
+        // Cast to the `GCallback` ABI: `void (*)(void)`.
         let cb: unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject) =
             shell_view_toggled_cb;
         ffi::g_signal_connect_data(
@@ -254,7 +254,7 @@ unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
     }
 }
 
-/// Chain up `GObjectClass.finalize`.
+/// Chain up to `GObjectClass.finalize`.
 unsafe extern "C" fn instance_finalize(object: *mut ffi::GObject) {
     unsafe {
         let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
@@ -264,7 +264,7 @@ unsafe extern "C" fn instance_finalize(object: *mut ffi::GObject) {
     }
 }
 
-/// Fill the dynamic class vtable.
+/// Populate the dynamic class vtable.
 unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
     unsafe {
         PARENT_CLASS.store(
@@ -277,9 +277,9 @@ unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
         obj_class.finalize = Some(instance_finalize);
 
         let ext_class = &mut *(klass as *mut ffi::EExtensionClass);
-        // Resolve by name, not by a getter.
-        // A getter can register a type inside class init.
-        // That can deadlock with another registration thread.
+        // Resolve the type by name.
+        // Do not call a getter in class init.
+        // A getter can register a type and deadlock with another thread.
         // `register_type` already registers this type.
         ext_class.extensible_type = ffi::g_type_from_name(c"EShellView".as_ptr());
     }
@@ -305,14 +305,14 @@ unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
     }
 }
 
-/// Register the dynamic type in `e_module_load`.
+/// Register the dynamic type during `e_module_load`.
 pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
     unsafe {
         let parent_type = ffi::e_extension_get_type();
-        // Register the extensible type that `class_init` resolves by name.
+        // Register this extensible type before `class_init` resolves it.
         ffi::e_shell_view_get_type();
 
-        // Reuse the parent class and instance size values.
+        // Reuse the parent class and instance sizes.
         let mut query = std::mem::MaybeUninit::<ffi::GTypeQuery>::uninit();
         ffi::g_type_query(parent_type, query.as_mut_ptr());
         let query = query.assume_init();
