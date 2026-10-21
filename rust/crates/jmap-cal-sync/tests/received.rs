@@ -276,3 +276,45 @@ fn a_received_cancellation_deletes_the_users_copy_of_another_organizers_meeting(
     assert_eq!(fixture.count(), 0);
     assert_eq!(fixture.sent(), Vec::<(String, String)>::new());
 }
+
+/// An answer to a held invitation goes out as an edit, and only to the organizer.
+#[test]
+fn accepting_a_held_invitation_sends_only_the_reply() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let invitation = meeting(Some(VERA), &[(OLGA, "NEEDS-ACTION"), (VERA, "ACCEPTED")]);
+    sync.save_component_with(&invitation, None, Itip::Suppress)
+        .expect("the delivered invitation");
+    let accepted = meeting(Some(VERA), &[(OLGA, "ACCEPTED"), (VERA, "ACCEPTED")]);
+    sync.save_component_with(&accepted, None, ANSWER)
+        .expect("the answer is filed");
+    assert_eq!(fixture.sent(), vec![("REPLY".to_owned(), VERA.to_owned())]);
+}
+
+#[test]
+fn accepting_a_held_invitation_without_an_answer_mails_nobody() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let invitation = meeting(Some(VERA), &[(OLGA, "NEEDS-ACTION"), (VERA, "ACCEPTED")]);
+    sync.save_component_with(&invitation, None, Itip::Suppress)
+        .expect("the delivered invitation");
+    let accepted = meeting(Some(VERA), &[(OLGA, "ACCEPTED"), (VERA, "ACCEPTED")]);
+    sync.save_component_with(&accepted, None, Itip::Received { reply: false })
+        .expect("the answer is filed");
+    assert_eq!(fixture.sent(), Vec::<(String, String)>::new());
+}
+
+/// A cancellation with an answer lets the server tell the organizer.
+#[test]
+fn a_received_cancellation_with_an_answer_tells_only_the_organizer() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let invitation = meeting(Some(VERA), &[(OLGA, "ACCEPTED"), (VERA, "ACCEPTED")]);
+    let saved = sync
+        .save_component_with(&invitation, None, Itip::Suppress)
+        .expect("the delivered invitation");
+    sync.remove_component_with(&saved.uid, ANSWER)
+        .expect("the cancellation is applied");
+    assert_eq!(fixture.count(), 0);
+    assert_eq!(fixture.sent(), vec![("REPLY".to_owned(), VERA.to_owned())]);
+}
