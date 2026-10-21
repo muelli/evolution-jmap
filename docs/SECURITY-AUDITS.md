@@ -100,7 +100,7 @@ paths are relative to `rust/crates/`.
 | F41 | The push (EventSource) request writes the path of `eventSourceUrl` as it is. A CR or LF in the path adds request lines, and the request has the credentials. | Open. |
 | F42 | The push (EventSource) connection reads the host of `eventSourceUrl` differently from the TLS check. A URL such as `http://localhost?.example.org/` passes as loopback and connects to another name. | Open. Fix together with F41. |
 | F43 | The id budget of L6 does not count the objects of a `/get` answer. A server can add objects that the client did not ask for, up to the size limit of each response. | Open. |
-| F44 | No caller uses the results that a partly applied `/set` returns. The error also hides a 401 or 429 of a later part from the retry logic. No caller sends more than one object today. | Open. |
+| F44 | No caller uses the results that a partly applied `/set` returns. The error also hides a 401 or 429 of a later part from the retry logic. No caller sends more than one object today. | Partly fixed. The error of the failed part now decides if the error is a 401 or a rate limit, and gives its retry time. `jmap-client/src/error.rs`, `a_partial_set_reports_the_401_of_its_failed_part` and `a_partial_set_reports_the_rate_limit_of_its_failed_part`. Open: no caller uses the results of the applied parts, so a retry sends those objects again. |
 | F45 | A received cancellation and an imported file can make the server send the user's answer to the organizer. The guests get no message. | Open. This needs a product decision. |
 | F46 | When the calendar backend goes offline during a received change, EDS can keep the change and upload it later as a change that the user made. | Open. |
 
