@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Principal methods and seeding helpers (`Principal/*`, `ShareNotification/*`, RFC 9670).
+//! Principal handlers and seed helpers for `Principal/*` and `ShareNotification/*`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::AccountState;
 
-/// Fixed stand-in for "now". This keeps tests reproducible.
+/// Use a fixed stand in for "now". This keeps tests reproducible.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 pub fn principal_get(
@@ -92,7 +92,8 @@ pub fn principal_query(
     })
 }
 
-/// Handle `Principal/getAvailability` over seeded `CalendarEvent` values, and omit draft `tooLarge`.
+/// Handle `Principal/getAvailability` over seeded `CalendarEvent` values.
+/// Omit draft `tooLarge`.
 pub fn principal_get_availability(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -118,7 +119,7 @@ pub fn principal_get_availability(
     to_result(&GetAvailabilityResponse { list })
 }
 
-/// Use `true` when `mayGetAvailability` is absent.
+/// Return `true` when `mayGetAvailability` is absent.
 fn may_get_availability(principal: &Principal) -> bool {
     principal
         .capabilities
@@ -128,12 +129,13 @@ fn may_get_availability(principal: &Principal) -> bool {
         .unwrap_or(true)
 }
 
-/// Build one event `BusyPeriod`; return `None` when the event is not busy in the request window.
+/// Build one `BusyPeriod` for an event.
+/// Return `None` when the event is not busy in the request window.
 fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> Option<BusyPeriod> {
     if matches!(event.status.as_deref(), Some("cancelled")) {
         return None;
     }
-    // RFC 8984 §4.4.2 sets default `freeBusyStatus` to `busy`.
+    // RFC 8984 section 4.4.2 sets the default `freeBusyStatus` to `busy`.
     // Only explicit `free` excludes an event here.
     if matches!(event.free_busy_status.as_deref(), Some("free")) {
         return None;
@@ -159,8 +161,8 @@ fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> O
     })
 }
 
-/// Add `PT<h>H<m>M<s>S` to `YYYY-MM-DDTHH:MM:SS` with same-day arithmetic.
-/// Return `start` if parsing fails or if the end crosses midnight.
+/// Add `PT<h>H<m>M<s>S` to `YYYY-MM-DDTHH:MM:SS` with same day arithmetic.
+/// Return `start` if parsing fails or when the end crosses midnight.
 fn busy_end(start: &str, duration: Option<&str>) -> String {
     (|| {
         let seconds = parse_simple_duration_seconds(duration?)?;
@@ -183,7 +185,7 @@ fn busy_end(start: &str, duration: Option<&str>) -> String {
     .unwrap_or_else(|| start.to_owned())
 }
 
-/// Parse ISO 8601 time-only durations (`PT...`) into seconds.
+/// Parse ISO 8601 time only durations (`PT...`) into seconds.
 /// Return `None` for unsupported forms.
 fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
     let rest = duration.strip_prefix("PT")?;
@@ -250,7 +252,8 @@ pub fn share_notification_get(
     })
 }
 
-/// Handle `ShareNotification/query` with [`share_notification_get`] visibility, then filter by `objectType`, `before`, and `after`.
+/// Handle `ShareNotification/query` with [`share_notification_get`] visibility.
+/// Then filter by `objectType`, `before`, and `after`.
 pub fn share_notification_query(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -391,7 +394,7 @@ fn principal_matches(principal: &Principal, filter: &PrincipalQueryFilter) -> bo
 }
 
 impl AccountState {
-    /// Seed a principal and return its id, without a state bump.
+    /// Seed a principal and return its id without a state bump.
     pub fn seed_principal(&mut self, principal: Principal) -> Id {
         let id = self.principals.alloc_id();
         let principal = Principal {
