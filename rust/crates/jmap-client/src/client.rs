@@ -295,6 +295,13 @@ impl Client {
             "application/json",
             limits::MAX_API_RESPONSE_BYTES,
         )?;
+        // The transport did not send the credentials to another origin, so its session must not direct them.
+        if !crate::url::same_origin(&self.session_url, &response.final_url) {
+            return Err(Error::RedirectCredentialsWithheld {
+                requested: crate::url::origin_of(&self.session_url).into_owned(),
+                followed: crate::url::origin_of(&response.final_url).into_owned(),
+            });
+        }
         let mut session: Session = serde_json::from_slice(&response.body)?;
         if let Some(origin) = &self.rebase_origin {
             let advertised_download_origin =

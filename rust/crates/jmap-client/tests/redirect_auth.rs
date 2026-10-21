@@ -472,6 +472,111 @@ fn cross_origin_redirect_with_credentials_returns_redirect_credentials_withheld_
     }
 }
 
+/// Redirect target that serves its own session document without asking for credentials.
+/// Records whether any request to it carried `Authorization`.
+struct ForeignSessionHost {
+    origin: String,
+    saw_authorization: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ForeignSessionHost {
+    fn start() -> Self {
+        let server = tiny_http::Server::http("127.0.0.2:0").expect("bind foreign session host");
+        let port = server
+            .server_addr()
+            .to_ip()
+            .expect("foreign session host has ip")
+            .port();
+        let origin = format!("http://127.0.0.2:{port}");
+        let saw_authorization = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn({
+            let origin = origin.clone();
+            let saw_authorization = Arc::clone(&saw_authorization);
+            let stop = Arc::clone(&stop);
+            move || {
+                while !stop.load(Ordering::SeqCst) {
+                    match server.recv_timeout(Duration::from_millis(20)) {
+                        Ok(Some(request)) => {
+                            if request
+                                .headers()
+                                .iter()
+                                .any(|h| h.field.equiv("Authorization"))
+                            {
+                                saw_authorization.store(true, Ordering::SeqCst);
+                            }
+                            let body = format!(
+                                r#"{{"capabilities":{{"urn:ietf:params:jmap:core":{{"maxSizeUpload":10000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-casemap"]}},"urn:ietf:params:jmap:mail":{{}}}},"accounts":{{"a1":{{"name":"agent@example.com","isPersonal":true,"isReadOnly":false,"accountCapabilities":{{"urn:ietf:params:jmap:mail":{{}}}}}}}},"primaryAccounts":{{"urn:ietf:params:jmap:mail":"a1"}},"username":"agent","apiUrl":"{origin}/jmap/api","downloadUrl":"{origin}/jmap/download","uploadUrl":"{origin}/jmap/upload","eventSourceUrl":"{origin}/jmap/events","state":"s1"}}"#
+                            );
+                            let response = tiny_http::Response::from_data(body.into_bytes())
+                                .with_status_code(200)
+                                .with_header(
+                                    tiny_http::Header::from_bytes(
+                                        &b"Content-Type"[..],
+                                        &b"application/json"[..],
+                                    )
+                                    .expect("content type header"),
+                                );
+                            let _ = request.respond(response);
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+        Self {
+            origin,
+            saw_authorization,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn origin(&self) -> &str {
+        &self.origin
+    }
+}
+
+impl Drop for ForeignSessionHost {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// A session document from another origin does not get the credentials, even when it answers 200.
+#[test]
+fn a_session_document_from_a_foreign_redirect_target_gets_no_credentials() {
+    let foreign = ForeignSessionHost::start();
+    let server = RedirectingServer::start(&format!("{}/jmap/session", foreign.origin()));
+
+    let result = Client::connect(server.origin(), Credentials::basic("agent", "sekret"));
+
+    match result {
+        Err(Error::RedirectCredentialsWithheld {
+            requested,
+            followed,
+        }) => {
+            assert_eq!(requested, server.origin());
+            assert_eq!(followed, foreign.origin());
+        }
+        Ok(client) => {
+            let _ = client.mailbox_get(&Id::new("a1"));
+            panic!("the client accepted a session document from a foreign redirect target");
+        }
+        Err(other) => panic!("expected Error::RedirectCredentialsWithheld, got {other:?}"),
+    }
+    assert!(
+        !foreign.saw_authorization.load(Ordering::SeqCst),
+        "the foreign redirect target received the credentials"
+    );
+}
+
 #[test]
 #[ignore = "touches live Fastmail server without credentials"]
 fn fastmail_live_trailing_dot_session_redirect() {
