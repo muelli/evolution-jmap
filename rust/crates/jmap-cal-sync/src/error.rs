@@ -44,7 +44,7 @@ pub enum SyncError {
 }
 
 /// Why the server did not send the scheduling messages of a change
-/// (`docs/MEETING-SCHEDULING.md`, rule 5).
+/// (`docs/MEETING-SCHEDULING.md`, rule 4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unscheduled {
     /// `noSupportedScheduleMethods` (draft-ietf-jmap-calendars section 5.9.2):

@@ -75,7 +75,7 @@ fn connect(origin: &str, user: &str, password: &str) -> Client {
 
 /// The calendar keyfile of the organizer, as in
 /// `live-stalwart-calendar-attendees.rs`. It has no `[WebDAV Backend]`
-/// group, thus `CalendarAutoSchedule` has its default: the server sends.
+/// group, as a new source has none.
 fn keyfile(port: u16, user: &str) -> String {
     format!(
         "[Data Source]\n\

@@ -5,7 +5,7 @@
 //! section 4), through a real, running `evolution-calendar-factory`.
 //!
 //! `jmap-backend-cal/tests/scheduling.rs` tests the capability string, the
-//! operation-flag mapping and the source read separately, and that the
+//! operation-flag mapping separately, and that the
 //! `impl_get_backend_property` slot is installed. Only a real backend shows
 //! that a libecal consumer (such as Evolution) sees the capabilities that
 //! stop it from sending mail to the guests, and that its flags reach the
@@ -168,21 +168,29 @@ fn by_default_the_server_tells_the_guests_and_evolution_is_told_not_to() {
     );
 }
 
+/// An old config can still carry `CalendarAutoSchedule=false`. The backend
+/// ignores it: the server always tells the guests.
 #[test]
-fn with_calendar_auto_schedule_off_evolution_tells_the_guests_and_the_server_is_never_asked() {
+fn an_old_calendar_auto_schedule_off_still_has_the_server_tell_the_guests() {
     let run = run("off", "\n[WebDAV Backend]\nCalendarAutoSchedule=false\n");
     for cap in CAPABILITIES {
         assert_eq!(
             run.seen(cap),
-            Some("0"),
-            "{cap} advertised with the switch off\n{}",
+            Some("1"),
+            "{cap} not advertised with the old switch off\n{}",
             run.report
         );
     }
-    assert!(run.sent.is_empty(), "sent {:?}\n{}", run.sent, run.report);
-    assert_eq!(run.seen("removed-sent"), Some("1"), "{}", run.report);
-    // No request asks the server to send, so the server refuses nothing.
-    assert_eq!(run.seen("unreachable-created"), Some("1"), "{}", run.report);
+    assert_eq!(
+        run.sent,
+        [
+            ("REQUEST".to_owned(), SENT_GUEST.to_owned()),
+            ("CANCEL".to_owned(), SENT_GUEST.to_owned()),
+        ],
+        "{}",
+        run.report
+    );
+    assert_eq!(run.seen("unreachable-created"), Some("0"), "{}", run.report);
     assert_eq!(run.stored, 0, "{}", run.report);
 }
 

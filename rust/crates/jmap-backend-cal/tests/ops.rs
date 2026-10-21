@@ -964,17 +964,18 @@ fn an_unnamed_unreachable_guest_still_says_what_to_check() {
     assert!(!message.contains("%1$s"), "{message}");
 }
 
-/// A server that does not schedule: the only fix is the account's switch,
-/// so the message names it the way Evolution's CalDAV settings label it.
+/// A server that does not schedule: Evolution never sends the invitations
+/// instead, so the message names no setting and offers the one way to save.
 #[test]
-fn a_server_that_does_not_schedule_points_at_the_switch() {
+fn a_server_that_does_not_schedule_says_to_save_without_sending() {
     let message = gerror_message(&SyncError::Unscheduled(Unscheduled::NotImplemented));
 
     assert!(
-        message.contains("Server handles meeting invitations"),
+        !message.contains("Server handles meeting invitations"),
         "{message}"
     );
     assert!(message.contains("not saved"), "{message}");
+    assert!(message.contains("choose not to send"), "{message}");
 }
 
 /// The message of the `GError` `failure` maps to, the error freed after.
