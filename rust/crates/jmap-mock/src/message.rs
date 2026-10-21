@@ -5,27 +5,27 @@
 //!
 //! Most modules serialize structured `Email` values to message bytes.
 //! `Email/import` is the reverse path. This module reads a small subset
-//! from raw bytes.
+//! of raw bytes.
 //!
 //! Scope: unfolded headers, address lists, message IDs, and preview text.
-//! It skips MIME trees, RFC 2047 encoded words, temporal headers,
+//! This module skips MIME trees, RFC 2047 encoded words, temporal headers,
 //! and address groups. Tests that need those features seed messages directly.
 
 use jmap_proto::mail::EmailAddress;
 
-/// Preview character limit, matching seeded messages.
+/// Preview character limit. Match seeded messages.
 const PREVIEW: usize = 64;
 
 /// Parsed message fields that this server uses.
 pub(crate) struct Message {
-    /// Header fields in wire order as lowercase names and unfolded values.
+    /// Header fields in wire order. Use lowercase names and unfolded values.
     fields: Vec<(String, String)>,
     /// Message body after the header block, interpreted as UTF-8 text.
     body: String,
 }
 
 impl Message {
-    /// Parse `source`, return `None` for invalid UTF-8 or header syntax.
+    /// Parse `source`. Return `None` for invalid UTF-8 or header syntax.
     pub(crate) fn read(source: &[u8]) -> Option<Self> {
         let source = std::str::from_utf8(source).ok()?;
         let (headers, body) = split(source);
@@ -71,7 +71,7 @@ impl Message {
         self.field("subject").map(str::to_owned)
     }
 
-    /// Parses one address-list header into JMAP addresses.
+    /// Parse one address-list header into JMAP addresses.
     pub(crate) fn addresses(&self, name: &str) -> Option<Vec<EmailAddress>> {
         let addresses: Vec<EmailAddress> = split_addresses(self.field(name)?)
             .into_iter()
@@ -80,7 +80,7 @@ impl Message {
         (!addresses.is_empty()).then_some(addresses)
     }
 
-    /// Parses message-id style headers and strips optional angle brackets.
+    /// Parse message-id style headers. Strip optional angle brackets.
     pub(crate) fn message_ids(&self, name: &str) -> Option<Vec<String>> {
         let ids: Vec<String> = self
             .field(name)?
@@ -94,7 +94,7 @@ impl Message {
         (!ids.is_empty()).then_some(ids)
     }
 
-    /// Builds a one-line preview from the start of the body.
+    /// Build a one-line preview from the body start.
     pub(crate) fn preview(&self) -> Option<String> {
         let preview: String = self
             .body
@@ -108,7 +108,7 @@ impl Message {
     }
 }
 
-/// Splits the message into headers and body at the first blank line.
+/// Split the message into headers and body at the first blank line.
 fn split(source: &str) -> (&str, &str) {
     match source.find("\r\n\r\n") {
         Some(end) => (&source[..end], &source[end + 4..]),
@@ -124,7 +124,7 @@ fn is_field_name(byte: u8) -> bool {
     (33..=57).contains(&byte) || (59..=126).contains(&byte)
 }
 
-/// Splits an address list on top-level commas.
+/// Split an address list on top-level commas.
 fn split_addresses(list: &str) -> Vec<&str> {
     let mut addresses = Vec::new();
     let mut quoted = false;
@@ -146,7 +146,7 @@ fn split_addresses(list: &str) -> Vec<&str> {
     addresses
 }
 
-/// Parses one address in `Name <local@domain>` or bare `local@domain` form.
+/// Parse one address in `Name <local@domain>` or bare `local@domain` form.
 fn address(address: &str) -> Option<EmailAddress> {
     let address = address.trim();
     if address.is_empty() {
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn what_is_not_a_message_is_refused() {
-        // No fields, broken header syntax, or non-UTF-8 bytes.
+        // Reject no fields, broken header syntax, or non-UTF-8 bytes.
         assert!(Message::read(b"").is_none());
         assert!(Message::read(b"this was never a message").is_none());
         assert!(Message::read(b"Subject: fine\r\nnot a field\r\n").is_none());
