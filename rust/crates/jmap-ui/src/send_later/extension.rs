@@ -976,17 +976,32 @@ unsafe extern "C" fn on_activate(
 /// differently, see the two `on_activate` functions). Thus a new preset needs
 /// only a line in [`schedule::offered`], not a new trampoline.
 fn dispatch_activation(name: Option<&str>, composer: gpointer) {
-    let Some(slug) = name.and_then(|name| name.strip_prefix("jmap-send-later-")) else {
-        return;
-    };
-    tracing::trace!(slug, "send-later: menu item activated");
     // SAFETY: the composer is alive, because its menu emitted the signal.
     unsafe {
-        if slug == "custom" {
-            activate_custom(composer.cast());
-        } else if let Some(preset) = schedule::from_slug(slug) {
-            activate(composer.cast(), preset);
+        match chosen(name) {
+            Some(Choice::Custom) => activate_custom(composer.cast()),
+            Some(Choice::Preset(preset)) => activate(composer.cast(), preset),
+            None => {}
         }
+    }
+}
+
+/// The menu item that an action name identifies.
+#[derive(Debug, PartialEq, Eq)]
+enum Choice {
+    Custom,
+    Preset(Preset),
+}
+
+/// Reads the clicked menu item from the action name. Returns `None` for a name
+/// that this extension does not own.
+fn chosen(name: Option<&str>) -> Option<Choice> {
+    let slug = name?.strip_prefix("jmap-send-later-")?;
+    tracing::trace!(slug, "send-later: menu item activated");
+    if slug == "custom" {
+        Some(Choice::Custom)
+    } else {
+        schedule::from_slug(slug).map(Choice::Preset)
     }
 }
 
@@ -1250,5 +1265,39 @@ unsafe fn refuse_send(composer: *mut GObject, text: String) {
         );
         gtk_dialog_run(dialog.cast());
         gtk_widget_destroy(dialog);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_offered_action_name_reads_back_as_its_preset() {
+        for preset in schedule::offered() {
+            let name = action_name(preset);
+            let name = name.to_str().unwrap();
+            assert_eq!(chosen(Some(name)), Some(Choice::Preset(preset)), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_custom_item_and_foreign_names_are_told_apart() {
+        assert_eq!(chosen(Some("jmap-send-later-custom")), Some(Choice::Custom));
+        assert_eq!(chosen(Some("jmap-send-later-nonsense")), None);
+        assert_eq!(chosen(Some("custom")), None);
+        assert_eq!(chosen(None), None);
+    }
+
+    #[test]
+    fn the_menu_definition_names_every_action() {
+        let ui = ui_definition();
+        let ui = ui.to_str().unwrap();
+        let names = schedule::offered().into_iter().map(action_name);
+        for name in names.chain([c"jmap-send-later-custom".to_owned()]) {
+            let attribute = format!("action='{}'", name.to_str().unwrap());
+            assert!(ui.contains(&attribute), "{attribute} is not in {ui}");
+        }
+        assert!(ui.contains("action='jmap-send-later-menu'"), "{ui}");
     }
 }
