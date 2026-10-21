@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! API endpoint dispatch, result-reference resolution (RFC 8620 §3.7), and method routing.
+//! JMAP API dispatch, result-reference resolution (RFC 8620 §3.7), and method routing.
 
 use jmap_proto::Id;
 use jmap_proto::error::{self, MethodError};
@@ -11,14 +11,14 @@ use serde_json::{Map, Value};
 
 use crate::state::{ServerState, TypeStateSnapshot};
 
-/// Handle a JMAP API POST and return `(HTTP status, JSON body)`.
-/// `caller` is the authenticated principal for access checks; `None` means anonymous.
+/// Handle one JMAP API POST and return `(HTTP status, JSON body)`.
+/// `caller` sets the authenticated principal for access checks. `None` means anonymous.
 pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> (u16, Value) {
     if let Ok(text) = std::str::from_utf8(body) {
         println!("--> POST /jmap\n{text}");
     }
 
-    // Count every HTTP round trip, including requests rejected before parsing.
+    // Count each HTTP round trip, including requests rejected before parsing.
     state.api_requests += 1;
 
     // RFC 8620 §2: reject requests over `maxSizeRequest` before parsing method calls.
@@ -49,7 +49,7 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
         }
     };
 
-    // RFC 8620 §3.2: reject the whole request when `maxCallsInRequest` is exceeded.
+    // RFC 8620 §3.2: reject the whole request when it exceeds `maxCallsInRequest`.
     if let Some(limit) = state.calls_in_request
         && request.method_calls.len() as u64 > limit
     {
@@ -66,13 +66,13 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
     }
 
     let mut responses: Vec<Invocation> = Vec::new();
-    // Track creation ids so later `/set` calls can resolve `#creationId` (RFC 8620 §5.3).
+    // Track creation ids for later `/set` calls that resolve `#creationId` (RFC 8620 §5.3).
     let mut created_ids: std::collections::BTreeMap<String, jmap_proto::Id> =
         std::collections::BTreeMap::new();
-    // Snapshot type states so one `StateChange` can report all request mutations (RFC 8620 §7.1).
+    // Snapshot type states so one `StateChange` reports all mutations in this request (RFC 8620 §7.1).
     let type_states_before = state.type_state_snapshot();
     for call in &request.method_calls {
-        // Record every attempted method call, even if it later fails.
+        // Record each attempted method call, even if handling later fails.
         state.method_calls.push(call.name.clone());
         let invocation = match resolve_references(call, &responses) {
             Ok(arguments) => {
@@ -120,7 +120,7 @@ fn error_invocation(error: MethodError, call_id: &str) -> Invocation {
     }
 }
 
-/// Replace `#argument` result references from earlier responses in this request (RFC 8620 §3.7).
+/// Resolve `#argument` result references from earlier responses in this request (RFC 8620 §3.7).
 fn resolve_references(call: &Invocation, responses: &[Invocation]) -> Result<Value, MethodError> {
     let Value::Object(arguments) = &call.arguments else {
         return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
@@ -164,7 +164,7 @@ fn resolve_references(call: &Invocation, responses: &[Invocation]) -> Result<Val
     Ok(Value::Object(resolved))
 }
 
-/// RFC 8620 §3.7 pointer evaluation: JSON Pointer (RFC 6901) plus `*` to map arrays.
+/// Evaluate RFC 8620 §3.7 pointers: JSON Pointer (RFC 6901) plus `*` for array mapping.
 fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     fn walk(tokens: &[&str], value: &Value) -> Option<Value> {
         let Some((token, rest)) = tokens.split_first() else {
@@ -197,7 +197,7 @@ fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     walk(&tokens, value)
 }
 
-/// Build a `StateChange` for counters that changed, or `None` when nothing changed.
+/// Build a `StateChange` from changed counters, or return `None`.
 fn state_change_since(
     before: &TypeStateSnapshot,
     after: &TypeStateSnapshot,
@@ -223,7 +223,7 @@ fn state_change_since(
     (!changed.is_empty()).then(|| jmap_proto::push::StateChange::new(changed))
 }
 
-/// Collect `{creationId: {id: ...}}` pairs from a successful `/set` result.
+/// Collect `{creationId: {id: ...}}` pairs from a successful `/set` response.
 fn record_created_ids(
     name: &str,
     result: &Value,
@@ -386,7 +386,7 @@ fn handle_method(
     }
 }
 
-/// Parse method arguments into a typed request, returning `invalidArguments` on failure.
+/// Parse method arguments into a typed request. Return `invalidArguments` on parse failure.
 pub(crate) fn parse_arguments<T: serde::de::DeserializeOwned>(
     arguments: Value,
 ) -> Result<T, MethodError> {
@@ -395,14 +395,14 @@ pub(crate) fn parse_arguments<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// Serialize a typed response, treating failure as a server bug.
+/// Serialize a typed response. Treat serialization failure as a server bug.
 pub(crate) fn to_result(response: &impl serde::Serialize) -> Result<Value, MethodError> {
     serde_json::to_value(response).map_err(|serialize_error| {
         MethodError::new(error::method::SERVER_FAIL).with_description(serialize_error.to_string())
     })
 }
 
-/// Look up an account or fail with `accountNotFound`.
+/// Look up an account, or return `accountNotFound`.
 pub(crate) fn account_mut<'a>(
     state: &'a mut ServerState,
     account_id: &jmap_proto::Id,
