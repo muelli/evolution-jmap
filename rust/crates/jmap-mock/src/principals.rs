@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::AccountState;
 
-/// Deterministic stand-in for "now" for reproducible tests.
+/// Fixed stand-in for "now". This keeps tests reproducible.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 pub fn principal_get(
@@ -92,7 +92,7 @@ pub fn principal_query(
     })
 }
 
-/// `Principal/getAvailability` over seeded `CalendarEvent` values, omitting draft `tooLarge`.
+/// Handle `Principal/getAvailability` over seeded `CalendarEvent` values, and omit draft `tooLarge`.
 pub fn principal_get_availability(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -118,7 +118,7 @@ pub fn principal_get_availability(
     to_result(&GetAvailabilityResponse { list })
 }
 
-/// Defaults `mayGetAvailability` to `true` when unset.
+/// Use `true` when `mayGetAvailability` is absent.
 fn may_get_availability(principal: &Principal) -> bool {
     principal
         .capabilities
@@ -128,13 +128,13 @@ fn may_get_availability(principal: &Principal) -> bool {
         .unwrap_or(true)
 }
 
-/// Return one event `BusyPeriod`, or `None` when the event is not busy in window.
+/// Build one event `BusyPeriod`; return `None` when the event is not busy in the request window.
 fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> Option<BusyPeriod> {
     if matches!(event.status.as_deref(), Some("cancelled")) {
         return None;
     }
-    // RFC 8984 §4.4.2 defaults `freeBusyStatus` to `busy`, so only explicit
-    // `free` excludes an event here.
+    // RFC 8984 §4.4.2 sets default `freeBusyStatus` to `busy`.
+    // Only explicit `free` excludes an event here.
     if matches!(event.free_busy_status.as_deref(), Some("free")) {
         return None;
     }
@@ -160,7 +160,7 @@ fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> O
 }
 
 /// Add `PT<h>H<m>M<s>S` to `YYYY-MM-DDTHH:MM:SS` with same-day arithmetic.
-/// Return `start` on parse failure or midnight crossing.
+/// Return `start` if parsing fails or if the end crosses midnight.
 fn busy_end(start: &str, duration: Option<&str>) -> String {
     (|| {
         let seconds = parse_simple_duration_seconds(duration?)?;
@@ -210,7 +210,7 @@ fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
     Some(seconds)
 }
 
-/// `ShareNotification/get` filtered to the resolved caller principal's recipient id.
+/// Handle `ShareNotification/get` for the resolved caller recipient id.
 pub fn share_notification_get(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -250,7 +250,7 @@ pub fn share_notification_get(
     })
 }
 
-/// `ShareNotification/query` applies [`share_notification_get`] visibility, then filters by `objectType`, `before`, and `after`.
+/// Handle `ShareNotification/query` with [`share_notification_get`] visibility, then filter by `objectType`, `before`, and `after`.
 pub fn share_notification_query(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -313,7 +313,7 @@ fn share_notification_matches(
     true
 }
 
-/// Record `ShareNotification` entries when principal rights change in `AddressBook/set` or `Mailbox/set`.
+/// Record `ShareNotification` entries when rights change in `AddressBook/set` or `Mailbox/set`.
 pub(crate) fn record_share_changes<R>(
     account: &mut AccountState,
     object_type: &str,
