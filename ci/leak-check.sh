@@ -12,7 +12,11 @@
 #
 # This script needs rustup, the EDS development headers (ci/install-deps.sh)
 # and addr2line (binutils) for symbol names in the reports. It installs the
-# toolchain named by LEAK_TOOLCHAIN (the default is `nightly`) if missing.
+# toolchain named by LEAK_TOOLCHAIN if missing. The default is a dated
+# nightly, so a red run shows a leak and not a change in the nightly. A fixed
+# toolchain also keeps the CI build cache valid from week to week.
+# To move the pin, run this script with LEAK_TOOLCHAIN set to the new date.
+# Change the default only when that run is green.
 #
 # Usage: ci/leak-check.sh [package...]
 #   With no arguments, the script checks the packages in DEFAULT_PACKAGES.
@@ -25,7 +29,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-toolchain=${LEAK_TOOLCHAIN:-nightly}
+toolchain=${LEAK_TOOLCHAIN:-nightly-2026-10-18}
 
 DEFAULT_PACKAGES=(
     eds-sys
