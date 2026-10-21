@@ -743,7 +743,7 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
     let nameless_back = vcard_to_card(&nameless_vcard).expect("parse");
     assert_eq!(nameless_back.organizations, nameless_card.organizations);
 
-    // EDS may clear the office slot in place. Readback drops empty units and keeps position order stable.
+    // EDS can clear the office slot in place. Readback drops empty units and keeps the position order stable.
     let cleared_office_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;;Lenses\r\n",
@@ -10505,7 +10505,8 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
 
 #[test]
 fn inbound_vcard_charset_parameter_variations_and_normalization() {
-    // Accept case-variant `CHARSET=UTF-8` input and normalize outbound vCard 3.0 by omitting CHARSET.
+    // Accept case-variant `CHARSET=UTF-8` input.
+    // Normalize outbound vCard 3.0 by omitting `CHARSET`.
     let vcard_inbound = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -11410,7 +11411,7 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
-    // Unsupported standard properties parse safely and are dropped on emission:
+    // Parse unsupported standard properties safely and drop them on emission:
     // GEO, TZ, MAILER, KIND, GENDER, GRAMGENDER, PRONOUNS, LANG, LANGUAGE, SOCIALPROFILE, EXPERTISE,
     // HOBBY, INTEREST, MEMBER, CONTACT-URI, ORG-DIRECTORY, SOURCE, XML, CREATED, PRODID, REV,
     // SORT-STRING, CLASS, SOUND, LOGO.
@@ -13996,7 +13997,8 @@ fn email_and_address_label_edge_cases_and_parameter_permutations() {
 
 #[test]
 fn vcard_21_outlook_representative_fixture_import_and_normalization() {
-    // Representative Outlook vCard 2.1 fixture with legacy type words and quoted-printable payloads.
+    // Use a representative Outlook vCard 2.1 fixture.
+    // Keep legacy type words and quoted-printable payloads.
     let outlook_vcard_21 = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:2.1\r\n",
@@ -17619,7 +17621,7 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
 #[test]
 fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
     // Full-card regression: mapped fields survive while AGENT and SOUND stay parse-safe and omitted.
-    // Asserts fixed-point stability after AGENT/SOUND stripping.
+    // Assert fixed-point stability after AGENT and SOUND stripping.
 
     let vcard_input = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
@@ -21323,7 +21325,7 @@ fn photo_roundtrip_fixpoint_multi_pass_convergence() {
 #[test]
 fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
     // Emit anniversary lines only for complete dates with year >= 1000.
-    // Do not emit anniversary lines for bare year, partial calendar value, ancient year, or deathday.
+    // Do not emit anniversary lines for bare years, partial calendar values, ancient years, or deathday.
 
     // Birth cases.
     let bday_bare_year = one_anniversary("birth", json!({"year": 1984}));
