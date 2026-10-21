@@ -2,10 +2,10 @@ mod ffi;
 mod msg_composer_extension;
 mod shell_view_extension;
 
-/// Register the extension types for this module.
+/// Register extension types for this module.
 ///
 /// # Safety
-/// `type_module` must be a valid pointer from Evolution.
+/// `type_module` must be a valid pointer that Evolution passes.
 #[no_mangle]
 pub unsafe extern "C" fn e_module_load(type_module: *mut ffi::GTypeModule) {
     unsafe {
@@ -14,9 +14,9 @@ pub unsafe extern "C" fn e_module_load(type_module: *mut ffi::GTypeModule) {
     }
 }
 
-/// Required unload hook for Evolution.
+/// Provide the unload hook that Evolution requires.
 ///
 /// # Safety
-/// `_type_module` must be a valid pointer from Evolution.
+/// `_type_module` must be a valid pointer that Evolution passes.
 #[no_mangle]
 pub unsafe extern "C" fn e_module_unload(_type_module: *mut ffi::GTypeModule) {}
