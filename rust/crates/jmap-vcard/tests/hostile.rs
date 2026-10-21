@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Exercise hostile `ContactCard` input from a server.
+//! Test hostile `ContactCard` input from a server.
 
 use std::collections::BTreeMap;
 
@@ -91,7 +91,7 @@ fn inbound_photo_uri_references_with_unsupported_schemes_are_dropped() {
     }
 }
 
-/// Keep inbound `data:` photo URIs from `VALUE=uri` lines.
+/// Keep inbound `data:` photo URIs from `VALUE=uri`.
 #[test]
 fn inbound_photo_value_uri_data_payload_stays_mapped() {
     let line = "PHOTO;VALUE=uri:data:image/png;base64,aGVsbG8=";
@@ -104,7 +104,7 @@ fn inbound_photo_value_uri_data_payload_stays_mapped() {
     assert_eq!(photo.media_type.as_deref(), Some("image/png"));
 }
 
-/// Do not emit local-file photo bytes on save.
+/// Keep local-file photo bytes out of save output.
 #[test]
 fn inbound_file_uri_photo_does_not_turn_into_outbound_inline_data() {
     let inbound = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nPHOTO;VALUE=uri:file:///dev/zero\r\nEMAIL:vera@example.com\r\nEND:VCARD\r\n";
@@ -240,7 +240,7 @@ fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     );
 }
 
-/// Keep escaped value newlines as data.
+/// Keep escaped value newlines as data text.
 #[test]
 fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
     let mut card = ContactCard {
@@ -268,7 +268,7 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
 use jmap_vcard::VCardError;
 use std::time::{Duration, Instant};
 
-/// Return typed errors for truncated input.
+/// Return typed errors for truncated cards.
 #[test]
 fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     let not_vcard_cases = ["", "   ", "\r\n", "\n", "\t"];
@@ -310,7 +310,7 @@ fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     }
 }
 
-/// Reject unbalanced parameter quoting. Do not panic, hang, or inject properties.
+/// Reject unbalanced parameter quoting. Do not panic or inject properties.
 #[test]
 fn unbalanced_quoting_in_vcard_parameters_matrix() {
     let hostile_quoted = [
@@ -335,7 +335,7 @@ fn unbalanced_quoting_in_vcard_parameters_matrix() {
     }
 }
 
-/// Parse extreme folding patterns without panic or root-field drift.
+/// Parse extreme folding patterns without panic or field drift.
 #[test]
 fn absurd_folding_every_second_octet_matrix() {
     let mut folded = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:\r\n");
@@ -496,7 +496,7 @@ fn malformed_photo_base64_and_corrupt_data_uri_matrix() {
     }
 }
 
-/// Parse multibyte UTF-8 fields without panic at byte boundaries.
+/// Parse UTF-8 fields without panic at byte boundaries.
 #[test]
 fn adversarial_multibyte_utf8_slice_boundary_matrix() {
     let multi_byte_chars = [
