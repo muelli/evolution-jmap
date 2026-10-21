@@ -168,9 +168,11 @@ Another user can share an address book or a calendar with the account
 `isPersonal: false`. The backend makes one child source for each address book
 and calendar in each such account. Mail in a shared account does not appear.
 
-- The name of the child is `<collection> (<owner>)`. `<owner>` is the `name`
+- The name of the child is `<owner>: <collection>`. `<owner>` is the `name`
   of the shared account in the session. Usually it is the email address of
-  the owner.
+  the owner. The owner is first, so the collection name cannot hide it. The
+  backend removes control characters, line separators and bidi formatting
+  characters from the two parts.
 - The child is read-only if the shared account is read-only or if `myRights`
   of the collection does not give write access.
 - "Delete" is available only if `myRights.mayDelete` is `true`. A delete

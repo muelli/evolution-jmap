@@ -93,7 +93,7 @@ fn keyfile(port: u16, user: &str) -> String {
 
 /// The owner shares an address book (writable) and a calendar (read-only)
 /// with the recipient. The Evolution account of the recipient gets one child
-/// for each, named `<collection> (<owner account name>)`. The children are
+/// for each, named `<owner account name>: <collection>`. The children are
 /// not removable, because no grant has `mayDelete`. The owner removes the
 /// two grants, and the next populate removes the two children. At the end,
 /// the test destroys the two collections.
@@ -232,7 +232,7 @@ fn shared_collections_appear_in_the_source_registry_and_go_when_unshared() {
         assert_eq!(seen.get(key("kind").as_str()), Some(&kind), "{report}");
         assert_eq!(
             seen.get(key("display-name").as_str()).copied(),
-            Some(format!("{name} ({owner_name})").as_str()),
+            Some(format!("{owner_name}: {name}").as_str()),
             "the {kind} child does not name its owner\n{report}"
         );
         assert_eq!(
