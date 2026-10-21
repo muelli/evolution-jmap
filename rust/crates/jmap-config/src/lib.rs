@@ -59,6 +59,9 @@
 //!   registration. It changes a host name into the [`oauth2::Config`] that
 //!   [`oauth2::apply`] stores. Only [`config_lookup`] calls it, not the
 //!   server settings page.
+//! - [`pending_delete`] is the storage for the due time of a deferred
+//!   collection delete: the `[JMAP Pending Delete]` extension. The registry
+//!   writes it, and Evolution reads it to offer an undo.
 //! - [`config_lookup`] is the `EConfigLookupWorker` behind the "Look Up
 //!   Account Details" step of the assistant.
 //! - [`source_config`] contains the two `ESourceConfigBackend` subclasses that
@@ -144,10 +147,15 @@ pub mod module;
 pub mod oauth2;
 pub mod oauth2_service;
 pub mod oauth2_setup;
+pub mod pending_delete;
 pub mod source_config;
 
 // Test binaries initialise the parent classes before their tests start threads.
 // Only the EDS types. The backends link this crate, but not Evolution's private
 // libraries. Thus a test that uses the Evolution types names them itself.
 #[cfg(feature = "testing")]
-jmap_backend_core::initialise_parents_before_main!(oauth2::Extension, oauth2_service::Service);
+jmap_backend_core::initialise_parents_before_main!(
+    oauth2::Extension,
+    oauth2_service::Service,
+    pending_delete::Extension,
+);

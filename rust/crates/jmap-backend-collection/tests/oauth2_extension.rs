@@ -35,6 +35,7 @@ use gobject_sys::{
 use jmap_backend_collection::module::{load, unload};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_config::oauth2::EXTENSION_NAME;
+use jmap_config::pending_delete::EXTENSION_NAME as PENDING_DELETE;
 
 mod common;
 use common::{with_timeout, with_timeout_duration};
@@ -134,6 +135,12 @@ fn the_module_load_registers_the_oauth2_extension_type() {
              EDS's own keyfile parser would silently drop that group in any \
              process that loads this module before anything calls \
              jmap_config::oauth2::apply/read on the same source"
+        );
+        // SAFETY: as above. The module load also registers the pending-delete type.
+        let pending = unsafe { e_source_get_extension(source, PENDING_DELETE.as_ptr()) };
+        assert!(
+            !pending.is_null(),
+            "e_module_load did not register the [JMAP Pending Delete] extension type"
         );
 
         // SAFETY: a live source that this test created.

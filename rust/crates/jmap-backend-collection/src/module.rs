@@ -54,6 +54,7 @@
 //! here first. `tests/oauth2_extension.rs` tests this path:
 //! `e_source_get_extension` on a new source, directly after the module load,
 //! without a call to `apply` or `read`.
+//! The `[JMAP Pending Delete]` extension type registers here for the same reason.
 //!
 //! ## The C symbols are not here
 //!
@@ -119,6 +120,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
             jmap_config::oauth2_service::register(type_module);
         }
         jmap_config::oauth2::ensure_registered();
+        jmap_config::pending_delete::ensure_registered();
     });
 }
 
