@@ -28,3 +28,15 @@ jmap_backend_core::initialise_parents_before_main!(
     backend::JmapCalBackend,
     factory::JmapCalFactory,
 );
+
+// Fills libical's zone table before `main`, as `module::load` does in EDS.
+#[cfg(feature = "testing")]
+const _: () = {
+    extern "C" fn load_builtin_zones() {
+        marshal::load_builtin_zones();
+    }
+
+    #[used]
+    #[unsafe(link_section = ".init_array")]
+    static LOAD_BUILTIN_ZONES: extern "C" fn() = load_builtin_zones;
+};
