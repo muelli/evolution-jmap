@@ -7460,13 +7460,13 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
         "X-ANNIVERSARY:2015-08-20\r\n",
         "X-ASSISTANT:Alice Assistant\r\n",
         "X-MANAGER:Carol Manager\r\n",
-        // Custom instant-messaging / communications services not mapped to EDS slots
+        // Keep unmapped instant messaging service lines.
         "X-DISCORD:vera#1234\r\n",
         "X-SIGNAL:+491701234567\r\n",
         "X-TELEGRAM:@vera_schmidt\r\n",
         "X-SLACK:U12345678\r\n",
         "X-WHATSAPP:+491701234567\r\n",
-        // Arbitrary enterprise & vendor properties
+        // Keep arbitrary enterprise and vendor lines.
         "X-CUSTOM-EXTENSION:Value 123\r\n",
         "X-KEY-ID:0xDEADBEEF\r\n",
         "X-DEPARTMENT-CODE:DE-SEC-09\r\n",
@@ -7475,8 +7475,7 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
         "END:VCARD\r\n"
     );
 
-    // 1. Parsing into ContactCard: all modeled properties parse cleanly, while all
-    //    unknown X- properties are safely ignored rather than corrupting fields.
+    // 1. Parse into `ContactCard`. Parse mapped fields and ignore unknown X- fields.
     let card = vcard_to_card(vcard).expect("parse vcard with vendor X- properties");
     assert_eq!(card.id.as_ref().unwrap().as_str(), "c101");
     assert_eq!(
@@ -7498,17 +7497,17 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
     assert!(card.titles.as_ref().unwrap().contains_key("t1"));
     assert!(card.titles.as_ref().unwrap().contains_key("r1"));
     assert!(card.links.as_ref().unwrap().contains_key("l1"));
-    // online_services contains nothing from X-DISCORD/X-SIGNAL/X-TELEGRAM/X-SLACK/X-WHATSAPP
+    // Keep `online_services` empty for these unmapped service lines.
     assert_eq!(card.online_services, None);
-    // related_to contains nothing from X-SPOUSE (non-EDS), X-ASSISTANT, X-MANAGER
+    // Keep `related_to` empty for X-SPOUSE, X-ASSISTANT, and X-MANAGER.
     assert_eq!(card.related_to, None);
-    // anniversaries contains nothing from vendor X-ANNIVERSARY
+    // Keep `anniversaries` empty for vendor X-ANNIVERSARY.
     assert_eq!(card.anniversaries, None);
-    // card.extra is empty: vcard_to_card never injects raw vCard lines into JSContact extra
+    // Keep `card.extra` empty. Parser never copies raw vCard lines there.
     assert!(card.extra.is_empty());
 
-    // 2. Emission: card_to_vcard produces clean vCard 3.0 lines with standard properties
-    //    and X-JMAP-KEY parameters, with zero unmapped X- lines.
+    // 2. Emit vCard 3.0 lines with standard fields and X-JMAP-KEY parameters.
+    //    Do not emit unmapped X- lines.
     let re_emitted = card_to_vcard(&card);
     assert!(re_emitted.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
     assert!(re_emitted.ends_with("END:VCARD\r\n"));
@@ -7524,7 +7523,7 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
     assert!(re_emitted.contains("ROLE;X-JMAP-KEY=r1:Group Lead\r\n"));
     assert!(re_emitted.contains("URL;X-JMAP-KEY=l1:https://vera.example.com\r\n"));
 
-    // Verify none of the unknown X- lines were emitted
+    // Confirm emission drops unknown X- lines.
     assert!(!re_emitted.contains("X-MOZILLA"));
     assert!(!re_emitted.contains("X-PHONETIC"));
     assert!(!re_emitted.contains("X-AB"));
@@ -7544,7 +7543,7 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
     assert!(!re_emitted.contains("X-KEY-ID"));
     assert!(!re_emitted.contains("X-DEPARTMENT-CODE"));
 
-    // 3. Fixed-point round-trip convergence: parsing re_emitted reproduces the exact same card.
+    // 3. Confirm fixed-point convergence after parse and re-emission.
     let card2 = vcard_to_card(&re_emitted).expect("parse re-emitted");
     assert_eq!(card2, card);
     let re_emitted2 = card_to_vcard(&card2);
@@ -7553,14 +7552,14 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
 
 #[test]
 fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
-    // Characterizes how EDS-specific and vendor X- properties that are unmapped in jmap-vcard
-    // behave on inbound parsing and outbound serialization.
+    // Characterize unmapped EDS and vendor X- properties.
+    // Parse ignores them. Emission does not restore them.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:eds-custom-001\r\n",
         "FN:EDS Custom Contact\r\n",
         "EMAIL;TYPE=WORK:eds.user@example.com\r\n",
-        // Unslotted online services in EDS
+        // EDS uses unslotted online service lines.
         "X-TWITTER:@eds_user\r\n",
         "X-SIP:sip:eds.user@sip.example.com\r\n",
         // Vendor manager and assistant fields without X-EVOLUTION-
@@ -7783,7 +7782,7 @@ fn properties_with_custom_and_unknown_x_parameters_characterization() {
         )
     );
 
-    // Outbound emission: emits clean parameters, dropping unknown X- parameters
+    // Drop unknown X- parameters during emission.
     let re_emitted = card_to_vcard(&card);
     assert!(!re_emitted.contains("X-CUSTOM-PARAM"));
     assert!(!re_emitted.contains("X-VENDOR-STATUS"));
@@ -7798,7 +7797,7 @@ fn properties_with_custom_and_unknown_x_parameters_characterization() {
     assert!(!re_emitted.contains("X-VERIFIED"));
     assert!(!re_emitted.contains("X-TAG-SYSTEM"));
 
-    // Roundtrip fixed point
+    // Confirm round-trip fixed point.
     let back = vcard_to_card(&re_emitted).expect("parse re-emitted");
     assert_eq!(back, card);
     let re_emitted2 = card_to_vcard(&back);
@@ -7807,8 +7806,8 @@ fn properties_with_custom_and_unknown_x_parameters_characterization() {
 
 #[test]
 fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
-    // Tests a server-originated JSContact card containing unmodeled RFC 9553 / custom
-    // properties in card.extra and individual property extra maps.
+    // Build a server-originated JSContact card with unmodeled RFC 9553 and custom data.
+    // Store unmodeled data in `card.extra` and property `extra` maps.
     let mut extra = BTreeMap::new();
     extra.insert(
         "preferredLanguages".to_owned(),
@@ -7859,13 +7858,13 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
         ..ContactCard::default()
     };
 
-    // 1. Emission: card_to_vcard emits only modeled properties and ignores card.extra
+    // 1. Emit only modeled fields. Ignore `card.extra`.
     let vcard = card_to_vcard(&card);
     assert!(vcard.contains("FN:Server Card With Extra\r\n"));
     assert!(vcard.contains("EMAIL;X-JMAP-KEY=e1:extra@example.com\r\n"));
     assert!(vcard.contains("NOTE;X-JMAP-KEY=n1:Modeled note\r\n"));
 
-    // Verify none of the unmodeled extra properties leaked into the vCard stream
+    // Confirm no unmodeled extra data leaks into vCard output.
     assert!(!vcard.contains("preferredLanguages"));
     assert!(!vcard.contains("localizations"));
     assert!(!vcard.contains("cryptoKeys"));
@@ -7874,7 +7873,7 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
     assert!(!vcard.contains("2026-08-19T10:00:00Z"));
     assert!(!vcard.contains("author"));
 
-    // 2. Reading back: reconstructs modeled fields cleanly
+    // 2. Read back modeled fields.
     let read_back = vcard_to_card(&vcard).expect("parse emitted vcard");
     assert_eq!(
         read_back.name.as_ref().and_then(|n| n.full.as_deref()),
@@ -7887,14 +7886,14 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
     assert_eq!(read_back.notes.as_ref().unwrap()["n1"].note, "Modeled note");
     assert!(read_back.extra.is_empty());
 
-    // 3. Fixed-point convergence
+    // 3. Confirm fixed-point convergence.
     let vcard2 = card_to_vcard(&read_back);
     assert_eq!(vcard2, vcard);
 }
 
 #[test]
 fn x_property_name_casing_and_empty_values_handling() {
-    // Tests lowercase/mixed-case X- property names and empty X- property values:
+    // Parse lowercase and mixed-case X- names, plus empty X- values.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "fn:Case Insensitive User\r\n",
