@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP API dispatch, result-reference resolution (RFC 8620 §3.7), and method routing.
+//! Dispatch JMAP API calls, resolve result references (RFC 8620 §3.7), and route methods.
 
 use jmap_proto::Id;
 use jmap_proto::error::{self, MethodError};
@@ -67,11 +67,11 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
     }
 
     let mut responses: Vec<Invocation> = Vec::new();
-    // Track creation ids for later `/set` calls that resolve `#creationId` (RFC 8620 §5.3).
+    // Track ids for later `/set` calls that resolve `#creationId` (RFC 8620 §5.3).
     let mut created_ids: std::collections::BTreeMap<String, jmap_proto::Id> =
         std::collections::BTreeMap::new();
-    // Snapshot type states before dispatch.
-    // Emit one `StateChange` for all request mutations (RFC 8620 §7.1).
+    // Snapshot type states before dispatch to emit one `StateChange` per request.
+    // This follows RFC 8620 §7.1 for batched mutations.
     let type_states_before = state.type_state_snapshot();
     for call in &request.method_calls {
         // Record each attempted method call, even when handling fails later.
@@ -168,7 +168,7 @@ fn resolve_references(call: &Invocation, responses: &[Invocation]) -> Result<Val
 }
 
 /// Evaluate RFC 8620 §3.7 pointers.
-/// Support JSON Pointer (RFC 6901) and `*` array mapping.
+/// Use JSON Pointer (RFC 6901) and `*` array mapping.
 fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     fn walk(tokens: &[&str], value: &Value) -> Option<Value> {
         let Some((token, rest)) = tokens.split_first() else {
@@ -202,7 +202,7 @@ fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
 }
 
 /// Build a `StateChange` from changed counters.
-/// Return `None` when no counter changed.
+/// Return `None` when no counters changed.
 fn state_change_since(
     before: &TypeStateSnapshot,
     after: &TypeStateSnapshot,
