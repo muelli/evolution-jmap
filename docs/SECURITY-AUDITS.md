@@ -47,6 +47,7 @@ re-audit also runs the regression test of every earlier finding again.
 | 2026-10-15 | Changes since 2026-10-13. | F32 |
 | 2026-10-17 | Changes since 2026-10-15. | F33, F32 fixed |
 | 2026-10-20 | Changes since 2026-10-17, with meeting guests and shared collections. | F34 to F39 |
+| 2026-10-21 | Logic review with a hostile server or a hostile sender of mail. | L1 to L7 |
 
 ## Findings
 
@@ -94,6 +95,12 @@ paths are relative to `rust/crates/`.
 | F37 | A `"` in a vCard parameter value from the server, such as a JSContact map key, is written with a backslash. EDS then drops the complete property. | Open. The fix is the same as F34. |
 | F38 | The push (EventSource) reader reads a line with no length limit. A server can use all memory with one long line. | Fixed. The reader refuses a line longer than 1 MiB and connects again. `jmap-client/src/eventsource.rs`, `an_endless_line_ends_the_connection_and_the_next_one_delivers` and `stream_events_refuses_a_data_line_longer_than_the_cap`. |
 | F39 | When a `/set` request is split into parts, a creation id is replaced by a text match, and the result of a part is lost when a later part fails. No caller sends more than one object today. | Fixed. Each part sends the earlier creation ids as `createdIds`, and the server resolves the references. The client does not change the objects. A failed later part keeps the results of the earlier parts. `jmap-client/src/set.rs`, `a_patch_key_that_starts_with_a_shorter_creation_id_is_sent_unchanged` and `a_failing_later_chunk_keeps_the_results_of_the_applied_chunks`. |
+
+### Logic review, 2026-10-21
+
+| ID | Problem | Resolution |
+|---|---|---|
+| L3 | A calendar component that Evolution received in a mail or imported from a file was saved like a change that the user made. The server could then send meeting messages in the user's name for data from another person. | Fixed. The backend marks each change that comes through `receive_objects`. For such a change, the server schedules only the user's answer to an organizer that is not the user. The change cannot set the organizer. It cannot change the guests or the organizer of a meeting that the user organizes, or delete that meeting. While the backend is offline, it refuses received components. `jmap-cal-sync/tests/received.rs`, `a_received_request_that_names_the_user_as_organizer_is_saved_without_scheduling` and related tests. `jmap-functional/tests/calendar-received.rs`, `received_components_never_make_the_server_invite_anyone_in_the_users_name`. |
 
 ### FFI soundness audit, 2026-08-19
 

@@ -9,6 +9,7 @@
 //!
 //! The backend reads this setting on every change and capability query.
 
+use std::cell::Cell;
 use std::ffi::CStr;
 
 use eds_sys::{
@@ -55,11 +56,36 @@ pub fn capabilities(inherited: Option<&str>, server_schedules: bool) -> String {
     caps.join(",")
 }
 
+thread_local! {
+    static RECEIVING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Marks the changes on this thread as received until the guard drops.
+///
+/// `receive_objects_sync` holds it while the meta backend saves on the same thread.
+#[must_use]
+pub fn receiving() -> Receiving {
+    Receiving(RECEIVING.replace(true))
+}
+
+/// The guard from [`receiving`]. It restores the previous mark on drop.
+pub struct Receiving(bool);
+
+impl Drop for Receiving {
+    fn drop(&mut self) {
+        RECEIVING.set(self.0);
+    }
+}
+
 /// Determines whether an operation sends iTIP messages to guests.
 ///
 /// Returns [`Itip::Send`] if server scheduling is active and unsuppressed.
+/// Returns [`Itip::Received`] while [`receiving`] marks this thread.
 pub fn itip(server_schedules: bool, opflags: ECalOperationFlags) -> Itip {
-    if server_schedules && opflags & E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE == 0 {
+    let send = server_schedules && opflags & E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE == 0;
+    if RECEIVING.get() {
+        Itip::Received { reply: send }
+    } else if send {
         Itip::Send
     } else {
         Itip::Suppress

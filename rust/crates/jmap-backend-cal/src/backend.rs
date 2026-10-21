@@ -15,9 +15,10 @@ use eds_sys::{
     ENamedParameters, ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent,
     e_backend_get_source, e_cal_backend_notify_property_changed, e_cal_backend_set_writable,
     e_cal_backend_sync_modify_objects, e_cal_cache_get_component, e_cal_client_error_create,
-    e_cal_component_get_as_string, e_cal_meta_backend_get_type, e_cal_meta_backend_ref_cache,
-    e_cal_meta_backend_schedule_refresh, e_cal_util_set_alarm_acknowledged, e_client_error_create,
-    e_util_free_nullable_object_slist, time_t,
+    e_cal_component_get_as_string, e_cal_meta_backend_ensure_connected_sync,
+    e_cal_meta_backend_get_type, e_cal_meta_backend_ref_cache, e_cal_meta_backend_schedule_refresh,
+    e_cal_util_set_alarm_acknowledged, e_client_error_create, e_util_free_nullable_object_slist,
+    time_t,
 };
 use gio_sys::GCancellable;
 use glib_sys::{
@@ -194,6 +195,9 @@ unsafe impl ObjectSubclass for JmapCalBackend {
 
         // Overrides parent discard_alarm_sync to forward dismissed alarms to the server.
         vfuncs.parent_class.discard_alarm_sync = Some(discard_alarm_sync);
+
+        // Overrides parent receive_objects_sync to mark received changes.
+        vfuncs.parent_class.receive_objects_sync = Some(receive_objects_sync);
 
         // Installs host reachability callback on EBackendClass.
         vfuncs
@@ -609,6 +613,39 @@ unsafe extern "C" fn discard_alarm_sync(
             g_slist_free_full(objects, Some(g_free));
             g_object_unref(component.cast());
             tracing::debug!(occurrence, "dismissed a reminder");
+        })
+    }
+}
+
+/// Chains up to the meta backend with each change on this thread marked as received.
+///
+/// Evolution calls this for an accepted invitation and for an import. The data
+/// comes from another person, so the sync layer applies [`Itip::Received`].
+/// While offline, the meta backend stores the change and uploads it later
+/// without the mark. Thus the call fails while the backend cannot connect.
+unsafe extern "C" fn receive_objects_sync(
+    backend: *mut ECalBackendSync,
+    cal: *mut EDataCal,
+    cancellable: *mut GCancellable,
+    calobj: *const gchar,
+    opflags: ECalOperationFlags,
+    error: *mut *mut GError,
+) {
+    // SAFETY: Follows safety requirements of connect_sync.
+    unsafe {
+        guard_value("receive_objects_sync", error, (), || {
+            let Some(parent) =
+                parent_class().and_then(|class| class.parent_class.receive_objects_sync)
+            else {
+                return;
+            };
+            if e_cal_meta_backend_ensure_connected_sync(backend.cast(), cancellable, error)
+                == GFALSE
+            {
+                return;
+            }
+            let _received = scheduling::receiving();
+            parent(backend, cal, cancellable, calobj, opflags, error);
         })
     }
 }

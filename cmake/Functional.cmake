@@ -163,6 +163,16 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-cal-scheduling-client PRIVATE ${LIBECAL_LIBRARIES})
 	target_link_directories(functional-cal-scheduling-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 
+	# Components that come in through receive_objects, as from an accepted
+	# invitation or an import. See tests/functional/cal-received-client.c.
+	add_executable(functional-cal-received-client
+		tests/functional/cal-received-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-cal-received-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
+	target_compile_options(functional-cal-received-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-received-client PRIVATE ${LIBECAL_LIBRARIES})
+	target_link_directories(functional-cal-received-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+
 	# Dismissing a reminder the way Evolution's reminder watcher does. See
 	# tests/functional/cal-discard-alarm-client.c.
 	add_executable(functional-cal-discard-alarm-client
@@ -703,6 +713,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_SCHEDULING_CLIENT=$<TARGET_FILE:functional-cal-scheduling-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# Received components, through a real, running backend instance: the
+	# server sends no invitation in the user's name for them, and they cannot
+	# change a meeting that the user organizes.
+	add_test(
+		NAME functional-cal-received
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar-received
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-received PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_RECEIVED_CLIENT=$<TARGET_FILE:functional-cal-received-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	# A dismissed reminder, through a real, running backend instance: the

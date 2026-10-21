@@ -13,16 +13,16 @@ use std::sync::Once;
 use eds_sys::{
     E_CAL_OPERATION_FLAG_CONFLICT_KEEP_SERVER, E_CAL_OPERATION_FLAG_CONFLICT_USE_NEWER,
     E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE, E_CAL_OPERATION_FLAG_NONE,
-    E_SOURCE_EXTENSION_WEBDAV_BACKEND, ECalBackendClass, ESource, e_source_get_extension,
-    e_source_has_extension, e_source_new_with_uid, e_source_webdav_get_type,
-    e_source_webdav_set_calendar_auto_schedule,
+    E_SOURCE_EXTENSION_WEBDAV_BACKEND, ECalBackendClass, ECalBackendSyncClass, ESource,
+    e_source_get_extension, e_source_has_extension, e_source_new_with_uid,
+    e_source_webdav_get_type, e_source_webdav_set_calendar_auto_schedule,
 };
 use glib_sys::{GFALSE, GTRUE};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_backend_cal::backend::{JmapCalBackend, JmapCalBackendClass, parent_class};
 use jmap_backend_cal::scheduling::{
     CREATE_MESSAGES, ITIP_SUPPRESS_ON_REMOVE_SUPPORTED, SAVE_SCHEDULES, capabilities, dismissal,
-    itip, server_handles_invitations,
+    itip, receiving, server_handles_invitations,
 };
 use jmap_backend_core::subclass::register_static;
 use jmap_cal_sync::Itip;
@@ -136,6 +136,42 @@ fn with_the_switch_off_no_change_asks_the_server() {
         itip(false, E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE),
         Itip::Suppress
     );
+}
+
+#[test]
+fn a_change_while_receiving_is_marked_received_and_keeps_the_users_choice() {
+    let guard = receiving();
+    assert_eq!(
+        itip(true, E_CAL_OPERATION_FLAG_NONE),
+        Itip::Received { reply: true }
+    );
+    assert_eq!(
+        itip(true, E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE),
+        Itip::Received { reply: false }
+    );
+    assert_eq!(
+        itip(false, E_CAL_OPERATION_FLAG_NONE),
+        Itip::Received { reply: false }
+    );
+    drop(guard);
+    assert_eq!(itip(true, E_CAL_OPERATION_FLAG_NONE), Itip::Send);
+}
+
+#[test]
+fn the_receiving_mark_is_restored_by_each_guard_and_stays_on_its_thread() {
+    let outer = receiving();
+    drop(receiving());
+    assert_eq!(
+        itip(true, E_CAL_OPERATION_FLAG_NONE),
+        Itip::Received { reply: true },
+        "an inner guard keeps the outer mark"
+    );
+    let other = std::thread::spawn(|| itip(true, E_CAL_OPERATION_FLAG_NONE))
+        .join()
+        .unwrap();
+    assert_eq!(other, Itip::Send);
+    drop(outer);
+    assert_eq!(itip(true, E_CAL_OPERATION_FLAG_NONE), Itip::Send);
 }
 
 #[test]
@@ -269,6 +305,27 @@ fn class_init_installs_get_backend_property_over_the_meta_backends() {
     let theirs = theirs
         .impl_get_backend_property
         .expect("the meta backend answers capabilities, so there is one to chain up to");
+    assert_ne!(ours as usize, theirs as usize);
+
+    // SAFETY: the reference taken above is given back exactly once.
+    unsafe { g_type_class_unref(class.cast()) };
+}
+
+#[test]
+fn class_init_installs_receive_objects_sync_over_the_meta_backends() {
+    let gtype = register_static::<JmapCalBackend>();
+    // SAFETY: Referencing the registered class invokes class_init and returns the class struct.
+    let class: *mut JmapCalBackendClass = unsafe { g_type_class_ref(gtype) }.cast();
+    // SAFETY: the class is referenced and leads with the parent's.
+    let ours: &ECalBackendSyncClass = unsafe { &(*class).parent_class.parent_class };
+    let theirs = &parent_class()
+        .expect("the parent class is registered")
+        .parent_class;
+
+    let ours = ours.receive_objects_sync.expect("installed");
+    let theirs = theirs
+        .receive_objects_sync
+        .expect("the meta backend receives objects, so there is one to chain up to");
     assert_ne!(ours as usize, theirs as usize);
 
     // SAFETY: the reference taken above is given back exactly once.
