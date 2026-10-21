@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Implement `Quota/*` methods from RFC 9425.
-//! This module is read-only.
+//! Serve this module as read-only.
 //! RFC 9425 defines no `Quota/set` method.
 
 use jmap_proto::Id;
@@ -15,7 +15,7 @@ use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::ServerState;
 
 /// Handle `Quota/get` as RFC 9425 §3 defines.
-/// Return all quotas when `ids` is null.
+/// Return all quotas when `ids` is `null`.
 /// Put unknown ids into `notFound`.
 pub fn quota_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
@@ -75,8 +75,8 @@ pub fn quota_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Apply RFC 9425 §4.4 filter rules.
-/// `name` uses a substring check.
+/// Apply filter rules from RFC 9425 §4.4.
+/// `name` uses substring matching.
 /// `type` matches one member in `types`.
 /// `scope` and `resourceType` use exact matching.
 fn quota_matches(quota: &Quota, filter: &QuotaQueryFilter) -> bool {
