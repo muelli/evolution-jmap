@@ -115,8 +115,13 @@ impl Error {
     /// Return true if the server rejected the request with HTTP 401.
     ///
     /// Indicates an expired or invalid bearer token.
+    /// For [`Error::SetPartiallyApplied`], the error of the failed part decides.
     pub fn is_unauthorized(&self) -> bool {
-        matches!(self, Self::Http { status: 401, .. })
+        match self {
+            Self::Http { status: 401, .. } => true,
+            Self::SetPartiallyApplied { cause, .. } => cause.is_unauthorized(),
+            _ => false,
+        }
     }
 
     /// Return true if credentials were withheld during cross-origin redirect and resulted in HTTP 401.
@@ -144,6 +149,7 @@ impl Error {
     ///
     /// Matches [`Error::RateLimited`], HTTP 429, request limit problems,
     /// method limit errors, or set rate limit errors.
+    /// For [`Error::SetPartiallyApplied`], the error of the failed part decides.
     pub fn is_rate_limited(&self) -> bool {
         match self {
             Self::RateLimited { .. } => true,
@@ -157,6 +163,7 @@ impl Error {
                 set_error.error_type == jmap_proto::error::set::RATE_LIMIT
                     || set_error.error_type == "limit"
             }
+            Self::SetPartiallyApplied { cause, .. } => cause.is_rate_limited(),
             _ => false,
         }
     }
@@ -171,6 +178,7 @@ impl Error {
             } => crate::client::extract_problem_retry_after(problem),
             Self::Method(method_error) => crate::client::extract_method_retry_after(method_error),
             Self::Set(set_error) => crate::client::extract_set_error_retry_after(set_error),
+            Self::SetPartiallyApplied { cause, .. } => cause.rate_limit_retry_after(),
             _ => None,
         }
     }
