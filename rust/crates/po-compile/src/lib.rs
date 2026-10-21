@@ -6,12 +6,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Compiles `.po` text into `.mo` bytes sorted by `msgid`.
+/// Compile `.po` text into `.mo` bytes sorted by `msgid`.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Reports compile errors with 1-based line numbers.
+/// Report compile errors with 1-based line numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// Missing the empty `msgid` header entry.
@@ -22,13 +22,13 @@ pub enum Error {
     Duplicate { msgid: String, line: usize },
     /// An unsupported `.po` construct.
     Unsupported { construct: String, line: usize },
-    /// A non-comment line this parser cannot classify.
+    /// A non-comment line that this parser cannot classify.
     Unparsed { line: usize, text: String },
     /// A backslash escape this parser does not accept.
     UnknownEscape { line: usize, escape: char },
     /// A `msgid` entry ended before its `msgstr`.
     NoMsgstr { line: usize, msgid: String },
-    /// Catalogue size exceeds `.mo` 32-bit offsets.
+    /// Catalogue size exceeds `.mo` 32-bit offset limits.
     TooLarge { bytes: usize },
 }
 
@@ -273,7 +273,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // Write: header, two `(length, offset)` tables, then one string block.
+    // Write the header, two `(length, offset)` tables, then one string block.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();

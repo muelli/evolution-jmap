@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Command line interface for `po-compile <catalogue.po> <catalogue.mo>`.
+//! Run `po-compile <catalogue.po> <catalogue.mo>` from the command line.
 
 use std::process::ExitCode;
 
