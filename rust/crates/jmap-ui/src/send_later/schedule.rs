@@ -372,6 +372,32 @@ mod tests {
         assert_eq!(from_slug("at-notanumber"), None);
     }
 
+    /// The menu offers the relative hour first, then the times of day in
+    /// order, then the next workday.
+    #[test]
+    fn the_menu_offers_every_preset_in_order() {
+        assert_eq!(
+            offered(),
+            vec![
+                Preset::InOneHour,
+                Preset::TimeOfDay(8),
+                Preset::TimeOfDay(12),
+                Preset::TimeOfDay(18),
+                Preset::TimeOfDay(21),
+                Preset::NextWorkday,
+            ]
+        );
+    }
+
+    /// `utc_in` names a moment ahead of now. The fixed-width UTC pattern
+    /// sorts as the time does, thus a string comparison is sufficient.
+    #[test]
+    fn utc_in_names_a_moment_ahead_of_now() {
+        let now = utc_in(0).unwrap();
+        let later = utc_in(600).unwrap();
+        assert!(later > now, "{later} is not after {now}");
+    }
+
     /// The string for `snoozed.until`: an RFC 8620 `UTCDate` ends in `Z`.
     #[test]
     fn utc_in_writes_a_z_terminated_utc_date() {
