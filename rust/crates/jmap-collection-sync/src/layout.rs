@@ -466,4 +466,17 @@ mod tests {
             .is_empty()
         );
     }
+
+    #[test]
+    fn one_service_alone_makes_a_login_usable() {
+        for capability in [CAPABILITY_MAIL, CAPABILITY_CONTACTS, CAPABILITY_CALENDARS] {
+            let layout = CollectionLayout::from_session(&session(
+                &[capability],
+                json!({"a": account("Vera", &[capability])}),
+                json!({}),
+            ));
+
+            assert!(!layout.is_empty(), "{capability} alone is a service");
+        }
+    }
 }
