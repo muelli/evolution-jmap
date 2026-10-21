@@ -3,8 +3,8 @@
 
 //! `GET /eventsource` push stream endpoint (RFC 8620 §7.3).
 //!
-//! Each subscriber runs on a dedicated thread, and chunked writes go through
-//! `Request::into_writer` so updates flush before EOF.
+//! Run each subscriber on a dedicated thread.
+//! Write chunks with `Request::into_writer` so updates flush before EOF.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -16,7 +16,7 @@ use jmap_proto::push::StateChange;
 
 use crate::state::ServerState;
 
-/// Parsed `/eventsource` query parameters used by this mock.
+/// Parsed `/eventsource` query parameters for this mock.
 struct EventSourceParams {
     /// `None` means no type filter.
     types: Option<BTreeSet<String>>,
@@ -77,7 +77,7 @@ pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex
     });
 }
 
-/// Stream `state` and optional `ping` events as flushed HTTP chunks.
+/// Stream `state` and optional `ping` events as flushed chunks.
 fn stream_events(
     writer: &mut dyn Write,
     receiver: &Receiver<Vec<u8>>,
@@ -111,7 +111,7 @@ fn stream_events(
     }
 }
 
-/// Frame `data` as one HTTP chunk and flush it.
+/// Write `data` as one HTTP chunk, then flush it.
 fn write_chunk(writer: &mut dyn Write, data: &[u8]) -> std::io::Result<()> {
     write!(writer, "{:x}\r\n", data.len())?;
     writer.write_all(data)?;
@@ -125,7 +125,8 @@ fn end_chunked_body(writer: &mut dyn Write) -> std::io::Result<()> {
     writer.flush()
 }
 
-/// Encode one `StateChange` as `event: state` plus JSON `data`, without `id:` resume data.
+/// Encode one `StateChange` as `event: state` plus JSON `data`.
+/// Do not emit `id:` resume data.
 pub fn format_state_event(change: &StateChange) -> Vec<u8> {
     let data = serde_json::to_string(change).expect("StateChange serializes");
     format!("event: state\ndata: {data}\n\n").into_bytes()
