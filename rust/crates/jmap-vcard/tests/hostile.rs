@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone};
+use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Media};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 
 /// The mapper strips line breaks before it writes map keys as parameter text.
@@ -22,6 +22,69 @@ fn card_with_email_key(key: &str) -> ContactCard {
         id: Some("C1".into()),
         emails: Some(emails),
         ..ContactCard::default()
+    }
+}
+
+/// Build a card with one `photo` media entry under key `m1`.
+fn card_with_photo_uri(uri: &str) -> ContactCard {
+    let mut media = BTreeMap::new();
+    media.insert(
+        "m1".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: uri.to_owned(),
+            ..Media::default()
+        },
+    );
+    ContactCard {
+        id: Some("C1".into()),
+        media: Some(media),
+        ..ContactCard::default()
+    }
+}
+
+/// Unsupported URI schemes must not emit `PHOTO` lines.
+#[test]
+fn a_file_uri_photo_from_the_server_is_not_written_as_a_photo_line() {
+    for uri in [
+        "file:///home/user/.ssh/id_ed25519",
+        "ftp://files.example.net/avatar.jpg",
+        "smb://server/share/avatar.png",
+        "avatar.png",
+    ] {
+        let vcard = card_to_vcard(&card_with_photo_uri(uri));
+        assert!(
+            !vcard.contains("\r\nPHOTO"),
+            "unsupported uri leaked into PHOTO line: {uri} in {vcard}"
+        );
+        assert!(
+            !vcard.contains(uri),
+            "unsupported uri leaked into rendered card: {uri} in {vcard}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse rendered card");
+        assert!(
+            parsed.media.is_none(),
+            "unsupported uri survived parse: {vcard}"
+        );
+    }
+}
+
+/// Inbound local or unsupported URI references must be dropped.
+#[test]
+fn inbound_photo_uri_references_with_unsupported_schemes_are_dropped() {
+    for line in [
+        "PHOTO;VALUE=uri:file:///home/user/.face",
+        "PHOTO;VALUE=uri:ftp://files.example.net/avatar.jpg",
+        "PHOTO;VALUE=uri:smb://server/share/avatar.png",
+        "PHOTO:file:///home/user/.face",
+    ] {
+        let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse card with unsupported photo uri");
+        assert!(
+            parsed.media.is_none(),
+            "unsupported URI reference must not become media: {line}"
+        );
     }
 }
 

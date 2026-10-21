@@ -10915,12 +10915,10 @@ fn photo_inline_base64_media_type_variants_and_roundtrip() {
 
 #[test]
 fn photo_uri_variant_and_lossy_media_type_characterization() {
-    // 1. Valid URI variants: HTTPS, HTTP, file://, URN
+    // 1. Supported URI variants: HTTPS and HTTP.
     let test_uris = [
         "https://example.com/alice.jpg",
         "http://photos.org/pic.png?size=large&format=raw",
-        "file:///home/user/.face",
-        "urn:uuid:6a2f7965-728b-47e2-8924-d2e7d7ffba44",
     ];
 
     for uri in test_uris {
@@ -10953,6 +10951,19 @@ fn photo_uri_variant_and_lossy_media_type_characterization() {
         // Fixed-point convergence
         let vcard2 = card_to_vcard(&parsed);
         assert_eq!(vcard, vcard2);
+    }
+
+    // Unsupported URI schemes are not emitted as `PHOTO` lines.
+    for unsupported_uri in [
+        "file:///home/user/.face",
+        "ftp://photos.org/pic.png",
+        "urn:uuid:6a2f7965-728b-47e2-8924-d2e7d7ffba44",
+    ] {
+        let vcard = card_to_vcard(&one_photo(unsupported_uri, None));
+        assert!(
+            !vcard.contains("\r\nPHOTO"),
+            "unsupported URI must not emit PHOTO: {unsupported_uri} in {vcard}"
+        );
     }
 
     // 2. Inbound parameter variations: VALUE=URI, value=uri, mixed case
@@ -20870,12 +20881,10 @@ fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
 
 #[test]
 fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
-    // 1. Setting and emitting URI photos across various schemes
+    // 1. Setting and emitting URI photos on supported schemes.
     let uri_schemes = [
         "https://example.com/photos/avatar.jpg",
         "http://photos.internal.net/user.png",
-        "file:///home/runner/.photos/contact_profile.webp",
-        "ftp://files.example.org/images/id_badge.jpg",
     ];
 
     for uri in uri_schemes {
@@ -20899,6 +20908,23 @@ fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
         assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
         assert_eq!(media["m1"].uri, uri);
         assert_eq!(media["m1"].media_type, None);
+    }
+
+    // Unsupported URI schemes do not state media.
+    for uri in [
+        "file:///home/runner/.photos/contact_profile.webp",
+        "ftp://files.example.org/images/id_badge.jpg",
+    ] {
+        let card = one_photo(uri, None);
+        assert!(
+            !states_media(&card.media.as_ref().unwrap()["m1"]),
+            "unsupported URI must not state PHOTO: {uri}"
+        );
+        let vcard = card_to_vcard(&card);
+        assert!(
+            !vcard.contains("\r\nPHOTO"),
+            "unsupported URI leaked into PHOTO: {uri} in {vcard}"
+        );
     }
 
     // 2. Setting and emitting inlined binary photos across multiple MIME types
@@ -21054,20 +21080,8 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
             "http://example.org/pic.png",
         ),
         (
-            "PHOTO:file:///local/path/photo.webp",
-            "file:///local/path/photo.webp",
-        ),
-        (
-            "PHOTO:ftp://server.org/user.jpg",
-            "ftp://server.org/user.jpg",
-        ),
-        (
             "PHOTO;VALUE=URI:https://example.com/avatar.jpg",
             "https://example.com/avatar.jpg",
-        ),
-        (
-            "PHOTO;VALUE=uri:file:///local/photo.png",
-            "file:///local/photo.png",
         ),
     ];
 
@@ -21076,6 +21090,22 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
         assert_eq!(media.kind.as_deref(), Some("photo"));
         assert_eq!(media.uri, expected_uri);
         assert_eq!(media.media_type, None);
+    }
+
+    // Unsupported URI schemes are dropped on import.
+    for unsupported_line in [
+        "PHOTO:file:///local/path/photo.webp",
+        "PHOTO:ftp://server.org/user.jpg",
+        "PHOTO;VALUE=uri:file:///local/photo.png",
+        "PHOTO;VALUE=uri:smb://server/share/photo.png",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{unsupported_line}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse card with unsupported URI reference");
+        assert!(
+            parsed.media.is_none(),
+            "unsupported URI must not survive import: {unsupported_line}"
+        );
     }
 
     // Direct RFC 2397 data URIs parse as-is.

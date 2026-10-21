@@ -1502,7 +1502,22 @@ proptest! {
             ..ContactCard::default()
         };
 
+        let uri_is_supported_remote = uri.starts_with("http://") || uri.starts_with("https://");
         let vcard1 = card_to_vcard(&card);
+        if is_uri && !uri_is_supported_remote {
+            prop_assert!(!vcard1.contains("PHOTO;"));
+            prop_assert!(!vcard1.contains(&uri));
+
+            let parsed1 = vcard_to_card(&vcard1).expect("parse card without emitted photo");
+            prop_assert!(parsed1.media.is_none());
+
+            let vcard2 = card_to_vcard(&parsed1);
+            let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip");
+            let vcard3 = card_to_vcard(&parsed2);
+            prop_assert_eq!(vcard2, vcard3, "Photo roundtrip must reach fixed point");
+            return Ok(());
+        }
+
         prop_assert!(vcard1.contains("PHOTO;"));
         if is_uri {
             prop_assert!(vcard1.contains("VALUE=uri"));

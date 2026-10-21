@@ -444,7 +444,7 @@ fn photo(media: &Media) -> Option<Photo<'_>> {
         return None;
     }
     let Some(rest) = strip_prefix_ci(&media.uri, DATA_SCHEME) else {
-        return Some(Photo::Uri(&media.uri));
+        return states_remote_photo_uri(&media.uri).then_some(Photo::Uri(&media.uri));
     };
     let (metadata, payload) = rest.split_once(',')?;
     let stated = strip_suffix_ci(metadata, BASE64_MARKER)?;
@@ -506,6 +506,34 @@ fn decoded(payload: &str) -> Option<Vec<u8>> {
         .decode(payload)
         .or_else(|_| BASE64_UNPADDED.decode(payload))
         .ok()
+}
+
+/// Whether this URI names a remote photo location we keep as `VALUE=uri`.
+fn states_remote_photo_uri(uri: &str) -> bool {
+    uri_scheme(uri).is_some_and(|scheme| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
+}
+
+/// Whether this URI scheme is not one of the accepted photo forms.
+fn states_unsupported_photo_uri(uri: &str) -> bool {
+    uri_scheme(uri).is_some_and(|scheme| {
+        !scheme.eq_ignore_ascii_case("http")
+            && !scheme.eq_ignore_ascii_case("https")
+            && !scheme.eq_ignore_ascii_case("data")
+    })
+}
+
+/// Return the URI scheme name when the value starts with one.
+fn uri_scheme(value: &str) -> Option<&str> {
+    let (scheme, _) = value.split_once(':')?;
+    let mut characters = scheme.chars();
+    characters
+        .next()
+        .filter(|first| first.is_ascii_alphabetic())?;
+    characters
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'))
+        .then_some(scheme)
 }
 
 /// Case-insensitive prefix strip used for URI schemes and media types.
@@ -2005,13 +2033,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 /// as-is. Media type follows EDS behavior via `MEDIATYPE` or normalized `TYPE`.
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
     let raw_text = entry_text(entry);
-    let states_a_reference = (entry_param(entry, "VALUE")
-        .is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE))
-        && !raw_text.starts_with("data:"))
-        || raw_text.starts_with("http://")
-        || raw_text.starts_with("https://")
-        || raw_text.starts_with("ftp://")
-        || raw_text.starts_with("file://");
+    let states_value_uri =
+        entry_param(entry, "VALUE").is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE));
 
     let media_type_param = entry_param(entry, "MEDIATYPE")
         .or_else(|| {
@@ -2043,8 +2066,21 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
     // stay symmetric.
     let media_type = media_type_param.filter(|mt| image_subtype(mt).is_some());
 
-    if states_a_reference {
+    if states_value_uri {
+        if states_remote_photo_uri(&raw_text) {
+            return (!raw_text.is_empty()).then(|| photo_entry(raw_text, media_type));
+        }
+        if !raw_text.is_empty() {
+            return None;
+        }
+    }
+
+    if states_remote_photo_uri(&raw_text) {
         return (!raw_text.is_empty()).then(|| photo_entry(raw_text, media_type));
+    }
+
+    if states_unsupported_photo_uri(&raw_text) {
+        return None;
     }
 
     let (bytes, stated_media_type) = if let Some(rest) = strip_prefix_ci(&raw_text, DATA_SCHEME) {
