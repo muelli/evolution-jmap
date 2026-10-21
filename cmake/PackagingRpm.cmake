@@ -3,9 +3,9 @@
 
 include_guard(GLOBAL)
 
-# Add RPM to default CPack generators only when `rpmbuild` exists.
-# Release workflows run `cmake --build <dir> --target package`.
-# Some release images miss `rpmbuild`.
+# Add RPM to the default CPack generators only when `rpmbuild` exists.
+# Release jobs run `cmake --build <dir> --target package`.
+# Some release images do not ship `rpmbuild`.
 # If CPack adds RPM anyway, `cpack` fails with
 # "RPM package requires rpmbuild executable".
 # This failure also blocks `.deb` output.
@@ -79,7 +79,7 @@ if(RPMBUILD_EXECUTABLE AND RPMLINT_EXECUTABLE)
 			"set -euo pipefail; cmake --build \"$BUILD_DIR\"; rm -f \"$BUILD_DIR\"/*.rpm; cpack --config \"$BUILD_DIR/CPackConfig.cmake\" -G RPM --verbose -B \"$BUILD_DIR\""
 	)
 
-	# `--strict` treats warnings as failures, matching the lintian gate.
+	# `--strict` treats warnings as failures. This matches the lintian gate.
 	add_test(
 		NAME package-rpm-lint
 		COMMAND ${CMAKE_COMMAND} -E env
