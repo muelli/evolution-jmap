@@ -11418,10 +11418,10 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
-    // Parse unsupported standard properties safely and drop them on emission:
-    // GEO, TZ, MAILER, KIND, GENDER, GRAMGENDER, PRONOUNS, LANG, LANGUAGE, SOCIALPROFILE, EXPERTISE,
-    // HOBBY, INTEREST, MEMBER, CONTACT-URI, ORG-DIRECTORY, SOURCE, XML, CREATED, PRODID, REV,
-    // SORT-STRING, CLASS, SOUND, LOGO.
+    // Parse unsupported standard properties and drop them on emit.
+    // Coverage list: GEO, TZ, MAILER, KIND, GENDER, GRAMGENDER, PRONOUNS, LANG, LANGUAGE,
+    // SOCIALPROFILE, EXPERTISE, HOBBY, INTEREST, MEMBER, CONTACT-URI, ORG-DIRECTORY,
+    // SOURCE, XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -17627,8 +17627,8 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
 
 #[test]
 fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
-    // Full-card regression: mapped fields survive while AGENT and SOUND stay parse-safe and omitted.
-    // Assert fixed-point stability after AGENT and SOUND stripping.
+    // Full-card regression for AGENT and SOUND.
+    // Keep mapped fields, drop AGENT and SOUND, and keep fixed-point stability.
 
     let vcard_input = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
@@ -21332,7 +21332,7 @@ fn photo_roundtrip_fixpoint_multi_pass_convergence() {
 #[test]
 fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
     // Emit anniversary lines only for complete dates with year >= 1000.
-    // Do not emit anniversary lines for bare years, partial calendar values, ancient years, or deathday.
+    // Reject bare years, partial dates, ancient years, and death anniversaries.
 
     // Birth cases.
     let bday_bare_year = one_anniversary("birth", json!({"year": 1984}));
