@@ -251,7 +251,8 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
             );
             continue;
         }
-        // Reject non-empty mailboxes with `hasEmail` because `onDestroyRemoveEmails` is unsupported.
+        // Reject non-empty mailboxes with `hasEmail`.
+        // This mock does not support `onDestroyRemoveEmails`.
         if account.emails.iter().any(|(_, email)| filed_in(email, &id)) {
             not_destroyed.insert(
                 id,
@@ -1077,7 +1078,7 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     let mut destroyed: Vec<Id> = Vec::new();
     let mut not_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
 
-    // Compute patched emails outside the transaction, then apply one state bump.
+    // Patch emails before the transaction, then apply one state bump.
     let mut to_update: Vec<(Id, Email)> = Vec::new();
     for (id, patch) in request.update.unwrap_or_default() {
         let Some(existing) = account.emails.get(&id) else {
@@ -1421,7 +1422,7 @@ pub fn email_submission_set(
 
     let mut to_create: Vec<(Id, EmailSubmission)> = Vec::new();
     for (creation_id, mut submission) in request.set.create.clone().unwrap_or_default() {
-        // Resolve each `#creationId` reference from an earlier `Email/set` create.
+        // Resolve each `#creationId` from an earlier `Email/set` create.
         if let Some(reference) = submission.email_id.as_str().strip_prefix('#') {
             match request_created_ids.get(reference) {
                 Some(id) => submission.email_id = id.clone(),
@@ -1464,7 +1465,7 @@ pub fn email_submission_set(
             continue;
         }
 
-        // SMTP FUTURERELEASE (RFC 4865), bounded by `maxDelayedSend`.
+        // Apply SMTP FUTURERELEASE (RFC 4865), bounded by `maxDelayedSend`.
         let hold = match hold_seconds(submission.envelope.as_ref()) {
             Ok(hold) => hold,
             Err(description) => {
@@ -1575,7 +1576,7 @@ pub fn email_submission_set(
         }
     });
 
-    // RFC 8621 §7.5: Apply onSuccessUpdateEmail patches after successful sends.
+    // RFC 8621 §7.5: Apply `onSuccessUpdateEmail` patches after successful sends.
     let mut email_patches: Vec<(Id, serde_json::Map<String, Value>)> = Vec::new();
     for (key, patch) in request.on_success_update_email.clone().unwrap_or_default() {
         let submission_id = match key.strip_prefix('#') {
