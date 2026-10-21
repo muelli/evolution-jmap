@@ -1416,7 +1416,7 @@ pub fn email_submission_set(
 
     let mut created: BTreeMap<String, EmailSubmission> = BTreeMap::new();
     let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
-    // creation id -> submission id, for onSuccessUpdateEmail `#` keys.
+    // Map creation ids to submission ids for onSuccessUpdateEmail `#` keys.
     let mut created_here: BTreeMap<String, Id> = BTreeMap::new();
 
     let mut to_create: Vec<(Id, EmailSubmission)> = Vec::new();
@@ -1575,7 +1575,7 @@ pub fn email_submission_set(
         }
     });
 
-    // RFC 8621 §7.5: apply onSuccessUpdateEmail patches for successful sends.
+    // RFC 8621 §7.5: Apply onSuccessUpdateEmail patches after successful sends.
     let mut email_patches: Vec<(Id, serde_json::Map<String, Value>)> = Vec::new();
     for (key, patch) in request.on_success_update_email.clone().unwrap_or_default() {
         let submission_id = match key.strip_prefix('#') {
@@ -1629,7 +1629,7 @@ pub fn email_submission_set(
         not_destroyed: None,
     })?;
 
-    // RFC 8620 §5.3: `created` omits properties the client already sent.
+    // RFC 8620 §5.3: `created` omits properties already sent by the client.
     if terse_submission_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
