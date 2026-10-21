@@ -4731,7 +4731,7 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
         line(&emitted, "X-EVOLUTION-ANNIVERSARY"),
         "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y4:1996-08-03"
     );
-    // Unstated entries are absent
+    // Entries that state nothing stay absent.
     assert!(!emitted.contains("X-JMAP-KEY=y1"), "{emitted}");
     assert!(!emitted.contains("X-JMAP-KEY=y3"), "{emitted}");
     assert!(!emitted.contains("X-JMAP-KEY=y5"), "{emitted}");
@@ -4739,7 +4739,7 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
     assert!(!emitted.contains("X-JMAP-KEY=y7"), "{emitted}");
     assert!(!emitted.contains("X-JMAP-KEY=y8"), "{emitted}");
 
-    // Inbound roundtrip parses the emitted lines back losslessly
+    // A parse roundtrip keeps the emitted lines unchanged.
     let roundtripped = vcard_to_card(&emitted).expect("parse back");
     let recovered = roundtripped.anniversaries.expect("anniversaries");
     assert_eq!(recovered.len(), 2);
@@ -4757,8 +4757,8 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
 
 #[test]
 fn bare_year_and_partial_dates_with_custom_attributes_roundtrip() {
-    // Tests that PartialDate objects carrying custom or alternative calendar attributes
-    // with bare years are safely handled and do not panic or emit malformed vCard lines.
+    // PartialDate values with custom calendar attributes and bare years stay safe.
+    // The mapper must not panic or emit malformed vCard lines.
     let card = ContactCard {
         anniversaries: Some(
             [
@@ -5482,7 +5482,7 @@ fn restore_address_and_name_components_reconstruction() {
 
 #[test]
 fn vcard_parser_errors_and_error_display_formatting() {
-    // Unterminated vCard error
+    // Unterminated input returns `VCardError::Unterminated`.
     let unterminated = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\n";
     let err_unterminated = vcard_to_card(unterminated).expect_err("should fail unterminated");
     assert_eq!(err_unterminated, VCardError::Unterminated);
@@ -5491,7 +5491,7 @@ fn vcard_parser_errors_and_error_display_formatting() {
         "truncated vCard: missing END:VCARD"
     );
 
-    // Not a vCard error (e.g. empty input or iCalendar envelope)
+    // Non-vCard input returns `VCardError::NotAVCard`.
     let not_vcard = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n";
     let err_not_vcard = vcard_to_card(not_vcard).expect_err("should fail not a vCard");
     assert_eq!(err_not_vcard, VCardError::NotAVCard);
@@ -5503,7 +5503,7 @@ fn vcard_parser_errors_and_error_display_formatting() {
     let empty_not_vcard = vcard_to_card("").expect_err("empty string is not a vcard");
     assert_eq!(empty_not_vcard, VCardError::NotAVCard);
 
-    // Malformed line error formatting
+    // A malformed content line returns `VCardError::Malformed`.
     let malformed_vcard =
         "BEGIN:VCARD\r\nVERSION:3.0\r\nINVALID CONTENT LINE WITHOUT COLON\r\nEND:VCARD\r\n";
     let malformed_err = vcard_to_card(malformed_vcard).expect_err("should fail malformed line");
@@ -5519,7 +5519,7 @@ fn vcard_parser_errors_and_error_display_formatting() {
 
 #[test]
 fn label_entry_with_empty_key_and_duplicate_keys_allocates_fresh_keys() {
-    // Inbound vCard with empty X-JMAP-KEY parameter on LABEL must not assign "" as map key
+    // An empty `X-JMAP-KEY` on `LABEL` must not become the map key `""`.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ADR;TYPE=HOME:;;123 Home St;Berlin;;10115;Germany\r\n",
@@ -5535,7 +5535,7 @@ fn label_entry_with_empty_key_and_duplicate_keys_allocates_fresh_keys() {
         Some("123 Home St\nBerlin\n10115\nGermany")
     );
 
-    // Inbound vCard with multiple unkeyed emails allocates sequential e1, e2, e3
+    // Multiple unkeyed `EMAIL` lines allocate keys `e1`, `e2`, and `e3`.
     let vcard_emails = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "EMAIL:alice@example.com\r\n",
@@ -5610,8 +5610,8 @@ fn inbound_vcard_with_multi_component_name_field() {
 
 #[test]
 fn vcard_kind_group_and_member_lines_characterization() {
-    // Group-card signals (`KIND`, `MEMBER`) are unmapped for vCard 3.0 and are
-    // dropped rather than being rewritten into incorrect mapped fields.
+    // vCard 3.0 group signals (`KIND`, `MEMBER`) are unmapped.
+    // Drop them instead of writing incorrect mapped fields.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:group-dev-team\r\n",
@@ -5634,7 +5634,7 @@ fn vcard_kind_group_and_member_lines_characterization() {
         notes.values().next().map(|n| n.note.as_str()),
         Some("Core engineering team")
     );
-    // `KIND` and `MEMBER` are unmapped properties, so `extra` is empty
+    // `KIND` and `MEMBER` are unmapped, so `extra` stays empty.
     assert!(card.extra.is_empty());
 
     // Serialization keeps mapped fields and does not invent KIND or MEMBER lines.
