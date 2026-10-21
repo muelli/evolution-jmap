@@ -4812,9 +4812,9 @@ fn bare_year_and_partial_dates_with_custom_attributes_roundtrip() {
 
 #[test]
 fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
-    // 1. `states_org_unit` predicate characterization:
-    // A unit is stated on the wire only if its name is non-empty.
-    // An empty name with or without sortAs in extra is unstated.
+    // Check when `states_org_unit` reports true.
+    // A unit is stated only when its name is non-empty.
+    // An empty name stays unstated, even when `extra` has `sortAs`.
     let empty_unit = OrgUnit::new("");
     assert!(!states_org_unit(&empty_unit));
 
@@ -4838,8 +4838,8 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     let whitespace_unit = OrgUnit::new("   ");
     assert!(states_org_unit(&whitespace_unit));
 
-    // 2. `states_organization` predicate with combinations of empty units:
-    // Org with empty name and only empty units states nothing.
+    // Check `states_organization` with empty unit combinations.
+    // An empty org name plus empty units states nothing.
     let empty_org = Organization {
         name: None,
         units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
@@ -4854,7 +4854,7 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     };
     assert!(!states_organization(&empty_named_org));
 
-    // Org with employer name states an ORG line even if all units are empty.
+    // An employer name states an ORG line, even when units are empty.
     let named_org_empty_units = Organization {
         name: Some("Acme Corp".to_owned()),
         units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
@@ -4862,7 +4862,7 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     };
     assert!(states_organization(&named_org_empty_units));
 
-    // Org with no employer name but at least one non-empty unit states an ORG line.
+    // No employer name still states ORG when one unit has a name.
     let nameless_org_valid_unit = Organization {
         name: None,
         units: Some(vec![OrgUnit::new(""), OrgUnit::new("Finance")]),
@@ -4873,8 +4873,8 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
 
 #[test]
 fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
-    // 1. Org with employer name and only empty-name units:
-    // Emits employer name alone on the ORG line; empty units are dropped from wire format.
+    // Case 1: employer name with only empty units.
+    // Emit the employer name alone on ORG. Drop empty units from wire output.
     let card1 = ContactCard {
         organizations: Some(
             [(
@@ -4903,8 +4903,8 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
     assert_eq!(org1.name.as_deref(), Some("Acme Corp"));
     assert_eq!(org1.units, None);
 
-    // 2. Org with employer name, leading/intermediate empty units, and valid units:
-    // Empty units are omitted from ORG components, leaving non-empty units in sequence.
+    // Case 2: employer name with empty and non-empty units.
+    // Omit empty units. Keep non-empty units in order.
     let card2 = ContactCard {
         organizations: Some(
             [(
@@ -4942,8 +4942,8 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
         Some([OrgUnit::new("Research"), OrgUnit::new("Optics")].as_slice())
     );
 
-    // 3. Nameless org with leading empty unit and valid units:
-    // Leading semicolon keeps unit in department slot; empty unit is omitted.
+    // Case 3: nameless org with leading empty unit and valid units.
+    // A leading semicolon keeps the department slot. Empty units are omitted.
     let card3 = ContactCard {
         organizations: Some(
             [(
@@ -4968,8 +4968,8 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
         Some([OrgUnit::new("Engineering")].as_slice())
     );
 
-    // 4. Inbound vCards with various empty component patterns:
-    // - ORG with empty employer and empty unit components:
+    // Case 4: inbound vCards with empty component patterns.
+    // ORG with empty employer and empty unit components.
     let empty_components_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG;X-JMAP-KEY=o1:;;;\r\n",
@@ -4978,7 +4978,7 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
     let from_empty = vcard_to_card(empty_components_vcard).expect("parse");
     assert_eq!(from_empty.organizations, None);
 
-    // - ORG with empty intermediate components and trailing empty semicolons:
+    // ORG with empty middle components and trailing empty semicolons.
     let multi_empty_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG;X-JMAP-KEY=o1:Acme Corp;;Research;;Development;\r\n",
@@ -4995,7 +4995,7 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
 
 #[test]
 fn name_and_address_component_predicates_and_context_mapping_fidelity() {
-    // states_name_component: requires non-empty value AND mapped kind
+    // `states_name_component` needs a non-empty value and a mapped kind.
     assert!(states_name_component(&NameComponent::new("given", "Alice")));
     assert!(states_name_component(&NameComponent::new(
         "surname", "Smith"
@@ -5005,7 +5005,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         "unmapped_kind",
         "Alice"
     )));
-    // states_name: checks if any mapped component, full name, or file-as is stated
+    // `states_name` checks mapped components, full name, or file-as.
     assert!(states_name(&Name {
         full: Some("Alice".to_string()),
         ..Name::default()
@@ -5025,7 +5025,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         ..Name::default()
     }));
 
-    // maps_context: covers "work" and "private"
+    // `maps_context` supports only `work` and `private`.
     assert!(maps_context("work"));
     assert!(maps_context("private"));
     assert!(!maps_context("other"));
@@ -5033,7 +5033,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
     assert!(!maps_context("home"));
     assert!(!maps_context(""));
 
-    // states_address_component: requires non-empty value AND mapped kind (including joined kind)
+    // `states_address_component` needs non-empty text and a mapped kind.
     assert!(states_address_component(&AddressComponent::new(
         "name",
         "Main Street"
@@ -5056,7 +5056,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         ""
     )));
 
-    // states_address: requires address_fields or address_label
+    // `states_address` needs address fields or an address label.
     assert!(states_address(&Address {
         components: Some(vec![AddressComponent::new("locality", "Berlin")]),
         ..Address::default()
@@ -5093,7 +5093,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         None
     );
 
-    // states_email, states_phone, states_note, states_link, states_nickname, title_kind
+    // Check simple field predicates and `title_kind`.
     assert!(states_email(&ContactEmail {
         address: "alice@example.com".into(),
         ..ContactEmail::default()
@@ -5140,7 +5140,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
 
 #[test]
 fn calendar_and_spouse_predicates_fidelity() {
-    // states_calendar: requires non-empty uri AND mapped kind (calendar, freeBusy)
+    // `states_calendar` needs a non-empty URI and a mapped kind.
     assert!(states_calendar(&Calendar {
         kind: Some("calendar".into()),
         uri: "https://calendar.example.com".into(),
@@ -5172,7 +5172,7 @@ fn calendar_and_spouse_predicates_fidelity() {
         ..Calendar::default()
     }));
 
-    // states_spouse and states_nothing_but_the_marriage:
+    // Check `states_spouse` and `states_nothing_but_the_marriage`.
     let rel_spouse_only = Relation {
         relation: Some([("spouse".into(), json!(true))].into()),
         extra: [("@type".into(), json!("Relation"))].into(),
@@ -5221,7 +5221,7 @@ fn calendar_and_spouse_predicates_fidelity() {
 
 #[test]
 fn media_photo_and_online_service_predicates_and_comparisons() {
-    // states_media and same_photo
+    // Check `states_media` and `same_photo`.
     let m_uri1 = Media {
         kind: Some("photo".into()),
         uri: "https://example.com/photo1.jpg".into(),
@@ -5306,7 +5306,7 @@ fn media_photo_and_online_service_predicates_and_comparisons() {
     assert!(!same_photo(&m_data1, &m_data_diff_type));
     assert!(!same_photo(&m_data1, &m_uri1));
 
-    // states_online_service, same_service, online_service_handle, online_service_uri
+    // Check online-service predicates and helper mappings.
     let s_matrix = OnlineService {
         service: Some("Matrix".into()),
         user: Some("@alice:matrix.org".into()),
