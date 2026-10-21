@@ -13,7 +13,7 @@ use jmap_backend_core::trampoline::guard;
 use crate::backend::JmapCalBackend;
 use crate::factory::{JmapCalFactory, remember_backend_type};
 
-/// Initializes logging and i18n, and registers backend types on `type_module`.
+/// Initializes logging and i18n, fills the zone table, and registers backend types on `type_module`.
 ///
 /// # Safety
 ///
@@ -22,6 +22,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     guard("e_module_load", (), || {
         jmap_backend_core::logging::init();
         bind();
+        crate::marshal::load_builtin_zones();
         // SAFETY: `type_module` is a valid GTypeModule pointer per function contract.
         unsafe {
             remember_backend_type(register_dynamic::<JmapCalBackend>(type_module));

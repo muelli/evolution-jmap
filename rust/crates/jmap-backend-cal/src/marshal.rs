@@ -351,6 +351,17 @@ unsafe fn resolve_time_zone(tzid: *const gchar, zones: *mut ETimezoneCache) -> *
     }
 }
 
+/// Fills libical's builtin zone table from `zone.tab`.
+///
+/// libical 3.0 publishes the table before it fills it, and a lookup takes no lock
+/// when the table exists. EDS looks up zones without our lock, so call this
+/// before a second thread can look up a zone.
+pub fn load_builtin_zones() {
+    let _table = BUILTIN_ZONES.lock().unwrap_or_else(PoisonError::into_inner);
+    // SAFETY: the name is a NUL-terminated literal; the borrowed zone is not used.
+    unsafe { i_cal_timezone_get_builtin_timezone(c"UTC".as_ptr()) };
+}
+
 /// Serializes this crate's lookups in libical's builtin zone table.
 ///
 /// libical 3.0 adds a zone that `zone.tab` does not list (for example `Etc/UTC`)
