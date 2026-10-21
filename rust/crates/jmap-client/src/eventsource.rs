@@ -824,6 +824,96 @@ mod tests {
     }
 
     #[test]
+    fn parse_url_refuses_a_control_character_or_a_space() {
+        for url in [
+            "http://127.0.0.1:6379/x\r\nSET key value",
+            "http://127.0.0.1/x\nHost: evil.example",
+            "http://127.0.0.1/x HTTP/1.0",
+            "http://127.0.0.1/x\ty",
+            "http://127.0.0.1/x\0y",
+            "http://127.0.0.1/x\u{7f}y",
+            "http://127.0.0.1\r\n/x",
+        ] {
+            assert!(parse_url(url).is_none(), "{url:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn parse_url_refuses_a_host_that_the_loopback_check_reads_differently() {
+        for url in [
+            "http://localhost?.evil.example/es",
+            "http://localhost#.evil.example/es",
+            "http://localhost\\.evil.example/es",
+            "http://localhost@evil.example/es",
+            "http://user:secret@evil.example/es",
+            "http://[::1/es",
+            "http://[::1]x/es",
+            "http://local host/es",
+            "http:///es",
+            "http://:80/es",
+            "http://example.com:/es",
+            "http://example.com:http/es",
+            "http://example.com:65536/es",
+        ] {
+            assert!(parse_url(url).is_none(), "{url:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn parse_url_dials_the_host_that_the_loopback_check_reads() {
+        for (url, loopback) in [
+            ("http://localhost/es", true),
+            ("http://127.0.0.1:4242/es", true),
+            ("http://[::1]:4242/es", true),
+            ("http://localhost.evil.example/es", false),
+            ("https://jmap.example.com/es", false),
+        ] {
+            let parts = parse_url(url).expect("parses");
+            assert_eq!(crate::url::is_loopback(url), loopback, "{url}");
+            let dialed = parts.dial.rsplit_once(':').expect("port").0;
+            assert_eq!(crate::url::is_loopback(&format!("http://{dialed}/")), loopback);
+        }
+    }
+
+    #[test]
+    fn parse_url_dials_a_bracketed_ipv6_literal() {
+        let plain = parse_url("http://[::1]:4242/eventsource").expect("parses");
+        assert_eq!(plain.dial, "[::1]:4242");
+        assert_eq!(plain.authority, "[::1]:4242");
+        assert_eq!(plain.host, "::1");
+
+        let tls = parse_url("https://[::1]/eventsource").expect("parses");
+        assert_eq!(tls.dial, "[::1]:443");
+        assert_eq!(tls.authority, "[::1]");
+        assert_eq!(tls.host, "::1");
+    }
+
+    #[test]
+    fn a_url_with_an_injected_request_line_is_never_dialed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let url = format!(
+            "http://{}/x HTTP/1.1\r\nHost: a\r\n\r\nSET key value\r\n",
+            listener.local_addr().expect("addr")
+        );
+        let _subscription = EventSourceSubscription::start(
+            url,
+            SharedHeaders::new(vec![("Authorization".into(), "Bearer t".into())]),
+            CancelFlag::default(),
+        );
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok(_) => panic!("the subscription dialed a URL with a CR LF"),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        }
+    }
+
+    #[test]
     fn expand_url_substitutes_the_three_required_template_variables() {
         let expanded = expand_url(
             "https://jmap.example.com/eventsource/\
