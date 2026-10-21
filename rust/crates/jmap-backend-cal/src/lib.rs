@@ -21,3 +21,10 @@ pub mod marshal;
 pub mod module;
 pub mod ops;
 pub mod scheduling;
+
+// Test binaries initialise the parent classes before their tests start threads.
+#[cfg(feature = "testing")]
+jmap_backend_core::initialise_parents_before_main!(
+    backend::JmapCalBackend,
+    factory::JmapCalFactory,
+);

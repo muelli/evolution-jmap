@@ -139,3 +139,10 @@ pub mod prepare_mail;
 pub mod removal;
 pub mod resource_id;
 pub mod source_changed;
+
+// Test binaries initialise the parent classes before their tests start threads.
+#[cfg(feature = "testing")]
+jmap_backend_core::initialise_parents_before_main!(
+    backend::JmapCollectionBackend,
+    factory::JmapCollectionFactory,
+);

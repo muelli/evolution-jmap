@@ -180,3 +180,15 @@ pub mod summary;
 pub mod synchronize;
 pub mod transfer;
 pub mod transport;
+
+// Test binaries initialise the parent classes before their tests start threads.
+#[cfg(feature = "testing")]
+jmap_backend_core::initialise_parents_before_main!(
+    store::JmapStore,
+    transport::JmapTransport,
+    folder::JmapFolder,
+    summary::JmapSummary,
+    message_info::JmapMessageInfo,
+    sasl::JmapSasl,
+    settings::JmapSettings,
+);

@@ -42,6 +42,14 @@ use gobject_sys::{
 };
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
+// Initialise the parent classes of the Evolution types before the tests start threads.
+jmap_backend_core::initialise_parents_before_main!(
+    jmap_config::backend::JmapConfigServiceBackend,
+    jmap_config::config_lookup::JmapConfigLookup,
+    jmap_config::source_config::JmapBookConfig,
+    jmap_config::source_config::JmapCalConfig,
+);
+
 /// The names that the two crates register, written here and not imported.
 ///
 /// Imported constants are equal to the names that the types under test use,

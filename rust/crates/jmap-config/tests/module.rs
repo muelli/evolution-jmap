@@ -51,6 +51,14 @@ use jmap_config::module::{load, unload};
 use jmap_config::oauth2_service;
 use jmap_config::source_config::{JmapBookConfig, JmapCalConfig};
 
+// Initialise the parent classes of the Evolution types before the tests start threads.
+jmap_backend_core::initialise_parents_before_main!(
+    jmap_config::backend::JmapConfigServiceBackend,
+    jmap_config::config_lookup::JmapConfigLookup,
+    jmap_config::source_config::JmapBookConfig,
+    jmap_config::source_config::JmapCalConfig,
+);
+
 /// A `GTypeModule` that replaces the `EModule` that Evolution loads this crate as.
 #[repr(C)]
 struct TestModule {

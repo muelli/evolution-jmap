@@ -39,6 +39,14 @@ use jmap_config::source_config::{
     BACKEND_NAME, JmapBookConfig, JmapCalConfig, config_backend_type, offers_creation_for,
 };
 
+// Initialise the parent classes of the Evolution types before the tests start threads.
+jmap_backend_core::initialise_parents_before_main!(
+    jmap_config::backend::JmapConfigServiceBackend,
+    jmap_config::config_lookup::JmapConfigLookup,
+    jmap_config::source_config::JmapBookConfig,
+    jmap_config::source_config::JmapCalConfig,
+);
+
 /// A registered class. The test keeps a reference, as in `tests/backend.rs`,
 /// for the same reason: `class_init` runs on the first `g_type_class_ref`, and
 /// the struct is readable only while a reference is held.
