@@ -514,3 +514,38 @@ fn a_crlf_in_a_scheduling_method_or_recurrence_id_cannot_add_a_property() {
         );
     }
 }
+
+/// A `file:` link from the server never becomes an `ATTACH` or `IMAGE` line,
+/// because Evolution and EDS read such a path on the local machine.
+#[test]
+fn a_file_href_from_the_server_is_not_drawn_as_an_attach_line() {
+    let mut links = std::collections::BTreeMap::new();
+    for (key, href, rel) in [
+        ("zero", "file:///dev/zero", None),
+        ("upper", "FILE:///tmp/cache.ics", None),
+        (
+            "icon",
+            "File://localhost/home/vera/.cache/a.png",
+            Some("icon"),
+        ),
+        ("kept", "https://example.com/agenda.pdf", None),
+    ] {
+        let mut link = serde_json::json!({"@type": "Link", "href": href});
+        if let Some(rel) = rel {
+            link["rel"] = rel.into();
+        }
+        links.insert(key.to_owned(), link);
+    }
+    let ics = event_to_ical(&CalendarEvent {
+        links: Some(links),
+        ..event()
+    });
+    assert!(
+        !ics.to_ascii_lowercase().contains("file:"),
+        "a file: link reached the component:\n{ics}"
+    );
+    assert!(
+        ics.contains("ATTACH;X-JMAP-KEY=kept:https://example.com/agenda.pdf"),
+        "the https: link is lost:\n{ics}"
+    );
+}

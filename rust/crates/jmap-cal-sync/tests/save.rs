@@ -887,6 +887,39 @@ fn a_new_events_local_attachment_is_not_sent_to_the_server() {
 }
 
 #[test]
+fn a_server_file_link_is_not_loaded_and_an_edit_leaves_it_on_the_server() {
+    // Evolution and EDS read a `file:` path on the local machine, so the server's link
+    // never reaches the component. The server keeps its entry through an edit.
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let links = json!({
+        "zero": {"@type": "Link", "href": "file:///dev/zero"},
+        "doc": {"@type": "Link", "href": "https://files.example.com/agenda.pdf"},
+    });
+    fixture.patch(&id, json!({"links": links}));
+    let sync = fixture.sync();
+
+    let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(
+        !icalendar.to_ascii_lowercase().contains("file:"),
+        "{icalendar}"
+    );
+    assert!(
+        icalendar.contains("https://files.example.com/agenda.pdf"),
+        "{icalendar}"
+    );
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Planning");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.title.as_deref(), Some("Planning"));
+    assert_eq!(
+        stored.links,
+        serde_json::from_value(links).expect("a map of links")
+    );
+}
+
+#[test]
 fn rescheduling_an_event_moves_the_start_and_keeps_its_zone() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
