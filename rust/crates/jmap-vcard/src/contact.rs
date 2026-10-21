@@ -501,7 +501,8 @@ fn image_subtype(media_type: &str) -> Option<&str> {
     strip_prefix_ci(name, IMAGE_PREFIX).filter(|subtype| !subtype.is_empty())
 }
 
-/// Decodes base64 payload bytes, accepting padded and unpadded forms.
+/// Decode base64 payload bytes.
+/// Accept padded and unpadded forms.
 fn decoded(payload: &str) -> Option<Vec<u8>> {
     BASE64
         .decode(payload)
@@ -509,14 +510,14 @@ fn decoded(payload: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// Whether this URI names a remote photo location we keep as `VALUE=uri`.
+/// Whether this URI names a remote photo location to keep as `VALUE=uri`.
 fn states_remote_photo_uri(uri: &str) -> bool {
     uri_scheme(uri).is_some_and(|scheme| {
         scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
     })
 }
 
-/// Whether this URI scheme is not one of the accepted photo forms.
+/// Whether this URI scheme is outside the accepted photo forms.
 fn states_unsupported_photo_uri(uri: &str) -> bool {
     uri_scheme(uri).is_some_and(|scheme| {
         !scheme.eq_ignore_ascii_case("http")
