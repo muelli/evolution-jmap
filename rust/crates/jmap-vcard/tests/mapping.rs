@@ -18481,7 +18481,7 @@ fn real_exporter_fixture_outlook_modern_vcard30_detailed_roundtrip() {
     let vcard_text = read_fixture("outlook_vcard30_export.vcf");
     let card = vcard_to_card(&vcard_text).expect("parse Outlook 3.0 fixture");
 
-    // 1. Verify 4-unit ORG hierarchy (Company, Unit 1, Unit 2, Office)
+    // 1. Confirm the four-level ORG hierarchy: company, unit 1, unit 2, office.
     let orgs = card.organizations.as_ref().unwrap();
     let org = orgs.values().next().unwrap();
     assert_eq!(org.name.as_deref(), Some("Nordic Solutions AB"));
@@ -18491,7 +18491,7 @@ fn real_exporter_fixture_outlook_modern_vcard30_detailed_roundtrip() {
     assert_eq!(units[1].name, "Platform Security");
     assert_eq!(units[2].name, "Executive Team");
 
-    // 2. Verify postal addresses and labels
+    // 2. Confirm postal address parsing and label content.
     let addresses = card.addresses.as_ref().unwrap();
     let work_adr = addresses
         .values()
@@ -18505,7 +18505,7 @@ fn real_exporter_fixture_outlook_modern_vcard30_detailed_roundtrip() {
             .contains("Stureplan 4, 5 tr")
     );
 
-    // 3. Export and ensure X-MS-* extensions are cleanly dropped
+    // 3. Export and confirm X-MS-* extensions are dropped.
     let export1 = card_to_vcard(&card);
     assert!(!export1.contains("X-MS-OL-DESIGN"));
     assert!(!export1.contains("X-MS-CARDPICTURE"));
@@ -18526,7 +18526,7 @@ fn real_exporter_fixture_outlook_classic_vcard21_detailed_roundtrip() {
     let vcard_text = read_fixture("outlook_vcard21_export.vcf");
     let card = vcard_to_card(&vcard_text).expect("parse Outlook 2.1 fixture");
 
-    // 1. Verify German umlauts decoded from QP
+    // 1. Confirm quoted-printable decoding of German umlauts.
     let name = card.name.as_ref().unwrap();
     assert_eq!(name.full.as_deref(), Some("Dr. Wolfgang Klaus Müller"));
 
@@ -18535,7 +18535,7 @@ fn real_exporter_fixture_outlook_classic_vcard21_detailed_roundtrip() {
     assert!(note_text.contains("Großkunde für Logistiklösungen"));
     assert!(note_text.contains("telefonische Kontaktaufnahme"));
 
-    // 2. Verify QP address decoded
+    // 2. Confirm quoted-printable address decoding.
     let addresses = card.addresses.as_ref().unwrap();
     let work_adr = addresses
         .values()
@@ -18543,7 +18543,7 @@ fn real_exporter_fixture_outlook_classic_vcard21_detailed_roundtrip() {
         .expect("work adr");
     assert!(work_adr.full.as_ref().unwrap().contains("Gebäude B"));
 
-    // 3. Export to strict vCard 3.0 UTF-8
+    // 3. Export as strict UTF-8 vCard 3.0.
     let export1 = card_to_vcard(&card);
     assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
     assert!(!export1.contains("QUOTED-PRINTABLE"));
@@ -18563,7 +18563,7 @@ fn real_exporter_fixture_nextcloud_carddav_vcard40_detailed_roundtrip() {
     let vcard_text = read_fixture("nextcloud_carddav_export.vcf");
     let card = vcard_to_card(&vcard_text).expect("parse Nextcloud fixture");
 
-    // 1. Verify data URI photo
+    // 1. Confirm data URI photo parsing.
     let media = card.media.as_ref().unwrap();
     let photo = media
         .values()
@@ -18572,7 +18572,7 @@ fn real_exporter_fixture_nextcloud_carddav_vcard40_detailed_roundtrip() {
     assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
     assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
 
-    // 2. Verify IMPP online services
+    // 2. Confirm IMPP online service mapping.
     let services = card.online_services.as_ref().unwrap();
     assert!(
         services
@@ -18585,7 +18585,7 @@ fn real_exporter_fixture_nextcloud_carddav_vcard40_detailed_roundtrip() {
             .any(|s| s.service.as_deref() == Some("Jabber"))
     );
 
-    // 3. Export to canonical vCard 3.0
+    // 3. Export as canonical vCard 3.0.
     let export1 = card_to_vcard(&card);
     assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
     assert!(!export1.contains("GENDER"));
@@ -18605,14 +18605,14 @@ fn real_exporter_fixture_evolution_native_vcard30_detailed_roundtrip() {
     let vcard_text = read_fixture("evolution_native_export.vcf");
     let card = vcard_to_card(&vcard_text).expect("parse Evolution fixture");
 
-    // 1. Verify File-As
+    // 1. Confirm File-As extraction.
     let name = card.name.as_ref().unwrap();
     assert_eq!(
         name.extra.get("fileAs"),
         Some(&serde_json::json!("Dubois, Henri (Aéronautique)"))
     );
 
-    // 2. Verify EDS relations, blogs, videos, and slotted IMs
+    // 2. Confirm EDS relation, blog, video, and slotted IM mappings.
     let relations = card.related_to.as_ref().unwrap();
     assert!(states_spouse(
         "Marie-Claire Dubois",
