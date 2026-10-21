@@ -11,8 +11,8 @@ use serde_json::{Map, Value};
 
 use crate::state::{ServerState, TypeStateSnapshot};
 
-/// Handle one JMAP API POST and return `(HTTP status, JSON body)`.
-/// `caller` sets the authenticated principal for access checks. `None` means anonymous.
+/// Handle one JMAP API POST and return HTTP status with JSON body.
+/// Use `caller` as the authenticated principal. `None` means anonymous access.
 pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> (u16, Value) {
     if let Ok(text) = std::str::from_utf8(body) {
         println!("--> POST /jmap\n{text}");
@@ -69,7 +69,8 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
     // Track creation ids for later `/set` calls that resolve `#creationId` (RFC 8620 §5.3).
     let mut created_ids: std::collections::BTreeMap<String, jmap_proto::Id> =
         std::collections::BTreeMap::new();
-    // Snapshot type states so one `StateChange` reports all mutations in this request (RFC 8620 §7.1).
+    // Snapshot type states before dispatch.
+    // Use this snapshot to emit one `StateChange` for all request mutations (RFC 8620 §7.1).
     let type_states_before = state.type_state_snapshot();
     for call in &request.method_calls {
         // Record each attempted method call, even if handling later fails.
@@ -120,7 +121,8 @@ fn error_invocation(error: MethodError, call_id: &str) -> Invocation {
     }
 }
 
-/// Resolve `#argument` result references from earlier responses in this request (RFC 8620 §3.7).
+/// Resolve `#argument` result references from earlier responses in this request.
+/// This follows RFC 8620 §3.7.
 fn resolve_references(call: &Invocation, responses: &[Invocation]) -> Result<Value, MethodError> {
     let Value::Object(arguments) = &call.arguments else {
         return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
@@ -164,7 +166,8 @@ fn resolve_references(call: &Invocation, responses: &[Invocation]) -> Result<Val
     Ok(Value::Object(resolved))
 }
 
-/// Evaluate RFC 8620 §3.7 pointers: JSON Pointer (RFC 6901) plus `*` for array mapping.
+/// Evaluate RFC 8620 §3.7 pointers.
+/// Support JSON Pointer (RFC 6901) and `*` array mapping.
 fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     fn walk(tokens: &[&str], value: &Value) -> Option<Value> {
         let Some((token, rest)) = tokens.split_first() else {
@@ -197,7 +200,8 @@ fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     walk(&tokens, value)
 }
 
-/// Build a `StateChange` from changed counters, or return `None`.
+/// Build a `StateChange` from changed counters.
+/// Return `None` when no counter changed.
 fn state_change_since(
     before: &TypeStateSnapshot,
     after: &TypeStateSnapshot,
