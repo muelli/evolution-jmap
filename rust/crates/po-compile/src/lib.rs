@@ -6,12 +6,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Compile `.po` text into `.mo` bytes. Sort by `msgid`.
+/// Compile `.po` text into `.mo` bytes sorted by `msgid`.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Report compile failures with 1-based line numbers.
+/// Report compile errors with 1-based line numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// Missing empty `msgid` header entry.
@@ -97,7 +97,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // End the current entry on blank lines and on `#~` obsolete lines.
+        // End the current entry on blank lines and `#~` obsolete lines.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -202,7 +202,7 @@ fn take(
         });
     };
 
-    // Keep the fuzzy header entry so `charset=` stays available.
+    // Keep a fuzzy header entry so `charset=` stays available.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -245,7 +245,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // A trailing backslash means the quoted string stays open.
+        // A trailing backslash means the quoted string remains open.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -257,7 +257,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // Reject escapes outside this supported subset.
+            // Reject escapes outside this subset.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -273,7 +273,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // Layout: header, two `(length, offset)` tables, then one string blob.
+    // Layout: header, two `(length, offset)` tables, then one string block.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();
@@ -311,7 +311,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // `.mo` table lengths do not include the trailing NUL byte.
+    // `.mo` table lengths exclude the trailing NUL byte.
     blob.push(0);
     Ok(())
 }
