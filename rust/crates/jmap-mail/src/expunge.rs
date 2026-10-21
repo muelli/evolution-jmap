@@ -1,65 +1,45 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `expunge_sync`: the vfunc that carries out the deletions the user has made.
+//! `expunge_sync`: the vfunc that removes the messages that the user deleted.
 //!
-//! [`crate::synchronize`] writes what the user changed *about* a message and
-//! [`crate::transfer`] writes where it is filed. This writes the one thing
-//! neither of them could: that the user is finished with it.
+//! ## Why the deleted mark goes to this vfunc
 //!
-//! ## Why the mark waited this long
+//! `CAMEL_MESSAGE_DELETED` is a Camel flag. JMAP has no deleted keyword (refer
+//! to `FLAGS_FROM_JMAP` in [`crate::message_info`]). Thus [`crate::synchronize`]
+//! does not write the mark. The mark is a request to remove the message, and
+//! Camel sends that request through this vfunc.
 //!
-//! `CAMEL_MESSAGE_DELETED` is a bit of Camel's own — [`crate::message_info`]'s
-//! `FLAGS_FROM_JMAP` has said since it was written that JMAP has no deleted
-//! keyword — so pressing Delete in Evolution marks a summary row and reaches no
-//! server at all. [`crate::synchronize`] therefore produced no keyword change
-//! for such a row, deliberately and with a note saying so: the mark is not a
-//! property of the message, it is a request that the message stop being here,
-//! and the request Camel makes of it is this vfunc rather than that one.
+//! ## The write for each message
 //!
-//! ## Which write an expunge is
+//! `expunge_message` in `jmap-mail-sync` decides the write for each message. RFC
+//! 8621 §4.6 makes `mailboxIds` a set, so a message can also be in a different
+//! mailbox. In that case, a destroy would also remove that copy.
 //!
-//! Decided in `jmap-mail-sync`'s `expunge_message`, and it is decided per
-//! message rather than once: RFC 8621 §4.6 makes `mailboxIds` a set, so a
-//! message may be in the folder being expunged *and* in one the user filed it
-//! into, and destroying it would take their copy with it. What is decided here
-//! is everything around that — which rows are on the work list, what becomes of
-//! a row whose message is already gone, and what the folder announces.
+//! ## The work list
 //!
-//! ## The work list is the flag, and nothing else
+//! This module walks the full summary and tests the flag, as the Camel providers
+//! do. It does not use `camel_folder_summary_get_changed`: that list holds only
+//! rows not yet written to the Camel database. A row marked before the last
+//! synchronization is not on it.
 //!
-//! Not `camel_folder_summary_get_changed`, which is what [`crate::synchronize`]
-//! walks. That list is the rows Camel has not written back to its *database*,
-//! and a row marked deleted before the last synchronisation is not on it while
-//! still being exactly what an expunge is for. So this walks the whole summary
-//! and tests the bit, which is what Camel's own providers do.
+//! ## Failures
 //!
-//! ## What one row's failure does to the rest
+//! The walk tries every marked row and reports the first failure at the end. A
+//! failure for one message tells nothing about the next message.
 //!
-//! Every marked row is attempted and the first failure is what the vfunc
-//! reports when the walk is done — [`crate::synchronize`]'s judgement, for its
-//! reason: a message one server refuses to destroy says nothing about the next,
-//! and every row behind the refusal would stay marked behind a write that can
-//! never succeed.
+//! A message that another client destroyed is not a failure. Its row is removed.
 //!
-//! A message another client destroyed is not a failure at all. It is a message
-//! that is already gone, which is what the expunge wanted; the row goes with
-//! it.
+//! ## Row removal
 //!
-//! ## The rows go now, not at the next listing
+//! The rows are removed immediately, not at the next refresh. Until a refresh,
+//! the message list would show messages that are not on the server.
+//! `camel_folder_changed` updates an open message list.
 //!
-//! [`crate::transfer`]'s judgement about a move, for the same reason: a refresh
-//! would reach the same answer, but "the next refresh" is a timer, and until it
-//! fires the message list would still be offering a message that is not there.
-//! `camel_folder_changed` is what redraws a window that is already open; the
-//! rows themselves are only what the next listing is drawn from.
+//! ## Cancellation
 //!
-//! ## Stopping one
-//!
-//! The `cancellable` is [`observe`]d for the length of the call, and a stop is
-//! reported like any other failure of the walk: the messages already gone are
-//! gone, their rows with them, and the rows behind the stop are still marked for
-//! the next expunge.
+//! The call [`observe`]s the `cancellable`. A stop is a failure of the walk. The
+//! rows before the stop are removed, and the rows after it stay marked.
 
 use std::ffi::{CStr, CString};
 
@@ -87,38 +67,37 @@ use crate::folder::{JmapFolder, parent_store};
 ///
 /// # Safety
 ///
-/// `class` must point at an initialised class struct that leads with a
-/// `CamelFolderClass` — which is every descendant of `CamelFolder`.
+/// `class` must point to an initialized class struct whose first member is a
+/// `CamelFolderClass`. All descendants of `CamelFolder` agree with this.
 pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
     vfuncs.expunge_sync = Some(expunge_sync);
 }
 
-/// Gets rid of the messages this folder's user marked deleted.
+/// Removes the messages in this folder that the user marked deleted.
 ///
-/// `TRUE` for an expunge in which nothing failed, `FALSE` with the error set
-/// otherwise — Camel's convention, and what `camel_folder_expunge_sync` reports
-/// to the user.
+/// Returns `TRUE` if nothing failed. Otherwise it sets the error and returns
+/// `FALSE` (the Camel convention).
 unsafe extern "C" fn expunge_sync(
     folder: *mut CamelFolder,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: Camel's contract for the vfunc: a valid instance of ours, and an
-    // out-parameter that is NULL or writable and currently NULL.
+    // SAFETY: the Camel contract for the vfunc: a valid instance of this type,
+    // and an out-parameter that is NULL or writable and currently NULL.
     unsafe {
         guard_bool("expunge_sync", error, || {
-            // SAFETY: Camel keeps its cancellable alive for the length of the
-            // call, so it outlives this observation — which is what makes
-            // every request below here stop when the user presses Stop.
+            // SAFETY: Camel keeps its cancellable alive for the full call, so it
+            // outlives this observation. The observation stops every request
+            // below when the user clicks Stop.
             let _cancel = observe(cancellable);
             match expunge_folder(folder) {
                 Ok(()) => GTRUE,
                 Err(problem) => {
-                    // SAFETY: `to_gerror` hands over an owned GError, and
-                    // `error` meets `set_raw_gerror`'s contract by this
-                    // function's.
+                    // SAFETY: `to_gerror` gives an owned GError. The contract
+                    // of this function makes `error` agree with the contract of
+                    // `set_raw_gerror`.
                     set_raw_gerror(error, problem.to_gerror());
                     GFALSE
                 }
@@ -127,12 +106,12 @@ unsafe extern "C" fn expunge_sync(
     }
 }
 
-/// The walk itself, as a function [`crate::synchronize`] can also reach.
+/// Walks the summary and removes the marked messages.
 ///
-/// Camel offers two ways to ask for this and Evolution uses both: the vfunc
-/// above, behind "Expunge" and "Empty Trash", and `synchronize_sync`'s
-/// `expunge` argument, which is what a folder closing on an account configured
-/// to expunge on exit sends. They mean the same thing and share this.
+/// Two Camel paths call this: the vfunc above ("Expunge" and "Empty Trash"),
+/// and the `expunge` argument of `synchronize_sync` in [`crate::synchronize`].
+/// Evolution sets that argument when it closes a folder on an account that
+/// expunges on exit.
 ///
 /// # Safety
 ///
@@ -144,10 +123,9 @@ pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), Stor
         // SAFETY: as above.
         return Err(StoreError::NoFolder(unsafe { name_of(folder) }));
     }
-    // Cloned rather than borrowed: the borrow would be alive across every
-    // request the walk makes, and the store below is borrowed from the same
-    // instance graph.
-    // SAFETY: as above; the vfunc is dispatched on an instance of our class.
+    // Clone the mailbox. A borrow would stay alive across all requests of the
+    // walk, and the store below is borrowed from the same instance graph.
+    // SAFETY: as above. Camel calls the vfunc on an instance of this class.
     let mailbox = match unsafe { JmapFolder::borrow(folder).and_then(JmapFolder::mailbox) } {
         Some(mailbox) => mailbox.clone(),
         // SAFETY: as above.
@@ -156,13 +134,12 @@ pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), Stor
 
     let mut changes = Changes::new();
     let mut failure = None;
-    // SAFETY: as above, and `deleted_rows` copies what it names out of Camel's
-    // arrays before any of it is spent.
+    // SAFETY: as above. `deleted_rows` copies the uids out of the Camel array
+    // before the walk uses them.
     for uid in unsafe { deleted_rows(summary) } {
-        // A uid Camel stored and we cannot read back as text is not one the
-        // server can be asked about either; it is left exactly as it is, which
-        // is a row still marked deleted rather than a row this provider took
-        // away without having destroyed anything.
+        // A uid that is not valid UTF-8 cannot go to the server. Its row stays
+        // marked deleted, because this function removes a row only after the
+        // server write.
         let Ok(text) = uid.to_str() else { continue };
         // SAFETY: as above.
         let gone = match unsafe { parent_store(folder) } {
@@ -170,8 +147,8 @@ pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), Stor
             None => Err(StoreError::Disconnected),
         };
         match gone {
-            // The message left this mailbox, or was not in the account at all.
-            // Either way it is not in this folder, and the row goes.
+            // The message left this mailbox, or the account has no such message.
+            // In both cases the folder does not contain it, so remove the row.
             Ok(()) | Err(StoreError::NoMessage(_)) => {
                 // SAFETY: a live summary and a uid it holds a row for.
                 unsafe { camel_folder_summary_remove_uid(summary, uid.as_ptr()) };
@@ -183,8 +160,8 @@ pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), Stor
         }
     }
 
-    // What tells a message list that is already on screen; the rows above are
-    // only what the next one would be drawn from.
+    // This updates an open message list. The summary rows supply only the next
+    // message list.
     if !changes.is_empty() {
         // SAFETY: a live folder, and a change info this owns for the call.
         unsafe { camel_folder_changed(folder, changes.as_ptr()) };
@@ -196,20 +173,19 @@ pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), Stor
     }
 }
 
-/// The uids of the rows the user marked deleted.
+/// Returns the uids of the rows that the user marked deleted.
 ///
-/// The whole summary is walked rather than the changed list, for the reason
-/// this module's header gives, and the uids are copied out before anything is
-/// sent: the walk makes a request per row and then removes rows from the very
-/// summary the array describes.
+/// This walks the full summary, not the changed list (the module docs tell
+/// why). It copies the uids before the walk, because the walk removes rows from
+/// the summary that the array describes.
 ///
 /// # Safety
 ///
 /// `summary` must point at a live `CamelFolderSummary`.
 unsafe fn deleted_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
-    // SAFETY: the contract above; `summary_dup_uids` hands back an array the
-    // caller owns and frees with `summary_free_uids`, holding a reference of its
-    // own to every uid in it.
+    // SAFETY: the contract above. `summary_dup_uids` returns an array that the
+    // caller owns and frees with `summary_free_uids`. The array holds its own
+    // reference to each uid in it.
     unsafe {
         let rows = summary_dup_uids(summary);
         if rows.is_null() {
@@ -229,19 +205,18 @@ unsafe fn deleted_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
     }
 }
 
-/// Whether the row for `uid` carries `CAMEL_MESSAGE_DELETED`.
+/// Tells if the row for `uid` has `CAMEL_MESSAGE_DELETED`.
 ///
-/// A row the summary has no longer — one a refresh running alongside removed
-/// between the array being taken and this being asked — is not deleted, which
-/// is the reading that leaves it alone.
+/// A concurrent refresh can remove a row after the uid array is copied. Such a
+/// row is not deleted, so the walk does not touch it.
 ///
 /// # Safety
 ///
 /// `summary` must point at a live `CamelFolderSummary` and `uid` be
 /// NUL-terminated.
 unsafe fn is_deleted(summary: *mut CamelFolderSummary, uid: *const gchar) -> bool {
-    // SAFETY: the contract above, and `summary_get` hands back a reference this
-    // function owns and releases when `info` drops at the end of the scope.
+    // SAFETY: the contract above. `summary_get` returns a reference that this
+    // function owns. The drop of `info` at the end of the scope releases it.
     unsafe {
         let Some(info) = Owned::from_raw(camel_folder_summary_get(summary, uid)) else {
             return false;
@@ -250,13 +225,13 @@ unsafe fn is_deleted(summary: *mut CamelFolderSummary, uid: *const gchar) -> boo
     }
 }
 
-/// The path Camel keys the folder by, for an error message about it.
+/// Returns the full name of the folder, for an error message.
 ///
 /// # Safety
 ///
 /// `folder` must point at a live `CamelFolder`.
 unsafe fn name_of(folder: *mut CamelFolder) -> String {
-    // SAFETY: the accessor returns a string the folder owns and outlives the
-    // call; `read_string` copies it.
+    // SAFETY: the accessor returns a string that the folder owns and that
+    // outlives the call. `read_string` copies it.
     unsafe { read_string(camel_folder_get_full_name(folder)).unwrap_or_default() }
 }

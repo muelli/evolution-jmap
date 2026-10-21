@@ -1,49 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CamelSubscribable`: the tick beside a folder in Evolution's subscription
-//! editor, and the three methods behind it.
+//! `CamelSubscribable`: the three methods behind the subscription check box
+//! in the Evolution subscription editor.
 //!
-//! An interface rather than more `CamelStoreClass` vfuncs, because not every
-//! store has the question: a Maildir has whatever folders are on the disk. So
-//! this is the one part of the provider whose implementations are reached
-//! through a vtable GObject hands the type rather than through our own class
-//! struct — [`Subscribable`] is that vtable's filling, declared from
-//! [`JmapStore`]'s `interfaces`.
+//! Camel uses an interface here, not `CamelStoreClass` vfuncs, because not all
+//! stores have subscriptions. [`Subscribable`] fills the vtable, and the
+//! `interfaces` of [`JmapStore`] declare it.
 //!
-//! ## What the store already does, and what is left here
+//! [`JmapStore::set_subscribed`] does the write. This module adds these items:
 //!
-//! [`JmapStore::set_subscribed`] is the write: one `Mailbox/set` and the edit
-//! to the folder listing the store holds, which is what makes the answer to the
-//! next question agree with it. What is left for this module is the shape of
-//! the interface around that:
+//! * **Path resolution.** Camel names a folder by its path. `tree_holding`
+//!   refreshes the listing if the path is not in it, so a mailbox that another
+//!   client created is subscribable without a restart.
+//! * **A non-blocking read.** Camel declares that `folder_is_subscribed` must
+//!   not send requests. Evolution calls it once per folder while it draws the
+//!   tree. Thus it reads only [`JmapStore::held_folders`].
+//! * **The signal.** The Camel wrapper does not emit `folder-subscribed`, so
+//!   this module emits it (IMAPX does the same). Without it, the Evolution
+//!   folder tree does not update.
 //!
-//! * **A path, not a mailbox.** Camel names a folder by its path, so resolving
-//!   it against the folder tree is this layer's job — through
-//!   `tree_holding`, which looks again before
-//!   giving up, so that a mailbox another client created since the last listing
-//!   is subscribable without a restart.
-//! * **A non-blocking read.** `folder_is_subscribed` is declared by Camel as
-//!   one of the methods that may not go to the server; Evolution asks it once
-//!   per folder while drawing the tree. So it reads
-//!   [`JmapStore::held_folders`] and nothing else — an answer or nothing, never
-//!   a request.
-//! * **The signal.** Camel's wrapper does *not* emit `folder-subscribed` for
-//!   the implementation; IMAPX emits it from inside its own vfunc and so does
-//!   this one. Without it Evolution's folder tree keeps showing what it last
-//!   drew until something else refreshes it.
+//! ## Tests
 //!
-//! ## Where the two halves are tested
+//! `tests/subscriptions.rs` tests `folder_is_subscribed` and [`set_subscribed`]
+//! against the mock server with [`JmapStore::detached`] stores.
 //!
-//! Everything above the emission is `tests/subscriptions.rs`, which drives
-//! `folder_is_subscribed` through the vtable and [`set_subscribed`] against the
-//! mock server with [`JmapStore::detached`] stores.
-//!
-//! The emission itself is `tests/emissions.rs`, and it needs more: a store
-//! instantiated through a `CamelSession`, because `camel_subscribable_folder_*`
-//! queues the signal on the session's main context rather than emitting it. A
-//! detached store is not even a GObject, so the two lines went untested until
-//! that file's harness existed.
+//! `tests/emissions.rs` tests the signal. It needs a store made through a
+//! `CamelSession`, because `camel_subscribable_folder_*` queues the signal on
+//! the main context of the session. A detached store is not a GObject.
 
 use std::slice;
 
@@ -66,13 +50,12 @@ use crate::folder_info::FolderInfoChain;
 use crate::folders::tree_holding;
 use crate::store::JmapStore;
 
-/// Whether the user asked to see this folder, answered out of the listing the
-/// store is holding and out of nothing else.
+/// Tells if the user subscribed to the folder at `path`. Only the listing that
+/// the store holds supplies the answer.
 ///
-/// `false` for a store with no listing and for a path no folder answers to.
-/// That is the honest reading of a question about the *user's* wishes: nothing
-/// in hand says they asked for this folder. It is also the conservative one —
-/// `true` would put a tick on a folder this store knows nothing about.
+/// The result is `false` if the store has no listing or no folder has that path.
+/// No data shows that the user subscribed, and `true` would mark an unknown
+/// folder.
 pub fn is_subscribed(store: &JmapStore, path: &str) -> bool {
     store
         .held_folders()
@@ -80,17 +63,15 @@ pub fn is_subscribed(store: &JmapStore, path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Puts the user's tick on the server for the folder Camel named by path.
+/// Writes the subscription state to the server for the folder at `path`.
 ///
-/// What comes back is that folder as it now is — the answer the
-/// `folder-subscribed` signal is built from, which is why it is returned rather
-/// than dropped. It is a copy: the listing the store holds is edited by
-/// [`JmapStore::set_subscribed`] under its own lock, and handing out a borrow
-/// of it would mean holding that lock across the emission.
+/// Returns a copy of the updated folder, for the `folder-subscribed` signal. A
+/// borrow would hold the lock that [`JmapStore::set_subscribed`] uses across
+/// the emission.
 ///
-/// A path no folder answers to is [`StoreError::NoFolder`] — the store's own
-/// domain rather than the service's, because nothing is wrong with the account
-/// when another client has deleted a folder this one still lists.
+/// A path with no folder is [`StoreError::NoFolder`]. This error is in the
+/// store domain, not the service domain: a folder that another client deleted
+/// is not an account problem.
 pub fn set_subscribed(
     store: &JmapStore,
     path: &str,
@@ -111,30 +92,29 @@ pub fn set_subscribed(
 // ---------------------------------------------------------------------------
 // the vtable
 
-/// The filling of `JmapStore`'s copy of `CamelSubscribableInterface`.
+/// Fills the `CamelSubscribableInterface` copy of `JmapStore`.
 ///
-/// A type beside the store rather than the store itself, which is what
-/// [`InterfaceImpl`] asks for: a class may fill several interfaces, and a trait
-/// implemented on the class could only describe one of them.
+/// This is a separate type, as [`InterfaceImpl`] requires. A class can
+/// implement many interfaces, but a trait on the class can describe only one.
 pub struct Subscribable;
 
-// SAFETY: `CamelSubscribableInterface` is bindgen's `#[repr(C)]` binding of the
-// interface struct `camel_subscribable_get_type` names, and it leads with
-// `GTypeInterface` — eds-sys's tests/camel.rs pins the interface's shape.
+// SAFETY: `CamelSubscribableInterface` is the bindgen `#[repr(C)]` binding of
+// the interface struct of `camel_subscribable_get_type`. Its first member is
+// `GTypeInterface`. The eds-sys test tests/camel.rs checks the shape.
 unsafe impl InterfaceImpl for Subscribable {
     type Vtable = CamelSubscribableInterface;
 
     fn gtype() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
+        // SAFETY: no arguments, and the type initializes itself.
         unsafe { camel_subscribable_get_type() }
     }
 
     unsafe fn interface_init(vtable: *mut Self::Vtable) {
-        // All three, because Camel installs no default behind any of them: a
-        // slot left NULL is a call through NULL from inside the wrapper.
+        // Set all three slots. Camel has no default for them, so the wrapper
+        // calls through NULL if a slot is NULL.
         //
-        // SAFETY: the contract of `InterfaceImpl::interface_init` — this is
-        // our own copy of the vtable, and nothing else can reach it yet.
+        // SAFETY: the contract of `InterfaceImpl::interface_init`: this is the
+        // copy of the vtable for this type, and nothing else can access it yet.
         let vtable = unsafe { &mut *vtable };
         vtable.folder_is_subscribed = Some(folder_is_subscribed);
         vtable.subscribe_folder_sync = Some(subscribe_folder_sync);
@@ -142,16 +122,16 @@ unsafe impl InterfaceImpl for Subscribable {
     }
 }
 
-/// The non-blocking read. No `GError` out-parameter, because there is no
-/// failure it could report: a store that knows nothing about the folder answers
-/// that the user did not ask for it.
+/// The non-blocking read. It has no `GError` out-parameter, because it cannot
+/// fail: an unknown folder is not subscribed.
 unsafe extern "C" fn folder_is_subscribed(
     subscribable: *mut CamelSubscribable,
     folder_name: *const gchar,
 ) -> gboolean {
     guard("folder_is_subscribed", GFALSE, || {
-        // SAFETY: Camel's contract for the vfunc — a valid instance of ours,
-        // and a NUL-terminated string it owns, which `read_string` copies.
+        // SAFETY: the Camel contract for the vfunc: a valid instance of this
+        // type, and a NUL-terminated string that Camel owns. `read_string`
+        // copies it.
         let (Some(store), Some(path)) = (unsafe { borrow(subscribable) }, unsafe {
             read_string(folder_name)
         }) else {
@@ -166,24 +146,24 @@ unsafe extern "C" fn folder_is_subscribed(
     })
 }
 
-/// Ticks a folder on, and tells Camel it happened.
+/// Subscribes to a folder and tells Camel.
 ///
-/// `cancellable` is [`observe`]d for the length of the call. This is one
-/// `Mailbox/set`, and one listing at worst, rather than a paged walk.
+/// The call [`observe`]s `cancellable`. It sends one `Mailbox/set` and at most
+/// one listing request.
 unsafe extern "C" fn subscribe_folder_sync(
     subscribable: *mut CamelSubscribable,
     folder_name: *const gchar,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a
-    // NUL-terminated string, and an out-parameter that is NULL or writable and
+    // SAFETY: the Camel contract for the vfunc: a valid instance of this type,
+    // a NUL-terminated string, and an out-parameter that is NULL or writable and
     // currently NULL.
     unsafe {
         guard_bool("subscribe_folder_sync", error, || {
-            // SAFETY: Camel keeps its cancellable alive for the length of the
-            // call, so it outlives this observation — which is what makes
-            // every request below here stop when the user presses Stop.
+            // SAFETY: Camel keeps its cancellable alive for the full call, so it
+            // outlives this observation. The observation stops every request
+            // below when the user clicks Stop.
             let _cancel = observe(cancellable);
 
             change(subscribable, folder_name, true, error)
@@ -191,20 +171,20 @@ unsafe extern "C" fn subscribe_folder_sync(
     }
 }
 
-/// And off again. The same call with the other answer — Camel gives the two
-/// directions separate slots, JMAP gives them one `isSubscribed` value.
+/// Unsubscribes from a folder. Camel has two slots for the two directions, but
+/// JMAP has one `isSubscribed` value.
 unsafe extern "C" fn unsubscribe_folder_sync(
     subscribable: *mut CamelSubscribable,
     folder_name: *const gchar,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> gboolean {
-    // SAFETY: as [`subscribe_folder_sync`].
+    // SAFETY: the same as for [`subscribe_folder_sync`].
     unsafe {
         guard_bool("unsubscribe_folder_sync", error, || {
-            // SAFETY: Camel keeps its cancellable alive for the length of the
-            // call, so it outlives this observation — which is what makes
-            // every request below here stop when the user presses Stop.
+            // SAFETY: Camel keeps its cancellable alive for the full call, so it
+            // outlives this observation. The observation stops every request
+            // below when the user clicks Stop.
             let _cancel = observe(cancellable);
 
             change(subscribable, folder_name, false, error)
@@ -212,13 +192,12 @@ unsafe extern "C" fn unsubscribe_folder_sync(
     }
 }
 
-/// The body both sync vfuncs share: resolve, write, announce.
+/// The shared body of the two sync vfuncs: resolve the path, write, and emit
+/// the signal.
 ///
-/// The announcement is a one-folder `CamelFolderInfo` — depth `Some(0)`, so no
-/// descendants — describing the folder as it now is. Camel's signal only
-/// borrows it, which is why the chain is kept and dropped here rather than
-/// handed over: `camel_folder_info_free` runs when this function returns, as it
-/// does one line later in IMAPX.
+/// The signal gets a one-folder `CamelFolderInfo` (depth `Some(0)`, thus no
+/// descendants). The signal only borrows it, so this function keeps the chain.
+/// `camel_folder_info_free` runs when this function returns, as in IMAPX.
 ///
 /// # Safety
 ///
@@ -236,9 +215,8 @@ unsafe fn change(
         // SAFETY: the contract above.
         return unsafe { fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror) };
     };
-    // Borrowed from Camel and NUL-terminated; `read_string` copies, and reads a
-    // NULL or empty name as no name — which no mailbox answers to, because a
-    // path always has a component in it.
+    // Camel owns the NUL-terminated name, and `read_string` copies it. A NULL or
+    // empty name becomes an empty path, and no mailbox has an empty path.
     // SAFETY: the contract above.
     let path = unsafe { read_string(folder_name) }.unwrap_or_default();
 
@@ -249,8 +227,8 @@ unsafe fn change(
     };
 
     let announcement = FolderInfoChain::from_forest(slice::from_ref(&folder), Some(0));
-    // SAFETY: `subscribable` is the live instance borrowed above, and the chain
-    // is alive until this function returns — the signal only borrows it.
+    // SAFETY: `subscribable` is the live instance borrowed above. The chain is
+    // alive until this function returns, and the signal only borrows it.
     unsafe {
         if subscribed {
             camel_subscribable_folder_subscribed(subscribable, announcement.as_ptr());
@@ -261,14 +239,14 @@ unsafe fn change(
     GTRUE
 }
 
-/// The Rust view of the `CamelSubscribable *` Camel handed over.
+/// Gives the Rust view of the `CamelSubscribable *` from Camel.
 ///
 /// # Safety
 ///
-/// As [`JmapStore::borrow`]: `subscribable` must be NULL or point at an
-/// instance of [`JmapStore`]. The cast is sound because the interface's
-/// prerequisite is `CamelStore` — checked in eds-sys's tests/camel.rs — so
-/// every instance this vfunc is dispatched on is one.
+/// The same as for [`JmapStore::borrow`]: `subscribable` must be NULL or point
+/// to an instance of [`JmapStore`]. The cast is sound because the interface
+/// has the prerequisite `CamelStore` (the eds-sys test tests/camel.rs checks
+/// this). Thus each instance that receives this vfunc is a `CamelStore`.
 unsafe fn borrow<'a>(subscribable: *mut CamelSubscribable) -> Option<&'a JmapStore> {
     unsafe { JmapStore::borrow(subscribable.cast::<CamelStore>()) }
 }
