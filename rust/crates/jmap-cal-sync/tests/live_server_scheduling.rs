@@ -384,7 +384,9 @@ fn a_guest_accepting_from_the_invitation_mail_updates_its_one_copy_and_tells_the
     // the lookup of that `UID` fails, and the backend creates.
     let accepted = meeting(&sent.uid, &sent.organizer_user, &sent.guest_user)
         .replace("PARTSTAT=NEEDS-ACTION", "PARTSTAT=ACCEPTED");
-    let saved = sent.guest_sync.save_component(&accepted, None);
+    let saved =
+        sent.guest_sync
+            .save_component_with(&accepted, None, Itip::Received { reply: true });
 
     let status = wait_for_status(
         sent.organizer.client(),
@@ -508,4 +510,48 @@ fn dismissing_a_meetings_reminder_sends_the_guest_nothing() {
     let after = guest_mail(&guest, &uid);
     let _ = sync.remove_component_with(&saved.uid, Itip::Suppress);
     assert_eq!(after, mail, "the dismissal mailed the guest");
+}
+
+/// A received component that names the user as the organizer is data from
+/// another person. The server must not send invitations for it in the user's
+/// name. The recipient account is the third address here.
+#[test]
+#[ignore = "needs a real JMAP server and two accounts; see docs/manual-test-live-server.md"]
+fn a_received_request_that_names_the_user_as_organizer_invites_nobody() {
+    let Some((victim, victim_user)) = connect(
+        "JMAP_LIVE_SERVER_WRITE_USER",
+        "JMAP_LIVE_SERVER_WRITE_PASSWORD",
+    ) else {
+        eprintln!("the live accounts are not set; skipping");
+        return;
+    };
+    let (stranger, stranger_user) = connect(
+        "JMAP_LIVE_SERVER_RECIPIENT_USER",
+        "JMAP_LIVE_SERVER_RECIPIENT_PASSWORD",
+    )
+    .expect("the recipient account is set");
+    let account_id = victim.primary_account(CAPABILITY_CALENDARS).unwrap();
+    let calendar_id = default_calendar(&victim, &account_id);
+    let stranger_account = stranger.primary_account(CAPABILITY_CALENDARS).unwrap();
+    let victim = CalSync::new(victim, account_id, calendar_id).with_server_scheduling(true);
+
+    let uid = format!("agent-received-{}@localhost", unique_suffix());
+    let forged = meeting(&uid, &victim_user, &stranger_user);
+    let saved = victim
+        .save_component_with(&forged, None, Itip::Received { reply: true })
+        .expect("the received component is filed");
+    let copies = wait_for(
+        &stranger,
+        &stranger_account,
+        &uid,
+        Duration::from_secs(15),
+        |copies| !copies.is_empty(),
+    );
+    let mail = guest_mail(&stranger, &uid);
+    let _ = victim.remove_component_with(&saved.uid, Itip::Suppress);
+    assert!(
+        copies.is_empty(),
+        "the stranger got the meeting: {copies:?}"
+    );
+    assert!(mail.is_empty(), "the stranger got mail: {mail:?}");
 }

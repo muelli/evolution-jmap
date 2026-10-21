@@ -38,6 +38,9 @@ pub enum SyncError {
     /// what to change. `jmap_backend_cal::ops` gives this in a translated
     /// sentence.
     Unscheduled(Unscheduled),
+    /// A received iTIP message or an import tried to change the guests or the
+    /// organizer of a meeting that this account organises, or to delete it.
+    OwnMeeting,
 }
 
 /// Why the server did not send the scheduling messages of a change
@@ -178,6 +181,9 @@ impl std::fmt::Display for SyncError {
             Self::NotFound(uid) => write!(f, "no calendar event with identifier {uid}"),
             Self::Unsendable(reason) => write!(f, "{reason}"),
             Self::Unscheduled(reason) => write!(f, "{reason}"),
+            Self::OwnMeeting => {
+                f.write_str("received data cannot change a meeting that this account organises")
+            }
         }
     }
 }
@@ -187,7 +193,9 @@ impl std::error::Error for SyncError {
         match self {
             Self::Client(error) => Some(error),
             Self::ICal(error) => Some(error),
-            Self::NotFound(_) | Self::Unsendable(_) | Self::Unscheduled(_) => None,
+            Self::NotFound(_) | Self::Unsendable(_) | Self::Unscheduled(_) | Self::OwnMeeting => {
+                None
+            }
         }
     }
 }

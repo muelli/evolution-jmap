@@ -81,6 +81,14 @@ pub enum Itip {
     Send,
     /// Ask the server to send nothing for this change.
     Suppress,
+    /// The change comes from a received iTIP message or an import, not from the user.
+    ///
+    /// The server sends at most the user's answer to another organizer, and only
+    /// when `reply` is true. See [`CalSync::save_component_with`].
+    Received {
+        /// False when EDS set `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`.
+        reply: bool,
+    },
 }
 
 /// Returns `error` from a create, edit or delete as an [`Unscheduled`] refusal
@@ -130,6 +138,44 @@ fn unreachable_addresses(event: &CalendarEvent) -> Vec<String> {
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+/// Whether this account is the scheduling origin of the stored `event`.
+///
+/// The server's `isOrigin` decides when it is present. Otherwise the account is
+/// the origin when the event has no organizer or when `own` holds the organizer.
+fn organised_here(event: &CalendarEvent, own: &[String]) -> bool {
+    event.is_origin.unwrap_or_else(|| {
+        event
+            .organizer_calendar_address
+            .as_deref()
+            .is_none_or(|organizer| own.contains(&organizer.to_ascii_lowercase()))
+    })
+}
+
+/// Whether a received `event` is an answer to an organizer that is not this account.
+///
+/// False when `own` is empty, because the client then cannot identify the origin.
+fn answers(event: &CalendarEvent, own: &[String]) -> bool {
+    event
+        .organizer_calendar_address
+        .as_deref()
+        .is_some_and(|organizer| !own.is_empty() && !own.contains(&organizer.to_ascii_lowercase()))
+}
+
+/// Whether the patch entry `key` changes the guests or the organizer, also in an override.
+fn names_guests(key: &str, value: &Value) -> bool {
+    let guests = |key: &str| {
+        key.split('/')
+            .any(|segment| segment == "participants" || segment == "organizerCalendarAddress")
+    };
+    if guests(key) {
+        return true;
+    }
+    match value {
+        Value::Object(map) => map.iter().any(|(key, value)| names_guests(key, value)),
+        _ => false,
+    }
 }
 
 /// Synchronises one JMAP calendar.
@@ -251,6 +297,12 @@ impl CalSync {
     /// is the error of this save. Evolution knows that the server sends the
     /// messages, so a save without scheduling would leave the guests without an
     /// invitation.
+    ///
+    /// [`Itip::Received`] applies stricter rules, because the data comes from
+    /// another person. The server schedules only the user's answer to an
+    /// organizer that is known not to be this account. The change never sets the
+    /// organizer. A change to the guests or the organizer of a meeting that this
+    /// account organises fails with [`SyncError::OwnMeeting`].
     pub fn save_component_with(
         &self,
         icalendar: &str,
@@ -279,6 +331,14 @@ impl CalSync {
             }
         };
         let Some(uid) = existing_uid else {
+            let schedule = match itip {
+                // Schedule only an answer to an organizer that is not this account.
+                Itip::Received { reply } => {
+                    let own = self.own_addresses()?;
+                    reply && self.server_schedules && answers(&event, &own)
+                }
+                Itip::Send | Itip::Suppress => schedule,
+            };
             let local = event.id.take();
             event.uid = event.uid.take().or_else(|| local.map(|id| id.to_string()));
             event.calendar_ids = Some(BTreeMap::from([(self.calendar_id.clone(), true)]));
@@ -380,7 +440,23 @@ impl CalSync {
         };
 
         let current = self.fetch(uid)?;
-        let patch = patch::diff(&current, &event);
+        let mut patch = patch::diff(&current, &event);
+        let schedule = match itip {
+            Itip::Received { reply } => {
+                let own = self.own_addresses()?;
+                if organised_here(&current, &own) {
+                    if patch.iter().any(|(key, value)| names_guests(key, value)) {
+                        return Err(SyncError::OwnMeeting);
+                    }
+                    false
+                } else {
+                    // Received data never changes the organizer.
+                    patch.remove("organizerCalendarAddress");
+                    reply && self.server_schedules && !own.is_empty()
+                }
+            }
+            Itip::Send | Itip::Suppress => schedule,
+        };
         if patch.is_empty() {
             return ComponentInfo::render(&current);
         }
@@ -411,6 +487,19 @@ impl CalSync {
         self.load_component(uid)
     }
 
+    /// The calendar addresses of this account's participant identities, in lower case.
+    fn own_addresses(&self) -> Result<Vec<String>, SyncError> {
+        let identities = self.client.participant_identities(&self.account_id)?;
+        Ok(identities
+            .iter()
+            .flat_map(|identity| {
+                let send_to = identity.send_to.iter().flat_map(|map| map.values());
+                identity.calendar_address.iter().chain(send_to)
+            })
+            .map(|address| address.to_ascii_lowercase())
+            .collect())
+    }
+
     /// The JMAP id of the event in this calendar whose JSCalendar `uid` is
     /// `uid`, if such an event exists.
     ///
@@ -433,7 +522,16 @@ impl CalSync {
     /// [`CalSync::remove_component`], with a value that tells if the guests can
     /// get messages.
     pub fn remove_component_with(&self, uid: &str, itip: Itip) -> Result<(), SyncError> {
-        let schedule = self.schedules(itip);
+        let schedule = match itip {
+            Itip::Received { reply } => {
+                let own = self.own_addresses()?;
+                if organised_here(&self.fetch(uid)?, &own) {
+                    return Err(SyncError::OwnMeeting);
+                }
+                reply && self.server_schedules && !own.is_empty()
+            }
+            Itip::Send | Itip::Suppress => self.schedules(itip),
+        };
         let account_id = self.account_id().to_string();
         let calendar_id = self.calendar_id().to_string();
         tracing::debug!(
@@ -638,6 +736,49 @@ fn revision_of(icalendar: &str) -> String {
 mod tests {
     use super::*;
     use jmap_proto::error::{MethodError, SetError};
+
+    fn organised_by(organizer: Option<&str>) -> CalendarEvent {
+        CalendarEvent {
+            organizer_calendar_address: organizer.map(str::to_owned),
+            ..CalendarEvent::default()
+        }
+    }
+
+    #[test]
+    fn a_received_event_answers_only_an_organizer_known_not_to_be_this_account() {
+        let own = vec!["mailto:olga@example.com".to_owned()];
+        let vera = organised_by(Some("mailto:vera@example.com"));
+        assert!(answers(&vera, &own));
+        assert!(!answers(&vera, &[]), "no identity: the origin is unknown");
+        assert!(!answers(
+            &organised_by(Some("MAILTO:Olga@Example.com")),
+            &own
+        ));
+        assert!(!answers(&organised_by(None), &own));
+    }
+
+    #[test]
+    fn the_servers_is_origin_decides_who_organises_a_stored_event() {
+        let own = vec!["mailto:olga@example.com".to_owned()];
+        let mut vera = organised_by(Some("mailto:vera@example.com"));
+        assert!(!organised_here(&vera, &own));
+        assert!(!organised_here(&vera, &[]));
+        assert!(organised_here(&organised_by(None), &own));
+        vera.is_origin = Some(true);
+        assert!(organised_here(&vera, &own));
+    }
+
+    #[test]
+    fn a_guest_or_organizer_change_is_found_also_inside_an_override() {
+        assert!(names_guests("participants/p2", &Value::Null));
+        assert!(names_guests("organizerCalendarAddress", &Value::Null));
+        let inner = serde_json::json!({"2026-09-29T11:00:00": {"participants/p1/roles": {}}});
+        assert!(names_guests("recurrenceOverrides", &inner));
+        assert!(!names_guests(
+            "title",
+            &Value::String("participants".to_owned())
+        ));
+    }
 
     /// The EDS cache keeps revisions after the process stops, so this test pins
     /// the digest to the published FNV-1a 64-bit test vectors. A change would

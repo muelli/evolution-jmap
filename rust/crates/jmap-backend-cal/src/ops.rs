@@ -5,8 +5,9 @@
 //! Out-parameters are written and transferred to EDS on success; errors are set on failure.
 
 use eds_sys::{
-    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_NOT_SUPPORTED, ETimezoneCache,
-    ICalComponent, e_cal_client_error_create, e_client_error_create, time_t,
+    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_NOT_SUPPORTED,
+    E_CLIENT_ERROR_PERMISSION_DENIED, ETimezoneCache, ICalComponent, e_cal_client_error_create,
+    e_client_error_create, time_t,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
@@ -442,6 +443,14 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
             let message = cstring_lossy(&unscheduled(reason));
             // SAFETY: code is valid enum value and message is copied.
             unsafe { e_client_error_create(E_CLIENT_ERROR_NOT_SUPPORTED, message.as_ptr()) }
+        }
+        SyncError::OwnMeeting => {
+            let message = cstring_lossy(&translate(
+                // TRANSLATORS: shown when an invitation or import tries to change a meeting that the user organizes.
+                c"You organize this meeting. A received invitation or an import cannot change its guests or its organizer, or delete it.",
+            ));
+            // SAFETY: code is valid enum value and message is copied.
+            unsafe { e_client_error_create(E_CLIENT_ERROR_PERMISSION_DENIED, message.as_ptr()) }
         }
     }
 }

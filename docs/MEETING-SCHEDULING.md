@@ -167,6 +167,13 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
      refuses a second event with the same `uid`. Thus, a create with a `UID`
      that this calendar already holds goes into that event. The answer reaches
      the organizer the same way as from the editor.
+   - A component from `receive_objects` (an accepted invitation or an import)
+     comes from another person. The backend marks it as received. The server
+     then schedules only the answer of the user to an organizer that is not
+     the user. The change cannot set the organizer. It cannot change the
+     guests or the organizer of a meeting that the user organizes, or delete
+     that meeting. The save fails with a permission error. While the backend
+     is offline, `receive_objects` fails.
 4. **Switch off.** The backend advertises no capability. It never sends
    `sendSchedulingMessages`. It still syncs the guests as data. Evolution
    mails them as it does today.
@@ -191,6 +198,10 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
     decides for each change.
   - `save_component_with` and `remove_component_with` take `Itip::Suppress`
     for `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`.
+  - They take `Itip::Received` for a change from `receive_objects`. The
+    calendar backend sets a mark on the thread while `receive_objects_sync`
+    runs, and the save reads it. The account's `ParticipantIdentity`
+    addresses tell if the user is the organizer.
   - A call asked the server to schedule, and the server refused it. The
     refusal comes back as `SyncError::Unscheduled`:
     - `Unreachable` for `noSupportedScheduleMethods`. It names the
