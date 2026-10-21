@@ -78,6 +78,11 @@ pub fn itip(opflags: ECalOperationFlags) -> Itip {
     }
 }
 
+/// Returns the flags that `receive_objects_sync` gives to the meta backend.
+pub fn received(opflags: ECalOperationFlags) -> ECalOperationFlags {
+    opflags
+}
+
 /// Returns the flags for a reminder dismissal, which never sends iTIP.
 ///
 /// A dismissal changes only the user's own alert, so the guests must not hear of it.
