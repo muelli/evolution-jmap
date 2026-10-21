@@ -1,19 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# lintian check for the binary `.deb` (Track C1). Run with `cmake -P`; the
+# lintian check for the binary `.deb` (Track C1). Run with `cmake -P`. The
 # caller sets:
 #
-#   BUILD_DIR         the CMake build tree to package out of
-#   STAGE_DIR         a scratch directory cpack writes into
+#   BUILD_DIR          the CMake build tree to package
+#   STAGE_DIR          a scratch directory for cpack output
 #   LINTIAN_EXECUTABLE the lintian binary
 #
-# Package content and control-field correctness are cmake/tests/
-# check-deb-package.cmake's job; this is the complementary, generic check —
-# whatever lintian itself knows how to find (unstripped binaries, missing
-# doc/copyright files, bad directory permissions, and the rest of its tag
-# set) — kept green so a regression in packaging plumbing is a red CI check,
-# not something a human notices only when building a release by hand.
+# cmake/tests/check-deb-package.cmake checks the package content and the
+# control fields. This test adds the generic lintian checks (for example,
+# unstripped binaries, missing doc/copyright files, bad directory permissions).
+# Thus a packaging regression causes a failed CI check, not a problem that a
+# person finds only during a manual release build.
 
 cmake_minimum_required(VERSION 3.14)
 
@@ -55,11 +54,10 @@ if(NOT _deb_count EQUAL 1)
 endif()
 list(GET _debs 0 _deb)
 
-# --pedantic surfaces more than the default profile (including the
-# non-standard-dir-perm class of finding this project has actually hit); a
-# tag lintian cannot be satisfied about belongs in an override file
-# alongside this one, argued in a comment, not dropped back to the default
-# profile.
+# --pedantic shows more tags than the default profile, including the
+# non-standard-dir-perm tag that this project had.
+# Put a tag that you cannot fix in an override file next to this file.
+# Give the reason in a comment. Do not go back to the default profile.
 execute_process(
 	COMMAND ${LINTIAN_EXECUTABLE} --pedantic "${_deb}"
 	OUTPUT_VARIABLE _lintian_output

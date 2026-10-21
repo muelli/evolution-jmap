@@ -20,12 +20,12 @@
 #   PKG_MODULE    pkg-config module owning the directory
 #   PKG_VARIABLE  variable in it naming the directory
 #
-# It answers the question the build system cannot answer for itself: after
-# `cmake --install`, is the module on disk, under the name and in the
-# directory EDS will look for, with the entry points EDS resolves?
+# The build system cannot check this itself: after `cmake --install`, is the
+# module on disk, with the name and directory that EDS uses, and with the entry
+# points that EDS resolves?
 
-# Script mode takes its policies from here, not from the project: file(SIZE),
-# list(JOIN) and IN_LIST all need a minimum newer than the project's own.
+# Script mode takes its policies from here, not from the project. file(SIZE)
+# and IN_LIST need a minimum version newer than the project minimum.
 cmake_minimum_required(VERSION 3.14)
 
 foreach(_var BUILD_DIR STAGE_DIR COMPONENT EXPECTED SYMBOLS)
@@ -34,9 +34,9 @@ foreach(_var BUILD_DIR STAGE_DIR COMPONENT EXPECTED SYMBOLS)
 	endif()
 endforeach()
 
-# Ask pkg-config where the host scans, rather than trusting the destination
-# the build was configured with — otherwise EXPECTED and the install rule
-# come from one variable and agree with each other no matter what it says.
+# Ask pkg-config where the host scans. Do not trust the configured
+# destination: EXPECTED and the install rule come from the same variable, so
+# they always agree, even if the variable is wrong.
 if(DEFINED PKG_MODULE)
 	find_program(PKG_CONFIG_EXECUTABLE pkg-config REQUIRED)
 	execute_process(
@@ -82,12 +82,12 @@ if(_size LESS 1024)
 	message(FATAL_ERROR "${_module} is ${_size} bytes; that is not a shared module")
 endif()
 
-# nm(1) rather than scanning the file for the name. `.dynstr` holds the
-# *undefined* symbols too, so a file(STRINGS) match proves only that the
-# module mentions the entry point — which every module that includes the
-# header declaring it does, whether or not it defines it. Mutation-checked:
-# renaming the definition to `camel_provider_module_lnit` left the string
-# behind and the scan happily passed. --defined-only is the whole point.
+# Use nm(1), not a scan of the file for the name. `.dynstr` also holds the
+# *undefined* symbols. Thus a file(STRINGS) match proves only that the module
+# mentions the entry point. Each module that includes the declaring header
+# does that, with or without a definition. Mutation test: with the definition
+# renamed to `camel_provider_module_lnit`, the string stayed and the scan
+# passed. --defined-only is necessary.
 find_program(NM_EXECUTABLE nm REQUIRED)
 execute_process(
 	COMMAND ${NM_EXECUTABLE} --dynamic --defined-only --format=posix "${_module}"
@@ -117,9 +117,10 @@ endforeach()
 
 message(STATUS "${_module}: ${_size} bytes, exports ${SYMBOLS}")
 
-# Files installed alongside — Camel's `.urls`, which is what decides whether
-# the module beside it is ever dlopened. An empty one is as bad as a missing
-# one and looks the same from the build system's side, so check the size too.
+# Files installed beside the module, for example the Camel `.urls` file. It
+# controls whether Camel dlopens the module. An empty file is as bad as a
+# missing file, and the build system cannot see the difference. Thus also
+# check the size.
 if(DEFINED EXPECTED_DATA)
 	string(REPLACE "|" ";" _data_files "${EXPECTED_DATA}")
 	foreach(_data IN LISTS _data_files)
@@ -135,12 +136,11 @@ if(DEFINED EXPECTED_DATA)
 	endforeach()
 endif()
 
-# The check above only inspects what the caller declared, so a build that
-# simply forgot to declare its `.urls` passes it. For a Camel provider that
-# is not a gap in the check, it is the failure: Camel decides whether to
-# dlopen libcamel<protocol>.so by reading libcamel<protocol>.urls beside it,
-# and a module without one is installed, correct, and never loaded. So state
-# Camel's rule here rather than trusting the caller to remember it.
+# The check above examines only the files that the caller declares. A build
+# that does not declare its `.urls` passes it. For a Camel provider, that is
+# the failure itself. Camel reads libcamel<protocol>.urls to decide whether to
+# dlopen libcamel<protocol>.so. Without the file, the module is installed and
+# correct, but Camel never loads it. Thus apply the Camel rule here.
 get_filename_component(_module_name "${EXPECTED}" NAME)
 if(_module_name MATCHES "^libcamel(.+)\\.so$")
 	get_filename_component(_module_dir "${EXPECTED}" DIRECTORY)

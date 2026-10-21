@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# This project's own catalogues, and the check that the machinery compiling
-# them works. The function itself lives in cmake/AddTranslations.cmake so the
-# fixture project the check builds can include it without also registering
-# this test.
+# The catalogues of this project, and the test of the function that compiles
+# them. The function is in cmake/AddTranslations.cmake, so the test's fixture
+# project can include it without a second registration of this test.
 #
-# Requires cmake/Rust.cmake: po-compile is built by the workspace, so the
-# compiler is a file the `rust-build` target produces.
+# Requires cmake/Rust.cmake: the workspace builds po-compile, so the compiler
+# is a file that the `rust-build` target makes.
 
 include(${CMAKE_CURRENT_LIST_DIR}/AddTranslations.cmake)
 
@@ -24,11 +23,13 @@ add_translations(
 	OUTPUT_VARIABLE INSTALLED_CATALOGUES
 )
 
-# The check cannot be made of the call above: po/LINGUAS is empty, so every
-# assertion about installed catalogues would be true of a build that installs
-# nothing. It is made of the same function driven over fixture catalogues
-# instead — including the two cases that must be loud, a language with no
-# `.po` and a `.po` the compiler refuses.
+# The test does not use the call above, because po/LINGUAS can be empty. Then
+# each assertion about installed catalogues is true of a build that installs
+# nothing.
+#
+# The test runs the same function on fixture catalogues. These include the two
+# cases that must fail: a language with no `.po`, and a `.po` that the
+# compiler refuses.
 add_test(
 	NAME translations
 	COMMAND ${CMAKE_COMMAND}

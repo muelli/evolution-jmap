@@ -1,50 +1,48 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Reproducibility check for the binary `.deb` (M8). Run with `cmake -P`; the
+# Reproducibility check for the binary `.deb`. Run with `cmake -P`. The
 # caller sets:
 #
-#   BUILD_DIR  the CMake build tree to package out of
-#   STAGE_DIR  a scratch directory the runs package into, one subdirectory each
-#   EPOCH_A    a decoy SOURCE_DATE_EPOCH exported for the first run
-#   EPOCH_B    a different decoy exported for the second run
+#   BUILD_DIR  the CMake build tree to package
+#   STAGE_DIR  a scratch directory with one subdirectory for each run
+#   EPOCH_A    a decoy SOURCE_DATE_EPOCH for the first run
+#   EPOCH_B    a different decoy SOURCE_DATE_EPOCH for the second run
 #
-# This repository builds everything twice and compares checksums, and the `.deb`
-# is now one of the things a person is asked to verify against a signed digest.
-# That promise is only worth anything if the package is a function of what went
-# into it — nothing else.
+# This repository builds everything twice and compares checksums. Users can
+# verify the `.deb` against a signed digest. This is useful only if the
+# package depends on its inputs and on nothing else.
 #
-# Two ways it can fail to be, and both are checked here because neither is
-# visible by reading the package:
+# Two causes can make the package change. This test checks both, because
+# they are not visible in the package:
 #
-#  1. The clock. `cpack` re-runs the install into a fresh staging tree, so every
-#     *directory* entry is created at packaging time, and the ar member headers
-#     carry the moment the archive was written. Packaging the same tree twice a
-#     minute apart therefore produced two different files.
-#  2. The caller's environment. Whoever runs `cpack` may or may not have
-#     SOURCE_DATE_EPOCH exported, and it need not agree with the one the
-#     binaries inside the package were compiled with.
+#  1. The clock. `cpack` runs the install again into a new staging tree, so it
+#     makes each *directory* entry at packaging time. The ar member headers
+#     contain the time of archive creation. Thus, two packaging runs of the
+#     same tree one minute apart made two different files.
+#  2. The caller environment. The `cpack` caller can export SOURCE_DATE_EPOCH
+#     or not. Its value can be different from the value used to compile
+#     the binaries in the package.
 #
-# So the package is built three times — twice with deliberately wrong epochs
-# exported, once with the variable removed from the environment entirely — and
-# all three must be byte-identical. The wrong epochs are what makes this more
-# than a "run it twice" test: a package that merely honours whatever the caller
-# exported would pass a two-run comparison on a machine that exports nothing,
-# and then differ on the release runner, which exports the commit timestamp.
+# Thus the test builds the package three times: twice with incorrect epochs
+# exported, and once with the variable removed from the environment.
+# The three packages must be byte-identical. The incorrect epochs are
+# necessary. A package that only uses the exported value passes a two-run test
+# on a machine that exports nothing. It then changes on the release runner,
+# which exports the commit timestamp.
 #
-# Byte-equality across those three runs still would not prove the *file* entries
-# are pinned: the modules keep their build mtimes, which are the same in all
-# three runs of one build tree, so a package that inherited them would look
-# stable here and change on the next rebuild. Hence the second assertion — every
-# entry in the package carries one and the same timestamp. Nothing about a real
-# tree makes that true by accident: the modules are linked seconds apart, the
-# Camel `.urls` file is as old as the last time anyone edited it, and the
-# directories are made at packaging time. Only a timestamp imposed on the whole
-# archive collapses them to one value.
+# Byte-equality of the three runs does not prove that the *file* entries have
+# a fixed timestamp. The modules keep their build mtimes, which are the same in
+# all three runs of one build tree. A package that uses these mtimes passes
+# here, but changes after the next rebuild. Thus the second assertion: all
+# entries in the package have the same timestamp. A real tree never does this
+# by accident. The linker makes the modules seconds apart. The Camel `.urls`
+# file has the time of its last edit. Packaging makes the directories.
+# Only a timestamp applied to the full archive gives one value.
 
-# Script mode takes its policies from here, not from the project. 3.24 for
-# `cmake -E env --unset=`, which is the only way to ask for a run of cpack with
-# SOURCE_DATE_EPOCH genuinely absent rather than empty.
+# Script mode uses the policies from this line, not from the project.
+# 3.24 is necessary for `cmake -E env --unset=`. Only this option runs cpack
+# with SOURCE_DATE_EPOCH absent, not empty.
 cmake_minimum_required(VERSION 3.24)
 
 foreach(_var BUILD_DIR STAGE_DIR EPOCH_A EPOCH_B)
@@ -63,8 +61,8 @@ if(NOT EXISTS "${BUILD_DIR}/CPackConfig.cmake")
 		"CPack configuration, so there is nothing to package")
 endif()
 
-# One packaging run into its own wiped subdirectory. `_epoch` is exported as
-# SOURCE_DATE_EPOCH, or, when empty, removed from the environment.
+# One packaging run into its own empty subdirectory. A non-empty `_epoch`
+# becomes SOURCE_DATE_EPOCH. An empty `_epoch` removes it from the environment.
 function(pack_once _label _epoch _out_deb)
 	set(_dir "${STAGE_DIR}/${_label}")
 	file(REMOVE_RECURSE "${_dir}")
@@ -101,10 +99,10 @@ function(pack_once _label _epoch _out_deb)
 	set(${_out_deb} "${_deb}" PARENT_SCOPE)
 endfunction()
 
-# Every distinct entry timestamp in a package, control tar and data tar
-# together, as `YYYY-MM-DD HH:MM:SS` strings. GNU tar's --full-time is what
-# makes this a check rather than a coincidence: to the minute, files linked in
-# the same build and directories made moments later would often agree.
+# Returns each different entry timestamp in the control tar and the data tar,
+# as `YYYY-MM-DD HH:MM:SS` strings. GNU tar --full-time is necessary. Without
+# seconds, files linked in one build and directories made a moment later often
+# show the same minute.
 function(deb_timestamps _deb _out)
 	set(_stamps)
 	foreach(_member --ctrl-tarfile --fsys-tarfile)
@@ -149,9 +147,9 @@ file(SHA256 "${_deb_a}" _sha_a)
 file(SHA256 "${_deb_b}" _sha_b)
 file(SHA256 "${_deb_unset}" _sha_unset)
 
-# Reported together, because "which of the three differs" is the diagnosis: A
-# against B says the exported epoch leaked into the package, either against the
-# unset run says the packaging clock did.
+# Report the three results together, because the different one gives the
+# cause. If A and B differ, the exported epoch went into the package.
+# If A or B differs from the unset run, the packaging clock went into it.
 if(NOT _sha_a STREQUAL _sha_b OR NOT _sha_a STREQUAL _sha_unset)
 	deb_timestamps("${_deb_a}" _stamps_a)
 	deb_timestamps("${_deb_b}" _stamps_b)
@@ -170,7 +168,7 @@ if(NOT _sha_a STREQUAL _sha_b OR NOT _sha_a STREQUAL _sha_unset)
 		"    entry timestamps: ${_stamps_unset_text}")
 endif()
 
-# Pinned, not merely stable: one timestamp for the whole archive.
+# Fixed, not only stable: one timestamp for the full archive.
 deb_timestamps("${_deb_unset}" _stamps)
 list(LENGTH _stamps _stamp_count)
 if(NOT _stamp_count EQUAL 1)
