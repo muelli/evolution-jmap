@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use eds_sys::{ESource, e_source_set_enabled};
 use glib_sys::GFALSE;
@@ -204,13 +204,21 @@ fn start<C: PendingChild + Send + 'static>(
         .name("jmap-pending-delete".to_owned())
         .spawn(move || {
             let mut unwatch = Unwatch(Some(child.uid()));
+            // The first wait sets the end on the monotonic clock, as the timer of
+            // the info bar does. A wall clock that moves back cannot extend it.
+            let mut end: Option<Instant> = None;
             loop {
                 let mut watched = watched();
-                let checked = check(&child, SystemTime::now());
+                let mut checked = check(&child, SystemTime::now());
                 if let Checked::Done(Settled::Wait(left)) = checked {
-                    drop(watched);
-                    thread::sleep(left);
-                    continue;
+                    let now = Instant::now();
+                    let end = *end.get_or_insert(now + left);
+                    if now < end {
+                        drop(watched);
+                        thread::sleep(left.min(end - now));
+                        continue;
+                    }
+                    checked = Checked::Due;
                 }
                 // The thread ends here, so remove the uid in the same lock
                 // as the check.

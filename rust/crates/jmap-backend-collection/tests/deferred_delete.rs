@@ -366,3 +366,64 @@ fn delete_later_defers_the_source_and_watches_the_child() {
         assert!(watch(again).is_none(), "the first thread still waits");
     });
 }
+
+/// A child whose due time moves one day later after the first check, as when
+/// the wall clock moves back by one day during the wait.
+struct ClockMovesBack {
+    child: Fake,
+    checks: AtomicU32,
+}
+
+impl PendingChild for ClockMovesBack {
+    fn uid(&self) -> String {
+        self.child.uid()
+    }
+
+    fn present(&self) -> bool {
+        self.child.present()
+    }
+
+    fn enabled(&self) -> bool {
+        self.child.enabled()
+    }
+
+    fn due(&self) -> Option<Due> {
+        let due = self.child.due()?;
+        if self.checks.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Some(due);
+        }
+        Due::from_stamp(due.stamp() + 86_400)
+    }
+
+    fn clear_due(&self) {
+        self.child.clear_due();
+    }
+
+    fn enable(&self) {
+        self.child.enable();
+    }
+
+    fn destroy_on_server(&self) -> Result<(), DeleteError> {
+        self.child.destroy_on_server()
+    }
+
+    fn remove(&self) -> Result<(), String> {
+        self.child.remove()
+    }
+}
+
+/// The info bar closes after at most one window. The destroy must not wait for
+/// the wall clock to catch up with the stored due time.
+#[test]
+fn a_clock_that_moves_back_during_the_wait_does_not_extend_it() {
+    with_timeout_duration(Duration::from_secs(20), || {
+        let due = Due::after_window(SystemTime::now() + Duration::from_secs(1) - UNDO_WINDOW);
+        let child = ClockMovesBack {
+            child: Fake::pending(due),
+            checks: AtomicU32::new(0),
+        };
+        let handle = watch(child).expect("a first watch of this child");
+
+        assert_eq!(handle.join().expect("no panic"), Settled::Destroyed);
+    });
+}
