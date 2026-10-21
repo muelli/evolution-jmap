@@ -696,9 +696,9 @@ fn drawn_tags(card: &ContactCard) -> Vec<&str> {
         .collect()
 }
 
-/// Tags from all `CATEGORIES` lines as a JSContact `keywords` Set.
-/// Returns `None` when no non-empty tags are present, so absence stays distinct
-/// from an explicit empty set in save comparisons.
+/// Build the JSContact `keywords` Set from all `CATEGORIES` lines.
+/// Return `None` when no non-empty tags exist.
+/// This keeps absence distinct from an explicit empty set in save comparisons.
 fn read_keywords(entries: &[VCardEntry]) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = entries
         .iter()
@@ -1148,10 +1148,10 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     // Emit the contact photo on `PHOTO`.
-    // Inline media keeps subtype metadata.
+    // Inline values keep subtype metadata.
     // URI references use `VALUE=uri`.
-    // libebook-contacts 3.52 uses the same selection rules.
-    // See [`photo`] for media kinds that emit no line.
+    // libebook-contacts 3.52 uses the same rules.
+    // See [`photo`] for media kinds that do not emit a line.
     for (key, media) in card.media.iter().flatten() {
         match photo(media) {
             None => continue,
@@ -2014,9 +2014,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 
 /// Decode one `PHOTO` line into one media entry.
 ///
-/// Support URI references (`VALUE=uri`) and inline image bytes.
+/// Read URI references (`VALUE=uri`) and inline image bytes.
 /// `calcard` already applies transfer decoding.
-/// Read `Text` and `Binary` values as they are.
+/// Read `Text` and `Binary` values as-is.
 /// Derive media type from `MEDIATYPE` or normalized `TYPE`.
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
     let raw_text = entry_text(entry);
@@ -2049,8 +2049,8 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
         })
         .or_else(|| entry_binary_content_type(entry).map(str::to_owned));
 
-    // `PHOTO` can only state images. Drop non-image types so parse and emit
-    // stay symmetric.
+    // `PHOTO` can only state images.
+    // Drop non-image types so parse and emit stay symmetric.
     let media_type = media_type_param.filter(|mt| image_subtype(mt).is_some());
 
     if states_value_uri {
