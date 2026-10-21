@@ -50,6 +50,14 @@ use jmap_config::complete::{Incomplete, check};
 use jmap_config::mail::MAIL_BACKEND_NAME;
 use jmap_config::oauth2;
 
+// Initialise the parent classes of the Evolution types before the tests start threads.
+jmap_backend_core::initialise_parents_before_main!(
+    jmap_config::backend::JmapConfigServiceBackend,
+    jmap_config::config_lookup::JmapConfigLookup,
+    jmap_config::source_config::JmapBookConfig,
+    jmap_config::source_config::JmapCalConfig,
+);
+
 /// The class that Evolution dispatches through. The test keeps a reference, so
 /// the slots and the name stay valid.
 struct Class(*mut JmapConfigServiceBackendClass);

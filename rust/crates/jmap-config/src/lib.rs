@@ -145,3 +145,9 @@ pub mod oauth2;
 pub mod oauth2_service;
 pub mod oauth2_setup;
 pub mod source_config;
+
+// Test binaries initialise the parent classes before their tests start threads.
+// Only the EDS types. The backends link this crate, but not Evolution's private
+// libraries. Thus a test that uses the Evolution types names them itself.
+#[cfg(feature = "testing")]
+jmap_backend_core::initialise_parents_before_main!(oauth2::Extension, oauth2_service::Service);

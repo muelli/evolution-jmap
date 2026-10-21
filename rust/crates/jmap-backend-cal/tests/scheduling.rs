@@ -14,7 +14,7 @@ use eds_sys::{
     E_CAL_OPERATION_FLAG_CONFLICT_KEEP_SERVER, E_CAL_OPERATION_FLAG_CONFLICT_USE_NEWER,
     E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE, E_CAL_OPERATION_FLAG_NONE,
     E_SOURCE_EXTENSION_WEBDAV_BACKEND, ECalBackendClass, ESource, e_source_get_extension,
-    e_source_get_type, e_source_has_extension, e_source_new_with_uid, e_source_webdav_get_type,
+    e_source_has_extension, e_source_new_with_uid, e_source_webdav_get_type,
     e_source_webdav_set_calendar_auto_schedule,
 };
 use glib_sys::{GFALSE, GTRUE};
@@ -157,20 +157,13 @@ fn a_reminder_dismissal_never_asks_the_server_to_send() {
     );
 }
 
-/// Registers the GTypes and builds the backend class on one thread, once.
-///
-/// Call this before a test touches a GType. If one thread registers `ESource`
-/// while another runs a `class_init` that needs it, GLib can deadlock.
-fn types_ready() {
+/// Registers the WebDAV extension once. A lookup by name cannot find the
+/// extension class until it is registered.
+fn webdav_ready() {
     static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        // SAFETY: no arguments. The class reference is kept for the process.
-        unsafe {
-            e_source_get_type();
-            // A lookup by name cannot find the extension class until it is registered.
-            e_source_webdav_get_type();
-            g_type_class_ref(register_static::<JmapCalBackend>());
-        }
+    // SAFETY: no arguments.
+    ONCE.call_once(|| unsafe {
+        e_source_webdav_get_type();
     });
 }
 
@@ -182,7 +175,7 @@ struct TestSource(*mut ESource);
 
 impl TestSource {
     fn new() -> Self {
-        types_ready();
+        webdav_ready();
         let uid = CString::new("jmap-cal-scheduling-test").expect("no NUL in a literal");
         let mut error = ptr::null_mut();
         // SAFETY: a NUL-terminated uid, the default main context and a NULL
@@ -262,7 +255,6 @@ fn without_a_source_nothing_is_claimed() {
 
 #[test]
 fn class_init_installs_get_backend_property_over_the_meta_backends() {
-    types_ready();
     let gtype = register_static::<JmapCalBackend>();
     // SAFETY: Referencing the registered class invokes class_init and returns the class struct.
     let class: *mut JmapCalBackendClass = unsafe { g_type_class_ref(gtype) }.cast();

@@ -30,6 +30,14 @@ use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_config::module::{load, unload};
 use jmap_config::oauth2::EXTENSION_NAME;
 
+// Initialise the parent classes of the Evolution types before the tests start threads.
+jmap_backend_core::initialise_parents_before_main!(
+    jmap_config::backend::JmapConfigServiceBackend,
+    jmap_config::config_lookup::JmapConfigLookup,
+    jmap_config::source_config::JmapBookConfig,
+    jmap_config::source_config::JmapCalConfig,
+);
+
 /// A `GTypeModule` in place of the `EModule` that Evolution loads this crate
 /// as. `tests/textdomain.rs` and `tests/module.rs` use the same substitute.
 #[repr(C)]

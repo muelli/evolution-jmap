@@ -28,7 +28,8 @@ use glib_sys::{GType, gpointer};
 use gobject_sys::{
     GInterfaceInfo, GInterfaceInitFunc, GObject, GObjectClass, GTypeInfo, GTypeInstance,
     GTypeModule, GTypeQuery, g_type_add_interface_static, g_type_class_peek, g_type_class_ref,
-    g_type_class_unref, g_type_from_name, g_type_module_add_interface, g_type_module_register_type,
+    g_type_class_unref, g_type_default_interface_ref, g_type_default_interface_unref,
+    g_type_from_name, g_type_get_plugin, g_type_module_add_interface, g_type_module_register_type,
     g_type_name, g_type_query, g_type_register_static,
 };
 
@@ -357,6 +358,62 @@ pub fn registered_type(name: &CStr) -> GType {
     gtype
 }
 
+/// Initialises the class of `T`'s parent and the default vtable of each
+/// interface that `T` declares, on this thread, now. Only static types are
+/// initialised. A static type keeps its class for the life of the process.
+///
+/// This prevents a deadlock in GLib. A foreign `class_init` often calls a
+/// lazy `*_get_type()` (`EBackend`'s asks for `ESource`). Thread A holds
+/// GLib's class-init lock in that `class_init` and waits in the accessor's
+/// `g_once_init_enter`. Thread B owns that once-init. It registers a type
+/// that implements an interface, and waits in `g_type_add_interface_static`
+/// for the class-init lock.
+///
+/// [`register_static`] and [`register_dynamic`] call this before they
+/// register `T`. In a module that is `e_module_load`, so the parents'
+/// initialisers run there, and the first reference to our class runs only
+/// our own `class_init`. A test binary starts many threads before it
+/// registers anything. Thus use [`initialise_parents_before_main!`](crate::initialise_parents_before_main)
+/// there as well.
+pub fn initialise_parents<T: ObjectSubclass>() {
+    initialise_foreign(T::parent_type(), &T::interfaces());
+}
+
+fn initialise_foreign(parent: GType, interfaces: &[InterfaceDecl]) {
+    // SAFETY: `parent` and each interface come from type accessors. A static
+    // type keeps a reference of its own, so the release keeps the class.
+    unsafe {
+        if g_type_get_plugin(parent).is_null() {
+            g_type_class_unref(g_type_class_ref(parent));
+        }
+        for interface in interfaces {
+            if g_type_get_plugin(interface.gtype).is_null() {
+                g_type_default_interface_unref(g_type_default_interface_ref(interface.gtype));
+            }
+        }
+    }
+}
+
+/// Calls [`initialise_parents`] for each named type before `main` starts.
+///
+/// Before `main`, a test binary has one thread, so no registration can run at
+/// the same time. Use it once in each crate root, behind the crate's
+/// `testing` feature. Name every type that the crate registers.
+#[macro_export]
+macro_rules! initialise_parents_before_main {
+    ($($subclass:ty),+ $(,)?) => {
+        const _: () = {
+            extern "C" fn initialise() {
+                $($crate::subclass::initialise_parents::<$subclass>();)+
+            }
+
+            #[used]
+            #[unsafe(link_section = ".init_array")]
+            static INITIALISE: extern "C" fn() = initialise;
+        };
+    };
+}
+
 /// Registers `T` as a static type, or returns the existing `GType` if it is
 /// already registered.
 ///
@@ -464,6 +521,7 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
     let interfaces = T::interfaces();
     let sizes = T::type_sizes();
     let _class_init_types = T::class_init_types();
+    initialise_foreign(parent, &interfaces);
 
     // A poisoned lock means that a different registration panicked. That
     // does not change the type system, so continue and do not panic.
@@ -901,5 +959,114 @@ mod tests {
             0,
             "the type was registered anyway, from under GLib's lock"
         );
+    }
+
+    /// What the parent's `class_init` saw: the child's `GType` when it ran,
+    /// plus one. Zero means that it did not run.
+    static CHILD_SEEN_BY_PARENT: AtomicUsize = AtomicUsize::new(0);
+
+    /// The same for the interface's `default_init`.
+    static CHILD_SEEN_BY_INTERFACE: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn fresh_parent_class_init(_class: gpointer, _data: gpointer) {
+        // SAFETY: NAME is a 'static NUL-terminated string.
+        let child = unsafe { g_type_from_name(ChildOfFresh::NAME.as_ptr()) };
+        CHILD_SEEN_BY_PARENT.store(child + 1, Ordering::SeqCst);
+    }
+
+    unsafe extern "C" fn fresh_interface_default_init(_vtable: gpointer, _data: gpointer) {
+        // SAFETY: as above.
+        let child = unsafe { g_type_from_name(ChildOfFresh::NAME.as_ptr()) };
+        CHILD_SEEN_BY_INTERFACE.store(child + 1, Ordering::SeqCst);
+    }
+
+    /// A static parent whose class nothing initialises before the child is
+    /// registered. It stands in for an EDS parent such as `ECalMetaBackend`.
+    fn fresh_parent() -> GType {
+        static PARENT: std::sync::OnceLock<GType> = std::sync::OnceLock::new();
+        // SAFETY: the sizes are those of GObject's own structs, and the
+        // initialiser matches GClassInitFunc.
+        *PARENT.get_or_init(|| unsafe {
+            gobject_sys::g_type_register_static_simple(
+                G_TYPE_OBJECT,
+                c"JmapBackendCoreFreshParent".as_ptr(),
+                size_of::<GObjectClass>() as u32,
+                Some(fresh_parent_class_init),
+                size_of::<GObject>() as u32,
+                None,
+                0,
+            )
+        })
+    }
+
+    /// A static interface whose default vtable nothing initialises first.
+    fn fresh_interface() -> GType {
+        static INTERFACE: std::sync::OnceLock<GType> = std::sync::OnceLock::new();
+        // SAFETY: a GTypeInterface-sized vtable, and an initialiser that
+        // matches GClassInitFunc.
+        *INTERFACE.get_or_init(|| unsafe {
+            gobject_sys::g_type_register_static_simple(
+                gobject_sys::G_TYPE_INTERFACE,
+                c"JmapBackendCoreFreshInterface".as_ptr(),
+                size_of::<gobject_sys::GTypeInterface>() as u32,
+                Some(fresh_interface_default_init),
+                0,
+                None,
+                0,
+            )
+        })
+    }
+
+    struct ChildOfFresh;
+
+    // SAFETY: the parent's structs are GObject's own, not extended.
+    unsafe impl ObjectSubclass for ChildOfFresh {
+        const NAME: &'static CStr = c"JmapBackendCoreChildOfFresh";
+        type Instance = GObject;
+        type Class = GObjectClass;
+
+        fn parent_type() -> GType {
+            fresh_parent()
+        }
+
+        fn interfaces() -> Vec<InterfaceDecl> {
+            vec![InterfaceDecl::defaults(fresh_interface())]
+        }
+    }
+
+    /// The class-init deadlock of `jmap-backend-cal`'s `tests/scheduling.rs`.
+    /// `EBackend`'s `class_init` asks for `ESource`. It ran on the first
+    /// reference to our class, on any thread. Registration now runs it, on
+    /// the registering thread, before our type exists. In a module, that is
+    /// `e_module_load`.
+    #[test]
+    fn registration_initialises_the_parent_class_and_interfaces_first() {
+        let child = register_static::<ChildOfFresh>();
+
+        assert_eq!(
+            CHILD_SEEN_BY_PARENT.load(Ordering::SeqCst),
+            1,
+            "the parent's class_init did not run before the child was registered"
+        );
+        assert_eq!(
+            CHILD_SEEN_BY_INTERFACE.load(Ordering::SeqCst),
+            1,
+            "the interface's default_init did not run before the child was registered"
+        );
+        // SAFETY: registered static types.
+        unsafe {
+            assert!(
+                !g_type_class_peek(fresh_parent()).is_null(),
+                "the parent class was not kept"
+            );
+            assert!(
+                !gobject_sys::g_type_default_interface_peek(fresh_interface()).is_null(),
+                "the default vtable was not kept"
+            );
+            assert!(
+                g_type_class_peek(child).is_null(),
+                "the child's own class was initialised"
+            );
+        }
     }
 }
