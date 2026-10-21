@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! In-memory server state: per-account typed object stores with id
-//! allocation, per-type state counters, and an append-only changes log.
+//! In-memory mock server state.
+//! Store typed objects per account, allocate ids, and keep per-type state counters.
+//! Keep an append-only changes log.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::Sender;
@@ -10,7 +11,7 @@ use std::sync::mpsc::Sender;
 use jmap_proto::push::StateChange;
 use jmap_proto::{Id, State};
 
-/// Snapshot of [`ServerState::type_state_snapshot`]: per-account type counters.
+/// Per-account type counters from [`ServerState::type_state_snapshot`].
 pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 
 /// Global mock-server state for fixture seeding and assertions.
@@ -45,7 +46,7 @@ pub struct ServerState {
     pub size_upload: Option<u64>,
     /// Whether `/.well-known/jmap` redirects to `/jmap/session` in auth redirect tests.
     pub session_via_redirect: bool,
-    /// Optional origin override for session URLs: `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
+    /// Optional origin override for `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
     pub advertise_origin: Option<String>,
     /// Optional redirect origin for `GET /download/...`. `None` serves blobs.
     pub download_via_redirect_to: Option<String>,
@@ -53,7 +54,7 @@ pub struct ServerState {
     pub reject_download_accept_json: bool,
     /// Whether `EmailSubmission/set` create omits echoed `identityId` and `emailId`.
     pub terse_submission_create: bool,
-    /// Whether `ContactCard/set` create returns only `id` in `created`.
+    /// Whether `ContactCard/set` create keeps only `id` in `created`.
     pub terse_contact_create: bool,
     /// Optional largest `ContactCard` create payload in JSON octets.
     /// Reject a larger payload as `tooLarge` (RFC 8620 section 5.3).
@@ -63,10 +64,10 @@ pub struct ServerState {
     /// Whether `CalendarEvent/set` create returns only `id` in `created`.
     pub terse_calendar_event_create: bool,
     /// Whether this server disables scheduling.
-    /// When true, reject `sendSchedulingMessages` in `CalendarEvent/set` as unknown
-    /// (RFC 8620 section 3.9).
+    /// When true, reject `sendSchedulingMessages` in `CalendarEvent/set` as unknown.
+    /// See RFC 8620 section 3.9.
     pub without_scheduling: bool,
-    /// Whether collection create omits echoed `name` and keeps server-computed fields.
+    /// Whether collection create omits echoed `name` and keeps server values.
     pub terse_collection_create: bool,
     /// Whether collection create omits `id` to model an RFC-violating server.
     pub id_omitting_collection_create: bool,
@@ -77,7 +78,7 @@ pub struct ServerState {
     /// Whether the Cyrus snooze extension is advertised.
     /// When true, the server accepts `Email.snoozed`.
     pub snooze_extension: bool,
-    /// Connected `/eventsource` subscribers for push delivery.
+    /// Connected `/eventsource` subscribers for state-change delivery.
     pub event_source: EventSourceHub,
 }
 
@@ -179,7 +180,7 @@ impl Default for ServerState {
     }
 }
 
-/// One `/eventsource` subscriber and its optional `types` filter.
+/// One `/eventsource` subscriber and optional `types` filter.
 struct Subscriber {
     sender: Sender<Vec<u8>>,
     types: Option<BTreeSet<String>>,
@@ -207,9 +208,9 @@ impl EventSourceHub {
         receiver
     }
 
-    /// Send `change` to each subscriber after optional type filtering.
+    /// Send `change` after optional type filtering.
     /// Drop disconnected subscribers.
-    /// Keep connected subscribers even when no type matches.
+    /// Keep connected subscribers when no type matches.
     pub fn broadcast(&mut self, change: &StateChange) {
         self.subscribers.retain(
             |subscriber| match filter_for(change, subscriber.types.as_ref()) {
@@ -250,7 +251,7 @@ fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<
     (!changed.is_empty()).then(|| StateChange::new(changed))
 }
 
-/// One account's data.
+/// Data for one account.
 pub struct AccountState {
     pub name: String,
     pub mailboxes: Store<jmap_proto::mail::Mailbox>,
@@ -265,7 +266,7 @@ pub struct AccountState {
     pub quotas: Store<jmap_proto::quota::Quota>,
     /// `SieveScript` objects (RFC 9661 §2.1), seeded empty.
     pub sieve_scripts: Store<jmap_proto::sieve::SieveScript>,
-    /// Accepted `EmailSubmission` records, for test assertions.
+    /// Accepted `EmailSubmission` records for test assertions.
     pub outbox: Vec<RecordedSubmission>,
     /// iTIP scheduling messages from `CalendarEvent/set`, kept for assertions.
     pub scheduling_outbox: Vec<RecordedSchedulingMessage>,
@@ -277,12 +278,13 @@ pub struct AccountState {
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
     pub principals: Store<jmap_proto::principals::Principal>,
     /// `ShareNotification` records (RFC 9670 §4), keyed by recipient id.
-    /// Stored per account because this mock maps bearer tokens into one account.
+    /// Store this per account because this mock maps bearer tokens to one account.
     pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
     /// `CalendarEventNotification` records keyed by recipient id.
-    /// This store uses the same single-account model.
+    /// This store uses the same one-account model.
     pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
-    /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5); `None` omits it.
+    /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5).
+    /// `None` omits it.
     pub current_user_principal_id: Option<Id>,
     /// Session `isPersonal` value for this account (RFC 8620 §1.6.2).
     /// `false` marks an account shared with the login (RFC 9670).
@@ -363,7 +365,7 @@ pub struct Blob {
     pub data: Vec<u8>,
 }
 
-/// A submission the mock accepted for "delivery".
+/// A submission the mock accepted for delivery.
 pub struct RecordedSubmission {
     pub id: Id,
     pub email_id: Id,
@@ -396,7 +398,7 @@ pub enum ChangeKind {
     Destroyed,
 }
 
-/// One changes-log entry: object `id` changed when state reached `state`.
+/// One changes log entry: object `id` changed when state reached `state`.
 #[derive(Debug, Clone)]
 pub struct Change {
     pub state: u64,
@@ -404,7 +406,7 @@ pub struct Change {
     pub id: Id,
 }
 
-/// Typed object store with monotonic state and prefixed ids for debugging.
+/// Typed object store with monotonic state and prefixed ids.
 pub struct Store<T> {
     prefix: &'static str,
     next_id: u64,
@@ -495,7 +497,7 @@ impl<T> Store<T> {
         result
     }
 
-    /// All changes since the given state counter value.
+    /// All changes after the given state counter value.
     pub fn changes_since(&self, since: u64) -> impl Iterator<Item = &Change> {
         self.changes
             .iter()
