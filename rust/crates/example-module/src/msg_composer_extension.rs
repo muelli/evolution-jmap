@@ -108,10 +108,10 @@ unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
         obj_class.constructed = Some(instance_constructed);
 
         let ext_class = &mut *(klass as *mut ffi::EExtensionClass);
-        // Resolve the type by name. Do not call a getter here.
-        // A getter can register a type inside class init.
-        // This can deadlock with another registration thread.
-        // `register_type` has already registered this type.
+        // Resolve the extensible type by name. Do not call a getter here.
+        // A getter can register a type during class init.
+        // That registration can deadlock with another thread.
+        // `register_type` already registers this type.
         ext_class.extensible_type = ffi::g_type_from_name(c"EMsgComposer".as_ptr());
     }
 }
