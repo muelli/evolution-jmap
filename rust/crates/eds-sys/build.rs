@@ -10,6 +10,8 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+mod feature_marker;
+
 /// The oldest supported EDS (Ubuntu 24.04, Fedora 40). The design rests on
 /// `e_book_meta_backend_*`, which EDS has since 3.26.
 const MIN_EDS: &str = "3.52";
@@ -771,7 +773,7 @@ const EDS_FEATURES: &[(&str, &str)] = &[
 fn emit_feature_cfgs(bindings: &str) {
     for (cfg, marker) in EDS_FEATURES {
         println!("cargo::rustc-check-cfg=cfg({cfg})");
-        if bindings.contains(marker) {
+        if feature_marker::has_marker(bindings, marker) {
             println!("cargo::rustc-cfg={cfg}");
             println!("cargo::metadata={cfg}=1");
         }
