@@ -133,19 +133,17 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
 
 ## 4. The rule
 
-1. **Default: the server schedules.** Every JMAP calendar server that we know
-   schedules. The draft makes scheduling mandatory after the client asks. The
-   draft offers no way to ask in advance. The backend therefore assumes
-   scheduling, unless the user says otherwise.
-2. **The switch belongs to the user, for each account.** A source setting
-   decides, like "Server handles meeting invitations" of CalDAV. The default
-   is on. A lax server can drop `sendSchedulingMessages` without an error
-   (section 2). No response can therefore prove that the server reached the
-   guests. The switch is the only reliable signal. The user guide must tell the
-   user to turn the switch off for a server that does not send invitations.
-3. **Switch on.** The backend advertises `create-messages`, `save-schedules`
-   and `itip-suppress-on-remove-supported`. Evolution therefore does not mail
-   the guests itself.
+1. **The server always schedules.** Every JMAP calendar server that we know
+   schedules. The draft makes scheduling mandatory after the client asks
+   (section 5.9.2). Evolution never mails the guests itself, and there is no
+   setting that makes it do so.
+2. **An old setting has no effect.** A calendar source can still carry
+   `[WebDAV Backend] CalendarAutoSchedule=false` from an earlier version. The
+   backend ignores it.
+3. **The backend advertises the scheduling capabilities.** These are
+   `create-messages`, `save-schedules` and
+   `itip-suppress-on-remove-supported`. Evolution therefore does not mail the
+   guests itself.
    - Creates, edits and deletes send `sendSchedulingMessages: true`.
    - The exception: the operation flags carry
      `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`. This means that the user
@@ -174,10 +172,7 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
      guests or the organizer of a meeting that the user organizes, or delete
      that meeting. The save fails with a permission error. While the backend
      is offline, `receive_objects` fails.
-4. **Switch off.** The backend advertises no capability. It never sends
-   `sendSchedulingMessages`. It still syncs the guests as data. Evolution
-   mails them as it does today.
-5. **Refusals are errors, not fallbacks.** When the server answers, Evolution
+4. **Refusals are errors, not fallbacks.** When the server answers, Evolution
    already knows that the backend sends. A quiet retry without scheduling
    would leave the guests uninvited. The user would not know.
    - `noSupportedScheduleMethods` fails the save. The message names the
@@ -185,7 +180,7 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
      (section 5.9.2).
    - `invalidArguments` on a call that carried `sendSchedulingMessages` means
      that the server does not implement it. The save fails in the same way. The
-     message tells the user to turn the switch off.
+     message tells the user to save the change without sending.
 
 ## 5. Where this lives
 
@@ -213,30 +208,14 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
     `uid`. If there is one, the create patches it (the invitation-mail answer
     in rule 3).
   - Tests: `tests/scheduling.rs` (mock) and `tests/live_server_scheduling.rs`
-    (two accounts on one real server). With the switch on, the calendar of
-    the guest gets the meeting exactly once and then its cancellation. With
-    the switch off, it gets nothing. When a guest accepts, from the editor or
+    (two accounts on one real server). With server scheduling on, the calendar
+    of the guest gets the meeting exactly once and then its cancellation.
+    With server scheduling off in the sync layer, it gets nothing. When a guest accepts, from the editor or
     from the invitation mail, the calendar keeps one copy and the answer
     reaches the organizer.
-- `jmap-backend-cal`: `scheduling.rs` reads the switch from the source of the
-  calendar. The CalDAV backend of EDS keeps the same option there:
-  `[WebDAV Backend] CalendarAutoSchedule`. An absent group means on (rule 1).
-  To turn the switch off, add this text
-
-  ```text
-  [WebDAV Backend]
-  CalendarAutoSchedule=false
-  ```
-
-  to the `.source` file of the calendar.
-  - A group that exists without the key also reads as off, because the
-    property defaults to false. This fails safe: Evolution mails the guests as
-    before.
-  - The backend reads the switch again for every change and every capability
-    query, as CalDAV does. `source_changed` tells clients that the
-    capabilities may have changed.
-  - While the switch is on, `get_backend_property` of the backend adds the
-    three capabilities to the answer of the meta backend.
+- `jmap-backend-cal`: `scheduling.rs` holds the rule.
+  - `get_backend_property` of the backend adds the three capabilities to the
+    answer of the meta backend.
   - `save_component_sync` and `remove_component_sync` map their operation
     flags to `Itip`.
   - `ops::to_gerror` turns the two refusals into translated messages. They say
@@ -244,11 +223,10 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
     - `Unreachable` becomes `E_CLIENT_ERROR_INVALID_ARG` (the meeting must
       change).
     - `NotImplemented` becomes `E_CLIENT_ERROR_NOT_SUPPORTED`. The message
-      names the "Server handles meeting invitations" switch, which the user
-      must turn off.
+      tells the user to save the change without sending.
   - Tests: `tests/scheduling.rs` and `tests/ops.rs` (in process). Also the
     `calendar-scheduling` leg of `jmap-functional`. It uses a real
     `evolution-calendar-factory` and an `ECalClient`. It checks the
-    capabilities with the switch at its default and with the switch off. It
-    also checks which creates and removes reach the scheduling outbox of the
-    mock server.
+    capabilities for a new source and for a source with an old
+    `CalendarAutoSchedule=false`. It also checks which creates and removes
+    reach the scheduling outbox of the mock server.

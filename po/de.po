@@ -69,17 +69,15 @@ msgstr ""
 "wurde die Änderung nicht gespeichert. Er kann diese Adressen nicht "
 "erreichen: %1$s."
 
-#. TRANSLATORS: shown when the server does not send meeting invitations itself. "Server handles meeting invitations" is the calendar's setting of that name.
+#. TRANSLATORS: shown when the server does not send meeting invitations.
 #: rust/crates/jmap-backend-cal/src/ops.rs:463
 msgid ""
-"This server does not send meeting invitations itself, so the change was not "
-"saved. Turn off “Server handles meeting invitations” for this calendar, and "
-"Evolution will send them instead."
+"This server cannot send meeting invitations, so the change was not saved. To "
+"save it, choose not to send the invitations."
 msgstr ""
-"Dieser Server versendet Besprechungseinladungen nicht selbst, daher wurde "
-"die Änderung nicht gespeichert. Schalten Sie für diesen Kalender »Server "
-"unterstützt Einladungen zu Besprechungen« aus, dann versendet Evolution sie "
-"stattdessen."
+"Dieser Server kann keine Besprechungseinladungen senden, daher wurde die "
+"Änderung nicht gespeichert. Um sie zu speichern, wählen Sie, die Einladungen "
+"nicht zu senden."
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.
 #: rust/crates/jmap-backend-cal/src/ops.rs:473

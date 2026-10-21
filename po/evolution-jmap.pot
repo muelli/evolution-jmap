@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-21 04:34+0000\n"
+"POT-Creation-Date: 2026-10-21 07:31+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -47,12 +47,11 @@ msgid ""
 "not saved. It has no way to reach: %1$s."
 msgstr ""
 
-#. TRANSLATORS: shown when the server does not send meeting invitations itself. "Server handles meeting invitations" is the calendar's setting of that name.
+#. TRANSLATORS: shown when the server does not send meeting invitations.
 #: rust/crates/jmap-backend-cal/src/ops.rs:472
 msgid ""
-"This server does not send meeting invitations itself, so the change was not "
-"saved. Turn off “Server handles meeting invitations” for this calendar, and "
-"Evolution will send them instead."
+"This server cannot send meeting invitations, so the change was not saved. To "
+"save it, choose not to send the invitations."
 msgstr ""
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.

@@ -13,10 +13,10 @@ use eds_sys::{
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackend, ECalBackend, ECalBackendSync, ECalComponent,
     ECalMetaBackend, ECalMetaBackendClass, ECalOperationFlags, EConflictResolution, EDataCal,
     ENamedParameters, ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent,
-    e_backend_get_source, e_cal_backend_notify_property_changed, e_cal_backend_set_writable,
-    e_cal_backend_sync_modify_objects, e_cal_cache_get_component, e_cal_client_error_create,
-    e_cal_component_get_as_string, e_cal_meta_backend_ensure_connected_sync,
-    e_cal_meta_backend_get_type, e_cal_meta_backend_ref_cache, e_cal_meta_backend_schedule_refresh,
+    e_backend_get_source, e_cal_backend_set_writable, e_cal_backend_sync_modify_objects,
+    e_cal_cache_get_component, e_cal_client_error_create, e_cal_component_get_as_string,
+    e_cal_meta_backend_ensure_connected_sync, e_cal_meta_backend_get_type,
+    e_cal_meta_backend_ref_cache, e_cal_meta_backend_schedule_refresh,
     e_cal_util_set_alarm_acknowledged, e_client_error_create, e_util_free_nullable_object_slist,
     time_t,
 };
@@ -38,7 +38,7 @@ use jmap_backend_core::retry::retry_on_authentication_failure;
 use jmap_backend_core::source::{backend_source, destination_address};
 use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::{guard, guard_bool, guard_value};
-use jmap_cal_sync::{CalSync, Itip};
+use jmap_cal_sync::CalSync;
 use jmap_client::Credentials;
 
 use crate::connect::{self, ACCEPTED_AUTH_RESULT, write_auth_result};
@@ -272,7 +272,7 @@ unsafe extern "C" fn connect_sync(
                 return GFALSE;
             };
 
-            // Server scheduling is enabled on sync; individual changes evaluate the account switch.
+            // The server sends invitations; each change can still suppress its own message.
             let sync = open.sync.with_server_scheduling(true);
             tracing::debug!(
                 account_id = sync.account_id().as_str(),
@@ -440,7 +440,7 @@ unsafe extern "C" fn save_component_sync(
                     overwrite_existing,
                     instances,
                     meta_backend.cast(),
-                    itip_for(meta_backend, opflags),
+                    scheduling::itip(opflags),
                     out_new_uid,
                     out_new_extra,
                     error,
@@ -468,7 +468,7 @@ unsafe extern "C" fn remove_component_sync(
             meta_backend,
             cancellable,
             error,
-            |sync, error| ops::remove_component(sync, uid, itip_for(meta_backend, opflags), error),
+            |sync, error| ops::remove_component(sync, uid, scheduling::itip(opflags), error),
         )
     }
 }
@@ -482,8 +482,6 @@ unsafe extern "C" fn source_changed(meta_backend: *mut ECalMetaBackend) {
     // SAFETY: Follows safety requirements of connect_sync.
     unsafe {
         guard("source_changed", (), || {
-            notify_capabilities(meta_backend.cast());
-
             let Some(backend) = instance(meta_backend) else {
                 return;
             };
@@ -705,7 +703,7 @@ unsafe fn fail_not_found(error: *mut *mut GError) {
     }
 }
 
-/// Returns backend capabilities, adding server scheduling when account switch is active.
+/// Returns backend capabilities with the server scheduling capabilities added.
 unsafe extern "C" fn get_backend_property(
     backend: *mut ECalBackend,
     prop_name: *const gchar,
@@ -723,44 +721,11 @@ unsafe extern "C" fn get_backend_property(
                 return inherited;
             }
 
-            let on = scheduling::server_handles_invitations(backend_source(backend.cast()));
-            let caps = scheduling::capabilities(read_string(inherited).as_deref(), on);
+            let caps = scheduling::capabilities(read_string(inherited).as_deref());
             g_free(inherited.cast());
-            tracing::debug!(server_schedules = on, "answered calendar capabilities");
             dup_string(&caps)
         })
     }
-}
-
-/// Notifies clients that backend capabilities changed.
-///
-/// # Safety
-///
-/// Follows safety requirements of [`backend_source`].
-unsafe fn notify_capabilities(backend: *mut ECalBackend) {
-    // SAFETY: Forwards preconditions from caller.
-    if unsafe { backend_source(backend.cast()) }.is_null() {
-        return;
-    }
-    // SAFETY: `backend` is constructed and property name is static string.
-    unsafe {
-        let value = get_backend_property(backend, CAPABILITIES_PROPERTY.as_ptr());
-        e_cal_backend_notify_property_changed(backend, CAPABILITIES_PROPERTY.as_ptr(), value);
-        g_free(value.cast());
-    }
-}
-
-/// Determines if operation sends iTIP messages based on account switch and flags.
-///
-/// # Safety
-///
-/// Follows safety requirements of [`backend_source`].
-unsafe fn itip_for(meta_backend: *mut ECalMetaBackend, opflags: ECalOperationFlags) -> Itip {
-    // SAFETY: Forwards preconditions from caller.
-    let source = unsafe { backend_source(meta_backend.cast()) };
-    // SAFETY: `source` is null or a live ESource reference.
-    let on = unsafe { scheduling::server_handles_invitations(source) };
-    scheduling::itip(on, opflags)
 }
 
 // ---------------------------------------------------------------------------

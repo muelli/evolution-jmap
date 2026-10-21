@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Tests which side tells the guests. When the account's "server handles meeting
-//! invitations" switch is on, each create, edit and delete asks the server to
-//! send the iTIP messages (`sendSchedulingMessages`, draft-ietf-jmap-calendars
-//! §5.9.2). The exception is a change for which Evolution sets
-//! `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`. When the switch is off, the
-//! server gets no request, and Evolution sends mail to the guests. The mock
+//! Tests which side tells the guests. With server scheduling on, each create,
+//! edit and delete asks the server to send the iTIP messages
+//! (`sendSchedulingMessages`, draft-ietf-jmap-calendars §5.9.2). The exception
+//! is a change for which Evolution sets `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`.
+//! With it off, the server gets no request. The mock
 //! records the messages in a scheduling outbox for each account.
 
 use jmap_cal_sync::{CalSync, Itip, SyncError, Unscheduled};

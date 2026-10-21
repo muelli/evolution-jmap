@@ -468,8 +468,8 @@ fn unscheduled(reason: &Unscheduled) -> String {
             &[addresses.join(", ").as_str()],
         ),
         Unscheduled::NotImplemented => translate(
-            // TRANSLATORS: shown when the server does not send meeting invitations itself. "Server handles meeting invitations" is the calendar's setting of that name.
-            c"This server does not send meeting invitations itself, so the change was not saved. Turn off “Server handles meeting invitations” for this calendar, and Evolution will send them instead.",
+            // TRANSLATORS: shown when the server does not send meeting invitations.
+            c"This server cannot send meeting invitations, so the change was not saved. To save it, choose not to send the invitations.",
         ),
     }
 }

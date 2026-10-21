@@ -196,16 +196,13 @@ impl CalSync {
         }
     }
 
-    /// Sets the account switch "server handles meeting invitations".
+    /// Lets the server send the iTIP messages. The calendar backend always turns this on.
     ///
-    /// When the switch is on, each create, edit and delete sends
-    /// `sendSchedulingMessages` (draft-ietf-jmap-calendars §5.9.2), unless the
-    /// change is [`Itip::Suppress`]. The server then sends mail to the guests,
-    /// or to the organizer when this account is only an attendee. The draft
-    /// gives no method to ask a server if it schedules, so the user must set
-    /// the switch (see `docs/MEETING-SCHEDULING.md`). When the switch is off
-    /// (the default), the server never gets the request. Evolution then sends
-    /// the iTIP itself, and a server request would send each guest two mails.
+    /// When on, each create, edit and delete sends `sendSchedulingMessages`
+    /// (draft-ietf-jmap-calendars §5.9.2), unless the change is
+    /// [`Itip::Suppress`]. The server then sends mail to the guests, or to the
+    /// organizer when this account is only an attendee. When off (the
+    /// default), the server never gets the request.
     ///
     /// The flag is sent also when the event has no participants. Such an event
     /// is not scheduled, so the server has nobody to send to. Thus a delete
