@@ -3048,8 +3048,8 @@ fn every_service_eds_has_a_field_for_gets_its_own_line() {
 #[test]
 fn a_service_eds_has_no_field_for_gets_no_line() {
     // Skip services without an editable EDS slot.
-    // A hidden line would make save logic treat unseen data as visible.
-    // Skip missing service names because no property line can be selected.
+    // Hidden lines make save logic treat unseen data as visible.
+    // Skip missing service names. No property line can be selected.
     for service in [Some("Signal"), Some("Twitter"), Some("SIP"), Some(""), None] {
         let vcard = card_to_vcard(&on_service(service, Some("handle")));
         assert!(
@@ -3061,9 +3061,9 @@ fn a_service_eds_has_no_field_for_gets_no_line() {
 
 #[test]
 fn unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader() {
-    // libebook-contacts 3.52 treats X-TWITTER and X-SIP as unslotted `EContactAttrList` fields.
-    // No _HOME_1..3 or _WORK_1..3 slot exists for these properties.
-    // Reader logic ignores X-TWITTER, X-SIP, and unknown X-SIGNAL.
+    // libebook-contacts 3.52 stores X-TWITTER and X-SIP as unslotted `EContactAttrList` fields.
+    // No _HOME_1..3 or _WORK_1..3 slot exists for these lines.
+    // The reader ignores X-TWITTER, X-SIP, and unknown X-SIGNAL lines.
     // This avoids unmodeled `online_services` entries.
     let vcard = "BEGIN:VCARD\r\n\
                  VERSION:3.0\r\n\
