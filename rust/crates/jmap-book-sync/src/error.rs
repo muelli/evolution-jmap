@@ -132,4 +132,53 @@ mod tests {
         );
         assert!(!SyncError::NotFound("uid-1".into()).is_unauthorized());
     }
+
+    #[test]
+    fn not_cannot_calculate_changes_for_an_unrelated_failure() {
+        assert!(
+            !SyncError::Client(jmap_client::Error::Http {
+                status: 403,
+                problem: None,
+            })
+            .is_cannot_calculate_changes()
+        );
+        assert!(!SyncError::NotFound("uid-1".into()).is_cannot_calculate_changes());
+    }
+
+    #[test]
+    fn sync_error_display_states_the_reason() {
+        assert_eq!(
+            SyncError::NotFound("uid-1".into()).to_string(),
+            "no contact with identifier uid-1"
+        );
+        assert_eq!(
+            SyncError::PhotoTooLarge { photo_octets: 2048 }.to_string(),
+            "the server refused the contact as too large; its photo is 2048 octets"
+        );
+    }
+
+    #[test]
+    fn source_is_only_the_wrapped_errors() {
+        use std::error::Error as _;
+
+        assert!(
+            SyncError::Client(jmap_client::Error::Http {
+                status: 500,
+                problem: None,
+            })
+            .source()
+            .is_some()
+        );
+        assert!(
+            SyncError::VCard(jmap_vcard::VCardError::NotAVCard)
+                .source()
+                .is_some()
+        );
+        assert!(SyncError::NotFound("uid-1".into()).source().is_none());
+        assert!(
+            SyncError::PhotoTooLarge { photo_octets: 1 }
+                .source()
+                .is_none()
+        );
+    }
 }
