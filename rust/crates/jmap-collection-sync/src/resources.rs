@@ -539,4 +539,41 @@ mod tests {
             "a share starts unsubscribed and Evolution cannot subscribe to it"
         );
     }
+
+    #[test]
+    fn a_calendars_order_default_and_rights_are_read_from_the_calendar() {
+        let late = Calendar {
+            id: Some(Id::new("Cal1")),
+            name: "Alpha".to_owned(),
+            sort_order: Some(2),
+            ..Calendar::default()
+        };
+        let early = Calendar {
+            id: Some(Id::new("Cal2")),
+            name: "Beta".to_owned(),
+            sort_order: Some(1),
+            is_default: Some(true),
+            my_rights: Some(CalendarRights {
+                may_write_all: Some(false),
+                may_write_own: Some(false),
+                may_delete: Some(false),
+                ..CalendarRights::default()
+            }),
+            ..Calendar::default()
+        };
+
+        let resources = resources(vec![late, early], Subscription::Honoured);
+
+        assert_eq!(
+            resources
+                .iter()
+                .map(|resource| resource.id.as_str())
+                .collect::<Vec<_>>(),
+            ["Cal2", "Cal1"],
+            "a lower sortOrder comes first, also before a lower name"
+        );
+        assert!(resources[0].is_default);
+        assert_eq!(resources[0].writable, Some(false));
+        assert_eq!(resources[0].deletable, Some(false));
+    }
 }
