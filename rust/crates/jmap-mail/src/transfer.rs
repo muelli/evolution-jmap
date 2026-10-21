@@ -1,80 +1,74 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `transfer_messages_to_sync`: the vfunc behind dragging a message into
-//! another folder.
+//! `transfer_messages_to_sync`: the vfunc that moves or copies a message into
+//! a different folder (for example, when the user drags it).
 //!
-//! [`crate::synchronize`] writes what the user changed *about* a message; this
-//! writes where it is. Both are one `Email/set` update, and the patch itself
-//! was built an increment ago as `jmap-mail-sync`'s [`Filing`] — a copy adds a
-//! `mailboxIds` member, a move adds one and takes another away, in one change.
-//! What is decided here is everything around that: which two mailboxes, what
-//! becomes of the rows the source folder is left holding, and which of Camel's
-//! several answers the caller gets.
+//! [`crate::synchronize`] writes changes *about* a message. This module writes
+//! the location of the message. Both send one `Email/set` update.
+//! `jmap-mail-sync`'s [`Filing`] makes the patch: a copy adds a `mailboxIds`
+//! member, a move adds one and removes one, in one change. This module decides
+//! the two mailboxes, the result for the rows of the source folder, and which of
+//! Camel's answers the caller gets.
 //!
 //! ## One request per message, not one per transfer
 //!
-//! One `Email/set` can carry an update for every selected message at once, and
-//! it would be applied as a single state change — so a transfer that half
-//! succeeded would come back as one failure with no way to say which messages
-//! moved. Camel asks about a list and needs an answer per message: a row that
-//! landed must leave the folder and a row that did not must stay in it. So the
-//! walk is a request per uid, exactly like [`crate::synchronize`]'s, and the
-//! first failure is what the vfunc reports once every message has been tried.
-//! Stopping at the first would leave the rest of the user's selection untouched
-//! for a reason that may say nothing about them.
+//! One `Email/set` can update all selected messages, but the server applies it
+//! as one state change. Thus a transfer that half succeeds would give one
+//! failure with no list of the moved messages. Camel asks about a list and needs
+//! one answer per message: a row that landed must leave the folder, and a row
+//! that did not land must stay. Thus the walk sends one request per uid, as
+//! [`crate::synchronize`] does. When it has tried every message, the vfunc
+//! reports the first failure. A stop at the first failure would leave the
+//! remaining selection unchanged, for a reason that possibly does not apply to it.
 //!
-//! ## What a move does to the folder it left
+//! ## The effect of a move on the source folder
 //!
-//! The rows go, now, rather than at the next listing. A refresh would reach the
-//! same answer — JMAP moves mail by changing `mailboxIds`, so a message that
-//! left the mailbox is one the next `Email/query` does not name — but "the next
-//! refresh" is a timer, and until it fires the message list would still be
-//! showing the message the user just moved out of it.
+//! The rows go immediately, not at the next listing. A refresh gives the same
+//! result: JMAP moves mail through `mailboxIds`, so the next `Email/query` does
+//! not name a message that left the mailbox. But the next refresh comes from a
+//! timer, and until then the message list still shows the moved message.
 //!
-//! Removing a row also removes the only record of a change the user has made
-//! and not yet saved: Camel keeps that on the row, marked with
-//! `CAMEL_MESSAGE_FOLDER_FLAGGED`, until `synchronize_sync` writes it. So a
-//! move settles the row before it takes it away, through the same function the
-//! synchronisation walk uses. It costs nothing for a row nobody changed — the
-//! diff is empty and no request is made — and it is the difference between a
-//! flag surviving a move and this provider dropping it in silence.
+//! A removed row also removes the only record of an unsaved change of the user.
+//! Camel keeps that change on the row, with the mark `CAMEL_MESSAGE_FOLDER_FLAGGED`,
+//! until `synchronize_sync` writes it. Thus a move settles the row before it
+//! removes it, with the same function as the synchronisation walk. For an
+//! unchanged row this costs nothing: the diff is empty and there is no request.
+//! Without this step, a move would lose a flag change silently.
 //!
-//! ## What is not decided here
+//! ## What this module does not decide
 //!
-//! **The destination folder's rows.** Nothing is added to them, and the message
-//! appears there when that folder is next listed. The listing is the only thing
-//! that knows what a row in it should say: what this side holds is a uid, and a
-//! row built from a uid alone would be a message list line with no subject,
-//! sender or date until the refresh replaced it.
+//! **The rows of the destination folder.** This module adds no row there. The
+//! message appears when the next listing of that folder occurs. Only the listing
+//! knows the contents of a row: this module has only a uid. A row made from a
+//! uid only would show no subject, sender or date until the refresh replaced it.
 //!
-//! ## Stopping one
+//! ## Stopping a transfer
 //!
-//! The `cancellable` is [`observe`]d for the length of the call. A stop between
-//! two messages leaves the ones already filed filed — a move is one `Email/set`
-//! per message and there is no transaction over the set — and the rows of those
-//! messages are removed from this folder, so what the user sees matches what the
-//! server holds.
+//! The vfunc [`observe`]s the `cancellable` for the full call. A stop between two
+//! messages keeps the messages already filed in their new mailbox: there is one
+//! `Email/set` per message and no transaction over the set. For a move, this
+//! folder also removes the rows of those messages, so the display agrees with
+//! the server.
 //!
-//! ## The one folder-mutating vfunc Camel does not lock for us
+//! ## The one folder-changing vfunc that Camel does not lock
 //!
 //! `camel_folder_refresh_info_sync`, `_synchronize_sync` and `_expunge_sync`
-//! each take `camel_folder_lock` on the folder for the whole of the vfunc
-//! call — checked directly against evolution-data-server 3.52.3's
-//! `camel-folder.c`, not assumed from the header — so on any one folder, a
-//! refresh, a synchronisation and an expunge are already mutually exclusive.
-//! `camel_folder_transfer_messages_to_sync`'s own wrapper does not: it only
-//! locks the *destination* on the cross-store path this vfunc is never
-//! reached for (that one goes through `append_message_sync` instead), and
-//! takes nothing on the source before dispatching here.
+//! each hold `camel_folder_lock` on the folder for the full vfunc call. This is
+//! verified in `camel-folder.c` of evolution-data-server 3.52.3, not taken from
+//! the header. Thus, on one folder, a refresh, a synchronisation and an expunge
+//! cannot run at the same time.
+//! `camel_folder_transfer_messages_to_sync`'s wrapper is different. It locks
+//! only the *destination*, and only on the cross-store path, which never comes
+//! to this vfunc (it uses `append_message_sync`). It locks nothing on the source
+//! before it calls this vfunc.
 //!
-//! Without a lock of its own, this vfunc's `camel_folder_summary_remove_uid`
-//! below can land in the same window as an unrelated refresh's own
-//! reconciliation of the *source* folder's summary — a listing the refresh
-//! asked for before this transfer's `Email/set` moved the message away
-//! still, truthfully, named it, and applying that listing after this
-//! function's removal writes the row straight back. [`FolderLock`] closes
-//! that window the way the other three vfuncs' own wrappers already do.
+//! Without its own lock, the `camel_folder_summary_remove_uid` call below can
+//! occur during an unrelated refresh of the *source* folder's summary. That
+//! refresh can have a listing from before this `Email/set`, which correctly names
+//! the message. If the refresh applies that listing after the removal, the row
+//! comes back. [`FolderLock`] closes that window, as the wrappers of the other
+//! three vfuncs do.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
@@ -102,34 +96,33 @@ use crate::connect::StoreError;
 use crate::folder::{JmapFolder, folder_type, parent_store};
 use crate::synchronize::push_row;
 
-/// Installs the folder's filing vfunc on a class whose first member is a
+/// Installs the filing vfunc of the folder on a class whose first member is a
 /// `CamelFolderClass`.
 ///
 /// # Safety
 ///
-/// `class` must point at an initialised class struct that leads with a
-/// `CamelFolderClass` — which is every descendant of `CamelFolder`.
+/// `class` must point at an initialised class struct that starts with a
+/// `CamelFolderClass` (every descendant of `CamelFolder` does).
 pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
     vfuncs.transfer_messages_to_sync = Some(transfer_messages_to_sync);
 }
 
-/// Files every named message into `destination`, and out of `source` if the
-/// originals are to go.
+/// Files every named message into `destination`, and removes it from `source`
+/// if the originals are to go.
 ///
-/// `TRUE` for a transfer in which nothing failed, `FALSE` with the error set
-/// otherwise — Camel's convention, and what `camel_folder_transfer_messages_to`
-/// reports to the user.
+/// Returns `TRUE` if nothing failed, otherwise `FALSE` with the error set. This
+/// is Camel's convention, and `camel_folder_transfer_messages_to` reports it to
+/// the user.
 ///
-/// The vfunc is reached only for a transfer between two folders of one store:
-/// `camel_folder_transfer_messages_to_sync` answers a transfer into the folder
-/// the messages are already in and one of no messages itself, and sends
-/// anything crossing stores down its own path of `get_message` and
-/// `append_message`. That path ends at [`crate::append`], which uploads the
-/// message and files it with `Email/import` (RFC 8621 §4.8) — a different
-/// request entirely, because a message from another account is one this one has
-/// never seen.
+/// Camel calls this vfunc only for a transfer between two folders of one store.
+/// `camel_folder_transfer_messages_to_sync` itself answers a transfer into the
+/// same folder and a transfer of no messages. It sends a transfer between stores
+/// through `get_message` and `append_message`. That path ends at
+/// [`crate::append`], which uploads the message and files it with `Email/import`
+/// (RFC 8621 §4.8). That is a different request, because this account has never
+/// seen a message from a different account.
 unsafe extern "C" fn transfer_messages_to_sync(
     source: *mut CamelFolder,
     message_uids: *mut GPtrArray,
@@ -143,24 +136,24 @@ unsafe extern "C" fn transfer_messages_to_sync(
     // uids of the first, and out-parameters that are NULL or writable.
     unsafe {
         guard_bool("transfer_messages_to_sync", error, || {
-            // SAFETY: `source` is a live `CamelFolder`, by this function's
-            // contract — held for the rest of the call, for the reason this
-            // module's docs give.
+            // SAFETY: `source` is a live `CamelFolder` by the contract of this
+            // function. The lock stays for the rest of the call (see the module
+            // docs for the reason).
             let _lock = FolderLock::acquire(source);
 
-            // SAFETY: Camel keeps its cancellable alive for the length of the
-            // call, so it outlives this observation — which is what makes
-            // every request below here stop when the user presses Stop.
+            // SAFETY: Camel keeps its cancellable alive for the full call, so
+            // it outlives this observation. Thus every request below stops when
+            // the user presses Stop.
             let _cancel = observe(cancellable);
 
             let uids = uid_list(message_uids);
             let reported = Reported::new(transferred_uids, uids.len());
 
-            // Type-checked rather than assumed, unlike `source`: GObject
-            // dispatched this call on the source's class, while the
-            // destination is whatever the caller passed. Camel picks the
-            // *destination's* class when it is a vtrash folder, so a folder of
-            // someone else's arriving here is a case the wrapper allows for.
+            // Check the type of `destination`, but not of `source`: GObject
+            // dispatched on the class of the source, and the destination is any
+            // folder of the caller. Camel uses the class of the *destination*
+            // when it is a vtrash folder, so the wrapper permits a destination
+            // of a different provider here.
             let Some(into) = mailbox_of(destination) else {
                 return fail_bool(
                     error,
@@ -189,11 +182,9 @@ unsafe extern "C" fn transfer_messages_to_sync(
                 true => Filing::moved(out_of.clone(), into.clone()),
                 false => Filing::copied_into(into.clone()),
             };
-            // A move into the mailbox the messages are already in: the one
-            // filing that cannot be written down, and therefore one that must
-            // not take the rows away either. Camel's own wrapper settles the
-            // usual way of asking for it — the same `CamelFolder` twice — but
-            // two folders of one mailbox are a pair it cannot recognise.
+            // A move into the current mailbox has no patch, so it must not
+            // remove the rows. Camel's wrapper catches the same `CamelFolder`
+            // twice, but not two folders of one mailbox.
             if filing.is_empty() {
                 return GTRUE;
             }
@@ -202,8 +193,8 @@ unsafe extern "C" fn transfer_messages_to_sync(
             let mut failure = None;
             for (index, uid) in uids.iter().enumerate() {
                 let filed = file_message(source, summary, uid, &filing, moving);
-                // A message that is not on the server at all is not in this
-                // folder either, whichever way the transfer was going.
+                // A message that is not on the server is also not in this
+                // folder, for a copy and for a move.
                 let leaves = match &filed {
                     Ok(true) => moving,
                     Ok(false) => false,
@@ -225,8 +216,8 @@ unsafe extern "C" fn transfer_messages_to_sync(
                 }
             }
 
-            // What tells a message list that is already on screen; the rows
-            // above are only what the next one would be drawn from.
+            // This tells a message list on screen about the removed rows. The
+            // summary rows only supply the next list that is drawn.
             if !changes.is_empty() {
                 camel_folder_changed(source, changes.as_ptr());
             }
@@ -239,16 +230,13 @@ unsafe extern "C" fn transfer_messages_to_sync(
     }
 }
 
-/// `camel_folder_lock`, released on drop — see this module's docs for why
-/// `transfer_messages_to_sync` has to take it explicitly rather than
-/// inheriting it from Camel's own wrapper the way the other folder-mutating
-/// vfuncs do.
+/// `camel_folder_lock`, released on drop. The module docs tell why
+/// `transfer_messages_to_sync` must take it itself, unlike the other
+/// folder-changing vfuncs.
 ///
-/// A plain RAII guard rather than a lock taken and dropped by hand: the
-/// function it guards has several early returns (a bad destination, a
-/// missing summary, a move into the mailbox the messages are already in),
-/// and a lock released on only one of those paths is a lock a later bug
-/// leaves held forever.
+/// An RAII guard, not a manual lock and unlock: the guarded function has
+/// several early returns (a bad destination or source, no summary, a move into
+/// the current mailbox). A later bug can leave a manual lock held on one of them.
 struct FolderLock(*mut CamelFolder);
 
 impl FolderLock {
@@ -265,24 +253,21 @@ impl FolderLock {
 
 impl Drop for FolderLock {
     fn drop(&mut self) {
-        // SAFETY: the folder locked in `acquire`, by this type's own
-        // contract, still live — nothing below this vfunc's call frame
-        // released it.
+        // SAFETY: by the contract of this type, the folder locked in `acquire`
+        // is still live: nothing below the call frame of this vfunc released it.
         unsafe { camel_folder_unlock(self.0) };
     }
 }
 
-/// Files one message, reporting whether it landed.
+/// Files one message, and returns whether it landed.
 ///
-/// `Ok(false)` is the one outcome that is neither: a uid Camel stored and this
-/// cannot read back as text is not one the server can be asked about either,
-/// and it is not a row this provider put there. It is left exactly as it is —
-/// not reported as transferred, not taken out of the folder, not counted as a
-/// failure of the account.
+/// `Ok(false)` means neither landed nor failed: the uid is not valid text, so
+/// the server cannot receive it, and this provider did not make that row. The
+/// row stays as it is: not reported as transferred, not removed, not a failure.
 ///
-/// A move settles the row first, for the reason this module's header gives: the
-/// row is about to go, and it is the only place a change the user has not saved
-/// yet is written down. A row nobody changed makes no request there.
+/// A move settles the row first (see the module header): the move removes the
+/// row, which is the only record of an unsaved change. An unchanged row sends
+/// no request there.
 ///
 /// # Safety
 ///
@@ -297,7 +282,7 @@ unsafe fn file_message(
     let Ok(text) = uid.to_str() else {
         return Ok(false);
     };
-    // SAFETY: the contract above, and `push_row` takes the same pair.
+    // SAFETY: the contract above. `push_row` has the same contract for this pair.
     unsafe {
         if moving {
             push_row(folder, summary, uid)?;
@@ -308,23 +293,22 @@ unsafe fn file_message(
     Ok(true)
 }
 
-/// The mailbox `folder` is a view of, if it is a folder of this provider at
-/// all.
+/// The mailbox that `folder` shows, if `folder` is a folder of this provider.
 ///
 /// # Safety
 ///
 /// `folder` must be NULL or point at a live `CamelFolder`.
 unsafe fn mailbox_of<'a>(folder: *mut CamelFolder) -> Option<&'a Id> {
-    // SAFETY: the contract above; the type check is what makes the borrow
-    // below sound, exactly as it is for the store behind a folder.
+    // SAFETY: the contract above. The type check makes the borrow below sound,
+    // as it does for the store of a folder.
     unsafe { checked_borrow::<_, JmapFolder>(folder, folder_type())?.mailbox() }
 }
 
-/// The uids Camel named, copied out of its array.
+/// A copy of the uids in Camel's array.
 ///
-/// Copied rather than borrowed because the walk that follows removes rows from
-/// the summary and makes a request per uid, while the array belongs to the
-/// caller — and, in Camel's own vee-folder path, is rebuilt between calls.
+/// A copy, not a borrow: the walk removes rows from the summary and makes one
+/// request per uid. The array belongs to the caller, and Camel's vee-folder path
+/// rebuilds it between calls.
 ///
 /// # Safety
 ///
@@ -333,8 +317,8 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<CString> {
     if array.is_null() {
         return Vec::new();
     }
-    // SAFETY: the contract above; every string lives as long as the array,
-    // which outlives this call, and each is copied here.
+    // SAFETY: the contract above. Each string lives as long as the array, the
+    // array outlives this call, and this code copies each string.
     unsafe {
         (0..(*array).len)
             .filter_map(|index| {
@@ -345,24 +329,20 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<CString> {
     }
 }
 
-/// Where the transferred messages ended up, for the caller that asked.
+/// The destination uids of the transferred messages, for a caller that asks.
 ///
-/// The answer JMAP gives is the question: RFC 8621 §4.1 gives an `Email` one
-/// immutable id per account, and filing it into another mailbox does not make a
-/// second object — so the message in the destination is the message that was in
-/// the source, under the uid the caller passed in. A protocol whose server mints
-/// a new uid in the destination has something to look up here; this one has
-/// something to copy.
+/// In JMAP, the destination uid is the source uid. RFC 8621 §4.1 gives an
+/// `Email` one immutable id per account. Filing into a different mailbox makes
+/// no second object. Thus this code copies the uid; it does not search for one.
 ///
-/// Allocated and filled the way Camel's own generic transfer does it, because
-/// that is the shape its callers free: an array sized to the uid list up front,
-/// `NULL` in the slot of any message that did not land, and every string one
-/// `g_free` will release.
+/// The array has the shape of Camel's generic transfer, because its callers free
+/// that shape. The array has one slot per uid from the start. A message that did
+/// not land has `NULL`. One `g_free` releases each string.
 struct Reported(*mut GPtrArray);
 
 impl Reported {
-    /// Hands the caller an empty array of the right size, or nothing if it did
-    /// not ask.
+    /// Gives the caller an empty array of the correct size, or nothing if the
+    /// caller did not ask.
     ///
     /// # Safety
     ///
@@ -371,9 +351,9 @@ impl Reported {
         if out.is_null() {
             return Self(ptr::null_mut());
         }
-        // SAFETY: a fresh array, sized so that every slot exists before any is
-        // written; `set_size` NULLs the new ones, which is what a message that
-        // did not land leaves behind.
+        // SAFETY: a new array, sized so that every slot exists before a write.
+        // `set_size` sets the new slots to NULL, the value for a message that
+        // did not land.
         unsafe {
             let array = g_ptr_array_new();
             g_ptr_array_set_size(array, len as c_int);
@@ -382,7 +362,7 @@ impl Reported {
         }
     }
 
-    /// Records where the message at `index` of the caller's list ended up.
+    /// Records the destination uid of the message at `index` of the caller's list.
     ///
     /// # Safety
     ///
@@ -392,12 +372,12 @@ impl Reported {
         if self.0.is_null() {
             return;
         }
-        // SAFETY: the contract above; the copy is the caller's to free.
+        // SAFETY: the contract above. The caller frees the copy.
         unsafe { *(*self.0).pdata.add(index) = g_strdup(uid.as_ptr()).cast() };
     }
 }
 
-/// The path Camel keys the folder by, for an error message about it.
+/// The path that Camel uses as the key of the folder, for an error message.
 ///
 /// # Safety
 ///
@@ -406,7 +386,7 @@ unsafe fn name_of(folder: *mut CamelFolder) -> String {
     if folder.is_null() {
         return String::new();
     }
-    // SAFETY: the accessor returns a string the folder owns and outlives the
-    // call; `read_string` copies it.
+    // SAFETY: the accessor returns a string that the folder owns and that
+    // outlives the call. `read_string` copies it.
     unsafe { read_string(camel_folder_get_full_name(folder)).unwrap_or_default() }
 }
