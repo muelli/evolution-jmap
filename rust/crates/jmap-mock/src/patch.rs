@@ -8,9 +8,9 @@
 
 use serde_json::{Map, Value};
 
-/// Apply a patch map to an object.
-/// Create intermediate objects when needed.
-/// Return an error if a path crosses a non-object segment.
+/// Apply a patch map to `target`.
+/// Create intermediate objects as needed.
+/// Return an error when a path crosses a non-object segment.
 pub(crate) fn apply_patch(target: &mut Value, patch: &Map<String, Value>) -> Result<(), String> {
     let Value::Object(_) = target else {
         return Err("patch target is not an object".to_owned());

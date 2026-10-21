@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Date arithmetic for the mock's fixed clock.
+//! Date arithmetic for the mock fixed clock.
 //!
-//! This module keeps the parser and formatter needed by reproducible tests.
+//! Keep the parser and formatter needed by reproducible tests.
 
 /// Parse `YYYY-MM-DDTHH:MM:SS[.fraction]Z` into Unix seconds.
-/// Fractional seconds are accepted and dropped.
-/// Returns `None` for malformed fields and non-`Z` offsets.
-/// Does not validate month-length combinations such as February 31.
+/// Accept fractional seconds and drop them.
+/// Return `None` for malformed fields and non-`Z` offsets.
+/// Do not validate month-length combinations such as February 31.
 pub fn parse_utc(date: &str) -> Option<i64> {
     let rest = date.strip_suffix('Z')?;
     let (date_part, time_part) = rest.split_once('T')?;
