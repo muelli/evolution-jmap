@@ -467,9 +467,7 @@ fn ecalcomponent_categories_location_url_and_descriptions_in_eds() {
         assert!(!comp.is_null());
 
         // Categories string accessor
-        let categories_raw = e_cal_component_get_categories(comp);
-        assert!(!categories_raw.is_null());
-        let categories_str = CStr::from_ptr(categories_raw).to_str().unwrap();
+        let categories_str = take_string(e_cal_component_get_categories(comp));
         assert_eq!(categories_str, "offsite,planning");
 
         // Categories list accessor
@@ -493,17 +491,12 @@ fn ecalcomponent_categories_location_url_and_descriptions_in_eds() {
         g_slist_free_full(cat_list, Some(free_gchar));
 
         // Location accessor
-        let loc_raw = e_cal_component_get_location(comp);
-        assert!(!loc_raw.is_null());
-        assert_eq!(CStr::from_ptr(loc_raw).to_str().unwrap(), "Room 42");
+        let location = take_string(e_cal_component_get_location(comp));
+        assert_eq!(location, "Room 42");
 
         // URL accessor
-        let url_raw = e_cal_component_get_url(comp);
-        assert!(!url_raw.is_null());
-        assert_eq!(
-            CStr::from_ptr(url_raw).to_str().unwrap(),
-            "https://meet.example.com/planning"
-        );
+        let url = take_string(e_cal_component_get_url(comp));
+        assert_eq!(url, "https://meet.example.com/planning");
 
         // Summary text accessor
         let summary_text = e_cal_component_get_summary(comp);
@@ -1178,6 +1171,7 @@ fn icalrecurrence_properties_and_string_roundtrips() {
         );
 
         g_object_unref(vevent.cast());
+        g_object_unref(until_time.cast());
         g_object_unref(recur.cast());
     }
 }
@@ -1395,6 +1389,7 @@ fn icaltime_date_vs_datetime_and_timezone_resolution() {
         let rendered = take_string(i_cal_component_as_ical_string(vtz));
         assert!(rendered.contains("BEGIN:VTIMEZONE"), "{rendered}");
         assert!(rendered.contains("TZID:"), "{rendered}");
+        g_object_unref(vtz.cast());
     }
 }
 
@@ -1857,6 +1852,7 @@ fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
         e_cal_component_id_free(cloned_id.cast());
         g_object_unref(cloned_event.cast());
         g_object_unref(e_event.cast());
+        g_object_unref(event_comp.cast());
 
         // 2. VEVENT that overrides one recurrence instance
         let instance_comp = i_cal_component_get_next_component(calendar, I_CAL_VEVENT_COMPONENT);
@@ -1868,6 +1864,7 @@ fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
         assert_eq!(e_cal_component_get_vtype(e_instance), E_CAL_COMPONENT_EVENT);
         assert_eq!(e_cal_component_is_instance(e_instance), 1);
         g_object_unref(e_instance.cast());
+        g_object_unref(instance_comp.cast());
 
         // 3. VTODO component
         let todo_comp = i_cal_component_get_first_component(calendar, I_CAL_VTODO_COMPONENT);
@@ -1878,6 +1875,7 @@ fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
         assert_eq!(e_cal_component_get_vtype(e_todo), E_CAL_COMPONENT_TODO);
         assert_eq!(e_cal_component_is_instance(e_todo), 0);
         g_object_unref(e_todo.cast());
+        g_object_unref(todo_comp.cast());
 
         // 4. VJOURNAL component
         let journal_comp = i_cal_component_get_first_component(calendar, I_CAL_VJOURNAL_COMPONENT);
@@ -1890,6 +1888,7 @@ fn ecalcomponent_vtypes_cloning_and_string_serialization_in_eds() {
             E_CAL_COMPONENT_JOURNAL
         );
         g_object_unref(e_journal.cast());
+        g_object_unref(journal_comp.cast());
 
         g_object_unref(calendar.cast());
     }
@@ -1978,6 +1977,7 @@ fn ecalcomponent_geo_coordinates_and_task_completion_in_eds() {
         );
 
         g_object_unref(comp.cast());
+        g_object_unref(event.cast());
 
         // 4. VTODO percent complete, priority and sequence
         let todo = i_cal_component_get_first_component(calendar, I_CAL_VTODO_COMPONENT);
@@ -2000,6 +2000,7 @@ fn ecalcomponent_geo_coordinates_and_task_completion_in_eds() {
         );
 
         g_object_unref(comp_todo.cast());
+        g_object_unref(todo.cast());
         g_object_unref(calendar.cast());
     }
 }

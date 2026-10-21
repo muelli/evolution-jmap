@@ -1240,6 +1240,7 @@ fn camel_mime_part_headers_disposition_and_encoding_in_eds() {
             std::ffi::CStr::from_ptr(mime_type).to_str().unwrap(),
             "application/pdf"
         );
+        glib_sys::g_free(mime_type.cast());
 
         gobject_sys::g_object_unref(part.cast());
     }
@@ -1318,6 +1319,7 @@ fn camel_multipart_container_and_part_management_in_eds() {
 
         gobject_sys::g_object_unref(part2.cast());
         gobject_sys::g_object_unref(part1.cast());
+        gobject_sys::g_object_unref(mp.cast());
         gobject_sys::g_object_unref(msg.cast());
     }
 }
@@ -1595,6 +1597,8 @@ fn camel_mime_message_attachment_and_reply_to_in_eds() {
         let found_part =
             camel_mime_message_get_part_by_content_id(msg, c"invoice-100@example.com".as_ptr());
         assert_eq!(found_part, att_part);
+        // EDS documents the result as `(transfer none)`, but it adds a reference.
+        gobject_sys::g_object_unref(found_part.cast());
 
         let not_found =
             camel_mime_message_get_part_by_content_id(msg, c"non-existent-id@example.com".as_ptr());
@@ -1602,6 +1606,7 @@ fn camel_mime_message_attachment_and_reply_to_in_eds() {
 
         gobject_sys::g_object_unref(att_part.cast());
         gobject_sys::g_object_unref(text_part.cast());
+        gobject_sys::g_object_unref(mp.cast());
         gobject_sys::g_object_unref(reply_to.cast());
         gobject_sys::g_object_unref(msg.cast());
     }
@@ -2034,7 +2039,8 @@ fn camel_uid_cache_operations_in_eds() {
         #[cfg(camel_uid_cache_get_new_uids)]
         {
             // Make a query array with both old and new UIDs
-            let query_array = glib_sys::g_ptr_array_new();
+            // The cache copies each uid, so the array frees its own copies.
+            let query_array = glib_sys::g_ptr_array_new_with_free_func(Some(glib_sys::g_free));
             glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1001".as_ptr()).cast());
             glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1002".as_ptr()).cast());
             glib_sys::g_ptr_array_add(query_array, glib_sys::g_strdup(c"UID-1003".as_ptr()).cast());
