@@ -97,7 +97,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // End the active entry on blank lines and `#~` obsolete lines.
+        // Close the pending entry on blank lines and `#~` obsolete lines.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -202,7 +202,7 @@ fn take(
         });
     };
 
-    // Keep the fuzzy header entry so `charset=` stays available.
+    // Keep a fuzzy header entry so `charset=` stays available.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -245,7 +245,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // Reject trailing backslashes in quoted strings.
+        // Reject a trailing backslash in a quoted string.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -257,7 +257,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // Reject escapes outside this accepted subset.
+            // Reject escapes outside this accepted set.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -273,7 +273,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // Write the header, both `(length, offset)` tables, then one string block.
+    // Write the file header, both `(length, offset)` tables, and one string block.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();
@@ -311,7 +311,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // Keep trailing NUL bytes out of `.mo` table lengths.
+    // Do not count the trailing NUL byte in `.mo` table lengths.
     blob.push(0);
     Ok(())
 }
