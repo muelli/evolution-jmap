@@ -29,6 +29,7 @@ use gobject_sys::{
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_config::module::{load, unload};
 use jmap_config::oauth2::EXTENSION_NAME;
+use jmap_config::pending_delete::EXTENSION_NAME as PENDING_DELETE;
 
 // Initialise the parent classes of the Evolution types before the tests start threads.
 jmap_backend_core::initialise_parents_before_main!(
@@ -127,6 +128,12 @@ fn the_module_load_registers_the_oauth2_extension_type() {
          Evolution's own source parsing would silently drop that group in \
          this process before anything calls jmap_config::oauth2::apply/read \
          on the same source"
+    );
+    // SAFETY: as above. The module load also registers the pending-delete type.
+    let pending = unsafe { e_source_get_extension(source, PENDING_DELETE.as_ptr()) };
+    assert!(
+        !pending.is_null(),
+        "e_module_load did not register the [JMAP Pending Delete] extension type"
     );
 
     // SAFETY: a live source this test created.

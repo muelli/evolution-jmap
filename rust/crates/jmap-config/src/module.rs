@@ -55,6 +55,7 @@
 //! parsing of this process silently drops the `[JMAP OAuth2]` group of an
 //! existing OAuth2 account (not only this crate leaves it unread).
 //! `tests/oauth2_module.rs` tests this path.
+//! The `[JMAP Pending Delete]` extension type registers here for the same reason.
 //!
 //! ## Guarded, as the others are
 //!
@@ -147,6 +148,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
             register_dynamic::<JmapCalConfig>(type_module);
         }
         crate::oauth2::ensure_registered();
+        crate::pending_delete::ensure_registered();
     });
 }
 

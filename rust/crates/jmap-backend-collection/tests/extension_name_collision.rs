@@ -12,7 +12,7 @@
 // class that `g_type_children` finds last. That depends on the registration
 // state at the first lookup, which a reader cannot see.
 //
-// This crate has two custom extensions. `e_source_camel_generate_subtype` gives
+// This crate has three custom extensions. `e_source_camel_generate_subtype` gives
 // the name `"<Protocol> Backend"` to the `ESourceCamel` subtype of a protocol.
 // Thus the Camel settings of the `jmap` provider are in `[Jmap Backend]`. That
 // name must not be the name of the `jmap_backend_core::rebase` extension (it
@@ -62,7 +62,7 @@ impl Drop for Source {
     }
 }
 
-/// The extension name that EDS generates for the protocol of this crate. Both
+/// The extension name that EDS generates for the protocol of this crate. All
 /// custom extensions are registered in the order that shows a collision.
 ///
 /// If two classes have the same name, `g_type_children` selects the class by
@@ -93,6 +93,7 @@ fn camel_extension_name() -> &'static CStr {
         };
         jmap_backend_core::rebase::ensure_registered();
         jmap_config::oauth2::ensure_registered();
+        jmap_config::pending_delete::ensure_registered();
         name
     });
     // SAFETY: an interned, NUL-terminated string that is never freed.
@@ -124,6 +125,18 @@ fn the_oauth2_extension_does_not_answer_to_the_camel_subtypes_name() {
             camel_extension_name(),
             "the OAuth2 extension and the generated ESourceCamel subtype claim \
              one keyfile group"
+        );
+    });
+}
+
+#[test]
+fn the_pending_delete_extension_does_not_answer_to_the_camel_subtypes_name() {
+    with_timeout(|| {
+        assert_ne!(
+            jmap_config::pending_delete::EXTENSION_NAME,
+            camel_extension_name(),
+            "the pending-delete extension and the generated ESourceCamel \
+             subtype claim one keyfile group"
         );
     });
 }
