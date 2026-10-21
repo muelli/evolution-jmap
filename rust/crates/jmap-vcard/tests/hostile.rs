@@ -50,6 +50,7 @@ fn a_file_uri_photo_from_the_server_is_not_written_as_a_photo_line() {
         "file:///home/user/.ssh/id_ed25519",
         "ftp://files.example.net/avatar.jpg",
         "smb://server/share/avatar.png",
+        "://empty-scheme.example/avatar.png",
         "avatar.png",
     ] {
         let vcard = card_to_vcard(&card_with_photo_uri(uri));
@@ -77,7 +78,9 @@ fn inbound_photo_uri_references_with_unsupported_schemes_are_dropped() {
         "PHOTO;VALUE=uri:file:///home/user/.face",
         "PHOTO;VALUE=uri:ftp://files.example.net/avatar.jpg",
         "PHOTO;VALUE=uri:smb://server/share/avatar.png",
+        "PHOTO;VALUE=uri:://empty-scheme.example/avatar.png",
         "PHOTO:file:///home/user/.face",
+        "PHOTO:://empty-scheme.example/avatar.png",
     ] {
         let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n");
         let parsed = vcard_to_card(&vcard).expect("parse card with unsupported photo uri");

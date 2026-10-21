@@ -525,6 +525,11 @@ fn states_unsupported_photo_uri(uri: &str) -> bool {
     })
 }
 
+/// Whether this value looks like a URI reference with an empty scheme.
+fn states_empty_scheme_photo_uri(uri: &str) -> bool {
+    uri.starts_with("://")
+}
+
 /// Return the URI scheme name when the value starts with one.
 fn uri_scheme(value: &str) -> Option<&str> {
     let (scheme, _) = value.split_once(':')?;
@@ -2062,6 +2067,10 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
     }
 
     if states_unsupported_photo_uri(&raw_text) {
+        return None;
+    }
+
+    if states_empty_scheme_photo_uri(&raw_text) {
         return None;
     }
 
