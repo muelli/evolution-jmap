@@ -6646,7 +6646,7 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
         email_lines[3]
     );
 
-    // 2. Tie-breaking: when multiple emails have identical pref (e.g. pref: 1), break tie by key
+    // 2. Break ties on equal `pref` values by key.
     let tie_card = ContactCard {
         emails: Some(
             [
@@ -6681,7 +6681,7 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
     assert!(tie_lines[0].contains("X-JMAP-KEY=e_alpha"));
     assert!(tie_lines[1].contains("X-JMAP-KEY=e_beta"));
 
-    // 3. No-PREF-present fallback: when all emails have pref: None, fall back to key order
+    // 3. Use key order when all `pref` values are `None`.
     let none_card = ContactCard {
         emails: Some(
             [
@@ -6716,7 +6716,7 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
     assert!(none_lines[0].contains("X-JMAP-KEY=e_a") && !none_lines[0].contains("PREF"));
     assert!(none_lines[1].contains("X-JMAP-KEY=e_z") && !none_lines[1].contains("PREF"));
 
-    // 4. Fixed-point roundtrip stability
+    // 4. Verify fixed-point roundtrip stability.
     let back = vcard_to_card(&emitted).expect("parse back");
     let re_emitted = card_to_vcard(&back);
     assert_eq!(emitted, re_emitted);
@@ -7962,7 +7962,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         },
     );
 
-    // Build an inline PHOTO payload as a data URI.
+    // Build an inline `PHOTO` payload as a data URI.
     let binary_data: Vec<u8> = (0..350).map(|i| (i % 256) as u8).collect();
     let base64_payload = base64::engine::general_purpose::STANDARD.encode(&binary_data);
     let photo_uri = format!("data:image/jpeg;base64,{base64_payload}");
@@ -7993,7 +7993,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
     // Write vCard output.
     let vcard = card_to_vcard(&card);
 
-    // NOTE and PHOTO should include folded continuation lines.
+    // `NOTE` and `PHOTO` must include folded continuation lines.
     assert!(vcard.contains("\r\n "));
 
     // Each physical line must stay within the RFC line-length limit.
@@ -8013,30 +8013,29 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
     // Parse output and check unfolded values.
     let read_card = vcard_to_card(&vcard).expect("parse folded vcard");
 
-    // NOTE should round-trip without text changes.
+    // `NOTE` must round-trip without text changes.
     let read_notes = read_card.notes.as_ref().expect("notes present");
     assert_eq!(
         read_notes["n1"].note, long_note_text,
         "Folded NOTE did not unfold losslessly"
     );
 
-    // PHOTO should keep media type and payload text.
+    // `PHOTO` must keep media type and payload text.
     let read_media = read_card.media.as_ref().expect("media present");
     assert_eq!(read_media["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(read_media["m1"].media_type.as_deref(), Some("image/jpeg"));
     assert_eq!(read_media["m1"].uri, photo_uri);
 
-    // Verify fixed-point stability: emitting the parsed card produces identical vCard
+    // Emit the parsed card again and verify fixed-point stability.
     let vcard2 = card_to_vcard(&read_card);
     assert_eq!(vcard2, vcard, "Emitted folded vCard must be at fixed-point");
 }
 
 #[test]
 fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
-    // RFC 2426 §2.6: Lines can be folded with CRLF + space OR CRLF + tab.
-    // Unfolding removes the CRLF and the immediately following space/tab continuation marker.
-    // If multiple spaces/tabs follow, only the first is the folding marker;
-    // subsequent spaces/tabs are part of the value.
+    // RFC 2426 §2.6: fold lines with `CRLF` plus space or tab.
+    // Unfolding removes `CRLF` and one continuation marker.
+    // Keep later spaces or tabs as payload bytes.
     let prefolded_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:prefolded-card-1\r\n",
@@ -9661,7 +9660,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
     };
 
     let vcard = card_to_vcard(&card);
-    // Only the plain website link should emit a URL line.
+    // Emit `URL` only for plain website links.
     assert_eq!(vcard.matches("\r\nURL").count(), 1);
     assert_eq!(
         line(&vcard, "URL"),
@@ -9681,8 +9680,8 @@ fn url_kind_filtering_and_contact_uri_omission() {
 
 #[test]
 fn url_eds_blog_video_and_custom_extensions_characterization() {
-    // EDS blog and video URL properties map to link kinds.
-    // Vendor-prefixed variants without X-EVOLUTION- stay ignored.
+    // Map EDS blog and video URL properties to link kinds.
+    // Ignore vendor-prefixed variants without `X-EVOLUTION-`.
     let raw_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Alice Baker\r\n",
