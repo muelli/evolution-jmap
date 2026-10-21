@@ -3,11 +3,11 @@
 
 #![forbid(unsafe_code)]
 
-//! Run an in-memory mock JMAP server with mutable state.
-//! Integration tests use this crate for the JMAP surface they need.
-//! Tests inspect server state through `Arc<Mutex<..>>`.
-//! The server listens on `127.0.0.1` over plain HTTP with `tiny_http`.
-//! `/eventsource` uses a separate thread.
+//! Provide an in-memory mock JMAP server with mutable state.
+//! Use this crate in integration tests for the JMAP surface under test.
+//! Inspect server state through `Arc<Mutex<..>>`.
+//! The server listens on `127.0.0.1` over plain HTTP through `tiny_http`.
+//! The `/eventsource` endpoint runs on a separate thread.
 
 mod auth;
 mod blob;

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Implement `Quota/*` methods from RFC 9425.
-//! This module is read only.
+//! This module is read-only.
 //! RFC 9425 defines no `Quota/set` method.
 
 use jmap_proto::Id;
