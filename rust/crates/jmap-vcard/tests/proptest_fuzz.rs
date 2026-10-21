@@ -725,7 +725,7 @@ prop_compose! {
             Just("X-SIGNAL".to_string()),
             Just("X-TELEGRAM".to_string()),
             Just("X-CUSTOM".to_string()),
-            // Include vCard 4.0 property names. vCard 3.0 treats them as unknown.
+            // Add vCard 4.0 property names. vCard 3.0 treats them as unknown.
             Just("IMPP".to_string()),
             Just("RELATED".to_string()),
             Just("ANNIVERSARY".to_string()),
@@ -790,7 +790,7 @@ prop_compose! {
                 Just(";ALTID=group1;LANGUAGE=ja".to_string()),
                 Just(";X-CUSTOM-PARAM=val1".to_string()),
                 Just(";X-VENDOR-STATUS=ACTIVE".to_string()),
-                // Include vCard 4.0 parameter forms that vCard 3.0 parsers can read.
+                // Add vCard 4.0 parameter forms that vCard 3.0 parsers can read.
                 Just(";MEDIATYPE=image/png".to_string()),
                 Just(";MEDIATYPE=image/jpeg".to_string()),
                 Just(";MEDIATYPE=image/webp".to_string()),
@@ -810,7 +810,7 @@ prop_compose! {
                 Just(";PREF=1".to_string()),
                 Just(";PREF=2".to_string()),
                 Just(";PREF=10".to_string()),
-                // Include vCard 2.1 bare parameter tokens from older producers.
+                // Add vCard 2.1 bare parameter tokens from older producers.
                 Just(";WORK".to_string()),
                 Just(";HOME".to_string()),
                 Just(";CELL".to_string()),
@@ -1144,7 +1144,7 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
     Ok(())
 }
 
-// Keep an empty full name with only `given` stable.
+// Keep fixed-point stability for an empty full name with only `given`.
 #[test]
 fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
     let card = ContactCard {
@@ -1168,7 +1168,7 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
-// Preserve the leading slot semicolon for empty names with units.
+// Keep the leading slot semicolon for empty names with units.
 #[test]
 fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first_emit() {
     let mut organizations = BTreeMap::new();
@@ -1233,7 +1233,7 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
     assert_eq!(parsed1.organizations, None);
 }
 
-// Use this regression seed to keep `ADR` lines at 75 octets or less.
+// Use this regression seed to keep `ADR` lines at or below 75 octets.
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
@@ -1316,7 +1316,7 @@ proptest! {
     fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
         let vcard = card_to_vcard(&card);
         for line in vcard.split("\r\n") {
-            // RFC 2426 §2.6 requires physical lines within 75 octets.
+            // RFC 2426 §2.6 limits physical lines to 75 octets.
             prop_assert!(
                 line.len() <= 75,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
