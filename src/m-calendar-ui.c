@@ -28,7 +28,7 @@
 #include "m-utils.h"
 #include "m-calendar-ui.h"
 
-/* e_calendar_view_get_selected_events() uses GSList across supported EDS versions. */
+/* In all supported Evolution versions, e_calendar_view_get_selected_events() returns a GSList. */
 static void
 do_action_calendar_event (EShellView *shell_view)
 {
@@ -104,7 +104,7 @@ calendar_has_selected_event (EShellView *shell_view)
 
 #if JMAP_EVO_EUI_MANAGER
 
-/* Use a module-owned group name; EUI action lookup is manager-wide. */
+/* Use a group name that only this module owns. The EUI manager finds an action by name in all groups. */
 #define GROUP_NAME "example-module-calendar"
 
 static void
@@ -123,7 +123,7 @@ action_calendar_event_cb (EUIAction *action,
 	do_action_calendar_event (E_SHELL_VIEW (user_data));
 }
 
-/* Entry 0 is selection-gated; entry 1 remains always sensitive. */
+/* A selected event enables entry 0. Entry 1 is always enabled. */
 static const EUIActionEntry calendar_entries[] = {
 	{ "my-calendar-ui-action",
 	  "document-new",
@@ -159,7 +159,7 @@ void
 m_calendar_ui_init (EUIManager *ui_manager,
 		    EShellView *shell_view)
 {
-	/* Keep the historical IDs and placeholders from evolution-calendars.eui. */
+	/* Keep the IDs and placeholders that evolution-calendars.eui defines. */
 	const gchar *ui_def =
 		"<eui>"
 		"<menu id='main-menu'>"

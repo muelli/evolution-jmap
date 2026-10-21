@@ -136,7 +136,7 @@ m_shell_view_extension_constructed (GObject *object)
 	extensible = e_extension_get_extensible (extension);
 
 #if JMAP_EVO_EUI_MANAGER
-	/* Merge menus in constructed(); the old EShellView::toggled path is gone. */
+	/* Merge the menus in constructed(). The EUI versions of Evolution do not use the EShellView::toggled path. */
 	{
 		EShellView *shell_view = E_SHELL_VIEW (extensible);
 		const gchar *name = e_shell_view_get_name (shell_view);

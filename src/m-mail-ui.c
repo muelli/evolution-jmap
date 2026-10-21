@@ -125,7 +125,7 @@ do_action_mail_message (EShellView *shell_view)
 	g_clear_object (&folder);
 }
 
-/* Compute the two action gates shared by both menu layers. */
+/* Calculate the two conditions that enable the actions. The EUI code and the GtkUIManager code both use them. */
 static void
 mail_update_state (EShellView *shell_view,
 		   gboolean *folder_node,
@@ -160,7 +160,7 @@ mail_update_state (EShellView *shell_view,
 	g_object_unref (folder_tree);
 	g_free (selected_path);
 
-	/* This only checks the shell view, not detached EMailBrowser windows. */
+	/* This check reads only the shell view. It does not read separate EMailBrowser windows. */
 	shell_content = e_shell_view_get_shell_content (shell_view);
 	g_object_get (shell_content, "mail-view", &mail_view, NULL);
 	if (E_IS_MAIL_PANED_VIEW (mail_view)) {
@@ -173,7 +173,7 @@ mail_update_state (EShellView *shell_view,
 
 #if JMAP_EVO_EUI_MANAGER
 
-/* Use a module-owned group name; EUI action lookup is manager-wide. */
+/* Use a group name that only this module owns. The EUI manager finds an action by name in all groups. */
 #define GROUP_NAME "example-module-mail"
 
 static void
@@ -192,7 +192,7 @@ action_mail_message_cb (EUIAction *action,
 	do_action_mail_message (E_SHELL_VIEW (user_data));
 }
 
-/* Entry 0 is folder-gated; entry 1 is message-selection-gated. */
+/* A selected folder enables entry 0. A selected message enables entry 1. */
 static const EUIActionEntry mail_entries[] = {
 	{ "my-mail-ui-folder-action",
 	  "folder-new",
@@ -231,7 +231,7 @@ void
 m_mail_ui_init (EUIManager *ui_manager,
 		EShellView *shell_view)
 {
-	/* Keep the historical IDs and placeholders from the mail EUI files. */
+	/* Keep the IDs and placeholders that the mail EUI files define. */
 	const gchar *ui_def =
 		"<eui>"
 		"<menu id='main-menu'>"
