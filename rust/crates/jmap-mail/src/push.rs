@@ -746,7 +746,13 @@ mod tests {
 
         assert_eq!(
             *seen.lock().expect("not poisoned"),
-            vec![check_only, messages_only.union(check_only)],
+            vec![
+                check_only,
+                Work {
+                    refresh_messages: true,
+                    check_folder_list: true,
+                }
+            ],
             "the coalesced pass must do both kinds of work, not just one"
         );
 

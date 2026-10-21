@@ -387,3 +387,24 @@ actually compiles and runs):
   result here was noise, most likely a stale incremental build reused
   across cargo-mutants' scratch copy, not a disposition this file needs to
   record.
+
+## `src/push.rs`
+
+18 mutants: 11 caught, 6 unviable, 1 fixed with a test.
+
+- `crates/jmap-mail/src/push.rs:296:9` (`WeakStore::with_strong`),
+  `replace ... with Some(Default::default())`, and
+  `crates/jmap-mail/src/push.rs:450:5` (`lock`), all four
+  `MutexGuard::new`/`from`/`from_iter` variants. All six fail to compile:
+  the generic `R` in `with_strong` carries no `Default` bound, and
+  `MutexGuard` exposes no public constructor at all, so cargo-mutants'
+  generic substitutions do not build. The usual unviable pattern, same
+  reason as this crate's other `Default`/opaque-type entries.
+- `crates/jmap-mail/src/push.rs:141:55` (`Work::union`), `replace || with
+  &&` on `check_folder_list`. Not equivalent: the existing
+  `work_requested_during_a_pass_unions_into_the_next_one` test computed its
+  expected value by calling `messages_only.union(check_only)` itself, so
+  mutating `union` changed both sides of the assertion identically and the
+  test could never fail. Replaced the right-hand side with the literal
+  `Work { refresh_messages: true, check_folder_list: true }`; verified red
+  by hand against the mutant, green on master.
