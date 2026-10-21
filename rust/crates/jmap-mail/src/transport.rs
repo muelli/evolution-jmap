@@ -1,50 +1,54 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CamelJmapTransport`: the service an account's mail leaves through.
+//! `CamelJmapTransport`: the service that sends the mail of an account.
 //!
-//! Camel splits an account in two. The [`crate::store`] is the mail the account
-//! *holds* — folders, summaries, message bodies — and a `CamelTransport` is the
-//! mail it *sends*, and the two are separate objects with no pointer between
-//! them. Evolution constructs each from its own `ESource`, gives each its own
-//! settings object, and connects each on its own schedule: the store when the
-//! user opens a folder, the transport when they press Send.
+//! Camel divides an account into two separate objects with no pointer between
+//! them. The [`crate::store`] holds the mail (folders, summaries, message
+//! bodies), and a `CamelTransport` sends the mail.
 //!
-//! That split is a fact about Camel rather than about JMAP, where both halves
-//! are the same session against the same server. It is still the shape this
-//! type has to take, because there is no supported way for a transport to reach
-//! the store of the account it belongs to: `camel_session_get_service` needs a
-//! uid this service does not carry, and Evolution's pairing of the two lives in
-//! `EMailAccountStore`, above Camel. So the transport opens a connection of its
-//! own — one more HTTP client against a server the account is already talking
-//! to, made once per send session rather than per message.
+//! Evolution constructs each object from its own `ESource`, with its own
+//! settings object. The store connects when the user opens a folder, the
+//! transport when the user clicks Send.
 //!
-//! What it therefore carries is one slot and no more: the connection, between
-//! `connect_sync` and `disconnect_sync`. There is no folder listing, because a
-//! transport lists nothing; the mailboxes sending needs — the one a message is
-//! staged in and the one it is filed into afterwards — are read over the
-//! connection at send time, and are not state this object keeps.
+//! In JMAP, both halves are one session against one server. But a transport
+//! has no supported path to the store of its account.
 //!
-//! ## What is shared with the store, and what is not
+//! `camel_session_get_service` needs a uid that this service does not have,
+//! and Evolution pairs the two services in `EMailAccountStore`, above Camel.
 //!
-//! The settings class is [`crate::settings`], the same one: it is the same
-//! account, and a transport that inherited `CamelSettings` would have no host,
-//! no port and no user for `e_source_camel_configure_service` to write. The
-//! `CamelService` vfuncs are [`crate::service`]'s, the same four, installed here
-//! for this type — connecting is the same operation on either service, and the
-//! only thing that differs is which object the connection it produced is put
-//! on. That is [`Connected`], which this type implements below.
+//! Thus the transport opens its own connection: one more HTTP client to the
+//! same server, made once per send session, not once per message.
 //!
-//! Not shared: the connection itself. Two services, two clients, and neither
-//! disconnect takes the other's away.
+//! The type holds only one slot: the connection, from `connect_sync` to
+//! `disconnect_sync`. It holds no folder listing, because a transport lists
+//! nothing.
+//!
+//! A send needs two mailboxes: the mailbox that stages the message and the
+//! mailbox that files it after the send. The transport reads them over the
+//! connection at send time and does not keep them.
+//!
+//! ## What the transport shares with the store
+//!
+//! The settings class is [`crate::settings`], the same as for the store,
+//! because it is the same account. An inherited `CamelSettings` has no host,
+//! no port and no user for `e_source_camel_configure_service` to write.
+//!
+//! The `CamelService` vfuncs are the same four from [`crate::service`],
+//! installed for this type. Connecting is the same operation on each service.
+//! Only the object that receives the connection is different: a
+//! [`Connected`], which this type implements below.
+//!
+//! The connection is not shared. Each service has its own client, and the
+//! disconnect of one service does not remove the client of the other.
 //!
 //! ## What it does
 //!
-//! `send_to_sync`, which is the reason the type exists, and which is
-//! [`crate::send`]: everything about the GObject and the connection is here,
-//! everything about Camel's arguments and its answers is there.
-//! [`JmapTransport::send_message`] below is the join in between — the three
-//! account-side operations a send is made of, under one hold of the connection.
+//! It implements `send_to_sync`, the reason this type exists, with
+//! [`crate::send`]. This module handles the GObject and the connection;
+//! [`crate::send`] handles the arguments and answers of Camel.
+//! [`JmapTransport::send_message`] below joins the two: it does the
+//! account-side operations of a send under one hold of the connection.
 //!
 //! [`MailSync::identity_for`]: jmap_mail_sync::MailSync::identity_for
 //! [`MailSync::outgoing_mailboxes`]: jmap_mail_sync::MailSync::outgoing_mailboxes
@@ -79,47 +83,45 @@ use crate::service::Connected;
 use crate::settings::settings_type;
 use crate::store::{read, write};
 
-/// What a message that went out left behind.
+/// The result of a sent message.
 pub struct Sent {
-    /// The id the account holds the message under now — the one the server
-    /// minted for the import, and the uid the sent copy is listed by.
+    /// The id of the message in the account now. The server makes this id for
+    /// the import, and the sent copy uses it as its uid.
     pub uid: Id,
-    /// Whether that copy is in the mailbox the account keeps sent mail in,
-    /// which is Camel's `out_sent_message_saved`: a caller told `false` saves a
-    /// copy of its own, and a caller told `true` does not.
+    /// Whether that copy is in the mailbox for sent mail: Camel's
+    /// `out_sent_message_saved`. If `false`, the caller saves its own copy.
     ///
-    /// It is [`OutgoingMailboxes::saves_sent_copy`] unchanged, and it is
-    /// deliberately not "was the message filed anywhere" — see there.
+    /// It is [`OutgoingMailboxes::saves_sent_copy`] unchanged. It does not mean
+    /// "the server filed the message in a mailbox": see there.
     ///
     /// [`OutgoingMailboxes::saves_sent_copy`]: jmap_mail_sync::OutgoingMailboxes::saves_sent_copy
     pub saved: bool,
 }
 
-/// The instance struct. `#[repr(C)]` leading with the parent's instance struct
-/// is what makes a `*mut JmapTransport` usable as the `CamelTransport *` every
-/// Camel function takes.
+/// The instance struct. `#[repr(C)]` with the parent instance struct first
+/// lets a `*mut JmapTransport` be the `CamelTransport *` of each Camel function.
 #[repr(C)]
 pub struct JmapTransport {
     parent: CamelTransport,
     /// The connection, from `connect_sync` to `disconnect_sync`.
     ///
-    /// An `RwLock` for the store's reason rather than out of symmetry: Camel
-    /// sends from a thread of its own, and Evolution's outbox will hand a
-    /// transport several messages one after another while the user carries on
-    /// composing. Only connect and disconnect, which replace the value, need
-    /// exclusive access; a send is a *use* of the connection and takes the read
-    /// lock, so a second send does not queue behind the first's upload.
+    /// It is an `RwLock` for the same reason as in the store: Camel sends from
+    /// its own thread, and the outbox gives a transport messages in sequence.
+    ///
+    /// Only connect and disconnect replace the value and need exclusive access.
+    /// A send takes the read lock, so it does not wait for the upload of another send.
     connection: Slot<RwLock<Option<MailSync>>>,
 }
 
 impl JmapTransport {
-    /// Installs `sync` as the live connection, replacing whatever was there.
+    /// Installs `sync` as the live connection and replaces the previous one.
     ///
-    /// Replacing rather than refusing, for [`JmapStore::store_connection`]'s
-    /// reason: Camel reconnects a service it believes has gone away, and the
-    /// connection being replaced is the one it believes that about. Nothing is
-    /// dropped alongside it — unlike the store, this service holds no listing
-    /// that the old connection's server is the only explanation for.
+    /// It replaces and does not refuse, for the reason in
+    /// [`JmapStore::store_connection`]: Camel reconnects a service that it
+    /// thinks is lost, and the replaced connection is that lost one.
+    ///
+    /// Nothing else is dropped with it. Unlike the store, this service holds
+    /// no listing that only the server of the old connection explains.
     ///
     /// [`JmapStore::store_connection`]: crate::store::JmapStore::store_connection
     pub fn install_connection(&self, sync: MailSync) {
@@ -129,11 +131,10 @@ impl JmapTransport {
         }
     }
 
-    /// Drops the connection, reporting whether there was one.
+    /// Drops the connection and tells whether one was there.
     ///
-    /// "There was none" is a normal outcome rather than a failure: Camel asks
-    /// every service to disconnect on shutdown, and an account whose user never
-    /// sent anything has a transport that never connected.
+    /// No connection is a normal result, not a failure: Camel disconnects each
+    /// service at shutdown, and a transport that never sent never connected.
     pub fn drop_connection(&self) -> bool {
         match self.connection() {
             Some(connection) => {
@@ -145,30 +146,33 @@ impl JmapTransport {
         }
     }
 
-    /// Sends one message over this transport's connection.
+    /// Sends one message over the connection of this transport.
     ///
-    /// The account-side half of `send_to_sync`: the identity the envelope
-    /// sender goes out through, the two mailboxes the message waits in and is
-    /// filed into, and the import-and-submit itself. Three operations on
-    /// [`MailSync`] that this joins and nothing else — the RFC 5322 bytes and
-    /// the envelope are already what they will be on the wire when they arrive
-    /// here, because [`crate::send`] built them out of Camel's arguments before
-    /// looking for a connection at all.
+    /// This is the account-side half of `send_to_sync`. It joins four
+    /// operations on [`MailSync`] and does nothing else.
     ///
-    /// **One hold of the read lock across all three.** Taking it once per
-    /// operation would let a `disconnect_sync` land between the identity lookup
-    /// and the submission, so that a message is imported over one connection
-    /// and submitted over another — or not submitted at all, with a draft left
-    /// behind for a send that reported a failure. It stays a *read* lock, which
-    /// is the whole reason the slot holds an `RwLock`: Evolution's outbox
-    /// hands a transport several messages in a row, and a second send does not
-    /// queue behind the first one's upload.
+    /// The operations get the identity of the envelope sender, then the
+    /// staging and destination mailboxes, then import and submit the message.
     ///
-    /// **The identity first, then the mailboxes.** Both are round trips that
-    /// cost nothing to lose — they happen before the upload — so the order is
-    /// only about which sentence the user gets when both are wrong, and "this
-    /// account cannot send as that address" names something they chose and can
-    /// change in the composer.
+    /// The RFC 5322 bytes and the envelope arrive final: [`crate::send`] builds
+    /// them from the arguments of Camel before it gets a connection.
+    ///
+    /// **One hold of the read lock across all four.** With one hold per
+    /// operation, a `disconnect_sync` can occur between the identity request
+    /// and the submission.
+    ///
+    /// Then the message is imported over one connection and submitted over
+    /// another. Or it is not submitted, and a draft stays for a failed send.
+    ///
+    /// It is a *read* lock, the reason for the `RwLock` in the slot: when the
+    /// outbox sends messages in sequence, a send does not wait for another upload.
+    ///
+    /// **The identity first, then the mailboxes.** Both are round trips before
+    /// the upload, so a failure of either costs nothing.
+    ///
+    /// The order only selects the message the user gets when both fail. "This
+    /// account cannot send as that address" names a choice the user can change
+    /// in the composer.
     pub fn send_message(&self, source: Vec<u8>, envelope: Envelope) -> Result<Sent, StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
@@ -206,17 +210,15 @@ impl JmapTransport {
             destination: mailboxes.destination.clone(),
         };
 
-        // Staging and submitting are retried separately, not as one
-        // composite attempt: `sync.stage_outgoing_message` already commits a
-        // real, visible draft on success, and a retry that reran both
-        // requests after a 401 on the *submit* half alone would import that
-        // same message a second time, leaving an orphaned duplicate draft
-        // behind once the retried submission succeeds. See
-        // `MailSync::stage_outgoing_message`'s doc.
+        // Retry staging and submitting separately, not as one attempt.
+        // `sync.stage_outgoing_message` commits a visible draft on success.
         //
-        // Both take `outgoing` by reference, so `retry_once_after` running
-        // either `attempt` twice stages, or submits, the same message again
-        // rather than whatever a first, unauthorized attempt left behind.
+        // After a 401 on the submit alone, a retry of both requests imports
+        // the message again. The retried submission then leaves a duplicate
+        // draft. See the doc of `MailSync::stage_outgoing_message`.
+        //
+        // Both take `outgoing` by reference. Thus, when `retry_once_after` runs
+        // an `attempt` twice, it stages or submits the same message again.
         let uid = match retry_once_after(
             || sync.stage_outgoing_message(&outgoing),
             SyncError::is_unauthorized,
@@ -248,47 +250,45 @@ impl JmapTransport {
         Ok(sent)
     }
 
-    /// Whether a send would find a connection.
+    /// Whether a send finds a connection.
     pub fn is_connected(&self) -> bool {
         self.connection()
             .is_some_and(|connection| read(connection).is_some())
     }
 
-    /// This transport, as the `CamelService` Camel gave Evolution, or `None`
-    /// on a [`JmapTransport::detached`] test instance, which is not one.
+    /// This transport as the `CamelService` that Camel gave to Evolution, or
+    /// `None` on a [`JmapTransport::detached`] test instance.
     ///
-    /// The mail-side counterpart of [`JmapStore::service`], one hop shorter:
-    /// `Self` leads with `CamelTransport` itself, from `CamelService`, so
-    /// `self` and this pointer name the same object, just typed as its C
-    /// ancestor. The type check is what makes this sound on a detached
-    /// instance too, the same guarantee `JmapStore::service` relies on.
+    /// The transport counterpart of [`JmapStore::service`], with one step less:
+    /// `Self` starts with `CamelTransport`, which derives from `CamelService`.
+    ///
+    /// Thus `self` and this pointer are the same object, typed as its C
+    /// ancestor. The type check makes this sound on a detached instance too.
     ///
     /// [`JmapStore::service`]: crate::store::JmapStore::service
     fn service(&self) -> Option<*mut CamelService> {
         let ptr = ptr::from_ref(self).cast::<CamelService>().cast_mut();
-        // SAFETY: `ptr` is `self` reinterpreted as its leading `GTypeInstance`
-        // field, which `checked_borrow_ptr` checks against the target type
-        // before it is read any further, per the doc comment above.
+        // SAFETY: `ptr` is `self` read as its leading `GTypeInstance` field.
+        // `checked_borrow_ptr` checks it against the target type before any
+        // further read, as the doc comment above says.
         unsafe { checked_borrow_ptr(ptr, camel_service_get_type()) }
     }
 
-    /// Fetches a fresh OAuth 2.0 access token for the account and installs it
-    /// on the live connection, reporting whether an operation is now worth
-    /// retrying.
+    /// Gets a new OAuth 2.0 access token for the account, installs it on the
+    /// live connection, and tells whether a retry of the operation is useful.
     ///
-    /// The transport-side twin of [`JmapStore::refresh_credentials`] — same
-    /// two "nothing to refresh" cases: not an OAuth 2.0 account, or no
-    /// `CamelService` to ask.
+    /// The transport twin of [`JmapStore::refresh_credentials`], with the same
+    /// two "nothing to refresh" cases: no OAuth 2.0, or no `CamelService` to ask.
     ///
     /// [`JmapStore::refresh_credentials`]: crate::store::JmapStore::refresh_credentials
     fn refresh_credentials(&self, sync: &MailSync) -> bool {
         let Some(service) = self.service() else {
             return false;
         };
-        // SAFETY: `service` is a live `CamelService` by the check in
-        // `Self::service`; the settings reference is released when it drops.
+        // SAFETY: the check in `Self::service` makes `service` a live
+        // `CamelService`. The settings reference is released when it drops.
         let settings = unsafe { Owned::from_raw(camel_service_ref_settings(service)) };
-        // SAFETY: `settings` is NULL or the `CamelSettings` just referenced.
+        // SAFETY: `settings` is NULL or the `CamelSettings` referenced above.
         let uses_oauth2 = settings
             .as_ref()
             .is_some_and(|settings| unsafe { oauth2::uses_oauth2(settings.as_ptr()) });
@@ -296,14 +296,14 @@ impl JmapTransport {
             return false;
         }
 
-        // SAFETY: `service` is a valid, registered `CamelService` by the
-        // check above; the session reference is released when it drops.
+        // SAFETY: the check above makes `service` a valid, registered
+        // `CamelService`. The session reference is released when it drops.
         let Some(session) = (unsafe { Owned::from_raw(camel_service_ref_session(service)) }) else {
             return false;
         };
-        // SAFETY: a valid session and a valid, registered service; no
-        // cancellable — this refresh is not the operation the user asked to
-        // stop, and `access_token` accepts NULL for "not cancellable".
+        // SAFETY: a valid session and a valid, registered service. No
+        // cancellable: the user did not ask to stop this refresh, and
+        // `access_token` accepts NULL for "not cancellable".
         match unsafe { oauth2::access_token(session.as_ptr(), service, ptr::null_mut()) } {
             Ok(token) => {
                 tracing::debug!("refreshed the transport connection's OAuth 2.0 access token");
@@ -320,7 +320,7 @@ impl JmapTransport {
         }
     }
 
-    /// For the tests only, mirroring [`JmapStore::inspect_connection`].
+    /// For the tests only, as [`JmapStore::inspect_connection`].
     ///
     /// [`JmapStore::inspect_connection`]: crate::store::JmapStore::inspect_connection
     #[cfg(feature = "testing")]
@@ -331,47 +331,48 @@ impl JmapTransport {
     }
 
     /// An instance outside the GObject type system: zeroed parent bytes and an
-    /// initialised slot, which is what `instance_init` leaves behind minus the
-    /// GObject.
+    /// initialised slot. This is the result of `instance_init`, without the GObject.
     ///
-    /// For the tests, and with [`JmapStore::detached`]'s caveat in full: the
-    /// parent bytes are a valid bit pattern but they are not a GObject, so
-    /// passing one of these to any Camel function is undefined behaviour.
-    /// Nothing but the slot may be touched through the result.
+    /// For the tests, with the full caveat of [`JmapStore::detached`]: the
+    /// parent bytes are a valid bit pattern, but they are not a GObject.
+    ///
+    /// Thus a Camel function that gets one of these has undefined behaviour.
+    /// Touch only the slot of the result.
     ///
     /// [`JmapStore::detached`]: crate::store::JmapStore::detached
     #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
-        // SAFETY: every field of the parent is a pointer or an integer, for
-        // which all-zero is a valid value, and an all-zero `Slot` is its
+        // SAFETY: each field of the parent is a pointer or an integer, for
+        // which all-zero is a valid value. An all-zero `Slot` is its
         // documented empty state.
         let transport: Box<Self> = unsafe { zeroed_box() };
         transport.connection.init(RwLock::new(None));
         transport
     }
 
-    /// The Rust view of a `CamelTransport *` Camel handed over.
+    /// The Rust view of a `CamelTransport *` from Camel.
     ///
     /// # Safety
     ///
-    /// `transport` must be NULL or point at an instance of this type. Camel
-    /// only dispatches a class's vfuncs on instances of that class, so a
-    /// vfunc's argument satisfies this; anything else has to check with
+    /// `transport` must be NULL or point to an instance of this type. Camel
+    /// dispatches the vfuncs of a class only on instances of that class.
+    ///
+    /// Thus a vfunc argument satisfies this. Other callers must check with
     /// `G_TYPE_CHECK_INSTANCE_TYPE` first.
     pub unsafe fn borrow<'a>(transport: *mut CamelTransport) -> Option<&'a Self> {
         // SAFETY: the doc comment above states the same contract.
         unsafe { dispatched_borrow(transport) }
     }
 
-    /// The connection slot, or `None` on an instance whose `instance_init` has
-    /// not run or whose `finalize` already has.
+    /// The connection slot, or `None` before `instance_init` or after
+    /// `finalize`.
     fn connection(&self) -> Option<&RwLock<Option<MailSync>>> {
         self.connection.get()
     }
 }
 
 // SAFETY: `JmapTransport` is the instance struct of the type `transport_type`
-// registers, and that type derives from `CamelTransport` — from `CamelService`.
+// registers. That type derives from `CamelTransport`, from `CamelService`.
 unsafe impl Connected for JmapTransport {
     fn hold_connection(&self, sync: MailSync) {
         self.install_connection(sync);
@@ -386,22 +387,20 @@ unsafe impl Connected for JmapTransport {
     }
 }
 
-/// The class struct, same rule one level up. It adds nothing of its own today;
-/// `send_to_sync` is an override of a slot the parent already declares, so what
-/// this exists for is to be a class of ours for that override to be installed
-/// on.
+/// The class struct, with the same rule one level up. It adds no fields now.
+/// It exists as our class for the `send_to_sync` override of a parent slot.
 #[repr(C)]
 pub struct JmapTransportClass {
     parent_class: CamelTransportClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the CamelTransport instance
-// and class structs, whose layouts eds-sys's tests/layout.rs checks against
-// `g_type_query`; CamelTransport derives from CamelService, from GObject.
+// SAFETY: both structs are #[repr(C)] and start with the CamelTransport instance
+// and class structs. The tests/layout.rs of eds-sys checks those layouts against
+// `g_type_query`. CamelTransport derives from CamelService, from GObject.
 unsafe impl ObjectSubclass for JmapTransport {
-    /// `CamelJmapTransport`, matching Camel's own `CamelSmtpTransport` and
-    /// `CamelSendmailTransport`: the type name is what a user sees in a GObject
-    /// warning about the wrong service type.
+    /// `CamelJmapTransport`, as the Camel names `CamelSmtpTransport` and
+    /// `CamelSendmailTransport`. A user sees the type name in a GObject warning
+    /// about the wrong service type.
     const NAME: &'static CStr = c"CamelJmapTransport";
     type Instance = JmapTransport;
     type Class = JmapTransportClass;
@@ -412,59 +411,56 @@ unsafe impl ObjectSubclass for JmapTransport {
     }
 
     fn class_init_types() -> Vec<GType> {
-        // The settings type below, registered before this one rather than from
-        // inside the class initialiser: `class_init` runs under GLib's
-        // class-initialisation lock and cannot take the registration lock
-        // without inverting the two. This is the deadlock `tests/transport.rs`
-        // used to hit.
+        // Register the settings type before this type, not in `class_init`.
+        // `class_init` runs under the GLib class-initialisation lock.
+        // Taking the registration lock there inverts the two locks: the
+        // deadlock that `tests/transport.rs` found.
         vec![settings_type()]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // The account's own settings class, for the reason the module docs
-        // give: inherited it would be `CamelSettings`, which carries no server.
+        // The settings class of the account, for the reason in the module docs:
+        // the inherited class is `CamelSettings`, which has no server.
         //
-        // SAFETY: the class leads with CamelTransportClass, which leads with
-        // CamelServiceClass — the contract above.
+        // SAFETY: the class starts with CamelTransportClass, which starts with
+        // CamelServiceClass: the contract above.
         let service = class.cast::<CamelServiceClass>();
         unsafe { (*service).settings_type = settings_type() };
 
-        // Connect, authenticate, disconnect, and the name Camel calls this
-        // service by — the same four the store installs, parameterised by which
-        // service they were dispatched on.
+        // Connect, authenticate, disconnect, and the name of this service: the
+        // same four as in the store, parameterised by the dispatched service.
         //
-        // SAFETY: as above, and `Self` is the type being registered.
+        // SAFETY: as above, and `Self` is the type that is being registered.
         unsafe { crate::service::install_vfuncs::<Self>(service) };
 
-        // The reason the type exists. `camel_transport_send_to_sync` is a
-        // `g_return_val_if_fail (class->send_to_sync != NULL, FALSE)`, so a
-        // transport that installed none would be an account that offers to send
-        // and answers a GLib critical.
+        // The reason this type exists. `camel_transport_send_to_sync` does
+        // `g_return_val_if_fail (class->send_to_sync != NULL, FALSE)`. Without
+        // this slot, the account offers to send and then gives a GLib critical.
         //
-        // SAFETY: the class leads with `CamelTransportClass`, which is the
+        // SAFETY: the class starts with `CamelTransportClass`, which is the
         // contract at the top of this impl.
         unsafe { crate::send::install_vfuncs(class.cast::<CamelTransportClass>()) };
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
-        // SAFETY: `instance` points at a zeroed instance struct of ours, and a
+        // SAFETY: `instance` points to our zeroed instance struct, and a
         // zeroed `Slot` is an empty one.
         unsafe { (*instance).connection.init(RwLock::new(None)) };
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
         // SAFETY: the instance is being finalized, so nothing can still reach
-        // it and no borrow handed out by `get` is alive. Without this the
-        // connection — and its socket — outlives the account.
+        // it and no borrow from `get` is alive. Without this, the connection
+        // and its socket outlive the account.
         unsafe { (*instance).connection.clear() };
     }
 }
 
 /// Registers the transport type, or returns it if it is already registered.
 ///
-/// Statically, like the store's and for the same reason: a Camel provider is
-/// not a `GTypeModule`, Camel never closes the object it dlopened, and the
-/// provider struct names these types forever.
+/// Static, as the store type, for the same reason: a Camel provider is not a
+/// `GTypeModule`, Camel never closes the object it dlopened, and the provider
+/// struct names these types permanently.
 pub fn transport_type() -> GType {
     register_static::<JmapTransport>()
 }

@@ -1,89 +1,81 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `synchronize_sync`: the vfunc that carries the user's changes the other way.
+//! `synchronize_sync`: the vfunc that writes the keyword changes of the user
+//! to the server.
 //!
-//! Everything the provider has built so far reads. [`crate::refresh`] lists a
-//! mailbox into the folder's summary, [`crate::message`] downloads one message's
-//! bytes — both are the server telling Evolution something. This is the one
-//! place Evolution tells the server something, and what it can tell it, today,
-//! is which keywords a message carries: read, important, junk, and whatever the
-//! user has labelled it.
+//! [`crate::refresh`] and [`crate::message`] read from the server. This module
+//! writes which keywords a message has: read, important, junk and the labels of
+//! the user. Other modules write other changes (for example [`crate::transfer`]
+//! and [`crate::expunge`]).
 //!
 //! ## The work list is wider than the work
 //!
-//! There is no queue of pending writes. What there is is
-//! `camel_folder_summary_get_changed`, the list IMAPX drives its own
-//! synchronisation from — and it is worth being precise about what that list
-//! holds, because its name suggests something narrower. It is the rows Camel has
-//! not yet written back to the *summary database*, which is a superset of the
-//! rows waiting for the *server*: a row the folder has merely rebuilt is on it
-//! too. `CAMEL_MESSAGE_FOLDER_FLAGGED` is the narrower mark, and the one that
-//! means a change of the user's is outstanding.
+//! There is no queue of pending writes. The work list is
+//! `camel_folder_summary_get_changed`, which IMAPX also uses for its
+//! synchronisation. The list holds the rows that Camel has not written to the
+//! *summary database*. That is a superset of the rows that wait for the
+//! *server*: a row that the folder only rebuilt is also on it.
+//! `CAMEL_MESSAGE_FOLDER_FLAGGED` is the narrower mark: it shows that a change
+//! of the user is outstanding.
 //!
-//! So the list is where the walk starts and not what it trusts. Every row on it
-//! is diffed, and a row with nothing to say costs nothing at all — not even a
-//! connection, which is what makes closing a folder free. The bit is still
-//! cleared on every row the walk settles, because a bit left set is a row
-//! retried on every synchronisation for as long as the folder is open, and a bit
-//! cleared without the write having happened is a change the user made and this
-//! provider dropped in silence.
+//! Thus the walk starts from the list but does not trust it. It diffs every row.
+//! A row with no difference costs nothing, not even a connection, so closing a
+//! folder is free. The walk clears the mark on every row that it settles. A
+//! mark left set makes the row retry on every synchronisation while the folder
+//! is open. A mark cleared without a write loses a change of the user silently.
 //!
-//! It is also why the two places that build rows from a listing —
-//! [`crate::message_info::update_message_info`] and [`crate::summary`] — take
-//! care not to set it. Camel's column setters and `camel_folder_summary_add`
-//! both mark a row as having to reach the server, which is right for the user
-//! changing a message and backwards for the server describing one.
+//! For the same reason, the two places that build rows from a listing
+//! ([`crate::message_info::update_message_info`] and [`crate::summary`]) do not
+//! set the mark. Camel's column setters and `camel_folder_summary_add` both mark
+//! a row for the server. That is correct for a change of the user and wrong for
+//! a description from the server.
 //!
-//! The bit is read as well as preserved there, and that is what keeps this walk
-//! from being raced by a refresh: a listing arriving between the user's click
-//! and this vfunc is replayed *around* the outstanding change rather than
-//! written over it, so what the walk finds when it gets here is still the
-//! difference the user made. Without that, the listing would leave the row
-//! claiming exactly what it remembers the server holding — a row still on the
-//! work list with nothing left on it to send.
+//! These two places also read and keep the mark, so a refresh cannot race this
+//! walk. A listing that arrives between the click and this vfunc is applied
+//! *around* the outstanding change, not over it. Thus the walk still finds the
+//! difference that the user made. Without this, the listing would make the row
+//! equal to the remembered server set: a row on the work list with nothing to
+//! send.
 //!
-//! ## A difference, and where its two ends come from
+//! ## A difference, and the source of its two ends
 //!
-//! What goes on the wire is `jmap-mail-sync`'s `KeywordChange` — the difference
-//! between the keywords the last listing found and the keywords the row claims
-//! now — because a whole-set write would speak for every keyword on the message,
-//! including the ones no client here has heard of. The *before* is the column
-//! `CamelJmapMessageInfo` keeps for exactly this and nothing else; the *after* is
-//! read back out of Camel's own flags word and user flags, which is where the
-//! user's click landed. A row nobody really changed therefore produces an empty
-//! change, and an empty change costs no request at all — which matters, because
-//! Camel marks a row dirty for reasons that are not keywords and Evolution
-//! synchronises a folder every time it closes one.
+//! The request sends a `KeywordChange` of `jmap-mail-sync`: the difference
+//! between the keywords of the last listing and the keywords the row has now. A
+//! write of the full set would speak for every keyword, also the keywords that
+//! no client here knows. The *before* set is a column of `CamelJmapMessageInfo`
+//! that has only this purpose. The *after* set comes from Camel's flags word and
+//! user flags, where the click of the user lands. A row with no real change thus
+//! gives an empty change, and an empty change sends no request. This is
+//! important: Camel marks rows dirty for reasons that are not keywords, and
+//! Evolution synchronises each folder when it closes it.
 //!
-//! ## What one row's failure does to the rest
+//! ## The effect of one row's failure on the other rows
 //!
-//! Every dirty row is attempted, and the first failure is what the vfunc reports
-//! when the walk is done. Stopping at the first would be cheaper on a dead
-//! network and wrong on a live one: a keyword one server refuses says nothing
-//! about the next message, and every row behind the refusal would stay queued
-//! behind a write that can never succeed. The cost is that a connection that has
-//! just gone away is discovered once per dirty row.
+//! The walk tries every dirty row and, at the end, reports the first failure.
+//! A stop at the first failure is cheaper on a dead network but wrong on a live
+//! one. A keyword that the server refuses for one message says nothing about the
+//! next message. Also, every row after the refusal would wait for a write that
+//! can never succeed. The cost: the walk finds a lost connection once for each
+//! dirty row.
 //!
-//! A message another client destroyed is not a failure at all — see
-//! `push_row`.
+//! A message that another client destroyed is not a failure (see `push_row`).
 //!
-//! ## The other half of the argument
+//! ## The other argument
 //!
-//! **`expunge`.** Camel's second argument asks the folder to also get rid of
-//! the messages the user marked deleted, which is a mailbox change rather than
-//! a flag change: JMAP has no deleted keyword, so a row marked deleted still
-//! produces no keyword change here and the whole of what it means is carried
-//! out by [`crate::expunge`], which this hands over to when the argument is
-//! set. The walk below runs first — see the call site.
+//! **`expunge`.** With this argument, Camel also asks the folder to remove the
+//! messages that the user marked deleted. That is a mailbox change, not a flag
+//! change. JMAP has no deleted keyword, so a deleted row gives no keyword change
+//! here. [`crate::expunge`] does all of the removal, and this vfunc calls it
+//! when the argument is set. The walk below runs first (see the call site).
 //!
-//! ## Stopping one
+//! ## Stopping a synchronisation
 //!
-//! The `cancellable` is [`observe`]d for the length of the call, so a stop lands
-//! between two writes rather than inside one. What was already written stays
-//! written and its rows are no longer marked changed — which is the honest
-//! record: those messages *were* updated on the server, and the ones behind the
-//! stop are still on the list for the next synchronisation.
+//! The vfunc [`observe`]s the `cancellable` for the full call, so a stop occurs
+//! between two writes, not inside one. Rows already written stay written and
+//! lose their mark. This is the correct record: the server has those changes,
+//! and the rows after the stop stay on the work list for the next
+//! synchronisation.
 
 use std::ffi::{CStr, CString};
 
@@ -106,25 +98,25 @@ use crate::connect::StoreError;
 use crate::folder::parent_store;
 use crate::message_info::{row_keywords, server_keywords, set_server_keywords};
 
-/// Installs the folder's write vfunc on a class whose first member is a
+/// Installs the write vfunc of the folder on a class whose first member is a
 /// `CamelFolderClass`.
 ///
 /// # Safety
 ///
-/// `class` must point at an initialised class struct that leads with a
-/// `CamelFolderClass` — which is every descendant of `CamelFolder`.
+/// `class` must point at an initialised class struct that starts with a
+/// `CamelFolderClass` (every descendant of `CamelFolder` does).
 pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
     vfuncs.synchronize_sync = Some(synchronize_sync);
 }
 
-/// Writes every queued change of this folder and empties the queue of the ones
-/// that landed.
+/// Writes every queued change of this folder and removes the written changes
+/// from the work list.
 ///
-/// `TRUE` for a synchronisation in which nothing failed, `FALSE` with the error
-/// set otherwise — Camel's convention, and what the callers of
-/// `camel_folder_synchronize_sync` test before they consider the folder saved.
+/// Returns `TRUE` if nothing failed, otherwise `FALSE` with the error set. This
+/// is Camel's convention: callers of `camel_folder_synchronize_sync` test it to
+/// know that the folder is saved.
 unsafe extern "C" fn synchronize_sync(
     folder: *mut CamelFolder,
     expunge: gboolean,
@@ -135,9 +127,9 @@ unsafe extern "C" fn synchronize_sync(
     // out-parameter that is NULL or writable and currently NULL.
     unsafe {
         guard_bool("synchronize_sync", error, || {
-            // SAFETY: Camel keeps its cancellable alive for the length of the
-            // call, so it outlives this observation — which is what makes
-            // every request below here stop when the user presses Stop.
+            // SAFETY: Camel keeps its cancellable alive for the full call, so
+            // it outlives this observation. Thus every request below stops when
+            // the user presses Stop.
             let _cancel = observe(cancellable);
 
             let summary = camel_folder_get_folder_summary(folder);
@@ -156,12 +148,9 @@ unsafe extern "C" fn synchronize_sync(
                 }
             }
 
-            // And only then the messages the user is finished with. After the
-            // keyword walk rather than before it, because a row about to be
-            // destroyed may still be carrying an unsaved change of the user's
-            // — marking a message read and deleting it before anything
-            // synchronised is an ordinary sequence — and because the walk
-            // above is what clears the marks that would otherwise be retried.
+            // Expunge after the keyword walk, for two reasons. A row to be
+            // destroyed can have an unsaved change (read, then deleted, is
+            // usual). Also, the walk clears the marks that would retry.
             if expunge != GFALSE
                 && let Err(problem) = crate::expunge::expunge_folder(folder)
             {
@@ -176,26 +165,23 @@ unsafe extern "C" fn synchronize_sync(
     }
 }
 
-/// The uids of the rows Camel is holding as not yet written back.
+/// The uids of the rows that Camel has not written back (the work list).
 ///
-/// Every row waiting for the server is on this list, and so are rows waiting
-/// only for the summary database — see this module's header. The walk sorts them
-/// out by diffing, which is what it would have to do anyway.
+/// The list holds every row that waits for the server, and also rows that wait
+/// only for the summary database (see the module header). The diff separates them.
 ///
-/// Copied out of Camel's array and the array freed before anything is sent, for
-/// two reasons that point the same way: the walk below makes a request per row,
-/// and the summary it is walking is one the folder may be adding rows to
-/// meanwhile. A row that arrives during the walk is not this synchronisation's
-/// business — it cannot be a change the user has made and left unsent — and a
-/// row that disappears during it is handled where it is met.
+/// This copies the uids and frees Camel's array before it sends a request. The
+/// walk makes one request per row, and the folder can add rows meanwhile.
+/// A row that arrives during the walk cannot be an unsent change of the user, so
+/// the walk ignores it. `push_row` handles a row that disappears during the walk.
 ///
 /// # Safety
 ///
 /// `summary` must point at a live `CamelFolderSummary`.
 unsafe fn queued_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
-    // SAFETY: the contract above; `summary_dup_changed` hands back an array the
-    // caller owns and frees with `summary_free_uids`, holding a reference of its
-    // own to every uid in it.
+    // SAFETY: the contract above. `summary_dup_changed` returns an array that the
+    // caller owns and frees with `summary_free_uids`. The array holds its own
+    // reference to each uid in it.
     unsafe {
         let queued = summary_dup_changed(summary);
         if queued.is_null() {
@@ -212,42 +198,40 @@ unsafe fn queued_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
     }
 }
 
-/// Sends one row's change, and takes the row off the work list if it is settled.
+/// Sends the change of one row, and removes the row from the work list if the
+/// row is settled.
 ///
-/// Settled means three things, and the third is the one worth naming:
+/// A row is settled in three cases. The third case is the important one:
 ///
-/// - The write succeeded. The row's remembered set becomes what was just sent,
-///   or the *next* change would be diffed against a set the server stopped
-///   holding a synchronisation ago.
-/// - There was nothing to write. Most rows on the work list are this: one Camel
-///   has not saved to its database yet, or one dirty for a change that is not a
-///   keyword — `CAMEL_MESSAGE_DELETED` is a local mark JMAP has no keyword for.
-///   Such a row costs no request and, deliberately, not even a connection: the
-///   store is looked for only once there is something to say to it, which is
-///   what makes closing a folder full of unchanged mail free.
-/// - The message is gone. Another client destroying it is ordinary rather than
-///   a fault: a uid in a summary is a claim about the last listing, and the flag
-///   change is moot rather than failed. Reported as a failure it would put an
-///   alert in front of the user about a message that is not there; left queued,
-///   it would retry a write that can never succeed. The row itself goes at the
-///   next refresh, which is where a message leaving the mailbox is noticed.
+/// - The write succeeded. The remembered set of the row becomes the set just
+///   written. If not, the *next* change would diff against an old server set.
+/// - There was nothing to write. Most rows on the work list are this case: rows
+///   that Camel has not saved to its database, or rows dirty for a change that is
+///   not a keyword (JMAP has no keyword for the local mark `CAMEL_MESSAGE_DELETED`).
+///   Such a row sends no request and opens no connection: the function gets the
+///   store only when there is something to send. Thus closing a folder of
+///   unchanged mail is free.
+/// - The message is gone. Another client that destroys a message is usual, not a
+///   fault. A uid in a summary is a claim about the last listing, so the flag
+///   change is moot, not failed. As a failure, it would show the user an alert
+///   about a message that does not exist. Left on the work list, it would retry a
+///   write that can never succeed. The next refresh removes the row, because a
+///   refresh finds messages that left the mailbox.
 ///
-/// It is also what [`crate::transfer`] calls before it takes a row away: a move
-/// removes the row, and the row is the only place a change the user has not
-/// saved yet is written down.
+/// [`crate::transfer`] also calls this function before it removes a row. A move
+/// removes the row, and the row is the only record of a change the user has not saved.
 ///
-/// A row whose remembered set is absent — one loaded from a summary written
-/// before that column existed — is diffed from nothing, which is the same
-/// conservative degradation `CamelJmapMessageInfo` documents: a difference from
-/// the empty set adds keywords and removes none.
+/// A row with no remembered set (loaded from a summary older than that column)
+/// diffs against the empty set. `CamelJmapMessageInfo` documents this safe
+/// degradation: a diff from the empty set adds keywords and removes none.
 ///
-/// The summary's own lock is deliberately not held across the request. A
-/// synchronisation is one round trip per changed row, and a folder locked for
-/// the length of that is a message list that cannot be drawn while the user's
-/// last click is being saved; `camel_folder_summary_get` takes the lock itself
-/// for as long as it needs it. What a refresh running alongside can do is renew
-/// the row's remembered set from a fresh listing, which this then overwrites
-/// with what the write just established — the more recent of the two answers.
+/// This function does not hold the lock of the summary during the request. A
+/// synchronisation is one round trip per changed row. A lock for that time
+/// prevents the message list from drawing while the last click saves.
+/// `camel_folder_summary_get` takes the lock itself, only for as long as it needs
+/// it. A parallel refresh can renew the remembered set of the row from a new
+/// listing. This function then overwrites it with the result of the write, the
+/// more recent of the two answers.
 ///
 /// # Safety
 ///
@@ -257,17 +241,16 @@ pub(crate) unsafe fn push_row(
     summary: *mut CamelFolderSummary,
     uid: &CStr,
 ) -> Result<(), StoreError> {
-    // SAFETY: the contract above, and `summary_get` hands back a reference this
+    // SAFETY: the contract above. `summary_get` returns a reference that this
     // function owns and releases when `info` drops at the end of the scope.
     let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
     else {
-        // A uid the summary named a moment ago and has no row for now: the row
-        // was removed by a refresh running alongside. There is nothing to send
-        // and nothing left to clear.
+        // A parallel refresh removed the row after the work list named it.
+        // There is nothing to send and nothing to clear.
         return Ok(());
     };
 
-    // SAFETY: `info` is a live row for as long as this function's reference is.
+    // SAFETY: `info` is a live row while this function holds its reference.
     let result = unsafe {
         let before = server_keywords(info.as_ptr()).unwrap_or_default();
         let after = row_keywords(info.as_ptr());
@@ -277,9 +260,8 @@ pub(crate) unsafe fn push_row(
             Ok(())
         } else {
             let Ok(text) = uid.to_str() else {
-                // A uid Camel stored and we cannot read back as text is not
-                // one the server can be asked about either; leave it queued
-                // rather than settling, below, a row nothing was sent for.
+                // A uid that is not valid text cannot go to the server. Keep
+                // the row on the work list: do not settle a row with no write.
                 return Ok(());
             };
             match parent_store(folder) {
@@ -306,13 +288,13 @@ pub(crate) unsafe fn push_row(
     }
 }
 
-/// The path Camel keys the folder by, for an error message about it.
+/// The path that Camel uses as the key of the folder, for an error message.
 ///
 /// # Safety
 ///
 /// `folder` must point at a live `CamelFolder`.
 unsafe fn name_of(folder: *mut CamelFolder) -> String {
-    // SAFETY: the accessor returns a string the folder owns and outlives the
-    // call; `read_string` copies it.
+    // SAFETY: the accessor returns a string that the folder owns and that
+    // outlives the call. `read_string` copies it.
     unsafe { read_string(camel_folder_get_full_name(folder)).unwrap_or_default() }
 }
