@@ -289,9 +289,10 @@ pub fn calendar_event_set(
         })
         .collect();
     let own_addresses = crate::scheduling::own_addresses(account);
-    // Stalwart holds a `uid` once per account and refuses a create that
-    // repeats one ("An event with UID ... already exists"), which is how a
-    // guest's second copy of a delivered meeting is turned away.
+    // Stalwart keeps each `uid` unique per account.
+    // A create that repeats a `uid` fails with
+    // "An event with UID ... already exists".
+    // This refusal rejects a guest's second copy of one delivered meeting.
     let taken: BTreeSet<String> = account
         .calendar_events
         .iter()
@@ -350,7 +351,8 @@ pub fn calendar_event_set(
         |_id, existing| schedulable(existing, &own_addresses, send_scheduling_messages),
     )?;
 
-    // Draft §8 notifies other sharing principals; `actor` (caller or owner) is excluded.
+    // Draft §8 notifies other sharing principals.
+    // Exclude `actor` (caller or owner).
     let actor = caller
         .or(account.current_user_principal_id.as_ref())
         .cloned();
@@ -1001,7 +1003,7 @@ pub fn participant_identity_set(
         }
     });
 
-    // draft-ietf-jmap-calendars-28 §3.2: unresolved ids are ignored, not errors.
+    // draft-ietf-jmap-calendars-28 §3.2: ignore unresolved ids.
     if let Some(reference) = on_success_set_is_default {
         let id = match reference.strip_prefix('#') {
             Some(creation_id) => created_here.get(creation_id).cloned(),
