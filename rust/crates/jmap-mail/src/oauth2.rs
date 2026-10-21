@@ -1,45 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Whether a mail account authenticates with OAuth 2.0, and the access token
-//! if it does.
+//! Tells if a mail account uses OAuth 2.0, and gets its access token.
 //!
-//! ## The same rule, a different field
+//! ## The method field
 //!
-//! [`jmap_backend_core::oauth2`] answers this for the address book and
-//! calendar backends by reading `[Authentication] Method` off the account's
-//! `ESource`. Camel keeps no `ESource` on a service — it keeps the same
-//! account's authentication choice on `CamelNetworkSettings:auth-mechanism`
-//! instead, because that is the interface every Camel provider's settings
-//! implements. Evolution's own account editor writes both fields from one
-//! combo box when the account is a JMAP one (`jmap-config`'s `Authentication`
-//! combo), so [`method_is_oauth2`] is asked of this field too rather than
-//! re-decided — an account the editor calls OAuth 2.0 must be one on both
-//! sides of it, or the mail half of it would silently fall back to sending no
-//! credentials at all.
+//! [`jmap_backend_core::oauth2`] reads `[Authentication] Method` from the
+//! `ESource` of an address book or calendar. A Camel service has no `ESource`.
+//! `ESourceCamel` binds the same method to `CamelNetworkSettings:auth-mechanism`,
+//! so this module asks [`method_is_oauth2`] about that field. Thus the mail
+//! side and the EDS side always agree on which accounts use OAuth 2.0.
 //!
 //! [`method_is_oauth2`]: jmap_backend_core::oauth2::method_is_oauth2
 //!
-//! ## Where the token comes from
+//! ## The token source
 //!
-//! `camel_session_get_oauth2_access_token_sync` is Camel's counterpart of
-//! `e_source_get_oauth2_access_token_sync`, and in the running application it
-//! is not a second implementation of that rule: `EMailSession`'s override
-//! (evolution-data-server 3.52.3, `libemail-engine/e-mail-session.c`,
-//! `mail_session_get_oauth2_access_token_sync`) looks the service's `ESource`
-//! up in the registry by uid and calls the very same `ESource` function the
-//! other two backends call directly. So this is not a parallel path that
-//! could disagree with theirs about whose token is good — it is a longer way
-//! to the same answer, taken because a `CamelService` has no `ESource` of its
-//! own to ask.
+//! `camel_session_get_oauth2_access_token_sync` is the Camel equivalent of
+//! `e_source_get_oauth2_access_token_sync`. In Evolution, the `EMailSession`
+//! override (`libemail-engine/e-mail-session.c`,
+//! `mail_session_get_oauth2_access_token_sync`) finds the `ESource` of the
+//! service by uid and calls that `ESource` function. Thus the mail side gets
+//! the same token as the other backends.
 //!
-//! ## Which `CamelAuthenticationResult` a failure gets
+//! ## The `CamelAuthenticationResult` of a failure
 //!
-//! Deliberately [`crate::connect::StoreError::OAuth2`]'s own concern, not
-//! this module's — see that variant's doc comment for why a failed token
-//! fetch is reported as `CAMEL_AUTHENTICATION_ERROR` rather than `REJECTED`,
-//! the opposite of the choice `jmap_backend_core::connect::ConnectError`
-//! makes for the same failure on the EDS side.
+//! [`crate::connect::StoreError::OAuth2`] decides this, not this module. Its
+//! doc comment tells why a failed token fetch is `CAMEL_AUTHENTICATION_ERROR`
+//! and not `REJECTED`.
 
 use eds_sys::{
     CamelService, CamelSession, CamelSettings, camel_network_settings_dup_auth_mechanism,
@@ -51,42 +38,39 @@ use glib_sys::{GError, GFALSE, g_error_free};
 use crate::connect::StoreError;
 use crate::server::{network, take_string};
 
-/// Whether `settings`' `auth-mechanism` names OAuth 2.0 — see the module docs
-/// for whose rule this reuses and why it is asked of this field.
+/// Tells if the `auth-mechanism` of `settings` names OAuth 2.0. The module
+/// docs tell why this field is used.
 ///
 /// # Safety
 ///
-/// `settings` must be NULL or a valid `CamelSettings`. It is only read from,
-/// and nothing outlives the call.
+/// `settings` must be NULL or a valid `CamelSettings`. This function only reads
+/// it, and nothing outlives the call.
 pub unsafe fn uses_oauth2(settings: *mut CamelSettings) -> bool {
-    // SAFETY: the contract above is `network`'s own.
+    // SAFETY: the contract above is the contract of `network`.
     let Some(network) = (unsafe { network(settings) }) else {
         return false;
     };
-    // SAFETY: `network` implements the interface, which is `network`'s own
-    // guarantee; the `dup_` accessor returns a g_malloc'd copy this call
-    // frees via `take_string` rather than a pointer into storage another
-    // thread may replace.
+    // SAFETY: `network` guarantees that its result implements the interface.
+    // The `dup_` accessor returns a g_malloc'd copy, not a pointer into storage
+    // that another thread can replace. `take_string` frees the copy.
     let method = unsafe { take_string(camel_network_settings_dup_auth_mechanism(network)) };
     jmap_backend_core::oauth2::method_is_oauth2(method.as_deref())
 }
 
 /// The OAuth 2.0 access token to send this account's requests as.
 ///
-/// This is where the refresh happens, exactly as it does on
-/// [`e_source_get_oauth2_access_token_sync`]: whatever runs underneath looks
-/// the account's refresh token up and exchanges it for an access token inside
-/// this call, so what comes back is good now, and a failure is either
-/// "nobody has consented to this account yet" or "the exchange did not
-/// work" — [`StoreError::OAuth2`] either way.
+/// The refresh occurs in this call, as in
+/// [`e_source_get_oauth2_access_token_sync`]. Thus a returned token is valid
+/// now. A failure (no consent yet, or a failed exchange) is
+/// [`StoreError::OAuth2`].
 ///
 /// [`e_source_get_oauth2_access_token_sync`]: eds_sys::e_source_get_oauth2_access_token_sync
 ///
 /// # Safety
 ///
 /// `session` must be a valid `CamelSession`, `service` a valid `CamelService`
-/// registered on it, and `cancellable` NULL or a valid `GCancellable` — which
-/// is what `attempt` has by the time it calls this.
+/// registered on it, and `cancellable` NULL or a valid `GCancellable`. `attempt`
+/// has all three when it calls this function.
 pub unsafe fn access_token(
     session: *mut CamelSession,
     service: *mut CamelService,
@@ -96,9 +80,10 @@ pub unsafe fn access_token(
     let mut expires_in = 0;
     let mut error: *mut GError = std::ptr::null_mut();
 
-    // SAFETY: a valid session and service by this function's contract, a
-    // NULL-or-valid cancellable, and three writable out-parameters. The token
-    // comes back as a GLib allocation this call owns, and the GError likewise.
+    // SAFETY: the contract of this function gives a valid session, a valid
+    // service and a NULL-or-valid cancellable. The three out-parameters are
+    // writable. This call owns the returned token and the GError (GLib
+    // allocations).
     let ok = unsafe {
         camel_session_get_oauth2_access_token_sync(
             session,
@@ -111,9 +96,9 @@ pub unsafe fn access_token(
     };
 
     if ok == GFALSE || token.is_null() {
-        // SAFETY: `error` is NULL or a GError this call owns; `trace_failure`
-        // only reads it, and freeing it afterwards is what the out-parameter
-        // contract asks for.
+        // SAFETY: `error` is NULL or a GError that this call owns.
+        // `trace_failure` only reads it. The out-parameter contract tells the
+        // caller to free it after.
         let message = unsafe {
             let message = trace_failure(error);
             if !error.is_null() {
@@ -126,33 +111,27 @@ pub unsafe fn access_token(
         })));
     }
 
-    // SAFETY: `token` is non-NULL by the check above, a g_malloc'd string this
-    // call owns; `take_string` copies it and frees the original.
+    // SAFETY: the check above makes `token` non-NULL. It is a g_malloc'd string
+    // that this call owns. `take_string` copies it and frees the original.
     Ok(unsafe { take_string(token) }.unwrap_or_default())
 }
 
-/// Classifies a failed access-token fetch and traces it, returning the
-/// message [`StoreError::OAuth2`] carries.
+/// Classifies a failed access-token fetch, traces it, and returns the message
+/// for [`StoreError::OAuth2`].
 ///
-/// Split out of [`access_token`] so the classification can be driven by a test
-/// with a hand-built `GError`, the same way `jmap_backend_core::oauth2`'s own
-/// tests drive [`classify_failure`]. That EDS-side token fetch already traces
-/// `reason`/`escalates_to_consent`; this call site, Camel's
-/// `camel_session_get_oauth2_access_token_sync`, logged nothing at all, so a
-/// failure here, including the stale-D-Bus-proxy shape, which this recognises
-/// identically by reusing [`classify_failure`], was invisible in the journal
-/// from the mail side even though the equivalent EDS-side fetch names it.
-/// Purely additive: the returned message is unchanged from what this call site
-/// already sent into [`StoreError::OAuth2`].
+/// This is a separate function so that a test can supply a hand-built `GError`.
+/// It uses [`classify_failure`], thus the mail side and the EDS side trace the
+/// same reasons (for example, a stale D-Bus proxy). The returned message is the
+/// message of the `GError`.
 ///
 /// [`classify_failure`]: jmap_backend_core::oauth2::classify_failure
 ///
 /// # Safety
 ///
-/// `error` must be NULL or a valid `GError` this call does not own: read
-/// only, never freed here.
+/// `error` must be NULL or a valid `GError` that this call does not own. This
+/// function only reads it and does not free it.
 unsafe fn trace_failure(error: *const GError) -> Option<String> {
-    // SAFETY: the contract above is `classify_failure`'s own.
+    // SAFETY: the contract above is the contract of `classify_failure`.
     let (reason, error_domain, error_domain_name, error_code, message) =
         unsafe { jmap_backend_core::oauth2::classify_failure(error) };
     tracing::debug!(
@@ -177,12 +156,11 @@ mod tests {
 
     use super::*;
 
-    /// A real `GError`, not a hand-rolled struct: [`trace_failure`] reads
-    /// `classify_failure`'s output, which reads the `domain`/`code`/`message`
-    /// fields directly. See `jmap_backend_core::oauth2`'s own tests for why.
+    /// Makes a real `GError`, not a hand-built struct. `classify_failure` reads
+    /// the `domain`, `code` and `message` fields directly.
     fn error(domain: glib_sys::GQuark, code: i32, text: &str) -> *mut GError {
         let message = CString::new(text).unwrap();
-        // SAFETY: a valid domain and a NUL-terminated message; every caller
+        // SAFETY: a valid domain and a NUL-terminated message. Every caller
         // below frees the result.
         unsafe { g_error_new_literal(domain, code, message.as_ptr()) }
     }
@@ -194,15 +172,12 @@ mod tests {
         capture(|| unsafe { trace_failure(error) })
     }
 
-    /// A dead D-Bus peer behind the OAuth 2.0 token fetch: traced as
-    /// `service_gone`/`escalates_to_consent=false`, exactly as
-    /// `jmap_backend_core::oauth2::access_token` already traces the same
-    /// failure on the EDS side. This call site had no trace at all before.
+    /// A dead D-Bus peer behind the token fetch traces as `service_gone` with
+    /// `escalates_to_consent=false`, as on the EDS side.
     ///
-    /// `service_gone` and not `secret_store_failure`: the two are distinct
-    /// members of [`SilentRefreshFailureReason`], and `is_service_gone`
-    /// recognises this shape as the former. Both agree on the half that
-    /// decides what the user sees, `escalates_to_consent=false`.
+    /// The reason is `service_gone`, not `secret_store_failure`. Both are
+    /// members of [`SilentRefreshFailureReason`] and neither escalates to
+    /// consent.
     ///
     /// [`SilentRefreshFailureReason`]: jmap_backend_core::oauth2::SilentRefreshFailureReason
     #[test]
@@ -235,9 +210,8 @@ mod tests {
         );
     }
 
-    /// A genuine "nobody has consented yet" failure still escalates, and is
-    /// traced saying so. The message this crate has always returned is
-    /// unchanged, only the trace is new.
+    /// A missing consent escalates, and the trace tells so. The returned
+    /// message is the message of the `GError`.
     #[test]
     fn a_missing_consent_is_traced_as_escalating() {
         // SAFETY: a registered GLib error quark, no arguments.
@@ -259,8 +233,8 @@ mod tests {
         );
     }
 
-    /// A NULL `GError*`. `access_token`'s own fallback message covers this,
-    /// [`trace_failure`] must not dereference it.
+    /// A NULL `GError*`. [`trace_failure`] must not dereference it. The
+    /// fallback message of `access_token` covers this case.
     #[test]
     fn a_null_error_traces_without_a_message() {
         let (message, captured) = run_captured(std::ptr::null());

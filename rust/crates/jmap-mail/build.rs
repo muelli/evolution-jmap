@@ -1,58 +1,46 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Re-emits the EDS feature detection `eds-sys` did, so this crate can `#[cfg]`
-//! on it.
+//! Re-emits the EDS feature cfgs of `eds-sys`, so that this crate can `#[cfg]`
+//! on them.
 //!
-//! `eds-sys/build.rs` decides which parts of the Camel API the installed EDS
-//! has by looking for marker identifiers in the bindings bindgen just generated
-//! (its `EDS_FEATURES` table). The answer reaches `eds-sys` itself as a
-//! `cargo::rustc-cfg` — but a `rustc-cfg` is per-crate, so a `#[cfg]` written
-//! here would be false on every EDS, silently, which is the one failure mode
-//! `docs/eds-version-matrix.md` exists to prevent.
+//! A `cargo::rustc-cfg` applies to one crate only. Without this script, each
+//! `#[cfg]` in this crate is silently false on every EDS.
 //!
-//! Cargo's channel for exactly this is a build script's `cargo::metadata`,
-//! which it hands to the build scripts of the crates that depend on it, keyed
-//! by the dependency's `links` value. So `eds-sys` publishes each detected
-//! feature and this script turns it back into a cfg for this crate's targets —
-//! the library *and* its tests, which is what lets a test drive the search
-//! entry point the EDS in front of it actually has.
+//! `eds-sys` publishes each detected feature as `cargo::metadata`. Cargo gives
+//! it to this script, which emits it again as a cfg for the library and its tests.
 //!
-//! The detection itself is deliberately *not* repeated here. Duplicating it
-//! would mean two oracles that can disagree, and re-deriving it from a version
-//! number would mean guessing which release changed what — the thing
-//! `eds-sys`'s table refuses to do.
+//! This script does not repeat the detection. A second detector can disagree
+//! with the first, and a version number does not tell which release changed what.
 
-/// The features this crate's sources `#[cfg]` on, as the names `eds-sys`
-/// publishes them under. A subset of that crate's table: the ones a Camel
-/// provider's own code has to care about.
+/// The features that this crate's sources `#[cfg]` on, with the names that
+/// `eds-sys` publishes. These are the Camel provider subset of its table.
 const FEATURES: &[&str] = &[
-    // Whether `CamelFolderSearch` still exists as an object a folder can
-    // delegate its search vfuncs to — `crate::folder`.
+    // Whether `CamelFolderSearch` exists as an object that a folder can give
+    // its search vfuncs to: `crate::folder`.
     "camel_folder_search_object",
-    // Whether `CamelFolderClass` has the 3.58 slot for answering a body term
-    // from the server — `crate::search_body`.
+    // Whether `CamelFolderClass` has the 3.58 slot that answers a body term
+    // from the server: `crate::search_body`.
     "camel_folder_search_body_sync",
-    // Whether the summary database's row structs are still called
-    // `CamelMIRecord`/`CamelFIRecord`, which also settles the shape of
-    // `summary_header_save` — `crate::summary`, `crate::message_info`.
+    // Whether the summary database row structs have the names
+    // `CamelMIRecord`/`CamelFIRecord`. This also sets the shape of
+    // `summary_header_save`: `crate::summary`, `crate::message_info`.
     "camel_summary_records",
-    // Whether `CamelProvider` still has `auto_detect` (gone in 3.58), and
-    // `url_hash` and `url_equal` (gone in 3.60): `crate::provider`.
+    // Whether `CamelProvider` has `auto_detect` (removed in 3.58), and
+    // `url_hash` and `url_equal` (removed in 3.60): `crate::provider`.
     "camel_provider_auto_detect",
     "camel_provider_url_helpers",
-    // Whether a folder's uid list is borrowed (`get_uids`/`free_uids`) or
-    // copied (`dup_uids`). Only the tests ask a folder directly, but the cfg is
-    // re-emitted for every target alike.
+    // Whether a folder lends its uid list (`get_uids`/`free_uids`) or gives a
+    // copy (`dup_uids`). Only the tests use it, but all targets get the cfg.
     "camel_folder_get_uids",
-    // Whether the message cache can write a new entry under a temporary name
-    // and rename it into place (`camel_data_cache_add_atomic`/`commit_atomic`/
-    // `discard_atomic`) or has to write straight to the final path
-    // (`camel_data_cache_add`) — `crate::cache`.
+    // Whether the message cache writes a new entry to a temporary name and
+    // renames it into place (`camel_data_cache_add_atomic`/`commit_atomic`/
+    // `discard_atomic`), or writes to the final path (`camel_data_cache_add`):
+    // `crate::cache`.
     "camel_data_cache_atomic",
-    // Whether EDS ships upstream's `CamelSaslXOAuth2Dynamic`, the mechanism of
-    // its own `EOAuth2ServiceDynamic`. Where it does, this provider publishes
-    // that type instead of declaring one of its own: `crate::sasl`.
+    // Whether EDS has the upstream `CamelSaslXOAuth2Dynamic`, the mechanism of
+    // its `EOAuth2ServiceDynamic`. If so, this provider publishes that type and
+    // does not declare its own: `crate::sasl`.
     "eds_oauth2_dynamic",
 ];
 
@@ -60,12 +48,12 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     for feature in FEATURES {
-        // Declared for every feature, present or not, so that `-D warnings`
-        // does not trip over the `#[cfg]`s this EDS turns out not to satisfy.
+        // Declare every feature, present or not, so that `-D warnings` accepts
+        // a `#[cfg]` that this EDS does not satisfy.
         println!("cargo::rustc-check-cfg=cfg({feature})");
 
-        // `links = "evolution-data-server"`, uppercased, is the prefix cargo
-        // puts on `eds-sys`'s metadata keys.
+        // Cargo makes the metadata key prefix from the `links` value of
+        // `eds-sys` ("evolution-data-server"), in upper case.
         let key = format!("DEP_EVOLUTION_DATA_SERVER_{}", feature.to_uppercase());
         println!("cargo:rerun-if-env-changed={key}");
         if std::env::var_os(&key).is_some() {

@@ -1,49 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CamelFolderClass::search_body_sync`, from EDS 3.58: the words of a
-//! body-contains term, answered by the server.
+//! `CamelFolderClass::search_body_sync` (EDS 3.58 and later): the server
+//! answers the words of a body-contains term.
 //!
-//! [`crate::search_sexp`] already turns a whole Camel search expression into an
-//! `Email/query` filter, and up to 3.52 that is the only server-side search
-//! this provider has: [`crate::folder`] fills `search_by_expression` and
-//! `search_by_uids` with it. From 3.58 those two slots are gone and the base
-//! class evaluates an expression itself through `CamelStoreSearch`, over the
-//! store's own database — which can answer a header or a flag out of the
-//! summary rows, but not a body, because a body this provider never downloaded
-//! is not in them.
+//! Up to 3.52, [`crate::folder`] sends a full search expression to the server
+//! through [`crate::search_sexp`]. From 3.58, `CamelStoreSearch` evaluates the
+//! expression over the local database, which does not have the body of a
+//! message that this provider did not download.
 //!
-//! So 3.58 leaves the provider one slot for exactly that case. When
-//! `CamelStoreSearch` reaches a body term whose answer is not already in the
-//! message preview, it calls this vfunc with the term's words
-//! (`camel-store-search.c`, `_camel_store_search_check_body_match`), and what
-//! it does with the answer is the whole reason this is worth filling in:
+//! For a body term that the message preview cannot answer, `CamelStoreSearch`
+//! calls this vfunc (`_camel_store_search_check_body_match` in
+//! `camel-store-search.c`):
 //!
-//! - Answered (TRUE): the uid set we hand back is authoritative for this
-//!   folder. Every other message is decided against without being looked at.
-//! - Refused (FALSE): the term is marked failed for the folder, and the search
-//!   falls back to opening *every* message in it and scanning the body
-//!   locally.
-//!
-//! The fallback is correct rather than broken: an unfilled slot does not
-//! silently find nothing. What it costs is a folder-sized download per body
-//! search, plus the messages that are not cached and cannot be fetched, which
-//! do silently fail to match. Answering from `Email/query` is one round trip
-//! instead.
+//! - TRUE: the returned uid set is authoritative for the folder.
+//! - FALSE: the search opens every message in the folder and scans its body
+//!   locally. This downloads the full folder, and a message that it cannot
+//!   fetch does not match.
 //!
 //! ## Which words match
 //!
-//! Camel means each word as a case-insensitive substring
-//! (`CAMEL_SEARCH_MATCH_CONTAINS`) and a message matches when it contains all
-//! of them; RFC 8621 §4.4.1 leaves `body` matching to the server, which in
-//! practice tokenises. A server therefore answers a partial word where Camel
-//! would have matched it. That difference is not new here: it is the same one
-//! `search_sexp`'s `body-contains` translation has taken since it shipped, and
-//! the same one IMAPX takes handing `BODY` to a server, so this slot keeps the
-//! provider consistent with itself rather than inventing a second policy.
-//! Multiple words become an AND of one condition each, not one condition of
-//! several words, because a multi-word string is one more thing RFC 8621 lets
-//! a server interpret.
+//! Camel matches each word as a case-insensitive substring
+//! (`CAMEL_SEARCH_MATCH_CONTAINS`), and a message must contain all words.
+//! RFC 8621 §4.4.1 lets the server decide how `body` matches, and servers
+//! usually match tokens, so a partial word can fail to match. The
+//! `body-contains` translation of `search_sexp` and IMAPX have the same
+//! difference. Each word becomes a separate condition in an AND, because
+//! RFC 8621 lets a server interpret a multi-word string as it chooses.
 
 use eds_sys::{CamelFolder, camel_pstring_free, camel_pstring_strdup};
 use gio_sys::GCancellable;
@@ -62,10 +45,8 @@ use crate::folder_info::c_string;
 
 /// Installs the vfunc on a class whose first member is a `CamelFolderClass`.
 ///
-/// Only from EDS 3.58, where the slot exists at all. Nothing stands in for it
-/// on an older EDS, and nothing needs to: there the same body term reaches the
-/// server through `search_by_expression`, which 3.58 is the release that took
-/// away.
+/// The slot exists from EDS 3.58. An older EDS sends the body term to the
+/// server through `search_by_expression`, which 3.58 removed.
 ///
 /// # Safety
 ///
@@ -77,15 +58,13 @@ pub unsafe fn install_vfuncs(class: *mut eds_sys::CamelFolderClass) {
     vfuncs.search_body_sync = Some(search_body_sync);
 }
 
-/// The JMAP filter for a body term's `words`, or `None` if there is nothing to
-/// ask: a message matches when its body contains every one of them.
+/// The JMAP filter for the `words` of a body term, or `None` if no word is left.
+/// A message matches when its body contains all the words.
 ///
-/// An empty word is dropped rather than asked about. Camel's own
-/// substring match treats one as matching everything, so dropping it cannot
-/// narrow the answer, while asking a server for it would be a condition whose
-/// meaning RFC 8621 does not fix. A term of nothing but empty words is
-/// therefore `None`, which the vfunc reports as "cannot search" rather than as
-/// "matches everything".
+/// The filter ignores an empty word. Camel matches an empty substring to all
+/// messages, so this does not change the result. RFC 8621 does not define an
+/// empty `body` condition. If all words are empty, the result is `None`, and the
+/// vfunc refuses the search: it does not answer "all messages".
 pub(crate) fn body_filter(words: &[String]) -> Option<Filter<EmailQueryFilter>> {
     let mut conditions: Vec<Filter<EmailQueryFilter>> = words
         .iter()
@@ -99,27 +78,25 @@ pub(crate) fn body_filter(words: &[String]) -> Option<Filter<EmailQueryFilter>> 
     }
 }
 
-/// `CamelFolderClass.search_body_sync`: which of this folder's messages have
-/// `words` in their body, as the server answers it.
+/// `CamelFolderClass.search_body_sync`: the server finds the messages of this
+/// folder that have `words` in their body.
 ///
-/// TRUE with `out_uids` set — possibly to an empty array, which means "none",
-/// not "could not tell" — or FALSE with the error set, which
-/// `CamelStoreSearch` reads as "ask the messages themselves instead". Nothing
-/// to ask about, a folder with no mailbox id yet, and a store with no
-/// connection are all refusals rather than empty answers: the second and third
-/// are the offline case, where the messages already on disk are the better
-/// source, and an empty array there would be a wrong answer stated
-/// confidently.
+/// On success, the result is TRUE and `out_uids` is set. An empty array means
+/// "no message matches", not "unknown". On failure, the result is FALSE and
+/// `error` is set, and `CamelStoreSearch` then scans the messages locally.
 ///
-/// Compiled on every EDS although only 3.58 and newer have a slot to put it
-/// in: it names no type older headers lack, so keeping it out of the `#[cfg]`
-/// is what lets this runner's own tests drive it.
+/// A term with no non-empty word, a folder with no mailbox id, and a store with
+/// no connection all give FALSE. The last two are the offline case: the messages
+/// on disk give a better answer there, and an empty array can be wrong.
+///
+/// This function compiles on every EDS, because it uses no type that older
+/// headers do not have. Thus the tests of this crate can call it.
 ///
 /// # Safety
 ///
-/// Camel's contract for the vfunc: `folder` a live instance of ours, `words`
-/// NULL or a live `GPtrArray` of NUL-terminated strings, `out_uids` a valid
-/// place to write one array pointer.
+/// The Camel contract for the vfunc: `folder` is a live instance of this
+/// provider's folder, `words` is NULL or a live `GPtrArray` of NUL-terminated
+/// strings, and `out_uids` is a valid location for one array pointer.
 pub unsafe extern "C" fn search_body_sync(
     folder: *mut CamelFolder,
     words: *mut GPtrArray,
@@ -164,18 +141,17 @@ pub unsafe extern "C" fn search_body_sync(
     }
 }
 
-/// The `GPtrArray` this vfunc answers with: pooled strings, and a free
+/// The `GPtrArray` that this vfunc returns: pooled strings, with a free
 /// function for them.
 ///
-/// Unlike the array [`crate::folder`]'s older search vfuncs return, which the
-/// base class frees element by element through `camel_folder_search_free`,
-/// this one is only ever `g_ptr_array_unref`'d by its caller — so the elements
-/// leak unless the array frees them itself. `camel_pstring_strdup` paired with
-/// `camel_pstring_free` is the pairing both the base implementation and IMAPX
-/// build this particular array with.
+/// The caller only calls `g_ptr_array_unref` on this array, so the array must
+/// free its elements. (The base class frees the result of the older search
+/// vfuncs of [`crate::folder`] element by element, with `camel_folder_search_free`.)
+/// The base implementation and IMAPX also use `camel_pstring_strdup` with
+/// `camel_pstring_free` for this array.
 fn pooled_uid_array(uids: &[&str]) -> *mut GPtrArray {
-    // SAFETY: a fresh array, and every pointer put in it is one the free
-    // function it was created with can free.
+    // SAFETY: the array is new, and its free function can free every pointer
+    // that goes into it.
     unsafe {
         let array = g_ptr_array_new_with_free_func(Some(free_pstring));
         for uid in uids {
@@ -187,12 +163,12 @@ fn pooled_uid_array(uids: &[&str]) -> *mut GPtrArray {
     }
 }
 
-/// `camel_pstring_free` as a `GDestroyNotify`, which is a wrapper rather than a
-/// cast because the two signatures differ in their argument type.
+/// `camel_pstring_free` as a `GDestroyNotify`. A cast is not sufficient, because
+/// the argument types of the two signatures are different.
 ///
 /// # Safety
 ///
-/// `string` must be NULL or a pointer the string pool handed out.
+/// `string` must be NULL or a pointer from the string pool.
 unsafe extern "C" fn free_pstring(string: gpointer) {
     // SAFETY: the contract above.
     unsafe { camel_pstring_free(string.cast()) };
@@ -232,8 +208,8 @@ mod tests {
         );
     }
 
-    /// An empty word matches everything Camel would have matched anyway, so
-    /// dropping it leaves the rest of the term asking for exactly as much.
+    /// Camel matches an empty word to all messages, so the filter can ignore it
+    /// without a change to the result.
     #[test]
     fn an_empty_word_is_dropped_rather_than_asked_about() {
         assert_eq!(

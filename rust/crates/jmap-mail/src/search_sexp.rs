@@ -1,48 +1,34 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Translating a Camel search expression into a JMAP `Email/query` filter.
+//! Translates a Camel search expression into a JMAP `Email/query` filter.
 //!
-//! Evolution's message list, search bar and quick-search all reduce to one
-//! call: `CamelFolderClass::search_by_expression`/`search_by_uids`, given a
-//! string in the e-sexp grammar (`e-sexp.c`) built from
-//! `mail/searchtypes.xml.in`'s rules, wrapped in `message-list.c`'s own
-//! `(match-all ...)`. [`translate`] answers the question those two vfuncs
-//! need answered before anything can go to the server: does this expression
-//! mean exactly one thing in both grammars, or does answering it correctly
-//! require Camel's own local search over the summary?
+//! Evolution sends its searches to `CamelFolderClass::search_by_expression` and
+//! `search_by_uids` as e-sexp strings (`e-sexp.c`). [`translate`] decides if an
+//! expression has exactly one meaning in JMAP, or if Camel must search locally.
 //!
-//! The tokenizer here is not a general e-sexp parser — it does not need to
-//! evaluate arithmetic, dates or user tags, only to recognise the shapes
-//! Evolution actually generates and to fail safely (returning [`None`], the
-//! same "stay local" answer as an untranslatable function) on anything else,
-//! including malformed input.
+//! This is not a full e-sexp parser. It accepts the shapes that Evolution makes
+//! and gives [`None`] ("search locally") for all other input, also malformed input.
 //!
-//! [`EmailQueryFilter`] only has "contains a substring" semantics (RFC 8621
-//! §4.4.1's `text`/`body`/`from`/... fields, and the generic `header`
-//! two-element form): `header-matches`, `header-starts-with`,
-//! `header-ends-with`, `header-has-words`, `header-soundex` and
-//! `header-exists` have no equivalent and are left untranslated.
-//! `system-flag` (Camel's flag-name table, `camel_system_flag` in
-//! `camel-folder-summary.c`) translates the six names that line up exactly
-//! with a JMAP field (`answered`/`draft`/`flagged`/`seen`/`junk`/`notjunk`
-//! to their `$`-prefixed keyword, `attachments` to `hasAttachment`); the
-//! remaining four have no JMAP equivalent and stay untranslated: `deleted`
-//! (JMAP models removal as an `Email/set` destroy or a mailbox-membership
-//! change, never a flag on a message that still exists), `secure` (local
-//! S/MIME verification state, not anything a server tracks), `junklearn`
-//! (an internal training-state flag for the junk filter) and any name
-//! Camel itself does not recognise either. A sub-expression that cannot be
-//! translated fails the whole tree rather than being dropped: dropping a
-//! child of `and` would query the server for more than the user asked, and
-//! dropping one of `or` for less.
+//! [`EmailQueryFilter`] has only substring semantics (RFC 8621 §4.4.1). Thus
+//! `header-matches`, `header-starts-with`, `header-ends-with`,
+//! `header-has-words`, `header-soundex` and `header-exists` stay untranslated.
+//!
+//! `system-flag` translates the seven Camel flag names (`camel_system_flag` in
+//! `camel-folder-summary.c`) that have an exact JMAP equivalent. It does not
+//! translate `deleted` (JMAP removes a message, it has no flag for this),
+//! `secure` (local S/MIME state), `junklearn` (junk filter training state) or
+//! an unknown name.
+//!
+//! An untranslatable sub-expression fails the full tree. If a child of `and`
+//! is removed, the query asks for more messages; for `or`, it asks for fewer.
 
 use jmap_proto::mail::{EmailQueryFilter, keyword};
 use jmap_proto::methods::Filter;
 
-/// One node of the subset of e-sexp this module parses: lists, strings and
-/// bare tokens (identifiers, numbers, `#t`/`#f`) — enough structure to walk
-/// `(func "arg" (nested ...))` shapes without needing to evaluate them.
+/// One node of the e-sexp subset that this module parses: lists, strings and
+/// bare tokens (identifiers, numbers, `#t`/`#f`). This module does not
+/// evaluate the nodes.
 #[derive(Debug, Clone, PartialEq)]
 enum SExpr {
     List(Vec<SExpr>),
@@ -50,38 +36,33 @@ enum SExpr {
     Str(String),
 }
 
-/// Parses `expression` and translates it to a JMAP filter tree, or `None` if
-/// the expression is malformed or uses anything this module does not know an
-/// exact JMAP equivalent for — in which case the caller should search
-/// locally instead, the same fallback a genuine parse failure gets.
+/// Parses `expression` and translates it to a JMAP filter tree.
+///
+/// Returns `None` if the expression is malformed or has no exact JMAP
+/// equivalent. Then the caller must search locally.
 pub fn translate(expression: &str) -> Option<Filter<EmailQueryFilter>> {
     let (expr, rest) = parse_value(expression.trim_start(), 0)?;
     if !rest.trim().is_empty() {
-        // Trailing garbage after the one top-level form the grammar allows.
+        // The grammar allows only one top-level form.
         return None;
     }
     translate_bool(&expr)
 }
 
-/// How deeply `(` may nest before an expression is refused outright.
+/// The maximum nesting depth of `(`. The parser refuses a deeper expression.
 ///
-/// [`parse_value`] and [`parse_list`] call each other once per `(`, so without
-/// a cap the nesting depth of the input is the recursion depth of this parser
-/// and a long enough run of open parens overflows the stack — which on a
-/// Camel worker thread inside Evolution is an abort of the whole process, not
-/// a refused search. The module's promise is to fail safely on malformed
-/// input, and a cap is what makes that true of this shape too. 64 matches the
-/// limit `jmap-mail-sync`'s `folder` module puts on a mailbox `parentId`
-/// chain, and is
-/// two orders of magnitude above anything `mail/searchtypes.xml.in` or
-/// `message-list.c` generates: the deepest real expression is a `(match-all
-/// (and (or …) …))`, four levels.
+/// [`parse_value`] and [`parse_list`] recurse once for each `(`. Without a
+/// limit, deep input overflows the stack, and this stops the full Evolution
+/// process. The value is the same as the `parentId` chain limit of the
+/// `folder` module of `jmap-mail-sync`. Evolution makes at most four levels:
+/// `(match-all (and (or …) …))`.
 const MAX_DEPTH: usize = 64;
 
-/// Parses one value (a list, a string, or a bare token) off the front of
-/// `input`, returning it with whatever is left unconsumed. `depth` is how
-/// many enclosing lists this value sits in; past [`MAX_DEPTH`] the expression
-/// is refused rather than recursed into.
+/// Parses one value (a list, a string, or a bare token) at the start of
+/// `input`, and returns it with the remaining input.
+///
+/// `depth` is the number of lists that contain this value. A list deeper than
+/// [`MAX_DEPTH`] gives `None`.
 fn parse_value(input: &str, depth: usize) -> Option<(SExpr, &str)> {
     let input = skip_ignorable(input);
     let mut chars = input.char_indices();
@@ -95,8 +76,8 @@ fn parse_value(input: &str, depth: usize) -> Option<(SExpr, &str)> {
     }
 }
 
-/// Skips whitespace and `;`-to-end-of-line comments, e-sexp's
-/// `cset_skip_characters`/`cpair_comment_single`.
+/// Skips whitespace and `;` comments to the end of the line, as
+/// `cset_skip_characters`/`cpair_comment_single` of e-sexp do.
 fn skip_ignorable(mut input: &str) -> &str {
     loop {
         let trimmed = input.trim_start();
@@ -111,9 +92,9 @@ fn skip_ignorable(mut input: &str) -> &str {
     }
 }
 
-/// Parses the elements of a list up to and including its closing `)`; the
-/// opening `(` has already been consumed by the caller, and `depth` already
-/// counts it.
+/// Parses the elements of a list up to and including its closing `)`.
+///
+/// The caller has already consumed the opening `(`, and `depth` includes it.
 fn parse_list(mut input: &str, depth: usize) -> Option<(SExpr, &str)> {
     let mut items = Vec::new();
     loop {
@@ -130,12 +111,13 @@ fn parse_list(mut input: &str, depth: usize) -> Option<(SExpr, &str)> {
     }
 }
 
-/// Parses a `"..."`/`'...'` string, honouring `\\` as the one escape
-/// e-sexp-generated strings need to round-trip (`e_sexp_encode_string`
-/// backslash-escapes `\\` and the string's own quote character).
+/// Parses a `"..."`/`'...'` string. A backslash escapes the next character.
+///
+/// `e_sexp_encode_string` puts a backslash before `\\` and before the quote
+/// character of the string.
 fn parse_string(input: &str, quote: char) -> Option<(SExpr, &str)> {
     let mut chars = input.char_indices();
-    chars.next(); // the opening quote, already matched by the caller.
+    chars.next(); // The caller has already matched the opening quote.
     let mut value = String::new();
     while let Some((idx, c)) = chars.next() {
         match c {
@@ -149,14 +131,14 @@ fn parse_string(input: &str, quote: char) -> Option<(SExpr, &str)> {
             c => value.push(c),
         }
     }
-    None // unterminated string
+    None // The string has no closing quote.
 }
 
-/// Parses a bare token: an identifier, a number, or `#t`/`#f` — anything run
-/// of characters not whitespace, a paren or a quote. This module never needs
-/// to tell those apart by type, only to carry the token's text: function
-/// names are matched against as strings, and every other bare token appears
-/// only in sub-expressions this module does not translate anyway.
+/// Parses a bare token: an identifier, a number, or `#t`/`#f`. The token ends
+/// at whitespace or a parenthesis.
+///
+/// The token type is not necessary. Function names are compared as text, and
+/// other bare tokens occur only in sub-expressions that stay untranslated.
 fn parse_token(input: &str) -> (SExpr, &str) {
     let end = input
         .find(|c: char| c.is_whitespace() || c == '(' || c == ')')
@@ -171,10 +153,10 @@ fn as_str(expr: &SExpr) -> Option<&str> {
     }
 }
 
-/// Builds a `header`-contains condition for a well-known header, or falls
-/// back to `EmailQueryFilter::header`'s generic name/value form for any
-/// other header name; `""` is Camel's "any header" wildcard, which has no
-/// JMAP equivalent.
+/// Builds a header-contains condition. A well-known header gets its own
+/// field, and other headers use the generic `EmailQueryFilter::header` form.
+///
+/// `""` is the Camel "any header" wildcard. It has no JMAP equivalent.
 fn header_contains(header: &str, value: &str) -> Option<Filter<EmailQueryFilter>> {
     let filter = if header.eq_ignore_ascii_case("From") {
         EmailQueryFilter::default().from(value)
@@ -194,11 +176,11 @@ fn header_contains(header: &str, value: &str) -> Option<Filter<EmailQueryFilter>
     Some(Filter::condition(filter))
 }
 
-/// Builds a condition for `(system-flag "<name>")` where `name` is one of
-/// the six Camel system flags with an exact JMAP equivalent; `None` for the
-/// other four Camel recognises (see the module doc) and for anything Camel
-/// itself would not recognise. Matched case-insensitively, the same way
-/// `camel_system_flag` itself compares names.
+/// Builds a condition for `(system-flag "<name>")` for the seven Camel system
+/// flags with an exact JMAP equivalent.
+///
+/// Returns `None` for the other three Camel flags (see the module doc) and for
+/// an unknown name. The comparison ignores case, as `camel_system_flag` does.
 fn system_flag(name: &str) -> Option<Filter<EmailQueryFilter>> {
     let filter = if name.eq_ignore_ascii_case("answered") {
         EmailQueryFilter::default().has_keyword(keyword::ANSWERED)
@@ -220,10 +202,9 @@ fn system_flag(name: &str) -> Option<Filter<EmailQueryFilter>> {
     Some(Filter::condition(filter))
 }
 
-/// Translates a boolean-valued e-sexp node. `and`/`or`/`not` and
-/// `match-all` are structural and recurse; every leaf function this module
-/// knows an exact JMAP equivalent for is matched by name; anything else
-/// yields `None`.
+/// Translates a boolean e-sexp node. `and`/`or`/`not` and `match-all`
+/// recurse, and leaf functions with an exact JMAP equivalent match by name.
+/// All other nodes give `None`.
 fn translate_bool(expr: &SExpr) -> Option<Filter<EmailQueryFilter>> {
     let SExpr::List(items) = expr else {
         return None;
@@ -232,7 +213,7 @@ fn translate_bool(expr: &SExpr) -> Option<Filter<EmailQueryFilter>> {
         return None;
     };
     match func.to_ascii_lowercase().as_str() {
-        // message-list.c's own wrapper: apply the one child to every message.
+        // The wrapper of message-list.c: it applies its one child to all messages.
         "match-all" => {
             let [inner] = args else { return None };
             translate_bool(inner)
@@ -283,29 +264,24 @@ fn translate_bool(expr: &SExpr) -> Option<Filter<EmailQueryFilter>> {
 mod tests {
     use super::*;
 
-    /// A run of `(` is the one shape that turns this parser's own recursion
-    /// into the input's nesting depth. Before the cap, 100 000 of them
-    /// overflowed the stack and aborted the process — inside Evolution that
-    /// is every account in the session, not one refused search. `None` is the
-    /// same "search locally" answer any other unparseable expression gets.
+    /// Without [`MAX_DEPTH`], 100 000 `(` overflow the stack and stop the
+    /// process. With it, the result is `None` ("search locally").
     #[test]
     fn a_run_of_open_parens_is_refused_rather_than_overflowing_the_stack() {
         assert_eq!(translate(&"(".repeat(100_000)), None);
-        // Balanced, and just as deep: a well-formed document is refused at
-        // the same depth as a truncated one, since it is the nesting and not
-        // the truncation that costs the stack.
+        // A balanced expression of the same depth is also refused, because
+        // the nesting uses the stack, not the missing `)`.
         let deep = format!("{}{}", "(and ".repeat(50_000), ")".repeat(50_000));
         assert_eq!(translate(&deep), None);
     }
 
-    /// The cap refuses only past its own limit: an expression nested to it
-    /// still parses, so no real `searchtypes.xml.in` rule is caught by this.
+    /// The limit refuses only deeper expressions. An expression at the limit
+    /// still translates.
     #[test]
     fn nesting_up_to_the_limit_still_translates() {
         let leaf = r#"(header-contains "Subject" "s")"#;
-        // One `not` per level, with the leaf at the bottom: `translate` counts
-        // the outermost list as depth 1, so MAX_DEPTH - 1 wrappers plus the
-        // leaf's own list sits exactly at the limit.
+        // `translate` counts the outermost list as depth 1. Thus MAX_DEPTH - 1
+        // `not` wrappers and the list of the leaf are exactly at the limit.
         let at_limit = format!(
             "{}{leaf}{}",
             "(not ".repeat(MAX_DEPTH - 1),
@@ -470,7 +446,7 @@ mod tests {
 
     #[test]
     fn system_flag_matches_camel_case_insensitively() {
-        // camel_system_flag itself compares with g_ascii_strcasecmp.
+        // camel_system_flag compares with g_ascii_strcasecmp.
         assert_eq!(
             translate(r#"(system-flag "SEEN")"#),
             Some(Filter::condition(
@@ -497,23 +473,22 @@ mod tests {
 
     #[test]
     fn system_flag_names_with_no_jmap_equivalent_are_untranslatable() {
-        // `deleted`: JMAP models removal as a destroy or mailbox-membership
-        // change, never a flag on a message that still exists.
+        // `deleted`: JMAP removes a message with a destroy or a mailbox
+        // change. It has no flag for this.
         assert_eq!(translate(r#"(system-flag "Deleted")"#), None);
         // `secure`: local S/MIME verification state, not a server keyword.
         assert_eq!(translate(r#"(system-flag "Secure")"#), None);
         // `junklearn`: the junk filter's internal training-state flag.
         assert_eq!(translate(r#"(system-flag "JunkLearn")"#), None);
-        // A name Camel's own flag table does not recognise either.
+        // A name that is not in the Camel flag table.
         assert_eq!(translate(r#"(system-flag "NotARealFlag")"#), None);
     }
 
     #[test]
     fn unquoted_leaf_args_are_untranslatable() {
-        // `parse_token` accepts any unquoted run of characters as an
-        // `Ident`, which `as_str` refuses: Evolution's search bar exposes a
-        // free-form expression mode where this text is user-typed, so an
-        // unquoted arg here is reachable, not just a malformed fixture.
+        // `parse_token` makes an `Ident` of unquoted text, and `as_str` refuses
+        // it. The free-form expression mode of the Evolution search bar can
+        // send this input.
         assert_eq!(translate(r#"(header-contains From "x")"#), None);
         assert_eq!(translate(r#"(header-contains "From" x)"#), None);
         assert_eq!(translate(r#"(body-contains foo)"#), None);
@@ -522,10 +497,9 @@ mod tests {
 
     #[test]
     fn empty_and_or_are_untranslatable() {
-        // e-sexp's own `(and)`/`(or)` are valid vacuous-true/false forms a
-        // free-form search expression can contain, but RFC 8620 SS5.5 never
-        // defines FilterOperator behaviour for an empty `conditions` array,
-        // so this must refuse rather than send one to the server.
+        // In e-sexp, `(and)` is true and `(or)` is false. RFC 8620 §5.5 does
+        // not define a FilterOperator with an empty `conditions` array, so
+        // `translate` refuses them.
         assert_eq!(translate("(and)"), None);
         assert_eq!(translate("(or)"), None);
         assert_eq!(
@@ -557,10 +531,8 @@ mod tests {
         assert_eq!(translate(""), None);
     }
 
-    /// `skip_ignorable` must skip past the newline that ends a comment, not
-    /// up to it: a comment with no text before the newline puts that newline
-    /// right at the start of the matched range, the one case where getting
-    /// the offset wrong (one before it instead of one after) underflows.
+    /// `skip_ignorable` must skip the newline that ends a comment. With an
+    /// empty comment, the newline is at index 0, where a wrong offset underflows.
     #[test]
     fn empty_comment_right_before_a_newline_is_skipped() {
         assert_eq!(
@@ -569,9 +541,7 @@ mod tests {
         );
     }
 
-    /// A comment with text before the newline exercises the same offset on a
-    /// non-zero index: skipping to the newline itself instead of past it
-    /// would leave the newline's preceding character in the parsed input.
+    /// A comment with text tests the same offset at a non-zero index.
     #[test]
     fn comment_with_text_before_an_expression_is_skipped() {
         assert_eq!(

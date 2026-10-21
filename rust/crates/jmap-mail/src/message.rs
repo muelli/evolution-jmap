@@ -1,54 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `get_message_sync`: the vfunc that answers a click on a message list row.
+//! `get_message_sync`: the vfunc that opens a message from a message list row.
 //!
-//! [`crate::refresh`] fills a folder with rows, and a row is what Evolution
-//! *lists*: a subject, a sender, a size. It is not the message. Opening one asks
-//! this vfunc, and what it has to hand back is a `CamelMimeMessage` — the object
-//! the preview pane renders, the reply composer quotes and the save-as dialogue
-//! writes out.
+//! A row from [`crate::refresh`] holds only list data. This vfunc returns the
+//! full `CamelMimeMessage`. [`MailSync::message_source`] gets the RFC 5322 bytes
+//! (an `Email/get` for the blob id, then a blob download). The Camel parser
+//! makes the object, so all parts of Camel agree about the message.
 //!
-//! Two steps and each belongs to a different layer. The bytes come from
-//! [`MailSync::message_source`], built last increment: an `Email/get` for the
-//! blob id, then a download of that blob, which is where the RFC 5322 message a
-//! JMAP server holds actually lives. Turning those bytes into an object is
-//! Camel's own parser, reached through the message's `CamelDataWrapper` face —
-//! and it has to be Camel's, because the object has to agree with every other
-//! part of Camel about what the message says. A provider that parsed headers
-//! itself would be a second, disagreeing MIME implementation inside the same
-//! process.
+//! `camel_data_wrapper_construct_from_data_sync` parses the downloaded buffer
+//! directly. A `CamelStreamMem` adds more FFI and no value. The message is in
+//! memory twice during the parse.
 //!
-//! ## One buffer, not a stream
+//! An `Email` is immutable (RFC 8621 §4.1), so [`crate::cache`] keeps the
+//! download, one file for each message. The vfunc reads the cache before it
+//! connects, so a cached message opens offline. The cache key is the uid,
+//! because a server can change the blob id (see [`MailSync::message_source`]).
 //!
-//! `camel_data_wrapper_construct_from_data_sync` rather than a
-//! `CamelStreamMem`: the download already produced the whole message in memory,
-//! so a stream would be a wrapper around a buffer this code is holding anyway,
-//! and it would put three more Camel classes across the FFI boundary for
-//! nothing. The cost is that a large message is in memory twice for the length
-//! of the parse — the download's copy and the object's — which is the same trade
-//! `camel_folder_get_message_sync` callers make anyway, since what they get back
-//! *is* the whole message.
-//!
-//! ## Once, not every time
-//!
-//! The two steps above are what the *first* open of a message costs. RFC 8621
-//! §4.1 makes an `Email` immutable, so every later open would pay the same two
-//! round trips for bytes that cannot have changed — and would fail outright with
-//! the account offline, in a provider whose store is a `CamelOfflineStore`. So
-//! the download is kept: [`crate::cache`], a file per message under the
-//! account's own cache directory, consulted here before the connection is even
-//! looked for. What is *not* kept is the blob id, for the reason
-//! [`MailSync::message_source`] documents — a server may reissue one — which is
-//! why the cache is keyed by the uid Camel asked for rather than by anything the
-//! fetch produced.
-//!
-//! ## Stopping one
-//!
-//! A blob download of a large message is the longest single request this
-//! provider makes, and the `cancellable` Camel passes is [`observe`]d for the
-//! length of the call. A stopped open caches nothing: the bytes are only written
-//! once they are all here.
+//! The `cancellable` is [`observe`]d for the full call. A cancelled open writes
+//! nothing to the cache, because the cache write occurs after the full download.
 //!
 //! [`MailSync::message_source`]: jmap_mail_sync::MailSync::message_source
 
@@ -77,8 +47,8 @@ use crate::folder::{JmapFolder, parent_store};
 ///
 /// # Safety
 ///
-/// `class` must point at an initialised class struct that leads with a
-/// `CamelFolderClass` — which is every descendant of `CamelFolder`.
+/// `class` must point at an initialised class struct that starts with a
+/// `CamelFolderClass`. All descendants of `CamelFolder` agree with this.
 pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
@@ -88,9 +58,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
 
 /// Fetches one message and parses it.
 ///
-/// A new reference on success, NULL with the error set on failure — Camel's
-/// convention for the object-returning vfuncs, and what
-/// `camel_folder_get_message_sync`'s callers test before they render anything.
+/// Returns a new reference on success, or NULL and sets the error on failure.
 unsafe extern "C" fn get_message_sync(
     folder: *mut CamelFolder,
     message_uid: *const gchar,
@@ -102,15 +70,14 @@ unsafe extern "C" fn get_message_sync(
     // currently NULL.
     unsafe {
         guard_ptr("get_message_sync", error, || {
-            // SAFETY: Camel keeps its cancellable alive for the length of the
-            // call, so it outlives this observation — which is what makes
-            // every request below here stop when the user presses Stop.
+            // SAFETY: Camel keeps its cancellable alive for the duration of the
+            // call, so it outlives this observation. The observation lets Stop
+            // cancel the requests below.
             let _cancel = observe(cancellable);
 
-            // The wrapper rejects a NULL uid before it dispatches, so this is
-            // the empty string a caller reaching the vfunc directly could pass.
-            // Reported as the missing message it describes rather than asserted:
-            // a vfunc is not the place to take the process down.
+            // The Camel wrapper rejects a NULL uid, so this branch catches an
+            // empty uid. Report a missing message: a vfunc must not abort the
+            // process.
             let Some(uid) = read_string(message_uid) else {
                 return fail(
                     error,
@@ -120,12 +87,9 @@ unsafe extern "C" fn get_message_sync(
             };
             let uid = Id::new(uid);
 
-            // Before the connection is even looked for: a message already
-            // downloaded is one this provider can hand over with the account
-            // offline, which is the whole point of a `CamelOfflineStore`. The
-            // same lookup `get_message_cached` makes below, so a message this
-            // process already opened once needs neither an error out-param
-            // nor the caller's own cache lookup a second time.
+            // Read the cache before the connection, so a cached message opens
+            // offline. This is the same lookup as `get_message_cached`, for
+            // callers that call this vfunc directly.
             let message = cached_message(folder, message_uid);
             if !message.is_null() {
                 return message;
@@ -139,11 +103,9 @@ unsafe extern "C" fn get_message_sync(
                 Ok(source) => source,
                 Err(failure) => return fail(error, &failure, StoreError::to_gerror),
             };
-            // Kept before it is parsed, not after: what is worth keeping is the
-            // bytes the server sent, and a message this parser rejects is one
-            // the next release of Camel may not — while a failed parse that
-            // discarded the download would make every open of that message
-            // another two round trips.
+            // Cache the bytes before the parse. A later Camel release can parse
+            // a message that this release rejects, and no second download is
+            // necessary.
             if let Some(cache) = JmapFolder::borrow(folder).and_then(JmapFolder::cache) {
                 cache.store(uid.as_str(), &source, listed_size(folder, message_uid));
             }
@@ -152,15 +114,13 @@ unsafe extern "C" fn get_message_sync(
     }
 }
 
-/// Answers a click on a message list row without ever taking
-/// `camel_folder_lock` — Camel's own `camel_folder_get_message_sync` tries
-/// this vfunc first and only falls back to the locked `get_message_sync`
-/// above on a miss, per this slot's own doc comment ("not being blocked by
-/// the folder's lock"). No `cancellable` is observed: everything this does is
-/// a local cache lookup, never a request the JMAP client could stop.
+/// Returns a cached message without `camel_folder_lock`.
 ///
-/// NULL for a miss, which this vfunc's contract explicitly says is not an
-/// error — there is nowhere to report one to, since the slot has no `GError`
+/// `camel_folder_get_message_sync` calls this vfunc first, and calls the locked
+/// `get_message_sync` only on a miss. This vfunc makes no request, so it does
+/// not observe the `cancellable`.
+///
+/// NULL means a miss, which is not an error. The slot has no `GError`
 /// out-parameter.
 unsafe extern "C" fn get_message_cached(
     folder: *mut CamelFolder,
@@ -176,14 +136,11 @@ unsafe extern "C" fn get_message_cached(
     }
 }
 
-/// The cached copy of `message_uid` in `folder`, or NULL for a miss —
-/// including "this folder has no cache" and "the entry did not survive
-/// [`MessageCache::load`]'s own checks", which are misses to every caller of
-/// this.
+/// The cached copy of `message_uid` in `folder`, or NULL for a miss.
 ///
-/// Shared by [`get_message_cached`] and, as its first attempt before it looks
-/// for a connection, [`get_message_sync`]: a message this process already
-/// opened once is served the same way through either vfunc.
+/// A folder with no cache and an entry that fails the checks of
+/// [`MessageCache::load`] are also misses. [`get_message_cached`] and
+/// [`get_message_sync`] both use this function.
 ///
 /// [`MessageCache::load`]: crate::cache::MessageCache::load
 ///
@@ -201,43 +158,34 @@ unsafe fn cached_message(
             return ptr::null_mut();
         };
         let cache = JmapFolder::borrow(folder).and_then(JmapFolder::cache);
-        // What the row says the message weighs is what tells a complete entry
-        // from what a crash left behind — see [`crate::cache`].
+        // The size in the row identifies a truncated entry (see [`crate::cache`]).
         let listed = listed_size(folder, message_uid);
         let Some(source) = cache.and_then(|cache| cache.load(uid.as_str(), listed)) else {
             return ptr::null_mut();
         };
-        // Parsed without an error out-parameter, so a failure is silent: an
-        // entry Camel's parser will not read is not a message either vfunc
-        // reports, it is a miss the locked path below will replace.
+        // A parse failure here is silent and is a miss. The download in
+        // `get_message_sync` then replaces the entry.
         parse(&source, ptr::null_mut())
     }
 }
 
-/// How many octets this folder's row for `message_uid` says the message has, or
-/// `None` if there is no row to ask.
+/// The size in octets in the summary row for `message_uid`, or `None` if there
+/// is no row.
 ///
-/// The number is the `Email`'s `size` as [`crate::message_info`] wrote it into
-/// the row, which RFC 8621 §4.1 defines as the octets of the data the `blobId`
-/// references — the same bytes the cache holds. Asked of the summary rather than
-/// carried into the vfunc because the vfunc's argument is a uid: what Evolution
-/// clicked is a line of the message list, and the row behind that line is where
-/// everything already known about the message lives.
+/// [`crate::message_info`] writes the `Email` `size` into the row. RFC 8621 §4.1
+/// defines it as the size of the `blobId` data, which the cache holds.
 ///
-/// `None` for a uid the summary has no row for, which is every uid a caller
-/// invented and the ordinary state of a folder that has not been refreshed. That
-/// is not an error here — it is a message the cache will hold unchecked, exactly
-/// as it did before there was a check — because the fetch below is what decides
-/// whether the uid means anything.
+/// A folder that has no refresh yet has no rows. `None` is not an error: the
+/// cache then stores and loads the entry without a size check.
 ///
 /// # Safety
 ///
 /// `folder` must point at a live `CamelFolder`, and `message_uid` must be a live
 /// NUL-terminated string.
 unsafe fn listed_size(folder: *mut CamelFolder, message_uid: *const gchar) -> Option<u32> {
-    // SAFETY: the contract above; the summary is borrowed from the folder, and
-    // `summary_get` hands back a reference this function owns and releases
-    // when `info` drops at the end of the scope.
+    // SAFETY: the contract above. The summary is borrowed from the folder.
+    // `summary_get` returns a reference that this function owns, and `info`
+    // releases it at the end of the scope.
     unsafe {
         let summary = camel_folder_get_folder_summary(folder);
         if summary.is_null() {
@@ -248,27 +196,23 @@ unsafe fn listed_size(folder: *mut CamelFolder, message_uid: *const gchar) -> Op
     }
 }
 
-/// The downloaded bytes, as the object Camel renders.
+/// Parses the downloaded bytes into a `CamelMimeMessage`.
 ///
-/// The failure is Camel's own and is passed through rather than reclassified:
-/// a message the parser rejects is a message this provider has no better
-/// account of than the parser does, and wrapping it in a service error would
-/// report a malformed message as a broken account.
+/// The Camel parse error passes through unchanged. A service error would report
+/// a malformed message as a broken account.
 ///
 /// # Safety
 ///
 /// As [`set_raw_gerror`] for `error`.
 unsafe fn parse(source: &[u8], error: *mut *mut GError) -> *mut CamelMimeMessage {
-    // SAFETY: a fresh message is a valid `CamelDataWrapper`, `source` is a live
-    // buffer of the length given, and the error out-parameter is a local that
-    // starts NULL. `message` releases its reference wherever this scope ends,
-    // unless `into_raw` hands it to the caller on the success path below.
+    // SAFETY: a new message is a valid `CamelDataWrapper`, `source` is a live
+    // buffer of the given length, and the error out-parameter is a local that
+    // starts NULL. `message` releases its reference at the end of the scope,
+    // unless `into_raw` gives it to the caller on success.
     unsafe {
         let Some(message) = Owned::from_raw(camel_mime_message_new()) else {
-            // Unreachable in practice — `camel_mime_message_new` has no failure
-            // mode to report — but a NULL construction is not one this parse
-            // succeeded at either, so it gets the same "unexplained" report as
-            // a parse the wrapper itself refused with no error set, below.
+            // `camel_mime_message_new` does not fail in practice. A NULL gets the
+            // same report as a parse failure with no error.
             set_raw_gerror(
                 error,
                 g_error_new_literal(
@@ -283,22 +227,18 @@ unsafe fn parse(source: &[u8], error: *mut *mut GError) -> *mut CamelMimeMessage
         let parsed = camel_data_wrapper_construct_from_data_sync(
             message.as_ptr().cast::<CamelDataWrapper>(),
             source.as_ptr().cast(),
-            // A message larger than `gssize` cannot be described to Camel at
-            // all; saturating leaves a truncated parse, which fails loudly,
-            // rather than a negative length, which Camel reads as "to the end
-            // of the buffer" and would walk off it.
+            // A Rust slice is at most `isize::MAX` bytes, so this saturation
+            // does not occur. A negative length means "NUL-terminated" to GIO,
+            // and a read past the buffer end.
             gssize::try_from(source.len()).unwrap_or(gssize::MAX),
             ptr::null_mut(),
             &mut inner,
         );
         if parsed == GFALSE {
             if inner.is_null() {
-                // A parser that failed without saying why still has to be
-                // reported as a failure: Camel logs a critical of its own for a
-                // vfunc that answers NULL with no error set. `INVALID` rather
-                // than `INVALID_UID` — the uid was fine, the bytes behind it
-                // were not — and not a service error, because nothing is wrong
-                // with the account.
+                // Camel logs a critical for a vfunc that returns NULL with no
+                // error, so make one. The code is `INVALID`, not `INVALID_UID`,
+                // because the bytes are bad, not the uid.
                 inner = g_error_new_literal(
                     camel_folder_error_quark(),
                     CAMEL_FOLDER_ERROR_INVALID as i32,
