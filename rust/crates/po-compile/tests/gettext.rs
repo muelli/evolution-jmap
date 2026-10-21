@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Check that glibc gettext reads this crate `.mo` output.
+//! Check that glibc gettext reads `.mo` output from this crate.
 
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -39,10 +39,10 @@ const PO: &str = concat!(
     "msgstr \"Zum Lesen und Speichern von E-Mail auf JMAP-Servern.\"\n",
 );
 
-/// Find a locale that is not C so gettext attempts translation.
+/// Return a non-C locale so gettext attempts translation.
 fn a_locale_that_can_translate() -> Option<String> {
     for candidate in [c"", c"en_US.UTF-8", c"en_US.utf8", c"C.UTF-8"] {
-        // SAFETY: this binary runs one test and does not spawn threads.
+        // SAFETY: this test process is single-threaded.
         let set = unsafe { setlocale(LC_MESSAGES, candidate.as_ptr()) };
         if set.is_null() {
             continue;
@@ -73,7 +73,7 @@ fn glibc_reads_what_this_compiler_wrote() {
 
     let translating = a_locale_that_can_translate();
 
-    // SAFETY: this binary runs one test and mutates env state once.
+    // SAFETY: this test process mutates env state once.
     unsafe { std::env::set_var("LANGUAGE", LANGUAGE) };
 
     let bound = CString::new(root.as_os_str().as_bytes()).expect("a path without a NUL");
