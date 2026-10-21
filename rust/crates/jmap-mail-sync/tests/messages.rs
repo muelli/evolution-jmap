@@ -4,6 +4,7 @@
 //! Listing a mailbox against a mock server: the `Email/query` and `Email/get`
 //! answers, and the two limits that a server can apply to them.
 
+use jmap_client::limits::IdBudget;
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
@@ -195,6 +196,41 @@ fn a_server_that_pages_its_query_answer_is_read_to_the_end() {
         ],
         "a page boundary must not reorder or duplicate anything"
     );
+}
+
+/// The listing of `mailbox` by a client with `budget`.
+fn messages_within(
+    fixture: &Fixture,
+    mailbox: &Id,
+    budget: IdBudget,
+) -> Result<Vec<jmap_mail_sync::MessageSummary>, jmap_mail_sync::SyncError> {
+    let client = Client::builder()
+        .id_budget(budget)
+        .connect(fixture.server.origin(), Credentials::none())
+        .unwrap();
+    MailSync::new(client, fixture.account_id.clone())
+        .messages(mailbox)
+        .map(|(_, messages)| messages)
+}
+
+#[test]
+fn a_query_past_the_id_budget_is_refused() {
+    // Each page is small, but the pages together can fill the memory. The
+    // client stops at the budget for one sync.
+    let fixture = Fixture::started_with(MockServer::builder().query_page_size(2));
+    let inbox = fixture.seed_mailbox_with("Inbox", Some(role::INBOX), 5);
+
+    match messages_within(&fixture, &inbox, IdBudget::new(4, usize::MAX)) {
+        Err(jmap_mail_sync::SyncError::Client(jmap_client::Error::Protocol(message))) => {
+            assert!(
+                message.contains("Email/query") && message.contains("budget"),
+                "{message}"
+            );
+        }
+        other => panic!("five ids passed a budget of four: {other:?}"),
+    }
+    let exact = messages_within(&fixture, &inbox, IdBudget::new(5, usize::MAX));
+    assert_eq!(exact.unwrap().len(), 5);
 }
 
 #[test]

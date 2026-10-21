@@ -17,7 +17,7 @@ use jmap_proto::session::{self, Session};
 use serde_json::Value;
 
 use crate::error::Error;
-use crate::limits;
+use crate::limits::{self, IdBudget};
 use crate::resolver::{NoSrvResolver, Resolver};
 use crate::transport::{
     CancelFlag, HttpMethod, HttpRequest, HttpResponse, Transport, TransportError,
@@ -80,6 +80,7 @@ pub struct ClientBuilder {
     resolver: Box<dyn Resolver>,
     max_rate_limit_retries: u32,
     max_retry_after: Duration,
+    id_budget: IdBudget,
 }
 
 impl std::fmt::Debug for ClientBuilder {
@@ -91,6 +92,7 @@ impl std::fmt::Debug for ClientBuilder {
             .field("rebase_urls_to_origin", &self.rebase_urls_to_origin)
             .field("max_rate_limit_retries", &self.max_rate_limit_retries)
             .field("max_retry_after", &self.max_retry_after)
+            .field("id_budget", &self.id_budget)
             .finish_non_exhaustive()
     }
 }
@@ -107,6 +109,7 @@ impl Default for ClientBuilder {
             resolver: Box::new(NoSrvResolver),
             max_rate_limit_retries: 3,
             max_retry_after: Duration::from_secs(30),
+            id_budget: IdBudget::per_sync(),
         }
     }
 }
@@ -180,6 +183,14 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the id budget for one sync, for example one `all_changes` call.
+    ///
+    /// Defaults to [`IdBudget::per_sync`].
+    pub fn id_budget(mut self, budget: IdBudget) -> Self {
+        self.id_budget = budget;
+        self
+    }
+
     /// Fetch the session object from `origin` (scheme + host + port) and
     /// return a ready client.
     pub fn connect(self, origin: &str, credentials: Credentials) -> Result<Client, Error> {
@@ -218,6 +229,7 @@ impl ClientBuilder {
             rebase_note: None,
             max_rate_limit_retries: self.max_rate_limit_retries,
             max_retry_after: self.max_retry_after,
+            id_budget: self.id_budget,
         };
         client.refresh_session()?;
         Ok(client)
@@ -248,6 +260,7 @@ pub struct Client {
     rebase_note: Option<String>,
     pub(crate) max_rate_limit_retries: u32,
     pub(crate) max_retry_after: Duration,
+    id_budget: IdBudget,
 }
 
 impl std::fmt::Debug for Client {
@@ -267,6 +280,11 @@ impl std::fmt::Debug for Client {
 impl Client {
     pub fn builder() -> ClientBuilder {
         ClientBuilder::default()
+    }
+
+    /// A fresh id budget for one sync. Each sync charges its own copy.
+    pub fn id_budget(&self) -> IdBudget {
+        self.id_budget
     }
 
     /// Connect with default transport and timeout.

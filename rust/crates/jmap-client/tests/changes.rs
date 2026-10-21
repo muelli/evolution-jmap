@@ -5,7 +5,8 @@
 
 use std::collections::BTreeSet;
 
-use jmap_client::{ChangeSet, Client, Credentials};
+use jmap_client::limits::IdBudget;
+use jmap_client::{ChangeSet, Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::contacts::ContactCard;
 use jmap_proto::{Id, State};
@@ -295,4 +296,121 @@ fn a_card_from_before_the_window_edited_inside_it_classifies_as_updated() {
     assert_eq!(changes.updated, BTreeSet::from([existing]));
     assert!(changes.created.is_empty());
     assert!(changes.destroyed.is_empty());
+}
+
+/// A server that answers `/changes` in pages of one id, the state before three
+/// new cards, and the ids of these cards.
+fn three_new_cards() -> (MockServer, Id, State, Vec<Id>) {
+    let server = MockServer::builder().changes_page_size(1).start();
+    let account_id = server.account_id();
+    let book = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_address_book("Personal", true)
+    };
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let since = client.contact_state(&account_id).unwrap();
+    let ids = ["One", "Two", "Three"]
+        .into_iter()
+        .map(|name| {
+            client
+                .contact_create(
+                    &account_id,
+                    &ContactCard::simple(book.clone(), name, "card@example.com"),
+                )
+                .unwrap()
+                .id
+                .unwrap()
+        })
+        .collect();
+    (server, account_id, since, ids)
+}
+
+/// The changes since `since`, read by a client with `budget`.
+fn changes_within(
+    server: &MockServer,
+    account_id: &Id,
+    since: &State,
+    budget: IdBudget,
+) -> Result<ChangeSet, Error> {
+    Client::builder()
+        .id_budget(budget)
+        .connect(server.origin(), Credentials::none())
+        .unwrap()
+        .all_changes(account_id, "ContactCard", since)
+}
+
+fn assert_refused_for_budget(result: Result<ChangeSet, Error>) {
+    match result {
+        Err(Error::Protocol(message)) => assert!(
+            message.contains("ContactCard/changes") && message.contains("budget"),
+            "{message}"
+        ),
+        other => panic!("a stream past the budget was accepted: {other:?}"),
+    }
+}
+
+#[test]
+fn a_changes_stream_past_the_id_budget_is_refused() {
+    let (server, account_id, since, ids) = three_new_cards();
+
+    assert_refused_for_budget(changes_within(
+        &server,
+        &account_id,
+        &since,
+        IdBudget::new(2, usize::MAX),
+    ));
+    let exact = changes_within(&server, &account_id, &since, IdBudget::new(3, usize::MAX));
+    assert_eq!(exact.unwrap().created, ids.into_iter().collect());
+}
+
+#[test]
+fn a_changes_stream_past_the_id_byte_budget_is_refused() {
+    let (server, account_id, since, ids) = three_new_cards();
+    let bytes: usize = ids.iter().map(|id| id.as_str().len()).sum();
+
+    assert_refused_for_budget(changes_within(
+        &server,
+        &account_id,
+        &since,
+        IdBudget::new(usize::MAX, bytes - 1),
+    ));
+    let exact = changes_within(
+        &server,
+        &account_id,
+        &since,
+        IdBudget::new(usize::MAX, bytes),
+    );
+    assert_eq!(exact.unwrap().created.len(), 3);
+}
+
+/// The budget counts each id once, so a server that repeats one id on many
+/// pages does not use it up.
+#[test]
+fn an_id_on_many_pages_counts_once() {
+    let (server, account_id, since, ids) = three_new_cards();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    for id in &ids {
+        client
+            .contact_update(&account_id, id, json!({"name/full": "Edited"}))
+            .unwrap();
+    }
+
+    let changes = changes_within(&server, &account_id, &since, IdBudget::new(3, usize::MAX));
+    assert_eq!(changes.unwrap().created, ids.into_iter().collect());
+}
+
+#[test]
+fn the_default_budget_is_the_per_sync_one() {
+    assert_eq!(IdBudget::default(), IdBudget::per_sync());
+    assert_eq!(
+        IdBudget::per_sync(),
+        IdBudget::new(
+            jmap_client::limits::MAX_SYNC_IDS,
+            jmap_client::limits::MAX_SYNC_ID_BYTES
+        )
+    );
 }
