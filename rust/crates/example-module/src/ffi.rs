@@ -8,7 +8,7 @@ use std::os::raw::{c_char, c_int, c_uint, c_ulong, c_void};
 
 pub type GType = usize;
 
-// Assume a 64-bit `GType`.
+// `GType` uses 64 bits on this target.
 const _: () = assert!(
     std::mem::size_of::<usize>() == 8,
     "GType is assumed to be 8 bytes (64-bit platforms only)"
@@ -42,7 +42,7 @@ pub struct GTypeInstance {
     pub g_class: *mut GTypeClass,
 }
 
-// Match `struct _GObjectClass` from `<gobject/gobject.h>` on LP64.
+// Mirror `struct _GObjectClass` from `<gobject/gobject.h>` on LP64.
 
 #[repr(C)]
 pub struct GObjectClass {
@@ -67,7 +67,7 @@ pub struct GObjectClass {
                                            // total: 136
 }
 
-// Match `struct _EExtensionClass` from `<libebackend/e-extension.h>`.
+// Mirror `struct _EExtensionClass` from `<libebackend/e-extension.h>`.
 
 #[repr(C)]
 pub struct EExtensionClass {
@@ -76,11 +76,11 @@ pub struct EExtensionClass {
     pub _reserved: [*mut c_void; 16], // 128
 }
 
-// Write this field in class init. Read it after class init.
+// Write this field in class init. Read this field after class init.
 unsafe impl Sync for EExtensionClass {}
 unsafe impl Send for EExtensionClass {}
 
-// Match `struct _GTypeInfo` from `<gobject/gtype.h>`.
+// Mirror `struct _GTypeInfo` from `<gobject/gtype.h>`.
 
 #[repr(C)]
 pub struct GTypeInfo {
@@ -99,7 +99,7 @@ pub struct GTypeInfo {
 // This type stores only function pointers and static pointers.
 unsafe impl Sync for GTypeInfo {}
 
-// Match `struct _GTypeQuery` from `<gobject/gtype.h>`.
+// Mirror `struct _GTypeQuery` from `<gobject/gtype.h>`.
 
 #[repr(C)]
 pub struct GTypeQuery {
@@ -109,7 +109,7 @@ pub struct GTypeQuery {
     pub instance_size: c_uint,
 }
 
-// Match `GtkActionEntry` from `<gtk/gtkactiongroup.h>`.
+// Mirror `GtkActionEntry` from `<gtk/gtkactiongroup.h>`.
 
 #[repr(C)]
 pub struct GtkActionEntry {
