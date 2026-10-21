@@ -9,8 +9,9 @@
 //! function that EDS calls, so a pointer into a Rust `String` shows here as a
 //! failure, not as a crash in a factory process.
 
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
     CamelAddress, CamelInternetAddress, E_SOURCE_CREDENTIAL_PASSWORD,
@@ -19,7 +20,11 @@ use eds_sys::{
     e_named_parameters_new, e_named_parameters_set, e_source_get_extension, e_source_has_extension,
     e_source_new,
 };
-use glib_sys::{GSList, g_free, g_slist_free_full, g_slist_length, g_slist_nth_data, gchar};
+use glib_sys::{
+    G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, GLogLevelFlags, GSList, g_free,
+    g_log_remove_handler, g_log_set_handler, g_slist_free_full, g_slist_length, g_slist_nth_data,
+    g_strdup, gchar,
+};
 use gobject_sys::g_object_unref;
 use jmap_backend_core::marshal;
 
@@ -46,6 +51,25 @@ fn a_null_and_an_empty_c_string_both_read_as_absent() {
         assert_eq!(marshal::read_string(c"".as_ptr()), None);
         assert_eq!(
             marshal::read_string(c"state-7".as_ptr()).as_deref(),
+            Some("state-7")
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// take_string
+
+/// A string that the caller gives away reads as `read_string` reads it. The
+/// empty string is absent here too, and the NULL is absent.
+#[test]
+fn a_taken_string_reads_like_a_borrowed_one() {
+    // SAFETY: each argument is NULL or a new GLib allocation that the call
+    // takes and frees.
+    unsafe {
+        assert_eq!(marshal::take_string(ptr::null_mut()), None);
+        assert_eq!(marshal::take_string(g_strdup(c"".as_ptr())), None);
+        assert_eq!(
+            marshal::take_string(g_strdup(c"state-7".as_ptr())).as_deref(),
             Some("state-7")
         );
     }
@@ -147,14 +171,45 @@ fn credentials_without_a_password_report_none() {
     }
 }
 
+/// Counts the messages that a GLib log handler receives.
+unsafe extern "C" fn count_message(
+    _domain: *const gchar,
+    _level: GLogLevelFlags,
+    _message: *const gchar,
+    counter: *mut c_void,
+) {
+    // SAFETY: the test gives the address of an `AtomicUsize` that outlives
+    // the handler.
+    unsafe { &*counter.cast::<AtomicUsize>() }.fetch_add(1, Ordering::SeqCst);
+}
+
 /// EDS calls `connect_sync` with NULL credentials on the first attempt, before
-/// it asks libsecret for anything.
+/// it asks libsecret for anything. The NULL must not get to
+/// `e_named_parameters_get`: its assertion logs a critical, and
+/// `G_DEBUG=fatal-criticals` then stops the factory.
 #[test]
-fn null_credentials_report_none() {
+fn null_credentials_report_none_without_a_critical() {
+    let criticals = AtomicUsize::new(0);
+    // SAFETY: the domain is a 'static literal. The handler reads `criticals`
+    // only until the removal below.
+    let handler = unsafe {
+        g_log_set_handler(
+            c"e-data-server".as_ptr(),
+            G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_WARNING,
+            Some(count_message),
+            ptr::from_ref(&criticals).cast_mut().cast(),
+        )
+    };
     // SAFETY: NULL is what EDS passes before it has any credentials.
-    unsafe {
-        assert_eq!(marshal::password(ptr::null()), None);
-    }
+    let password = unsafe { marshal::password(ptr::null()) };
+    // SAFETY: the ID is from the call above, and the removal happens once.
+    unsafe { g_log_remove_handler(c"e-data-server".as_ptr(), handler) };
+    assert_eq!(password, None);
+    assert_eq!(
+        criticals.load(Ordering::SeqCst),
+        0,
+        "the NULL credentials got to e_named_parameters_get"
+    );
 }
 
 // ---------------------------------------------------------------------------

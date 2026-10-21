@@ -131,3 +131,18 @@ insurance only. The contract asks for a valid `ESource`, and `ESource`'s class
 init registers every built-in extension type, `ESourceAuthentication` too
 (EDS 3.52 `e-source.c`, "Register built-in ESourceExtension types"). So the
 type is always registered before the call, and no test can see a difference.
+
+## `src/marshal.rs`
+
+All functions in this file are `unsafe fn`, so cargo-mutants makes no
+mutants here. These three hand mutants survive and are equivalent.
+
+`checked_borrow` and `checked_borrow_ptr` survive with the NULL check
+removed. `g_type_check_instance_is_a` returns FALSE for a NULL instance
+and logs nothing (GLib 2.80, checked with `G_DEBUG=fatal-criticals`), so
+the type check gives the same `None`. `checked_borrow_ptr_or` is different:
+its NULL check gives `Ok(None)`, not the error, and a test pins that.
+
+`take_string` survives with its `g_free` removed. The mutant only leaks the
+string. As for `src/mime.rs`, no test can see a leak without memory
+instrumentation, and this project has none.
