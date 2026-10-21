@@ -852,8 +852,8 @@ fn member(date: &Value, name: &str) -> Option<u32> {
     date.get(name)?.as_u64()?.try_into().ok()
 }
 
-/// Unwraps Apple-style `_$!<LabelName>!$_` markers into clean label names, or
-/// returns the trimmed input text if not wrapped in markers.
+/// Return the inner label from an Apple `_$!<LabelName>!$_` marker.
+/// Return trimmed input text when no marker is present.
 fn clean_apple_label(raw: &str) -> &str {
     let trimmed = raw.trim();
     if let Some(inner) = trimmed
@@ -866,15 +866,14 @@ fn clean_apple_label(raw: &str) -> &str {
     }
 }
 
-/// Render a contact card as a vCard 3.0 string, ready for
-/// `e_contact_new_from_vcard()`.
+/// Render one contact card as vCard 3.0 text for `e_contact_new_from_vcard()`.
 pub fn card_to_vcard(card: &ContactCard) -> String {
     let mut entries = Vec::new();
 
-    // EDS keys its cache on the vCard UID and passes it back to
+    // EDS caches contacts by vCard UID and returns that UID to
     // `load_contact_sync()` and `remove_contact_sync()`.
-    // Set this UID to the server-assigned identifier that JMAP methods use.
-    // Store the JSContact UID beside it because it uses a different namespace.
+    // Write the server id into `UID` because JMAP methods address contacts by id.
+    // Keep JSContact `uid` on `X-JMAP-UID` because it uses another namespace.
     if let Some(uid) = card
         .id
         .as_ref()
@@ -891,8 +890,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
 
     if let Some(name) = &card.name {
         // `read_name` treats an empty `FN` as absent.
-        // Treat an empty stated `full` as absent here too.
-        // This keeps every round trip at the same fixed point.
+        // Treat an empty `full` value as absent here too.
+        // This keeps round trips at one fixed point.
         let full = name
             .full
             .as_deref()
@@ -926,9 +925,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    // Write one line per entry, not the RFC 2426 §3.1.3 comma-separated list.
-    // This keeps each JSContact key and matches EDS, which reads one text
-    // value either way.
+    // Write one line per nickname, not one comma-separated list.
+    // This keeps each JSContact key and matches EDS behavior.
     for (key, nickname) in card.nicknames.iter().flatten() {
         if !states_nickname(nickname) {
             continue;
@@ -2008,11 +2006,11 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     })
 }
 
-/// Decodes a `PHOTO` line into one media entry.
+/// Decode one `PHOTO` line into one media entry.
 ///
-/// Supports URI references (`VALUE=uri`) and inline image bytes. `calcard`
-/// already applies transfer decoding, so `Text` and `Binary` are consumed
-/// as-is. Media type follows EDS behavior via `MEDIATYPE` or normalized `TYPE`.
+/// Support URI references (`VALUE=uri`) and inline image bytes.
+/// `calcard` already applies transfer decoding, so `Text` and `Binary` are used
+/// as-is. Media type follows EDS behavior from `MEDIATYPE` or normalized `TYPE`.
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
     let raw_text = entry_text(entry);
     let states_value_uri =
