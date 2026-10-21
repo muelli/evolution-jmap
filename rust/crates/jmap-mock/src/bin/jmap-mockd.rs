@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Run a standalone mock JMAP server for manual tests with curl or Evolution.
+//! Run a standalone mock JMAP server for manual tests in curl or Evolution.
 //!
 //! ```text
 //! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]
 //! ```
 //!
-//! Serve one account (`A1`, alice@example.com) with seeded data.
+//! Serve one account (`A1`, alice@example.com) and seed demo data.
 
 use jmap_mock::{EmailSeed, MockServer};
 use serde_json::json;
@@ -50,8 +50,8 @@ fn main() {
         }
     }
 
-    // Keep this disabled by default.
-    // This tests deployments without OAuth metadata.
+    // Keep OAuth metadata disabled by default.
+    // Use this path to test deployments without OAuth metadata.
     if oauth2 {
         builder = builder
             .oauth_authorization_server(|origin| {
