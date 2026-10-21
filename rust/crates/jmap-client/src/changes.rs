@@ -14,6 +14,7 @@ use jmap_proto::{Id, State};
 
 use crate::client::Client;
 use crate::error::Error;
+use crate::limits::IdBudget;
 
 impl Client {
     /// Request changes for a data type (`Foo/changes`, RFC 8620 §5.2).
@@ -94,6 +95,7 @@ impl Client {
     /// Fetch and fold all changes since `since_state` (RFC 8620 §5.2).
     ///
     /// Automatically follows `hasMoreChanges` pages up to `MAX_CHANGES_PAGES`.
+    /// Fails when the distinct ids go past the client's [`IdBudget`].
     /// Consolidates intermediate states into a canonical [`ChangeSet`].
     pub fn all_changes(
         &self,
@@ -103,17 +105,18 @@ impl Client {
     ) -> Result<ChangeSet, Error> {
         let mut state = since_state.clone();
         let mut by_id: BTreeMap<Id, Disposition> = BTreeMap::new();
+        let mut budget = self.id_budget();
 
         for _ in 0..MAX_CHANGES_PAGES {
             let response = self.changes(account_id, type_name, &state)?;
             for id in response.created {
-                by_id.entry(id).or_default().created = true;
+                keep(&mut by_id, &mut budget, id, type_name)?.created = true;
             }
             for id in response.updated {
-                by_id.entry(id).or_default().updated = true;
+                keep(&mut by_id, &mut budget, id, type_name)?.updated = true;
             }
             for id in response.destroyed {
-                by_id.entry(id).or_default().destroyed = true;
+                keep(&mut by_id, &mut budget, id, type_name)?.destroyed = true;
             }
 
             let advanced = response.new_state != state;
@@ -132,6 +135,21 @@ impl Client {
             "{type_name}/changes never stopped reporting more changes"
         )))
     }
+}
+
+/// The entry for `id` in `by_id`. A new id is charged to `budget` first.
+fn keep<'a>(
+    by_id: &'a mut BTreeMap<Id, Disposition>,
+    budget: &mut IdBudget,
+    id: Id,
+    type_name: &str,
+) -> Result<&'a mut Disposition, Error> {
+    if !by_id.contains_key(&id) && !budget.charge(id.as_str()) {
+        return Err(Error::Protocol(format!(
+            "{type_name}/changes reports more ids than the budget for one sync"
+        )));
+    }
+    Ok(by_id.entry(id).or_default())
 }
 
 impl ChangeSet {

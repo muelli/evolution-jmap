@@ -1098,8 +1098,10 @@ impl MailSync {
 
     /// Gets all pages of `Email/query` for `filter`, oldest first. It stops
     /// when the server does not report a limit, or returns an empty page.
+    /// It fails when the ids go past the id budget of the client.
     fn paged_query(&self, filter: Filter<EmailQueryFilter>) -> Result<Vec<Id>, SyncError> {
         let mut ids: Vec<Id> = Vec::new();
+        let mut budget = self.client.id_budget();
 
         for _ in 0..MAX_QUERY_PAGES {
             let response = self.client.email_query(
@@ -1111,6 +1113,12 @@ impl MailSync {
             )?;
             let capped = response.limit.is_some();
             let answered = !response.ids.is_empty();
+            // Each id costs memory, also when a page repeats it.
+            if !response.ids.iter().all(|id| budget.charge(id.as_str())) {
+                return Err(SyncError::protocol(
+                    "Email/query reports more ids than the budget for one sync",
+                ));
+            }
             ids.extend(response.ids);
             // No limit: all remaining ids are in this page. A limited empty
             // page: no ids remain.
