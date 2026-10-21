@@ -1288,7 +1288,7 @@ const MAX_LINE_OCTETS: usize = 75;
 /// Fold physical lines longer than [`MAX_LINE_OCTETS`] at UTF-8 boundaries.
 ///
 /// `calcard` already folds lines.
-/// This pass enforces the RFC 2426 75-octet limit.
+/// This pass still enforces the RFC 2426 75-octet limit.
 /// This pass keeps escaped pairs on one folded line.
 fn fold_overlong_lines(vcard: String) -> String {
     if vcard
@@ -1303,7 +1303,7 @@ fn fold_overlong_lines(vcard: String) -> String {
             out.push_str("\r\n");
         }
         let mut rest = line;
-        // The continuation-line space uses one of the 75 octets.
+        // The continuation space uses one of the 75 octets.
         let mut budget = MAX_LINE_OCTETS;
         while rest.len() > budget {
             if rest.is_empty() {
@@ -1326,8 +1326,7 @@ fn fold_overlong_lines(vcard: String) -> String {
                 cut -= 1;
             }
             if cut == 0 {
-                // Fallback: cut at the first UTF-8 boundary.
-                // Keep the loop moving.
+                // Fallback: cut at the first UTF-8 boundary to keep progress.
                 // Unfolding restores octets in both cases.
                 cut = (1..=rest.len())
                     .find(|&i| rest.is_char_boundary(i))
@@ -1343,10 +1342,10 @@ fn fold_overlong_lines(vcard: String) -> String {
     out
 }
 
-/// Normalize extended ISO 8601 values on calendar properties before parsing
-/// with `calcard`.
+/// Normalize extended ISO 8601 values on calendar properties before `calcard`
+/// parses them.
 ///
-/// This import shim preserves day and timezone fields across supported vCard
+/// This import shim keeps day and timezone fields across supported vCard
 /// versions.
 fn normalize_vcard_dates(vcard: &str) -> String {
     let mut out = String::with_capacity(vcard.len());
@@ -1415,7 +1414,7 @@ fn normalize_date_value(prop_name: &str, val: &str) -> String {
         && bytes[7] == b'-'
         && bytes[8..10].iter().all(u8::is_ascii_digit)
     {
-        // Extended date YYYY-MM-DD -> basic YYYYMMDD
+        // Convert extended `YYYY-MM-DD` dates to basic `YYYYMMDD`.
         let year = &val[0..4];
         let month = &val[5..7];
         let day = &val[8..10];
@@ -1428,7 +1427,7 @@ fn normalize_date_value(prop_name: &str, val: &str) -> String {
         && bytes[7] == b'-'
         && bytes[8..10].iter().all(u8::is_ascii_digit)
     {
-        // vCard 4.0 ANNIVERSARY with timestamp: convert to basic format
+        // Convert vCard 4.0 `ANNIVERSARY` timestamps to basic format.
         let year = &val[0..4];
         let month = &val[5..7];
         let day = &val[8..10];
@@ -1452,7 +1451,7 @@ fn normalize_date_value(prop_name: &str, val: &str) -> String {
 
 /// Read a vCard 3.0 string into a contact card.
 ///
-/// `id` comes from `UID`, including local placeholders Evolution invents for
+/// `id` comes from `UID`. Evolution can use local placeholders there for
 /// unsynced contacts. Callers must drop local-only IDs before create.
 pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let normalized = normalize_vcard_dates(vcard);
