@@ -2000,11 +2000,11 @@ fn one_link(key: &str, uri: &str) -> ContactCard {
 
 #[test]
 fn maps_links_onto_url_lines() {
-    // RFC 2426 §3.6.8 `URL` is a bare URI with no room for extra data.
-    // The JSContact key rides in `X-JMAP-KEY`, as it does on `EMAIL`.
-    // EDS rewrites that line value in place and keeps the parameter.
-    // This is verified against libebook-contacts 3.52.
-    // Evolution shows the first `URL` as the contact home page.
+    // RFC 2426 §3.6.8 defines `URL` as a bare URI.
+    // Store the JSContact key in `X-JMAP-KEY`, as for `EMAIL`.
+    // EDS rewrites the value and keeps this parameter.
+    // Verify this behavior with libebook-contacts 3.52.
+    // Evolution shows the first `URL` as the contact Home Page.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "URL"),
@@ -2023,12 +2023,13 @@ fn maps_links_onto_url_lines() {
 
 #[test]
 fn a_link_of_a_kind_no_vcard_30_property_states_gets_no_line() {
-    // `kind=contact` maps to vCard 4.0 `CONTACT-URI`, not vCard 3.0 `URL`, so it is omitted.
+    // `kind=contact` maps to vCard 4.0 `CONTACT-URI`.
+    // vCard 3.0 has no matching field, so omit this link.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("\r\nURL").count(), 1, "{vcard}");
     assert!(!vcard.contains("write-to-me"), "{vcard}");
 
-    // Unknown link kinds are omitted for the same reason.
+    // Omit unknown link kinds for the same reason.
     let mut card = one_link("l1", "https://vera.example/");
     card.links.as_mut().expect("links").insert(
         "l2".to_owned(),
@@ -2044,10 +2045,10 @@ fn a_link_of_a_kind_no_vcard_30_property_states_gets_no_line() {
 
 #[test]
 fn a_link_that_points_nowhere_is_skipped_in_both_directions() {
-    // Empty URIs are treated as absent entries.
+    // Treat empty URIs as absent entries.
     assert!(!card_to_vcard(&one_link("l1", "")).contains("\r\nURL"));
 
-    // EDS can leave an empty `URL` line after clearing the Home Page field.
+    // EDS can leave an empty `URL` line after it clears Home Page.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "URL;X-JMAP-KEY=l1:\r\n",
@@ -2059,7 +2060,8 @@ fn a_link_that_points_nowhere_is_skipped_in_both_directions() {
 
 #[test]
 fn a_uri_keeps_the_punctuation_a_vcard_value_gives_meaning_to() {
-    // URI punctuation that vCard also uses structurally must roundtrip without splitting the URI.
+    // Keep URI punctuation through roundtrip.
+    // Do not split on punctuation that vCard uses structurally.
     let vcard = card_to_vcard(&one_link("l1", "https://vera.example/q?tags=a,b;c"));
     assert_eq!(
         line(&vcard, "URL"),
@@ -2122,7 +2124,8 @@ fn one_scheduling_address(key: &str, uri: &str) -> ContactCard {
 
 #[test]
 fn maps_calendars_onto_the_caluri_and_fburl_lines() {
-    // `calendar` maps to `CALURI` and `freeBusy` maps to `FBURL`; both use `X-JMAP-KEY`.
+    // `calendar` maps to `CALURI` and `freeBusy` maps to `FBURL`.
+    // Both lines carry the `X-JMAP-KEY` parameter.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "CALURI"),
@@ -2148,12 +2151,13 @@ fn maps_calendars_onto_the_caluri_and_fburl_lines() {
 
 #[test]
 fn a_calendar_of_a_kind_no_eds_field_holds_gets_no_line() {
-    // Unknown calendar kinds have no `CALURI` or `FBURL` target and are omitted.
+    // Unknown calendar kinds have no `CALURI` or `FBURL` target.
+    // Omit them.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("\r\nCALURI").count(), 1, "{vcard}");
     assert!(!vcard.contains("nameless"), "{vcard}");
 
-    // Vendor calendar kinds are omitted too.
+    // Omit vendor calendar kinds too.
     let vcard = card_to_vcard(&one_calendar(
         "c1",
         Some("example.com:tasks"),
@@ -2164,11 +2168,11 @@ fn a_calendar_of_a_kind_no_eds_field_holds_gets_no_line() {
 
 #[test]
 fn a_calendar_that_points_nowhere_is_skipped_in_both_directions() {
-    // Empty calendar URIs are treated as absent entries.
+    // Treat empty calendar URIs as absent entries.
     let vcard = card_to_vcard(&one_calendar("c1", Some("calendar"), ""));
     assert!(!vcard.contains("\r\nCALURI"), "{vcard}");
 
-    // EDS can leave empty `CALURI` and `FBURL` lines after clearing fields.
+    // EDS can leave empty `CALURI` and `FBURL` lines after it clears fields.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CALURI;X-JMAP-KEY=c1:\r\n",
@@ -2181,7 +2185,7 @@ fn a_calendar_that_points_nowhere_is_skipped_in_both_directions() {
 
 #[test]
 fn invents_a_key_for_a_calendar_that_has_none() {
-    // Reader-generated keys must stay unique across keyless `CALURI` and `FBURL` lines.
+    // Keep reader-generated keys unique across keyless `CALURI` and `FBURL` lines.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CALURI:https://vera.example/cal/vera.ics\r\n",
