@@ -251,11 +251,31 @@ mod tests {
             cache.lookup("uid-1", now + Duration::from_secs(599)),
             Some(features.clone())
         );
+        assert_eq!(
+            cache.lookup("uid-1", now + Duration::from_secs(600)),
+            Some(features.clone()),
+            "an answer exactly as old as the TTL is still valid"
+        );
         assert_eq!(cache.lookup("uid-1", now + Duration::from_secs(601)), None);
 
         cache.store("uid-1", features.clone(), now);
         cache.invalidate("uid-1");
         assert_eq!(cache.lookup("uid-1", now), None);
         assert_eq!(cache.lookup("uid-2", now), None, "keys are per account");
+    }
+
+    /// All reader windows must see one cache. Otherwise each window fetches the
+    /// session again.
+    #[test]
+    fn the_shared_cache_is_one_cache() {
+        let features = AccountFeatures {
+            account_id: Id::new("A1"),
+            vacation: false,
+            max_hold: Some(60),
+            snooze: true,
+        };
+        let now = Instant::now();
+        shared().store("uid-shared-test", features.clone(), now);
+        assert_eq!(shared().lookup("uid-shared-test", now), Some(features));
     }
 }
