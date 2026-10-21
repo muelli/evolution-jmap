@@ -5,7 +5,6 @@
 //!
 //! Evolution never sends them itself. The user can suppress the message for one change.
 
-use std::cell::Cell;
 use std::ffi::CStr;
 
 use eds_sys::{E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE, ECalOperationFlags};
@@ -42,40 +41,31 @@ pub fn capabilities(inherited: Option<&str>) -> String {
     caps.join(",")
 }
 
-thread_local! {
-    static RECEIVING: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Marks the changes on this thread as received until the guard drops.
+/// Marks a received change in its opflags. EDS defines bits 0 to 4 only.
 ///
-/// `receive_objects_sync` holds it while the meta backend saves on the same thread.
-#[must_use]
-pub fn receiving() -> Receiving {
-    Receiving(RECEIVING.replace(true))
-}
-
-/// The guard from [`receiving`]. It restores the previous mark on drop.
-pub struct Receiving(bool);
-
-impl Drop for Receiving {
-    fn drop(&mut self) {
-        RECEIVING.set(self.0);
-    }
-}
+/// EDS keeps the opflags of a queued offline change and uploads with them later.
+const RECEIVED: ECalOperationFlags = 1 << 30;
 
 /// Determines whether an operation sends iTIP messages to guests.
 ///
 /// Returns [`Itip::Send`] unless `opflags` suppresses the message.
-/// Returns [`Itip::Received`] while [`receiving`] marks this thread.
+/// Returns [`Itip::Received`] when [`received`] marked the opflags.
 pub fn itip(opflags: ECalOperationFlags) -> Itip {
     let send = opflags & E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE == 0;
-    if RECEIVING.get() {
+    if opflags & RECEIVED != 0 {
         Itip::Received { reply: send }
     } else if send {
         Itip::Send
     } else {
         Itip::Suppress
     }
+}
+
+/// Returns the flags that `receive_objects_sync` gives to the meta backend.
+///
+/// The mark stays with the change through EDS's offline queue.
+pub fn received(opflags: ECalOperationFlags) -> ECalOperationFlags {
+    opflags | RECEIVED
 }
 
 /// Returns the flags for a reminder dismissal, which never sends iTIP.

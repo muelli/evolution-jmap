@@ -14,7 +14,7 @@ use gobject_sys::{g_type_class_ref, g_type_class_unref};
 use jmap_backend_cal::backend::{JmapCalBackend, JmapCalBackendClass, parent_class};
 use jmap_backend_cal::scheduling::{
     CREATE_MESSAGES, ITIP_SUPPRESS_ON_REMOVE_SUPPORTED, SAVE_SCHEDULES, capabilities, dismissal,
-    itip, receiving,
+    itip, received,
 };
 use jmap_backend_core::subclass::register_static;
 use jmap_cal_sync::Itip;
@@ -105,35 +105,53 @@ fn disable_itip_message_is_read_as_one_bit_among_the_conflict_flags() {
 }
 
 #[test]
-fn a_change_while_receiving_is_marked_received_and_keeps_the_users_choice() {
-    let guard = receiving();
+fn a_received_change_is_marked_received_and_keeps_the_users_choice() {
     assert_eq!(
-        itip(E_CAL_OPERATION_FLAG_NONE),
+        itip(received(E_CAL_OPERATION_FLAG_NONE)),
         Itip::Received { reply: true }
     );
     assert_eq!(
-        itip(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE),
+        itip(received(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE)),
         Itip::Received { reply: false }
     );
-    drop(guard);
     assert_eq!(itip(E_CAL_OPERATION_FLAG_NONE), Itip::Send);
 }
 
 #[test]
-fn the_receiving_mark_is_restored_by_each_guard_and_stays_on_its_thread() {
-    let outer = receiving();
-    drop(receiving());
+fn a_received_change_stays_received_on_a_thread_with_no_mark() {
+    // EDS queues a change it cannot send with its opflags (e-cal-meta-backend.c
+    // ecmb_create_object_sync), and later uploads it on another thread.
+    let replayed = std::thread::spawn(|| {
+        (
+            itip(received(E_CAL_OPERATION_FLAG_NONE)),
+            itip(received(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE)),
+        )
+    })
+    .join()
+    .unwrap();
     assert_eq!(
-        itip(E_CAL_OPERATION_FLAG_NONE),
-        Itip::Received { reply: true },
-        "an inner guard keeps the outer mark"
+        replayed,
+        (
+            Itip::Received { reply: true },
+            Itip::Received { reply: false }
+        )
     );
-    let other = std::thread::spawn(|| itip(E_CAL_OPERATION_FLAG_NONE))
-        .join()
-        .unwrap();
-    assert_eq!(other, Itip::Send);
-    drop(outer);
-    assert_eq!(itip(E_CAL_OPERATION_FLAG_NONE), Itip::Send);
+}
+
+#[test]
+fn the_received_mark_is_one_bit_outside_the_eds_flags() {
+    let flags =
+        E_CAL_OPERATION_FLAG_CONFLICT_KEEP_SERVER | E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE;
+    assert_eq!(
+        received(flags) & flags,
+        flags,
+        "the other flags pass through"
+    );
+    let mark = received(flags) & !flags;
+    assert_eq!(mark.count_ones(), 1, "the mark is one bit");
+    // EDS 3.52 to master define bits 0 to 4. The cache keeps the flags as a guint32.
+    assert_eq!(mark & 0x1f, 0, "the mark is not an EDS flag");
+    assert!(mark < 1 << 31, "the mark stays positive in a gint");
 }
 
 #[test]

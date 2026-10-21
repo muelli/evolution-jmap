@@ -194,8 +194,10 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
   - `save_component_with` and `remove_component_with` take `Itip::Suppress`
     for `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`.
   - They take `Itip::Received` for a change from `receive_objects`. The
-    calendar backend sets a mark on the thread while `receive_objects_sync`
-    runs, and the save reads it. The account's `ParticipantIdentity`
+    calendar backend sets a mark in the operation flags that
+    `receive_objects_sync` gives to EDS, and the save reads it. EDS keeps
+    these flags with a change that it queues offline, so the mark stays when
+    EDS uploads the change later. The account's `ParticipantIdentity`
     addresses tell if the user is the organizer.
   - A call asked the server to schedule, and the server refused it. The
     refusal comes back as `SyncError::Unscheduled`:
