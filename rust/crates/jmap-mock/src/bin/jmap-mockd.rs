@@ -50,7 +50,8 @@ fn main() {
         }
     }
 
-    // Keep this off by default to test deployments without OAuth metadata.
+    // Keep this disabled by default.
+    // This tests deployments without OAuth metadata.
     if oauth2 {
         builder = builder
             .oauth_authorization_server(|origin| {
@@ -69,7 +70,7 @@ fn main() {
 
     let server = builder.port(port).start();
 
-    // Seed demo data so startup state is visible.
+    // Seed demo data so startup state is easy to inspect.
     {
         let state = server.state();
         let mut state = state.lock().expect("state lock");
