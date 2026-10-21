@@ -831,9 +831,9 @@ impl Day {
 
 /// Return the day from an anniversary line, or `None`.
 ///
-/// Accepts `YYYY-MM-DD` and `YYYYMMDD` because
-/// `e_contact_date_from_string()` accepts both.
-/// Trailing time text is dropped for compatibility.
+/// Accept both `YYYY-MM-DD` and `YYYYMMDD`.
+/// `e_contact_date_from_string()` accepts both forms.
+/// Drop trailing time text for compatibility.
 fn read_day(text: &str) -> Option<Day> {
     let digits: String = text
         .split(['T', 't'])
@@ -877,8 +877,10 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
 
     // EDS caches contacts by vCard UID and returns that UID to
     // `load_contact_sync()` and `remove_contact_sync()`.
-    // Write the server id into `UID` because JMAP methods address contacts by id.
-    // Keep JSContact `uid` on `X-JMAP-UID` because it uses another namespace.
+    // Write the server id into `UID`.
+    // JMAP methods address contacts by this id.
+    // Keep JSContact `uid` on `X-JMAP-UID`.
+    // It uses another namespace.
     if let Some(uid) = card
         .id
         .as_ref()
@@ -2185,7 +2187,7 @@ fn read_anniversary(entry: &VCardEntry) -> Option<Anniversary> {
 /// The seven `ADR` fields for an address, or `None` when no mapped component
 /// has text.
 ///
-/// Empty fields are preserved because field position carries meaning.
+/// Keep empty fields. Field position carries meaning.
 fn address_fields(address: &Address) -> Option<Vec<String>> {
     let components = address.components.as_ref()?;
     let mut fields = vec![String::new(); ADDRESS_COMPONENTS.len()];
@@ -2210,8 +2212,9 @@ fn address_fields(address: &Address) -> Option<Vec<String>> {
 /// Components from an edited `ADR` line, restoring split source parts when a
 /// shared field still equals its original joined text.
 ///
-/// Shared fields round trip as one component because split boundaries are
-/// ambiguous. `restore_shared_fields` repairs unchanged joined text.
+/// Keep one component for shared fields on round trip.
+/// Split boundaries are ambiguous.
+/// `restore_shared_fields` repairs unchanged joined text.
 pub fn restore_address_components(
     current: &[AddressComponent],
     edited: &[AddressComponent],
@@ -2386,8 +2389,8 @@ fn read_organization(entry: &VCardEntry) -> Option<Organization> {
 /// Picks the `addresses` key for a `LABEL` line.
 ///
 /// Prefer explicit `X-JMAP-KEY` when it does not conflict. Otherwise match by
-/// context and label text, then allocate a new key because EDS can synthesize
-/// `LABEL` lines without preserving `X-JMAP-KEY`.
+/// context and label text, then allocate a new key.
+/// EDS can synthesize `LABEL` lines without preserving `X-JMAP-KEY`.
 fn label_entry(
     entry: &VCardEntry,
     contexts: Option<&Value>,
