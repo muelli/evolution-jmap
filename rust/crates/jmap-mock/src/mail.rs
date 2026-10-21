@@ -1416,12 +1416,12 @@ pub fn email_submission_set(
 
     let mut created: BTreeMap<String, EmailSubmission> = BTreeMap::new();
     let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
-    // Map creation ids to submission ids for onSuccessUpdateEmail `#` keys.
+    // Map creation ids to submission ids for `onSuccessUpdateEmail` `#` keys.
     let mut created_here: BTreeMap<String, Id> = BTreeMap::new();
 
     let mut to_create: Vec<(Id, EmailSubmission)> = Vec::new();
     for (creation_id, mut submission) in request.set.create.clone().unwrap_or_default() {
-        // Resolve a `#creationId` reference from an earlier Email/set create.
+        // Resolve each `#creationId` reference from an earlier `Email/set` create.
         if let Some(reference) = submission.email_id.as_str().strip_prefix('#') {
             match request_created_ids.get(reference) {
                 Some(id) => submission.email_id = id.clone(),
@@ -1496,7 +1496,7 @@ pub fn email_submission_set(
             }
         }
 
-        // Derive the SMTP envelope from the message when absent (RFC 8621 §7).
+        // Derive the SMTP envelope from the message when it is absent (RFC 8621 §7).
         let envelope = submission.envelope.clone().unwrap_or_else(|| Envelope {
             mail_from: EnvelopeAddress::new(
                 email
