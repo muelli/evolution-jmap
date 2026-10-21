@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared `/set` and `/changes` helpers for [`Store`]-backed JMAP types.
-//! Use these helpers when store-level create, update, and destroy are enough.
+//! Use these helpers when store-level create, update, and destroy logic is enough.
 
 use std::collections::BTreeMap;
 
@@ -13,16 +13,16 @@ use jmap_proto::methods::{SetRequest, SetResponse};
 use crate::patch::apply_patch;
 use crate::state::Store;
 
-/// Serve `/changes` from the store log as RFC 8620 §5.2 defines.
+/// Serve `/changes` from the store log, as RFC 8620 §5.2 defines.
 ///
 /// Report each id in at most one list.
 /// Hide objects that were created and destroyed in the same served window.
 ///
 /// Apply `page_size` and client `maxChanges` at transition boundaries.
-/// The returned `newState` stays reusable.
+/// Keep the returned `newState` reusable.
 ///
 /// `unrecognized_state_is_invalid_arguments` selects parse error mapping for
-/// `sinceState`: RFC style `cannotCalculateChanges` or Stalwart style
+/// `sinceState`: RFC-style `cannotCalculateChanges` or Stalwart-style
 /// `invalidArguments`.
 pub(crate) fn store_changes<T>(
     store: &Store<T>,
