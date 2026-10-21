@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::AccountState;
 
-/// Use a fixed stand in for "now". This keeps tests reproducible.
+/// Use a fixed stand-in for "now" to keep tests reproducible.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 pub fn principal_get(
@@ -135,7 +135,7 @@ fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> O
     if matches!(event.status.as_deref(), Some("cancelled")) {
         return None;
     }
-    // RFC 8984 section 4.4.2 sets the default `freeBusyStatus` to `busy`.
+    // RFC 8984 section 4.4.2 sets default `freeBusyStatus` to `busy`.
     // Only explicit `free` excludes an event here.
     if matches!(event.free_busy_status.as_deref(), Some("free")) {
         return None;
@@ -161,8 +161,8 @@ fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> O
     })
 }
 
-/// Add `PT<h>H<m>M<s>S` to `YYYY-MM-DDTHH:MM:SS` with same day arithmetic.
-/// Return `start` if parsing fails or when the end crosses midnight.
+/// Add `PT<h>H<m>M<s>S` to `YYYY-MM-DDTHH:MM:SS` with same-day arithmetic.
+/// Return `start` if parsing fails or if the end crosses midnight.
 fn busy_end(start: &str, duration: Option<&str>) -> String {
     (|| {
         let seconds = parse_simple_duration_seconds(duration?)?;
@@ -185,7 +185,7 @@ fn busy_end(start: &str, duration: Option<&str>) -> String {
     .unwrap_or_else(|| start.to_owned())
 }
 
-/// Parse ISO 8601 time only durations (`PT...`) into seconds.
+/// Parse ISO 8601 time-only durations (`PT...`) into seconds.
 /// Return `None` for unsupported forms.
 fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
     let rest = duration.strip_prefix("PT")?;
@@ -212,7 +212,7 @@ fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
     Some(seconds)
 }
 
-/// Handle `ShareNotification/get` for the resolved caller recipient id.
+/// Handle `ShareNotification/get` for the caller-resolved recipient id.
 pub fn share_notification_get(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -451,7 +451,7 @@ mod tests {
             busy_end("2026-09-01T09:00:00", Some("garbage")),
             "2026-09-01T09:00:00"
         );
-        // Crossing midnight is out of scope for this mock arithmetic.
+        // This mock arithmetic does not cross midnight.
         assert_eq!(
             busy_end("2026-09-01T23:30:00", Some("PT1H")),
             "2026-09-01T23:30:00"
