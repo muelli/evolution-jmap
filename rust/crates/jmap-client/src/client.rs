@@ -678,6 +678,24 @@ impl Client {
         })
     }
 
+    /// Remove each object whose id is not in `requested` (RFC 8620 §5.1).
+    ///
+    /// A `/get` answer must hold only the requested objects. Call this for
+    /// each chunk, so that extra objects do not stay in memory. The first
+    /// object with no id stays, so that the caller can report the violation.
+    pub(crate) fn keep_requested<T>(
+        list: &mut Vec<T>,
+        requested: &[Id],
+        id: impl Fn(&T) -> Option<&Id>,
+    ) {
+        let requested: std::collections::HashSet<&Id> = requested.iter().collect();
+        let mut kept_one_without_id = false;
+        list.retain(|object| match id(object) {
+            Some(id) => requested.contains(id),
+            None => !std::mem::replace(&mut kept_one_without_id, true),
+        });
+    }
+
     /// Extract arguments from an invocation, mapping `error` responses to
     /// [`Error::Method`].
     pub fn unwrap_invocation(invocation: &Invocation, method: &str) -> Result<Value, Error> {
@@ -1023,5 +1041,20 @@ mod tests {
                 .any(|(level, name, _)| *level == Level::WARN && name == "error"),
             "expected a WARN error field, got {captured:?}"
         );
+    }
+
+    #[test]
+    fn keep_requested_drops_unrequested_ids_and_keeps_one_object_without_an_id() {
+        use jmap_proto::Id as JmapId;
+        let requested = [JmapId::new("a"), JmapId::new("b")];
+        let mut list = vec![
+            Some(JmapId::new("a")),
+            Some(JmapId::new("x")),
+            None,
+            Some(JmapId::new("b")),
+            None,
+        ];
+        Client::keep_requested(&mut list, &requested, Option::as_ref);
+        assert_eq!(list, [Some(JmapId::new("a")), None, Some(JmapId::new("b"))]);
     }
 }

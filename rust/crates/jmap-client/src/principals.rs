@@ -52,7 +52,9 @@ impl Client {
             let (chunk, remaining) = rest.split_at(take);
             let request = GetRequest::ids(account_id.clone(), chunk.to_vec());
             let arguments = self.single_call(USING, "Principal/get", &request)?;
-            let response: GetResponse<Principal> = serde_json::from_value(arguments)?;
+            let mut response: GetResponse<Principal> = serde_json::from_value(arguments)?;
+            Self::keep_requested(&mut response.list, chunk, |principal| principal.id.as_ref());
+            Self::keep_requested(&mut response.not_found, chunk, |id| Some(id));
             fetched.extend(response.list);
             not_found_list.extend(response.not_found);
             rest = remaining;
