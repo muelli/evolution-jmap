@@ -23,7 +23,9 @@ use std::ptr;
 
 use common::Account;
 use eds_sys::{CAMEL_SERVICE_ERROR_NOT_CONNECTED, CamelFolder, camel_service_error_quark};
-use glib_sys::{GError, GFALSE, GPtrArray, g_error_free, g_ptr_array_add, g_ptr_array_free, gchar};
+use glib_sys::{
+    GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_add, g_ptr_array_free, gchar,
+};
 use glib_sys::{g_ptr_array_new, g_ptr_array_unref, gpointer};
 use gobject_sys::g_object_unref;
 use jmap_client::{Client, Credentials};
@@ -63,9 +65,10 @@ impl Words {
 
 impl Drop for Words {
     fn drop(&mut self) {
-        // SAFETY: frees the one array allocated above. Passes FALSE because
-        // the pointers in it belong to `self.words`.
-        unsafe { g_ptr_array_free(self.array, GFALSE) };
+        // SAFETY: the one array, allocated above. TRUE frees its pointer
+        // block. The array has no element free function, so the strings
+        // in `self.words` stay.
+        unsafe { g_ptr_array_free(self.array, GTRUE) };
         self.words.clear();
     }
 }

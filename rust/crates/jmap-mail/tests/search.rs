@@ -55,7 +55,7 @@ use common::Account;
 use eds_sys::{CamelFolder, camel_folder_get_folder_summary, camel_folder_summary_save};
 use glib_sys::{GError, GPtrArray, gchar};
 #[cfg(camel_folder_search_object)]
-use glib_sys::{GFALSE, g_ptr_array_add, g_ptr_array_free, gpointer};
+use glib_sys::{GTRUE, g_ptr_array_add, g_ptr_array_free, gpointer};
 use gobject_sys::g_object_unref;
 #[cfg(camel_folder_search_object)]
 use jmap_client::{Client, Credentials};
@@ -384,10 +384,10 @@ impl UidList {
 #[cfg(camel_folder_search_object)]
 impl Drop for UidList {
     fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. `GFALSE` tells the call not
-        // to free the elements, because the pointers in the array belong to
-        // `self.uids`.
-        unsafe { g_ptr_array_free(self.array, GFALSE) };
+        // SAFETY: the one array, allocated above. TRUE frees its pointer
+        // block. The array has no element free function, so the strings
+        // in `self.uids` stay.
+        unsafe { g_ptr_array_free(self.array, GTRUE) };
         self.uids.clear();
     }
 }
