@@ -51,7 +51,7 @@ do_action_msg_composer (MMsgComposerExtension *msg_composer_ext)
 
 #if JMAP_EVO_EUI_MANAGER
 
-/* Keep a dedicated group for this extension's composer actions. */
+/* Use a separate action group for the composer actions of this extension. */
 #define GROUP_NAME "example-module-composer"
 
 static void
@@ -75,7 +75,7 @@ static void
 m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
 				 EMsgComposer *composer)
 {
-	/* Keep the historical menu and toolbar IDs from evolution-composer.eui. */
+	/* Keep the menu and toolbar IDs that evolution-composer.eui defines. */
 	const gchar *ui_def =
 		"<eui>"
 		"<menu id='main-menu'>"
