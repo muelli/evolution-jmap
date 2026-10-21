@@ -4,12 +4,12 @@
 include_guard(GLOBAL)
 
 # Add RPM to default CPack generators only when `rpmbuild` exists.
-# The release workflow runs `cmake --build <dir> --target package`.
-# Release images can miss `rpmbuild`.
-# If CPack adds RPM without `rpmbuild`, `cpack` stops with
+# Release workflows run `cmake --build <dir> --target package`.
+# Some release images miss `rpmbuild`.
+# If CPack adds RPM anyway, `cpack` fails with
 # "RPM package requires rpmbuild executable".
-# That failure also blocks `.deb` output, even when no RPM was requested.
-# Use `ci/rpm.sh` to build RPM packages in a Fedora container.
+# This failure also blocks `.deb` output.
+# Run `ci/rpm.sh` to build RPM packages in a Fedora container.
 find_program(RPMBUILD_EXECUTABLE rpmbuild)
 if(RPMBUILD_EXECUTABLE AND NOT "RPM" IN_LIST CPACK_GENERATOR)
 	list(APPEND CPACK_GENERATOR RPM)
@@ -40,9 +40,9 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSES/GPL-3.0-or-later.t
 
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Productivity")
 
-# The RPM payload ships no helper scripts or service files.
+# This RPM payload ships no helper scripts or service files.
 # Keep explicit Requires unset.
-# Let automatic ELF dependency generation provide runtime package Requires.
+# Let automatic ELF dependency generation provide runtime Requires.
 
 set(CPACK_RPM_USER_FILELIST
 	"%attr(-,root,root) ${EDS_BOOK_BACKEND_DIR}/libebookbackendjmap.so"
@@ -79,7 +79,7 @@ if(RPMBUILD_EXECUTABLE AND RPMLINT_EXECUTABLE)
 			"set -euo pipefail; cmake --build \"$BUILD_DIR\"; rm -f \"$BUILD_DIR\"/*.rpm; cpack --config \"$BUILD_DIR/CPackConfig.cmake\" -G RPM --verbose -B \"$BUILD_DIR\""
 	)
 
-	# `--strict` fails on warnings, matching the `.deb` lintian gate.
+	# `--strict` treats warnings as failures, matching the lintian gate.
 	add_test(
 		NAME package-rpm-lint
 		COMMAND ${CMAKE_COMMAND} -E env

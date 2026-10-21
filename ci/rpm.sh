@@ -48,7 +48,7 @@ if [[ "${rpm_count}" -eq 0 ]]; then
 	exit 1
 fi
 
-# `--strict` fails on a warning too, as the package-rpm-lint check does.
+# `--strict` treats warnings as failures, like `package-rpm-lint`.
 rpmlint --strict "${build_dir}"/*.rpm
 
 privlibdir="$(pkg-config --variable=privlibdir evolution-shell-3.0)"
