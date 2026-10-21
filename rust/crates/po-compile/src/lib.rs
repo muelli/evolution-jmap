@@ -6,27 +6,27 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Compile `.po` text into `.mo` bytes sorted by `msgid`.
+/// Compiles `.po` text into `.mo` bytes sorted by `msgid`.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Report compile errors with 1-based line numbers.
+/// Reports compile errors with 1-based line numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// Missing empty `msgid` header entry.
+    /// Missing the empty `msgid` header entry.
     NoHeader,
-    /// Header charset is missing or unsupported.
+    /// The header charset is missing or unsupported.
     Charset { declared: String },
     /// Two entries translate the same message.
     Duplicate { msgid: String, line: usize },
-    /// Unsupported `.po` construct.
+    /// An unsupported `.po` construct.
     Unsupported { construct: String, line: usize },
     /// A non-comment line this parser cannot classify.
     Unparsed { line: usize, text: String },
     /// A backslash escape this parser does not accept.
     UnknownEscape { line: usize, escape: char },
-    /// A `msgid` whose entry ended before its `msgstr`.
+    /// A `msgid` entry ended before its `msgstr`.
     NoMsgstr { line: usize, msgid: String },
     /// Catalogue size exceeds `.mo` 32-bit offsets.
     TooLarge { bytes: usize },
@@ -97,7 +97,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // End the current entry on blank lines and `#~` obsolete lines.
+        // Close the current entry on blank lines and `#~` obsolete lines.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -245,7 +245,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // A trailing backslash means the quoted string remains open.
+        // A trailing backslash leaves the quoted string open.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -273,7 +273,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // Layout: header, two `(length, offset)` tables, then one string block.
+    // Write: header, two `(length, offset)` tables, then one string block.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();
@@ -311,7 +311,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // `.mo` table lengths exclude the trailing NUL byte.
+    // Exclude the trailing NUL byte from `.mo` table lengths.
     blob.push(0);
     Ok(())
 }
