@@ -1,32 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The `CamelStore` folder vfuncs: `get_folder_info_sync`, which describes the
-//! account's folders, `get_folder_sync`, which opens one of them by path, and
-//! the three — `get_inbox_folder_sync`, `get_trash_folder_sync`,
-//! `get_junk_folder_sync` — that open one by purpose. `can_refresh_folder`,
-//! which is a question about a folder of that listing rather than one asked of
-//! the listing at all. And `initial_setup_sync`, which reports two of the same
-//! purposes — Sent and Drafts — back to Evolution's account wizard instead of
-//! opening them.
+//! The `CamelStore` folder vfuncs.
 //!
-//! The first five are one module because they are one question asked five ways:
-//! all five read the folder listing [`JmapStore::folders`] keeps, and the last
-//! four exist to turn something out of the first — a path, a role — back into
-//! the mailbox it came from. What they do with the answer is where they part:
-//! the listing marshals a whole subtree into C structs Camel frees, opening
-//! builds the [`crate::folder`] object Camel keeps, and the three purposes
-//! delegate to the opening so that every way of asking reaches the same object.
+//! - `get_folder_info_sync` gives the listing of the account's folders.
+//! - `get_folder_sync` opens one folder by path.
+//! - `get_inbox_folder_sync`, `get_trash_folder_sync` and
+//!   `get_junk_folder_sync` open one folder by purpose.
+//! - `can_refresh_folder` answers a question about one folder of a listing.
+//! - `initial_setup_sync` gives the Sent and Drafts folders to the Evolution
+//!   account wizard. It does not open them.
+//!
+//! The first five vfuncs all read the tree that [`JmapStore::folders`] keeps.
+//! Of these five, the last four change a path or a role from that tree back
+//! into its mailbox. The listing converts a subtree into C structs that Camel frees.
+//! Opening builds the [`crate::folder`] object that Camel keeps. The three
+//! purpose vfuncs use the opening, so that all of them get the same object.
 //!
 //! ## The listing
 //!
-//! Everything it answers with exists already — [`JmapStore::folders`] keeps the
-//! tree and decides whether to go and look, [`FolderInfoChain`] turns a tree
-//! into the C forest Camel frees. What is left is the reading of the two
-//! arguments those pieces do not take: `top`, the folder the answer is rooted
-//! at, and `CAMEL_STORE_FOLDER_INFO_RECURSIVE`, the depth it is cut to.
-//! [`Request`] is that reading, and it is a type of its own so that the decision
-//! can be tested without a `CamelStore` to call the vfunc on.
+//! [`JmapStore::folders`] keeps the tree and decides when to fetch it again.
+//! [`FolderInfoChain`] converts a tree into the C forest that Camel frees.
+//! [`Request`] reads the two remaining arguments: `top`, the root of the
+//! answer, and `CAMEL_STORE_FOLDER_INFO_RECURSIVE`, its depth. It is a
+//! separate type, so that tests can examine it without a `CamelStore`.
 //!
 //! ### What Camel means by the arguments
 //!
@@ -34,61 +31,57 @@
 //! information about the folder structure of @store, starting with @top […] If
 //! @flags includes `CAMEL_STORE_FOLDER_INFO_RECURSIVE`, the returned tree will
 //! include all levels of hierarchy below @top. If not, it will only include the
-//! immediate subfolders of @top." A NULL or empty `top` is the account itself —
-//! the wrapper makes the same test (`top == NULL || *top == '\0'`) for its own
-//! purposes, so a store that read the two spellings differently would disagree
-//! with the function calling it. The folder `top` names is part of the answer
-//! rather than skipped: it is the head of the chain, which is what IMAPX
-//! returns and what `camel_folder_info_build` produces from a set of paths
-//! sharing that prefix.
+//! immediate subfolders of @top." A NULL or empty `top` is the account itself.
+//! The wrapper uses the same test (`top == NULL || *top == '\0'`), so the store
+//! must read the two forms the same way. The folder that `top` names is in the
+//! answer as the head of the chain. IMAPX and `camel_folder_info_build` do the
+//! same.
 //!
-//! `RECURSIVE` is honoured here although IMAPX, the reference implementation,
-//! has a `/* FIXME: obey other flags */` where it would be. Every real caller —
-//! Evolution's folder cache and subscription editor, Camel's own
-//! `camel_store_delete_folder_sync` — passes it, and the two calls that do not
-//! are `camel_store_get_folder_info_sync`'s virtual-folder paths, which strip it
-//! deliberately and want exactly the top level back. So obeying the documented
-//! contract costs nothing a caller depends on, and saves a deep account from
-//! marshalling its whole tree into C for a question about one level of it.
+//! This store obeys `RECURSIVE`, although IMAPX, the reference implementation,
+//! has a `/* FIXME: obey other flags */` at that location. All real callers
+//! (the Evolution folder cache and subscription editor, and
+//! `camel_store_delete_folder_sync`) set it. Only the virtual-folder paths of
+//! `camel_store_get_folder_info_sync` clear it, and they want only the top
+//! level. Thus no caller loses, and a deep account does not convert its full
+//! tree into C for a question about one level.
 //!
-//! `SUBSCRIBED` and `SUBSCRIPTION_LIST` are read too, and both are a filter on
-//! the folders rather than a different request: `Mailbox/get` returns every
-//! mailbox of the account with its `isSubscribed`, so this store has the
-//! subscription list in hand and never needs the second, wider call an IMAP
-//! store makes `LIST` beside `LSUB` for. See [`Request::new`] for what each
-//! asks for and why an unsubscribed folder is sometimes still in the answer.
+//! This store also reads `SUBSCRIBED` and `SUBSCRIPTION_LIST`. Both are
+//! filters on the folders, not different requests. `Mailbox/get` returns all
+//! mailboxes of the account with their `isSubscribed`, so this store does not
+//! need the second call (`LSUB` next to `LIST`) that an IMAP store makes.
+//! [`Request::new`] tells what each flag asks for, and why an unsubscribed
+//! folder can stay in the answer.
 //!
-//! Two flags are still not read. `FAST` is documented as deprecated and "most
-//! backends will behave the same whether it is supplied or not", which is true
-//! of this one because JMAP puts the counts in the mailbox anyway.
-//! `NO_VIRTUAL` is not this vfunc's business at all: the wrapper adds and
-//! removes vTrash and vJunk around the call.
+//! This store does not read two flags. `FAST` is deprecated, and "most
+//! backends will behave the same whether it is supplied or not". This is true
+//! here, because each JMAP mailbox includes its counts. `NO_VIRTUAL` is not
+//! for this vfunc: the wrapper adds and removes vTrash and vJunk.
 //!
-//! ## The sixth vfunc, which is a question about the listing rather than of it
+//! ## The sixth vfunc: a question about one folder of the listing
 //!
 //! [`refreshable`] answers `can_refresh_folder`, the one non-blocking slot in
 //! `CamelStoreClass`: "Returns if this folder (param info) should be checked
-//! for new mail or not", asked once per folder of a listing. It reads the flags
-//! word and nothing else — no store state, no request — because Camel calls it
-//! from a walk over a forest it already has, and a slot documented as
-//! non-blocking that went to the server would turn one Send / Receive into a
-//! round trip per folder.
+//! for new mail or not". Camel asks it once for each folder of a listing. It
+//! reads only the flags word, with no store state and no request. Camel calls
+//! it during a walk over a forest that it already has. A request to the server
+//! here would make one Send / Receive do one round trip for each folder.
 //!
-//! ## The seventh vfunc, asked once and answered from the same tree
+//! ## The seventh vfunc: one call, answered from the same tree
 //!
-//! [`initial_setup_sync`] is what Evolution's account wizard calls right after
-//! a fresh account's first successful connect, and only then — gated on
-//! `CAMEL_STORE_SUPPORTS_INITIAL_SETUP`, which [`crate::store`]'s
-//! `instance_init` sets alongside the vfunc pointer this module installs for
-//! it. What it hands back is not a folder but two entries of a `GHashTable`
-//! Evolution saves onto the account's own sources: `CAMEL_STORE_SETUP_SENT_FOLDER`
-//! and `CAMEL_STORE_SETUP_DRAFTS_FOLDER`, each a Camel path the wizard turns
-//! into a folder URI. RFC 8621 §2 gives `sent` and `drafts` mailboxes a `role`
-//! the same way it gives one to `inbox`, `trash` and `junk`, and the same tree
-//! [`open_by_role`] reads for those three is what is read here — the
-//! difference is what is done with the role once found, a string handed to
-//! Evolution rather than a folder handed to Camel. An account whose server
-//! assigns neither role saves nothing, which is the documented contract:
+//! The Evolution account wizard calls [`initial_setup_sync`] only after the
+//! first successful connection of a new account. `CAMEL_STORE_SUPPORTS_INITIAL_SETUP`
+//! enables the call. The `instance_init` of [`crate::store`] sets this flag
+//! together with the vfunc pointer that this module installs. The answer is
+//! not a folder. It is two entries of a `GHashTable` that Evolution saves on
+//! the account sources: `CAMEL_STORE_SETUP_SENT_FOLDER` and
+//! `CAMEL_STORE_SETUP_DRAFTS_FOLDER`. Each entry is a Camel path, which the
+//! wizard changes into a folder URI.
+//!
+//! RFC 8621 §2 gives a `role` to `sent` and `drafts` mailboxes, as it does to
+//! `inbox`, `trash` and `junk`. This vfunc reads the same tree that
+//! [`open_by_role`] reads for those three. The difference is the result: a
+//! string for Evolution, not a folder for Camel. If the server assigns neither
+//! role, nothing is saved. This agrees with the documented contract:
 //! "The function should return TRUE even if it didn't populate anything."
 
 use std::borrow::Cow;
@@ -121,57 +114,56 @@ use crate::refresh::refresh_info_sync;
 use crate::store::JmapStore;
 use crate::summary::summary_state;
 
-/// The part of a store's folder tree one `get_folder_info_sync` call asks for.
+/// The part of the store's folder tree that one `get_folder_info_sync` call
+/// asks for.
 pub struct Request<'a> {
-    /// The sibling chain the answer is rooted at: the single folder `top`
-    /// names, or every top-level folder when it names none.
+    /// The sibling chain at the root of the answer: the one folder that `top`
+    /// names, or all top-level folders if `top` names no folder.
     ///
-    /// Empty for a `top` no folder answers to, which is a legitimate question
-    /// with a legitimate empty answer — see [`Request::new`].
+    /// Empty if no folder has the path `top`. This is a valid question with a
+    /// valid empty answer (see [`Request::new`]).
     ///
-    /// Borrowed from the store's tree for a call that wants the folders as
-    /// they are, owned for one that asked for a filtered view of them: a
-    /// subtree with folders taken out of it is not a subtree of the tree the
-    /// store holds, so it has to be built.
+    /// Borrowed from the store's tree if the call wants the folders unchanged.
+    /// Owned if the call asks for a filtered view: a subtree with folders
+    /// removed is not part of the store's tree, so it must be built.
     pub roots: Cow<'a, [FolderInfo]>,
-    /// How many levels of descendants below those roots belong in the answer;
-    /// `None` for all of them.
+    /// The number of descendant levels below the roots that the answer
+    /// includes; `None` for all levels.
     pub depth: Option<usize>,
 }
 
 impl<'a> Request<'a> {
-    /// Reads the vfunc's `top` and `flags` against the tree the store holds.
+    /// Reads the vfunc's `top` and `flags` against the store's tree.
     ///
-    /// The depth differs by one between the two `top` cases, and for a reason
-    /// that is easy to lose: "the immediate subfolders of `top`" is one level
-    /// below a folder that is itself in the answer, but the account's top-level
-    /// folders *are* the immediate subfolders of the root — the root is not a
-    /// folder and is not returned — so there is no level left below them.
+    /// The depth is different by one between the two `top` cases. "The
+    /// immediate subfolders of `top`" is one level below a folder that is in
+    /// the answer. But the account's top-level folders *are* the immediate
+    /// subfolders of the root. The root is not a folder and is not in the
+    /// answer, so no level below them is included.
     ///
-    /// A `top` that matches nothing yields no roots rather than an error, the
-    /// way IMAPX's own `get_folder_info_offline` answers an empty match too:
-    /// an empty array handed to `camel_folder_info_build` comes back NULL
-    /// with nothing having set a GError. The case is ordinary: a folder
-    /// another client deleted between one call and the next is asked for
-    /// once more before Camel notices, and reporting that as a failure would
-    /// turn someone else's tidying into a broken account.
+    /// If `top` matches no folder, the result has no roots and is not an
+    /// error. IMAPX's `get_folder_info_offline` also gives an empty answer:
+    /// `camel_folder_info_build` returns NULL for an empty array, and no
+    /// GError is set. This case is usual. Another client can delete a folder
+    /// before Camel knows about it, and Camel then asks for it again. An error
+    /// here would show an account as broken because of a change by a
+    /// different client.
     ///
     /// ## The two subscription flags
     ///
-    /// `SUBSCRIBED` asks for the folders the user ticked, and is what
-    /// Evolution's folder tree adds for a store that is `CamelSubscribable` —
-    /// so it is what makes the tick in the subscription editor change what the
-    /// user sees. It is applied to whatever `top` already chose, rather than
-    /// instead of it: the two are separate halves of the same question, and a
-    /// caller that asks about one subtree of a filtered account means the
-    /// filtered part of that subtree.
+    /// `SUBSCRIBED` asks for the folders that the user ticked. The Evolution
+    /// folder tree adds it for a `CamelSubscribable` store, so a tick in the
+    /// subscription editor changes what the user sees. The filter applies to
+    /// the folders that `top` selects, not in place of them. A caller that
+    /// asks about one subtree of a filtered account wants the filtered part of
+    /// that subtree.
     ///
-    /// `SUBSCRIPTION_LIST` is the subscription editor's own question — which
-    /// folders are there to tick — and is answered with all of them, which for
-    /// this store is the listing it already has: `Mailbox/get` returns every
-    /// mailbox of the account with its `isSubscribed`. It outranks `SUBSCRIBED`
-    /// if a caller sets both, because an editor showing only what is already
-    /// ticked is one nothing new can be ticked in.
+    /// `SUBSCRIPTION_LIST` is the question of the subscription editor: which
+    /// folders can the user tick? The answer is all folders. This store
+    /// already has them, because `Mailbox/get` returns all mailboxes of the
+    /// account with their `isSubscribed`. If a caller sets both flags,
+    /// `SUBSCRIPTION_LIST` wins. An editor that shows only ticked folders
+    /// does not let the user tick a new folder.
     pub fn new(
         tree: &'a FolderTree,
         top: Option<&str>,
@@ -198,44 +190,43 @@ impl<'a> Request<'a> {
         }
     }
 
-    /// The forest this request is answered with, owned until it is handed over.
+    /// The forest that answers this request. The caller owns it until it gives
+    /// it to Camel.
     pub fn answer(&self) -> FolderInfoChain {
         FolderInfoChain::from_forest(&self.roots, self.depth)
     }
 }
 
-/// The part of a sibling chain the user's ticks leave: every subscribed folder,
-/// and every ancestor of one.
+/// The part of a sibling chain that the user's ticks keep: each subscribed
+/// folder, and each ancestor of a subscribed folder.
 ///
-/// The ancestors are the whole of what makes this more than a filter.
-/// `CamelFolderInfo` hangs a child off its parent, so there is no answer in
-/// which `Work/Invoices` is present and `Work` is not — dropping an unticked
-/// parent would drop the ticked folder underneath it, which is mail the user
-/// asked to see and cannot reach. An IMAP server has the same problem and
-/// answers it the same way, by returning the unsubscribed parents `LSUB`'s
-/// children need.
+/// The ancestors make this more than a filter. In `CamelFolderInfo`, a child
+/// is attached to its parent, so `Work/Invoices` cannot be in the answer
+/// without `Work`. If an unticked parent were removed, the ticked folder below
+/// it would also go, and the user could not get to that mail. An IMAP server
+/// has the same problem and solves it the same way: it returns the
+/// unsubscribed parents that the `LSUB` children need.
 ///
-/// Such a folder is *not* dressed up as anything else on the way out. It keeps
-/// `subscribed: false`, so the listing does not put a tick in the subscription
-/// editor the user never set, and it is deliberately not marked
-/// `CAMEL_FOLDER_NOSELECT`, which Camel documents as "the folder cannot contain
-/// messages" — a JMAP mailbox the user unticked holds mail like any other, and
-/// claiming otherwise would be a lie Camel acts on. The visible consequence is
-/// that unticking a folder with a ticked one below it leaves the folder in the
-/// tree and openable; the alternative is worse.
+/// Such a folder does *not* get changed flags. It keeps `subscribed: false`,
+/// so the subscription editor does not show a tick that the user did not set.
+/// It does not get `CAMEL_FOLDER_NOSELECT`. Camel documents this flag as "the
+/// folder cannot contain messages", but an unticked JMAP mailbox holds mail
+/// like all other mailboxes, and Camel acts on that flag. Thus, if the user
+/// unticks a folder that has a ticked folder below it, the folder stays in the
+/// tree and the user can open it. The alternative is worse.
 ///
-/// What it does change is the children. A folder whose children were all
-/// unticked has none *in this view*, and says so — unlike the depth cut in
-/// [`FolderInfoChain::from_forest`], which leaves `CAMEL_FOLDER_CHILDREN` on a
-/// folder whose children it left out, because those children exist and the
-/// expander is how the caller asks for them.
+/// The function does change the children. If the user unticked all children of
+/// a folder, the folder has no children *in this view*, and its flags show
+/// this. The depth cut in [`FolderInfoChain::from_forest`] is different: it
+/// keeps `CAMEL_FOLDER_CHILDREN` on a folder whose children it removes,
+/// because those children exist and the expander lets the caller ask for them.
 ///
-/// Iteratively, for the reason `from_forest` gives: the depth of the tree comes
-/// from a `parentId` chain a server chose.
+/// The function is iterative, for the reason that `from_forest` gives: the
+/// depth of the tree comes from a `parentId` chain that the server controls.
 fn ticked(siblings: &[FolderInfo]) -> Vec<FolderInfo> {
-    // Pre-order first, each folder paired with its parent's place in that
-    // order, because the answer has to be assembled the other way round: what
-    // becomes of a folder depends on what became of everything below it.
+    // First, a pre-order walk that records the index of each folder's parent.
+    // The answer is built in the opposite direction, because the result for a
+    // folder depends on the results for all folders below it.
     let mut order: Vec<(&FolderInfo, Option<usize>)> = Vec::new();
     let mut pending: Vec<(&FolderInfo, Option<usize>)> =
         siblings.iter().rev().map(|folder| (folder, None)).collect();
@@ -251,9 +242,9 @@ fn ticked(siblings: &[FolderInfo]) -> Vec<FolderInfo> {
         );
     }
 
-    // And back again: reverse pre-order reaches every descendant before its
-    // ancestor, so the children a folder keeps are settled by the time the
-    // folder itself is decided.
+    // Reverse pre-order gets to each descendant before its ancestor. Thus the
+    // kept children of a folder are known before the function decides about
+    // the folder.
     let mut kept: Vec<Vec<FolderInfo>> = vec![Vec::new(); order.len()];
     let mut roots: Vec<FolderInfo> = Vec::new();
     for (index, (folder, parent)) in order.into_iter().enumerate().rev() {
@@ -261,11 +252,11 @@ fn ticked(siblings: &[FolderInfo]) -> Vec<FolderInfo> {
         if !folder.subscribed && children.is_empty() {
             continue;
         }
-        // They were collected by the same reversed walk, so they are in
-        // reverse sibling order.
+        // The reversed walk collected them, so they are in reverse sibling
+        // order.
         children.reverse();
-        // Field by field rather than `..folder.clone()`, which would clone the
-        // subtree these children were just chosen from only to throw it away.
+        // Each field is copied, not `..folder.clone()`. That clone would copy
+        // the full subtree and then discard it.
         let folder = FolderInfo {
             id: folder.id.clone(),
             path: folder.path.clone(),
@@ -295,8 +286,8 @@ fn ticked(siblings: &[FolderInfo]) -> Vec<FolderInfo> {
 ///
 /// # Safety
 ///
-/// `class` must point at an initialised class struct that leads with a
-/// `CamelStoreClass` — which is every descendant of `CamelStore`.
+/// `class` must point to an initialised class struct that starts with a
+/// `CamelStoreClass`. This is true for all descendants of `CamelStore`.
 pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
@@ -309,70 +300,69 @@ pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
     vfuncs.initial_setup_sync = Some(initial_setup_sync);
 }
 
-/// Whether Evolution should check this folder for new mail of its own accord:
-/// the inbox, and every folder the user subscribed to.
+/// Tells if Evolution must automatically check this folder for new mail: the
+/// inbox, and each folder that the user subscribed to.
 ///
-/// The flags word is the whole input, because it is the whole of what the
-/// question is about. `CAMEL_FOLDER_TYPE_INBOX` is `CamelStore`'s own default
-/// answer, kept rather than replaced — mail arrives in the inbox by definition,
-/// and an account whose inbox goes unchecked never reports new mail at all.
-/// `CAMEL_FOLDER_SUBSCRIBED` is what this store adds, and RFC 8621 §2 is why it
-/// is the right line: `isSubscribed` is defined as "has the user indicated they
-/// wish to see this Mailbox", which is the same user and the same intent that
-/// "check this folder for new mail" is about. Server-side filing is ordinary on
-/// JMAP — mail the user cares about often never touches the inbox — so a store
-/// that checked the inbox alone would leave the folder tree's counts stale
-/// until each folder was clicked.
+/// The flags word is the only input, because the question is only about those
+/// flags. `CAMEL_FOLDER_TYPE_INBOX` is the default answer of `CamelStore`, and
+/// this function keeps it. New mail arrives in the inbox, and an account with
+/// an unchecked inbox never reports new mail.
 ///
-/// Every other provider gets here through a *setting*: IMAPX has `check-all`
-/// and `check-subscribed`, evolution-ews has `check-all` and a per-folder tick
-/// of its own. This store needs neither, and that is a property of the protocol
-/// rather than a corner cut. An IMAP store has to ask, because `LIST` and
-/// `LSUB` are separate round trips and an account's subscriptions are often
-/// nobody's idea of the folders worth checking; `Mailbox/get` returns every
-/// mailbox with its `isSubscribed` in the one call the listing already made, so
-/// the answer is in hand and costs nothing. If a user ever wants "check all
-/// folders" regardless of their ticks, that is a settings property to add
-/// alongside this rule, not a reason to guess at one now.
+/// This store adds `CAMEL_FOLDER_SUBSCRIBED`, because of RFC 8621 §2. It
+/// defines `isSubscribed` as "has the user indicated they wish to see this
+/// Mailbox". That is the same user and the same intent as "check this folder
+/// for new mail". On JMAP, servers usually file mail into folders, so
+/// important mail often does not go into the inbox. If the store checked only
+/// the inbox, the folder counts would stay old until the user clicked each
+/// folder.
 ///
-/// The one case worth stating because it is invisible from here: an unticked
-/// folder that is in the listing *only* because something ticked sits below it
-/// — see `ticked` — answers no. It is a folder the user chose not to see,
-/// and the ticked folder underneath it is asked about separately.
+/// Other providers use a *setting* for this: IMAPX has `check-all` and
+/// `check-subscribed`, and evolution-ews has `check-all` and a tick for each
+/// folder. This store needs neither, because of the protocol. An IMAP store
+/// must ask, because `LIST` and `LSUB` are separate round trips, and IMAP
+/// subscriptions often do not match the folders to check. `Mailbox/get`
+/// returns each mailbox with its `isSubscribed` in the call that the listing
+/// already made, so the answer costs nothing. If a user wants "check all
+/// folders" independently of the ticks, add a settings property next to this
+/// rule. Do not guess one now.
 ///
-/// `CAMEL_FOLDER_NOSELECT` is deliberately not tested. This store never sets
-/// it (again see `ticked`: an unticked ancestor holds mail like any other
-/// mailbox and is not dressed up as unselectable), and Evolution's
-/// `mail-send-recv.c` filters `NOSELECT` itself in the walk that asks this
-/// question — so a test here would be a second answer to a question the caller
-/// has already answered, about a flag this side does not produce.
+/// One case is not visible here. An unticked folder that is in the listing
+/// *only* because a ticked folder is below it (see `ticked`) gets the answer
+/// no. The user chose not to see it. Camel asks separately about the ticked
+/// folder below it.
+///
+/// This function does not test `CAMEL_FOLDER_NOSELECT`. This store never sets
+/// it (see `ticked`: an unticked ancestor holds mail like all other mailboxes).
+/// Also, `mail-send-recv.c` in Evolution removes `NOSELECT` folders itself
+/// during the walk that asks this question. A test here would answer again a
+/// question that the caller answered, about a flag that this store does not
+/// set.
 pub fn refreshable(flags: CamelFolderInfoFlags) -> bool {
     let is_inbox =
         flags & CAMEL_FOLDER_TYPE_MASK as CamelFolderInfoFlags == CAMEL_FOLDER_TYPE_INBOX;
     is_inbox || flags & CAMEL_FOLDER_SUBSCRIBED != 0
 }
 
-/// `can_refresh_folder`: [`refreshable`], as the vfunc Camel calls.
+/// `can_refresh_folder`: [`refreshable`], as the vfunc that Camel calls.
 ///
-/// The `error` out-parameter is never set, because there is no failure to
-/// report — the answer is a test on a word Camel handed in. Camel's own default
-/// takes the same view, and `camel_store_can_refresh_folder`'s only caller
-/// passes NULL for it.
+/// The function never sets the `error` out-parameter, because no failure can
+/// occur: the answer is a test on a word from Camel. The Camel default does
+/// the same, and the only caller of `camel_store_can_refresh_folder` gives
+/// NULL for it.
 ///
-/// The `store` is not read either, which is what makes this slot safe to answer
-/// without a connection: Evolution asks it while walking a listing, and a
-/// provider that reached for the account's state here would be answering a
-/// question about a folder with a question about the network.
+/// The function also does not read `store`, so it is safe without a
+/// connection. Evolution calls it during a walk over a listing. A provider
+/// that read the account state here would make a question about a folder into
+/// a question about the network.
 unsafe extern "C" fn can_refresh_folder(
     _store: *mut CamelStore,
     info: *mut CamelFolderInfo,
     _error: *mut *mut GError,
 ) -> gboolean {
     guard("can_refresh_folder", GFALSE, || {
-        // SAFETY: Camel's contract for the vfunc — an info out of a listing,
-        // which its own wrapper has already checked is non-NULL. A NULL here
-        // is nothing Camel does, and answering no is the harmless half of the
-        // question either way.
+        // SAFETY: Camel's contract for the vfunc: an info from a listing, which
+        // the Camel wrapper already checked is non-NULL. Camel does not give a
+        // NULL here. If it does, the answer no is the harmless answer.
         let Some(info) = (unsafe { info.as_ref() }) else {
             return GFALSE;
         };
@@ -384,19 +374,18 @@ unsafe extern "C" fn can_refresh_folder(
     })
 }
 
-/// Answers with the account's folders, or the part of them Camel asked for.
+/// Gives the account's folders, or the part of them that Camel asked for.
 ///
-/// NULL is both the failure value and a legitimate answer — an account with no
-/// folders, or a `top` that names none — which is why the error is what
-/// separates them, and why nothing here returns NULL and sets one for a
-/// question that simply had no folders in it.
+/// NULL is the failure value and also a valid answer: an account with no
+/// folders, or a `top` that names no folder. Thus the error is what tells the
+/// two apart. This function never sets an error when the answer simply has no
+/// folders.
 ///
-/// `cancellable` is [`observe`]d for the length of the call, so a listing the
-/// user stopped answers with `G_IO_ERROR_CANCELLED` and no tree. The listing is
-/// one or two round trips rather than a paged walk, so the stop usually lands
-/// before the request rather than between two of them — which is still the
-/// difference between an account that answers and one that hangs on a server
-/// that has stopped replying.
+/// The function [`observe`]s `cancellable` during the call. If the user stops
+/// the listing, the answer is `G_IO_ERROR_CANCELLED` and no tree. The listing
+/// is one or two round trips, not a paged walk, so the stop usually occurs
+/// before the request. But it still prevents a hang on a server that does not
+/// reply.
 unsafe extern "C" fn get_folder_info_sync(
     store: *mut CamelStore,
     top: *const gchar,
@@ -409,9 +398,9 @@ unsafe extern "C" fn get_folder_info_sync(
     // currently NULL.
     unsafe {
         guard_ptr("get_folder_info_sync", error, || {
-            // SAFETY: Camel keeps its cancellable alive for the length of the
-            // call, so it outlives this observation — which is what makes
-            // every request below here stop when the user presses Stop.
+            // SAFETY: Camel keeps its cancellable alive for the duration of the
+            // call, so it lives longer than this observation. Thus each request
+            // below stops when the user pushes Stop.
             let _cancel = observe(cancellable);
 
             let Some(store) = JmapStore::borrow(store) else {
@@ -425,9 +414,8 @@ unsafe extern "C" fn get_folder_info_sync(
                 Err(failure) => return fail(error, &failure, StoreError::to_gerror),
             };
 
-            // The tree is borrowed for exactly as long as the forest is being
-            // built out of it, and the forest owns copies of everything it
-            // took.
+            // The forest borrows the tree only while it is built, and it owns
+            // copies of all data that it takes.
             Request::new(&tree, top.as_deref(), flags)
                 .answer()
                 .into_raw()
@@ -435,27 +423,26 @@ unsafe extern "C" fn get_folder_info_sync(
     }
 }
 
-/// Opens one folder of the store: `camel_store_get_folder_sync`'s vfunc.
+/// Opens one folder of the store: the vfunc of `camel_store_get_folder_sync`.
 ///
-/// What it must *not* do is keep the folder. `CamelStore` owns a
-/// `CamelObjectBag` of the folders it has open — public as
-/// `camel_store_get_folders_bag`, keyed with the class's own
-/// `hash_folder_name`/`equal_folder_name` — and the wrapper reserves this
-/// folder's name in it before it reaches this function at all, so a second call
-/// for the same path never gets here. A cache of our own would be a second
-/// answer to a question Camel has already answered, and the way two
-/// `CamelFolder`s over one mailbox — two summaries, two sets of flags — get
-/// handed out.
+/// This function must *not* keep the folder. `CamelStore` owns a
+/// `CamelObjectBag` of its open folders (public as
+/// `camel_store_get_folders_bag`, with the keys of the class's
+/// `hash_folder_name`/`equal_folder_name`). The wrapper reserves the folder
+/// name in that bag before it calls this function, so a second call for the
+/// same path does not get here. A cache of our own would duplicate the bag,
+/// and could give two `CamelFolder`s (two summaries, two sets of flags) for
+/// one mailbox.
 ///
-/// The flags are not read. `CREATE` asks for a folder that does not exist to be
-/// made, which for JMAP is a `Mailbox/set` and belongs to `create_folder_sync`;
-/// `BODY_INDEX` asks for a body index this provider does not build; `PRIVATE`
-/// is about vFolder membership, which is the wrapper's business; and `EXCL` is
-/// documented as not honoured.
+/// The function does not read the flags. `CREATE` asks to make a missing
+/// folder, which for JMAP is a `Mailbox/set` and is the task of
+/// `create_folder_sync`. `BODY_INDEX` asks for a body index, which this
+/// provider does not build. `PRIVATE` is about vFolder membership, which the
+/// wrapper controls. `EXCL` is documented as not honoured.
 ///
-/// `cancellable` is [`observe`]d for the length of the call, as in
-/// [`get_folder_info_sync`]: opening a folder Camel has not heard of relists
-/// the account, which is a request the user can stop.
+/// The function [`observe`]s `cancellable` during the call, as
+/// [`get_folder_info_sync`] does. If the held tree does not have the path,
+/// the function lists the account again, and the user can stop that request.
 unsafe extern "C" fn get_folder_sync(
     store: *mut CamelStore,
     folder_name: *const gchar,
@@ -468,17 +455,17 @@ unsafe extern "C" fn get_folder_sync(
     // currently NULL.
     unsafe {
         guard_ptr("get_folder_sync", error, || {
-            // SAFETY: Camel keeps its cancellable alive for the length of the
-            // call, so it outlives this observation — which is what makes
-            // every request below here stop when the user presses Stop.
+            // SAFETY: Camel keeps its cancellable alive for the duration of the
+            // call, so it lives longer than this observation. Thus each request
+            // below stops when the user pushes Stop.
             let _cancel = observe(cancellable);
 
             let Some(instance) = JmapStore::borrow(store) else {
                 return fail(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
-            // Borrowed from Camel and NUL-terminated; `read_string` copies, and
-            // reads a NULL or empty name as no name — which no mailbox answers
-            // to, because a path always has a component in it.
+            // Borrowed from Camel and NUL-terminated; `read_string` copies. A
+            // NULL or empty name becomes the empty path. No mailbox has that
+            // path, because a path always has a component.
             let path = read_string(folder_name).unwrap_or_default();
 
             let tree = match tree_holding(instance, |tree| tree.find(&path).is_some()) {
@@ -490,21 +477,21 @@ unsafe extern "C" fn get_folder_sync(
             };
 
             // SAFETY: `store` is the live `CamelStore` borrowed above, which is
-            // what `new_folder` asks for, and the pointer it returns is
-            // transfer-full — exactly what `Owned::from_raw` takes.
+            // what `new_folder` asks for. The pointer that it returns is
+            // transfer-full, which is what `Owned::from_raw` takes.
             let Some(folder) = Owned::from_raw(new_folder(store, mailbox)) else {
                 return ptr::null_mut();
             };
 
-            // A folder whose summary holds no state (a freshly added account or a
-            // folder never opened before) has nothing in its summary yet. Refresh
-            // it on first open so the first view answers a non-empty summary.
+            // A summary with no state (a new account, or a folder not opened
+            // before) is empty. Refresh the folder on the first open, so that
+            // the first view shows messages.
             let summary = camel_folder_get_folder_summary(folder.as_ptr());
             if summary_state(summary).is_none() {
                 let ok = refresh_info_sync(folder.as_ptr(), cancellable, error);
                 if ok == GFALSE {
-                    // `folder` drops here, releasing the reference `new_folder`
-                    // handed over.
+                    // `folder` drops here and releases the reference from
+                    // `new_folder`.
                     return ptr::null_mut();
                 }
             }
@@ -514,28 +501,26 @@ unsafe extern "C" fn get_folder_sync(
     }
 }
 
-/// Opens the account's inbox: `camel_store_get_inbox_folder_sync`'s vfunc.
+/// Opens the account's inbox: the vfunc of `camel_store_get_inbox_folder_sync`.
 ///
-/// Camel asks a store for this folder by *purpose*, and the purpose is the only
-/// thing it can be answered from — which is why the vfunc is overridden rather
-/// than inherited. `CamelStoreClass` does supply an implementation: it asks the
-/// store's own `get_folder_sync` for a folder named `inbox`, in that case, and
-/// IMAPX does the same thing one spelling up against `"INBOX"`. Both are IMAP
-/// conventions rather than facts about mail stores. RFC 8621 §2 gives a mailbox
-/// a `role` instead, and says nothing about that mailbox's name or where in the
-/// hierarchy it sits: a JMAP account may perfectly well keep its inbox under a
-/// per-address parent and call it something in the user's own language. An
-/// account that *also* has an ordinary mailbox named "inbox" is the one the
-/// inherited version gets quietly wrong, by running the user's incoming filters
-/// over the wrong folder.
+/// Camel asks for this folder by *purpose*, and only the purpose can find it.
+/// Thus this store overrides the vfunc. The `CamelStoreClass` implementation
+/// asks `get_folder_sync` for a folder with the name `inbox`. IMAPX does the
+/// same with `"INBOX"`. These are IMAP conventions, not facts about all mail
+/// stores. RFC 8621 §2 gives a mailbox a `role`, and does not specify the
+/// mailbox name or its position in the hierarchy. A JMAP account can keep its
+/// inbox below a parent for each address, with a name in the user's language.
+/// If such an account *also* has a usual mailbox with the name "inbox", the
+/// inherited vfunc gives the incorrect folder. The user's incoming filters
+/// then operate on the incorrect folder.
 unsafe extern "C" fn get_inbox_folder_sync(
     store: *mut CamelStore,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
 ) -> *mut CamelFolder {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, and an
-    // out-parameter that is NULL or writable and currently NULL — which is
-    // [`open_by_role`]'s contract too.
+    // out-parameter that is NULL or writable and currently NULL. This is also
+    // the contract of [`open_by_role`].
     unsafe {
         guard_ptr("get_inbox_folder_sync", error, || {
             open_by_role(store, FolderRole::Inbox, cancellable, error)
@@ -543,29 +528,28 @@ unsafe extern "C" fn get_inbox_folder_sync(
     }
 }
 
-/// Opens the folder deleted mail is delivered into:
-/// `camel_store_get_trash_folder_sync`'s vfunc.
+/// Opens the folder for deleted mail: the vfunc of
+/// `camel_store_get_trash_folder_sync`.
 ///
-/// The inherited implementation answers with a *virtual* folder — Camel's
-/// vTrash, a search across the account for messages carrying the
-/// `CAMEL_MESSAGE_DELETED` flag — and for a JMAP account that is the wrong
-/// answer twice over. JMAP has no deleted keyword ([`crate::message_info`]'s
-/// `FLAGS_FROM_JMAP` is where that is written down), so the flag is local to
-/// this client: a message deleted here is in a folder no other client can see,
-/// and a message another client moved to trash is not in it. Meanwhile the
-/// account's *own* trash — the mailbox holding the `trash` role, which is where
-/// the server and every other client put deleted mail — would sit next to it
-/// under its own name.
+/// The inherited implementation gives a *virtual* folder: Camel's vTrash, a
+/// search of the account for messages with the `CAMEL_MESSAGE_DELETED` flag.
+/// For a JMAP account, this answer is incorrect for two reasons. First, JMAP
+/// has no deleted keyword (see `FLAGS_FROM_JMAP` in [`crate::message_info`]),
+/// so the flag is local to this client. A message deleted here goes into a
+/// folder that no other client sees. A message that another client moved to
+/// trash is not in it. Second, the account's *own* trash (the mailbox with the
+/// `trash` role, where the server and all other clients put deleted mail)
+/// would show next to it with its own name.
 ///
-/// So the role is the answer, and the virtual folders are turned off with it:
-/// [`crate::store`]'s `instance_init` clears `CAMEL_STORE_VTRASH` and
-/// `CAMEL_STORE_VJUNK`, because `camel_store_get_folder_info_sync` appends both
-/// to every listing a store with those flags answers with.
+/// Thus the role gives the answer, and the virtual folders are disabled. The
+/// `instance_init` of [`crate::store`] clears `CAMEL_STORE_VTRASH` and
+/// `CAMEL_STORE_VJUNK`. If a store has those flags,
+/// `camel_store_get_folder_info_sync` adds both virtual folders to each
+/// listing.
 ///
-/// What this vfunc does *not* do is make the mailbox. An account whose server
-/// assigns no `trash` role has no trash folder, and `Mailbox/set` from in here
-/// would be the provider inventing a folder in the user's account on the way to
-/// answering a question about one.
+/// This vfunc does *not* make the mailbox. If the server assigns no `trash`
+/// role, the account has no trash folder. A `Mailbox/set` here would add a
+/// folder to the user's account only to answer a question.
 unsafe extern "C" fn get_trash_folder_sync(
     store: *mut CamelStore,
     cancellable: *mut GCancellable,
@@ -579,16 +563,14 @@ unsafe extern "C" fn get_trash_folder_sync(
     }
 }
 
-/// And the folder spam is delivered into:
-/// `camel_store_get_junk_folder_sync`'s vfunc.
+/// Opens the folder for spam: the vfunc of `camel_store_get_junk_folder_sync`.
 ///
-/// The mirror of [`get_trash_folder_sync`], with one difference in the
-/// reasoning: `$junk` *is* a JMAP keyword, so the vJunk folder the inherited
-/// implementation answers with would not be empty — it would be a second spam
-/// folder, populated differently from the account's own, and the two would
-/// disagree the moment a server filed a message into the junk mailbox without
-/// keywording it. The mailbox holding the `junk` role is the one the user sees
-/// everywhere else.
+/// This is the same as [`get_trash_folder_sync`], with one difference in the
+/// reason. `$junk` *is* a JMAP keyword, so the inherited vJunk folder would not
+/// be empty. It would be a second spam folder with different contents. The two
+/// folders would disagree when a server files a message into the junk mailbox
+/// without the keyword. The user sees the mailbox with the `junk` role in all
+/// other clients.
 unsafe extern "C" fn get_junk_folder_sync(
     store: *mut CamelStore,
     cancellable: *mut GCancellable,
@@ -602,16 +584,18 @@ unsafe extern "C" fn get_junk_folder_sync(
     }
 }
 
-/// Reports the account's Sent and Drafts mailboxes to the account wizard:
-/// `camel_store_initial_setup_sync`'s vfunc.
+/// Gives the account's Sent and Drafts mailboxes to the account wizard: the
+/// vfunc of `camel_store_initial_setup_sync`.
 ///
-/// Unlike the three above, nothing here is opened: `out_save_setup` is a
-/// `GHashTable` Camel's own wrapper already created (`g_str_hash`/`g_str_equal`
-/// keys, `g_free` as both destroy functions), and this fills it rather than
-/// building anything Camel keeps. `error` is only ever set through
-/// [`guard_bool`]'s catch of a genuine panic; a role nobody claims is not a
-/// failure here the way it is for [`open_by_role`] — the module doc states the
-/// contract this leans on.
+/// This function opens no folder, unlike the three above. `out_save_setup` is
+/// a `GHashTable` that the Camel wrapper created (`g_str_hash`/`g_str_equal`
+/// keys, `g_free` as both destroy functions). This function fills it and
+/// builds nothing that Camel keeps.
+///
+/// The function sets `error` if the store has no connection, if the listing
+/// fails, or if [`guard_bool`] catches a panic. A role that no mailbox has is
+/// not a failure, as it is for [`open_by_role`]. The module documentation
+/// gives the contract for this.
 unsafe extern "C" fn initial_setup_sync(
     store: *mut CamelStore,
     out_save_setup: *mut GHashTable,
@@ -619,11 +603,12 @@ unsafe extern "C" fn initial_setup_sync(
     error: *mut *mut GError,
 ) -> gboolean {
     // SAFETY: Camel's contract for the vfunc: a valid instance of ours, and a
-    // hash table it owns that is safe to insert into for the length of the
-    // call.
+    // hash table that it owns and that is safe to insert into for the duration
+    // of the call.
     unsafe {
         guard_bool("initial_setup_sync", error, || {
-            // SAFETY: as [`get_inbox_folder_sync`].
+            // SAFETY: Camel keeps its cancellable alive for the duration of the
+            // call.
             let _cancel = observe(cancellable);
 
             let Some(instance) = JmapStore::borrow(store) else {
@@ -655,21 +640,21 @@ unsafe extern "C" fn initial_setup_sync(
     }
 }
 
-/// Inserts `role`'s Camel path into `out` under `key`, or nothing if no
-/// mailbox in `tree` claims that role.
+/// Inserts the Camel path of `role` into `out` with the key `key`. Inserts
+/// nothing if no mailbox in `tree` has that role.
 ///
 /// # Safety
 ///
 /// `out` must be a live `GHashTable` whose key and value destroy functions are
-/// both `g_free` — true of the table `camel_store_initial_setup_sync`'s own
-/// wrapper creates, which is the only caller.
+/// both `g_free`. The table that the `camel_store_initial_setup_sync` wrapper
+/// creates agrees with this, and it is the only caller.
 unsafe fn save_role(out: *mut GHashTable, tree: &FolderTree, role: FolderRole, key: &CStr) {
     let Some(folder) = tree.role(role) else {
         return;
     };
     let path = c_string(&folder.path);
-    // SAFETY: the contract above; both strings are freshly allocated for the
-    // table to own.
+    // SAFETY: the contract above; both strings are new allocations that the
+    // table owns.
     unsafe {
         g_hash_table_insert(
             out,
@@ -679,38 +664,40 @@ unsafe fn save_role(out: *mut GHashTable, tree: &FolderTree, role: FolderRole, k
     }
 }
 
-/// The mailbox claiming `role`, as the folder Camel keeps for its path.
+/// Opens the mailbox that has `role`, as the folder that Camel keeps for its
+/// path.
 ///
-/// The three vfuncs above are this function under three names, because Camel
-/// asks the same question three times: which of the account's mailboxes serves
-/// this purpose. The role lookup is [`FolderTree::role`], which reads the role
-/// this provider *assigned* — a contested role goes to one mailbox and only
-/// one, so the folder opened here is the folder the listing gave that role's
-/// `CAMEL_FOLDER_TYPE_*` to, and not a second mailbox claiming the same thing.
+/// The three vfuncs above use this function, because Camel asks the same
+/// question three times: which mailbox of the account has this purpose?
+/// [`FolderTree::role`] reads the role that this provider *assigned*. If two
+/// mailboxes claim a role, only one gets it. Thus this function opens the
+/// folder that has that role's `CAMEL_FOLDER_TYPE_*` in the listing, not a
+/// second mailbox with the same claim.
 ///
-/// The folder itself is not built here. It is asked for by path through
-/// `camel_store_get_folder_sync`, so that the answer goes through the store's
-/// folder bag: Evolution reaches these folders both ways — by purpose when it
-/// files or empties, by path when the user clicks one — and two `CamelFolder`s
-/// over one mailbox would be two summaries and two sets of flags. Building one
-/// here would be that bug.
+/// This function does not build the folder. It asks
+/// `camel_store_get_folder_sync` for the path, so that the answer goes through
+/// the store's folder bag. Evolution gets these folders in two ways: by
+/// purpose when it files or empties, and by path when the user clicks one.
+/// Two `CamelFolder`s for one mailbox would have two summaries and two sets of
+/// flags. If this function built a folder, it would cause that bug.
 ///
-/// A role no mailbox claims is reported rather than answered with a silent NULL,
-/// although Camel documents NULL as meaning "no such folder exists" as well as
-/// "it failed". The store knows *why* — the account has mailboxes, none of them
-/// carries the role — and that is the difference between a user who can see
-/// what to fix in their account and one whose deletes go nowhere for no stated
-/// reason. It also keeps all three vfuncs answering alike.
+/// If no mailbox has the role, the function reports an error, not only NULL.
+/// Camel documents NULL for "no such folder exists" and also for "it failed".
+/// The store knows the cause: the account has mailboxes, but none has the
+/// role. With this error, the user can see what to correct in the account.
+/// Without it, deletes go nowhere and no cause shows. The error also makes the
+/// three vfuncs give the same answers.
 ///
-/// `cancellable` is both [`observe`]d here — the role lookup may relist the
-/// account — and passed on to `camel_store_get_folder_sync`, which reaches
-/// [`get_folder_sync`] and observes it again. The two nest: the inner scope
-/// gives the outer one back when it returns.
+/// This function [`observe`]s `cancellable`, because the role search can list
+/// the account again. It also gives `cancellable` to
+/// `camel_store_get_folder_sync`, which can call [`get_folder_sync`] and
+/// observe it again. The two observations nest: when the inner one ends, the
+/// outer one applies again.
 ///
 /// # Safety
 ///
-/// `store` must be NULL or point at a live [`JmapStore`], and `error` must be
-/// NULL or a writable location currently holding NULL.
+/// `store` must be NULL or point to a live [`JmapStore`], and `error` must be
+/// NULL or a writable location that holds NULL.
 unsafe fn open_by_role(
     store: *mut CamelStore,
     role: FolderRole,
@@ -718,21 +705,20 @@ unsafe fn open_by_role(
     error: *mut *mut GError,
 ) -> *mut CamelFolder {
     // SAFETY: the contract above is what `JmapStore::borrow` and `fail` ask
-    // for, and `camel_store_get_folder_sync` is handed the store borrowed here
-    // with a NUL-terminated path that outlives the call. No flags on it:
-    // `CREATE` would make a mailbox the tree says already exists.
+    // for, and `camel_store_get_folder_sync` gets the store borrowed here
+    // with a NUL-terminated path that lives longer than the call. No flags on
+    // it: `CREATE` would make a mailbox that the tree already has.
     unsafe {
         let Some(instance) = JmapStore::borrow(store) else {
             return fail(error, &StoreError::Disconnected, StoreError::to_gerror);
         };
 
-        // Installed here rather than in each of the three vfuncs above,
-        // because this is where the request they can make is made: looking the
-        // role up may relist the tree. The `camel_store_get_folder_sync` below
-        // takes the same cancellable and installs it again for itself, which
-        // nests and restores.
+        // Installed here and not in each of the three vfuncs, because the
+        // request occurs here: the role search can list the tree again.
+        // `camel_store_get_folder_sync` below installs the same cancellable
+        // again, which nests and restores.
         //
-        // SAFETY: Camel keeps its cancellable alive for the length of the call.
+        // SAFETY: Camel keeps its cancellable alive for the duration of the call.
         let _cancel = observe(cancellable);
 
         let tree = match tree_holding(instance, |tree| tree.role(role).is_some()) {
@@ -748,25 +734,24 @@ unsafe fn open_by_role(
     }
 }
 
-/// The store's folder tree, looked at again if it does not hold the folder the
-/// caller is after.
+/// The store's folder tree. If the held tree does not have the folder that the
+/// caller wants, the function gets the tree again.
 ///
-/// The second look is what makes a mailbox created since the last listing
-/// openable. Evolution reopens the folder the user last had selected when it
-/// starts, from a URI in its own settings, before anything has asked the store
-/// to refresh — and another client creating a folder while this one has an
-/// account open is ordinary. Reporting a folder that plainly exists as missing
-/// because our tree predates it would be a bug the user can only clear by
-/// restarting.
+/// The second fetch lets the user open a mailbox that was created after the
+/// last listing. At start, Evolution opens the last selected folder from a URI
+/// in its settings, before a refresh of the store. Also, another client can
+/// create a folder while this client has the account open. If the store
+/// reported an existing folder as missing because its tree is old, only a
+/// restart would correct it.
 ///
-/// The cost is one `Mailbox/changes` on the path that is about to fail anyway;
-/// a hit — every folder the user clicks — is answered out of the held tree with
-/// no request at all.
+/// The cost is one `Mailbox/changes` on a path that would otherwise fail. A
+/// hit (each folder that the user clicks) uses the held tree and sends no
+/// request.
 ///
-/// `wanted` is a question about the whole tree rather than a path, because the
-/// callers ask different ones: opening a folder wants the path Camel named,
-/// opening the inbox wants whichever mailbox claims the role, and
-/// [`crate::subscribe`] wants the path a subscription change was aimed at.
+/// `wanted` is a question about the full tree, not a path, because callers
+/// ask different questions. Opening a folder wants the path from Camel.
+/// Opening the inbox wants the mailbox with the role. [`crate::subscribe`]
+/// wants the path of a subscription change.
 pub(crate) fn tree_holding(
     store: &JmapStore,
     wanted: impl Fn(&FolderTree) -> bool,

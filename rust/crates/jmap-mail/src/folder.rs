@@ -1,37 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `CamelJmapFolder`: one mailbox, as the object Camel opens.
+//! `CamelJmapFolder`: one mailbox, as the object that Camel opens.
 //!
-//! Everything the store has produced so far describes folders from the
-//! outside — a `CamelFolderInfo` forest, plain structs Camel reads once and
-//! frees. This is the folder itself: what `camel_store_get_folder_sync` hands
-//! back, what Evolution keeps alive while the user has it open, and what every
-//! later message operation is a method on.
+//! A `CamelFolderInfo` tree only describes folders: Camel reads it once and
+//! frees it. This type is the folder itself. `camel_store_get_folder_sync`
+//! returns it, Evolution keeps it while the user has it open, and all message
+//! operations are methods on it.
 //!
-//! Being an object rather than a description is what makes it the first place
-//! the provider keeps per-folder state, and the piece of state that has to be
-//! there from the start is the JMAP mailbox id. Camel has no field for it and
-//! nothing can recover it later: the path Camel keys the folder by is an
-//! identifier this crate invented out of the mailbox's *name* (see
-//! `jmap-mail-sync`'s `path` module), and the encoding is not reversible by
-//! anything that only holds the result — while `Email/query`, which is where
-//! the folder's contents come from, filters on `inMailbox`, an id. A folder
-//! that knew only its path could describe itself and fetch nothing.
+//! Thus the folder is the first place where the provider keeps per-folder
+//! state. The JMAP mailbox id must be there from the start. Camel has no field
+//! for it, and nothing can recover it later. The Camel path of the folder comes
+//! from the mailbox *name* (see the `path` module of `jmap-mail-sync`), and
+//! the encoding is not reversible. But `Email/query` filters on `inMailbox`,
+//! which is an id. A folder with only its path cannot fetch messages.
 //!
 //! ## Two flags words, one letter apart
 //!
-//! A folder has a flags word and so does a `CamelFolderInfo`, and they are not
-//! the same word. `CamelFolderInfoFlags` — the one [`crate::folder_info`] fills
-//! in — says what kind of folder this is: its type field, whether it is
-//! subscribed, whether it has children. `CamelFolderFlags`, the one set here,
-//! says how Camel *treats* the folder: whether incoming mail in it runs through
-//! the user's filters, whether it is the account's trash. Only the second is
-//! meaningful on an object, and only two of its bits can honestly be set by
-//! this increment — see `flags`.
-//!
-//! The vfuncs a folder answers to — its summary, its messages — are not here
-//! yet; this is the type, and what one is constructed from.
+//! A folder and a `CamelFolderInfo` each have a flags word, and they are
+//! different. `CamelFolderInfoFlags` (which [`crate::folder_info`] fills in)
+//! gives the kind of folder: its type field, its subscription, its children.
+//! `CamelFolderFlags` (which this module sets) tells Camel how to *treat* the
+//! folder: for example, whether the user's filters apply to incoming mail, or
+//! whether it is the trash. Only the second applies to an object. See `flags`
+//! for the bits that this module sets.
 
 use std::cmp::Ordering;
 use std::ffi::CStr;
@@ -76,59 +68,53 @@ use crate::search_sexp;
 use crate::store::{JmapStore, store_type};
 use crate::summary::attach_summary;
 
-/// The instance struct. `#[repr(C)]` leading with the parent's instance struct
-/// is what makes a `*mut JmapFolder` usable as the `CamelFolder *` every Camel
-/// function takes.
+/// The instance struct. It is `#[repr(C)]` and starts with the parent instance
+/// struct, so a `*mut JmapFolder` is a valid `CamelFolder *`.
 #[repr(C)]
 pub struct JmapFolder {
     parent: CamelOfflineFolder,
-    /// The mailbox this folder is a view of.
+    /// The mailbox that this folder shows.
     ///
-    /// Written once, by [`new_folder`], before anything else can reach the
-    /// object, and never again: a mailbox that is renamed or moved is still
-    /// the same mailbox, and one that is deleted leaves a folder Camel drops
-    /// rather than re-points. A [`Slot`] rather than a plain field because the
-    /// instance struct arrives zeroed and is freed without a destructor
-    /// running over it — the same reason the store keeps its connection in one.
+    /// [`new_folder`] writes it once, before other code can reach the object.
+    /// A renamed or moved mailbox is the same mailbox, and Camel drops the
+    /// folder of a deleted mailbox. It is a [`Slot`] because the instance
+    /// struct starts zeroed and no destructor runs on it (the store keeps its
+    /// connection in a slot for the same reason).
     mailbox: Slot<Id>,
-    /// The messages of this account already downloaded, on disk.
+    /// The downloaded messages of this account, on disk.
     ///
-    /// Filled by [`new_folder`] like the mailbox, and for a reason of the same
-    /// kind: what a cache needs is the account's cache directory, and the
-    /// moment that is both known and settled is when the folder is built on a
-    /// store Camel has finished constructing. Empty on a folder whose cache
-    /// directory could not be made, which is a folder that fetches every
-    /// message it opens — see [`crate::cache`].
+    /// [`new_folder`] fills it, because the cache needs the account cache
+    /// directory, and that directory is known only when Camel has constructed
+    /// the store. It is empty if the cache directory could not be made. Then
+    /// the folder fetches each message that it opens (see [`crate::cache`]).
     ///
-    /// It is not per-folder state despite living here: the entries are keyed by
-    /// JMAP email id under the *account's* directory, so a message filed in
-    /// several mailboxes is one file that every one of those folders reads.
+    /// This is not per-folder state. The entries are keyed by JMAP email id in
+    /// the *account* directory, so all folders of a message read one file.
     cache: Slot<MessageCache>,
 }
 
 impl JmapFolder {
-    /// The JMAP mailbox id every request about this folder filters on.
+    /// The JMAP mailbox id that all requests about this folder filter on.
     ///
-    /// `None` on an instance whose construction did not finish, which is the
-    /// state a vfunc reached on a half-built folder would find. Callers report
-    /// that rather than assuming an id.
+    /// `None` if the construction did not complete. Callers report this
+    /// condition and do not assume an id.
     pub fn mailbox(&self) -> Option<&Id> {
         self.mailbox.get()
     }
 
-    /// The account's message cache, or `None` if this folder has none — which
-    /// every caller treats as "fetch it", never as an error.
+    /// The message cache of the account, or `None` if this folder has none.
+    /// All callers then fetch the message: `None` is not an error.
     pub fn cache(&self) -> Option<&MessageCache> {
         self.cache.get()
     }
 
-    /// The Rust view of a `CamelFolder *` Camel handed over.
+    /// The Rust view of a `CamelFolder *` from Camel.
     ///
     /// # Safety
     ///
-    /// `folder` must be NULL or point at an instance of this type. Camel only
-    /// dispatches a class's vfuncs on instances of that class, so a vfunc's
-    /// argument satisfies this; anything else has to check with
+    /// `folder` must be NULL or point at an instance of this type. Camel
+    /// dispatches the vfuncs of a class only on instances of that class, so a
+    /// vfunc argument obeys this rule. Check other pointers with
     /// `G_TYPE_CHECK_INSTANCE_TYPE` first.
     pub unsafe fn borrow<'a>(folder: *mut CamelFolder) -> Option<&'a Self> {
         // SAFETY: the doc comment above states the same contract.
@@ -136,50 +122,47 @@ impl JmapFolder {
     }
 }
 
-/// The store the folder hangs off, as our own.
+/// The parent store of the folder, as a [`JmapStore`].
 ///
-/// Every request a folder makes goes out over the store's connection — the
-/// folder holds a mailbox id and nothing else — so this is the first line of
-/// [`crate::refresh`] and of [`crate::message`] alike, and it lives here rather
-/// than in either of them because it is a fact about the folder object.
+/// All requests of a folder use the connection of the store, because the
+/// folder holds only a mailbox id. [`crate::refresh`] and [`crate::message`]
+/// both start with this function.
 ///
-/// Type-checked rather than assumed, unlike the store vfuncs' first argument:
-/// those are dispatched by GObject on an instance of the class, while
-/// `parent-store` is an ordinary construct property that anything holding a
-/// `CamelStore` could have been given. A folder of ours on someone else's store
-/// is not a case that arises, but reading a `JmapStore` out of one would be
-/// undefined behaviour rather than a wrong answer.
+/// This function checks the type. A store vfunc can assume the type of its
+/// first argument, because GObject dispatches it on an instance of the class.
+/// But `parent-store` is a usual construct property that can hold any
+/// `CamelStore`. That case does not occur, but a `JmapStore` read from a
+/// different store is undefined behaviour.
 ///
 /// # Safety
 ///
 /// `folder` must point at a live `CamelFolder`.
 pub(crate) unsafe fn parent_store<'a>(folder: *mut CamelFolder) -> Option<&'a JmapStore> {
-    // SAFETY: the accessor borrows the store the folder holds a reference to;
-    // the contract above is what makes the type check itself legal, and the
-    // check is what makes the cast inside sound.
+    // SAFETY: the accessor borrows the store that the folder holds a reference
+    // to. The contract above makes the type check legal, and the type check
+    // makes the cast inside sound.
     unsafe {
         let store = camel_folder_get_parent_store(folder);
         checked_borrow(store, store_type())
     }
 }
 
-/// The class struct, same rule one level up. It carries nothing of its own —
-/// what it carries is the parent's vfunc slots with our functions in them,
-/// which is still not the same as *being* `CamelOfflineFolderClass`: the type
-/// needs a class of its own for those overrides to have somewhere to go.
+/// The class struct, with the same layout rule. It has no fields of its own,
+/// but the type needs its own class to hold the overridden vfunc slots of the
+/// parent `CamelOfflineFolderClass`.
 #[repr(C)]
 pub struct JmapFolderClass {
     parent_class: CamelOfflineFolderClass,
 }
 
-// SAFETY: both structs are #[repr(C)] and lead with the CamelOfflineFolder
-// instance and class structs, whose layouts eds-sys's tests/layout.rs checks
-// against `g_type_query`; CamelOfflineFolder derives from CamelFolder, from
-// CamelObject, from GObject.
+// SAFETY: both structs are #[repr(C)] and start with the CamelOfflineFolder
+// instance and class structs. The tests/layout.rs of eds-sys checks those
+// layouts against `g_type_query`. CamelOfflineFolder derives from CamelFolder,
+// which derives from CamelObject, which derives from GObject.
 unsafe impl ObjectSubclass for JmapFolder {
-    /// `CamelJmapFolder`, matching `CamelJmapStore`: Camel's own folders are
-    /// all `Camel<Protocol>Folder`, and the type name is what a user sees in a
-    /// GObject warning about the wrong folder type.
+    /// `CamelJmapFolder`, to match `CamelJmapStore`. All Camel folders are
+    /// `Camel<Protocol>Folder`, and a GObject warning about a wrong folder type
+    /// shows this name to the user.
     const NAME: &'static CStr = c"CamelJmapFolder";
     type Instance = JmapFolder;
     type Class = JmapFolderClass;
@@ -190,135 +173,114 @@ unsafe impl ObjectSubclass for JmapFolder {
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
-        // What the folder is asked about its contents. `CamelFolder` leaves
-        // `refresh_info_sync` NULL and its wrapper answers TRUE without doing
-        // anything for a class that has not filled it in — so without this line
-        // a JMAP folder is one that reports every refresh as a success and
-        // stays permanently empty.
+        // Refresh: `CamelFolder` leaves `refresh_info_sync` NULL, and its
+        // wrapper then returns TRUE and does nothing. Without this line, each
+        // refresh reports success and the folder stays empty.
         //
-        // SAFETY: the class leads with CamelOfflineFolderClass, which leads
-        // with CamelFolderClass — the contract above.
+        // SAFETY: the class starts with CamelOfflineFolderClass, which starts
+        // with CamelFolderClass (the contract above).
         unsafe { crate::refresh::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
-        // And what one of those rows becomes when the user opens it.
-        // `camel_folder_get_message_sync` refuses to call a class that has not
-        // filled this in, so without it a folder is one whose message list draws
-        // and whose messages cannot be read.
+        // Message read: `camel_folder_get_message_sync` refuses a class that
+        // does not fill in this slot. Without this line, the message list
+        // shows, but the user cannot read the messages.
         //
         // SAFETY: as above.
         unsafe { crate::message::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
-        // And the one vfunc that goes the other way: what the user changed
-        // about a row, put on the server. `CamelFolder` leaves
-        // `synchronize_sync` NULL and its wrapper answers TRUE for a class that
-        // has not filled it in — so without this line a JMAP folder is one that
-        // reports every flag change as saved and sends none of them.
+        // Flag changes to the server: `CamelFolder` leaves `synchronize_sync`
+        // NULL, and its wrapper then returns TRUE. Without this line, each flag
+        // change reports success and the server gets none of them.
         //
         // SAFETY: as above.
         unsafe { crate::synchronize::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
-        // And the other thing the user does to a message, which is not a
-        // property of it at all: where it is filed. `CamelFolder` fills this
-        // slot in with a generic implementation that downloads every message
-        // and appends it to the destination — correct between two accounts and
-        // absurd within one, where the server can file the message itself
-        // without the mail ever leaving it.
+        // Move and copy: the generic `CamelFolder` implementation downloads
+        // each message and appends it to the destination. That is correct
+        // between two accounts. In one account, the server can file the message
+        // itself, and the mail does not leave the server.
         //
         // SAFETY: as above.
         unsafe { crate::transfer::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
-        // And the arrival the one above cannot serve: a message that is not in
-        // the account yet. `CamelFolder` leaves `append_message_sync` NULL and
-        // `camel_folder_append_message_sync` refuses to call a class that has
-        // not filled it in — so without this line a message dragged in from
-        // another account, or a draft the composer saves, fails inside Camel.
+        // Append (a message that is not in the account yet): `CamelFolder`
+        // leaves `append_message_sync` NULL, and
+        // `camel_folder_append_message_sync` refuses a class that does not
+        // fill it in. Without this line, a message from a different account or
+        // a saved draft fails in Camel.
         //
         // SAFETY: as above.
         unsafe { crate::append::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
-        // And the departure none of those is: a message the user is finished
-        // with. `CamelFolder` leaves `expunge_sync` NULL and its wrapper
-        // answers TRUE for a class that has not filled it in — so without this
-        // line "Expunge" and "Empty Trash" are menu items that report success
-        // and leave every message where it was.
+        // Expunge: `CamelFolder` leaves `expunge_sync` NULL, and its wrapper
+        // then returns TRUE. Without this line, "Expunge" and "Empty Trash"
+        // report success and remove no message.
         //
         // SAFETY: as above.
         unsafe { crate::expunge::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
-        // And what the account's mailbox quota looks like. Unlike the vfuncs
-        // above, `CamelFolder`'s own base class already fills this one in —
-        // with an implementation that always answers
-        // `G_IO_ERROR_NOT_SUPPORTED` — so without this line a JMAP account is
-        // not broken, only one Evolution's folder-properties dialog shows no
-        // quota row for. This line is what makes it show the account's real
-        // usage where the server reports one.
+        // Quota: the `CamelFolder` base class fills in this slot, but its
+        // implementation always returns `G_IO_ERROR_NOT_SUPPORTED`. Without
+        // this line, the folder-properties dialog of Evolution shows no quota
+        // row. With it, the dialog shows the usage that the server reports.
         //
         // SAFETY: as above.
         unsafe { crate::quota::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
-        // And where a message a user asks to view the source of, or save,
-        // reads its raw bytes from on disk. `CamelFolder`'s own base class
-        // leaves this NULL and asserts on a class that has not filled it in —
-        // so without this line "View Source" and "Save Message As" fall back
-        // to re-serializing the message from memory (which still works) with
-        // a `camel-CRITICAL` logged at every call. This line is what answers
-        // the same way `camel-imapx-folder.c` does, from this folder's own
-        // on-disk cache (see `crate::cache`).
+        // Raw message bytes on disk, for "View Source" and "Save Message As":
+        // the `CamelFolder` base class leaves this slot NULL and asserts on a
+        // class that does not fill it in. Without this line, Evolution
+        // serializes the message again from memory (this works), and logs a
+        // `camel-CRITICAL` at each call. This line answers from the on-disk
+        // cache of the folder, as `camel-imapx-folder.c` does (see
+        // `crate::cache`).
         //
         // SAFETY: as above.
         unsafe { crate::cache::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
-        // And how two of its uids are ordered. `CamelFolder` fills this slot
-        // in with a compare that parses both uids as decimal numbers, which is
-        // IMAP's uid and not a JMAP id: every id that does not start with a
-        // digit parses as 0, so every pair compares equal and `sort_uids`,
-        // which sorts with this compare, leaves its array in whatever order it
-        // came. A JMAP id is an opaque string (RFC 8620 section 1.2), so the
-        // only order it has is the bytes'.
+        // Uid order: the `CamelFolder` compare parses each uid as a decimal
+        // number, as for IMAP uids. A JMAP id that does not start with a digit
+        // parses as 0, so all pairs are equal and `sort_uids` does not change
+        // the order. A JMAP id is an opaque string (RFC 8620 section 1.2), so
+        // its only order is the byte order.
         //
         // SAFETY: as above.
         unsafe { (*class.cast::<CamelFolderClass>()).cmp_uids = Some(cmp_uids) };
 
-        // And which flags a message keeps between sessions. `CamelFolder`
-        // fills this slot in with one that answers 0, which tells a caller
-        // that nothing set on a message is kept, not even its read state.
+        // Permanent flags: the `CamelFolder` implementation returns 0. This
+        // tells a caller that no flag of a message is kept, not even its read
+        // state.
         //
         // SAFETY: as above.
         unsafe {
             (*class.cast::<CamelFolderClass>()).get_permanent_flags = Some(get_permanent_flags)
         };
 
-        // And what the folder answers when it is asked which of its messages
-        // match an expression — which is not only the search bar: every
-        // message-list view is one ("Unread Messages", "Hide Deleted
-        // Messages"), so a folder that cannot answer is a folder whose list
-        // does not draw.
+        // Search by expression: this is not only the search bar. Each
+        // message-list view ("Unread Messages", "Hide Deleted Messages") is an
+        // expression, so if the folder cannot answer, the list does not show.
         //
-        // Only up to EDS 3.52, and this is the one vfunc in the class that a
-        // newer EDS takes *away* from a provider rather than renaming. There,
-        // `CamelFolderClass` leaves `search_by_expression`/`search_by_uids`
-        // NULL and asserts on a class that has not filled them in, so the two
+        // Only EDS up to 3.52 has these slots. There, `CamelFolderClass` leaves `search_by_expression` and `search_by_uids`
+        // NULL and asserts on a class that does not fill them in. The two
         // functions below fill them with a `CamelFolderSearch` over the local
-        // summary. From 3.58 both slots are gone: `search_sync` replaces them
-        // and the base class installs an implementation of it built on
-        // `CamelStoreSearch`, over the same rows and with the same result. So
-        // the right thing to install on a newer EDS is nothing at all —
-        // overriding would replace a working implementation with a
-        // reimplementation of it. `tests/search.rs` is what holds that claim
-        // up: it drives whichever entry point the EDS in front of it has and
-        // asserts the same answers on both.
+        // summary. From 3.58, both slots are removed: `search_sync` replaces
+        // them, and the base class implements it with `CamelStoreSearch` over
+        // the same rows, with the same result. Thus on a newer EDS, install
+        // nothing: an override only does again what already works.
+        // `tests/search.rs` proves this: it uses the entry point of the
+        // available EDS and asserts the same answers on both.
         #[cfg(camel_folder_search_object)]
         {
+            // SAFETY: as above.
             let folder_class = unsafe { &mut *class.cast::<CamelFolderClass>() };
             folder_class.search_by_expression = Some(search_by_expression);
             folder_class.search_by_uids = Some(search_by_uids);
         }
 
-        // The one search slot a newer EDS *adds* rather than takes away, and
-        // the one thing its own `CamelStoreSearch` implementation cannot do
-        // out of the store's database: match a body this provider never
-        // downloaded. See `crate::search_body` for what it costs when it is
-        // left NULL.
+        // Body search: a newer EDS *adds* this slot. Its own `CamelStoreSearch`
+        // implementation cannot match a body that this provider did not
+        // download. See `crate::search_body` for the cost if this slot stays
+        // NULL.
         //
         // SAFETY: as above.
         #[cfg(camel_folder_search_body_sync)]
@@ -327,17 +289,16 @@ unsafe impl ObjectSubclass for JmapFolder {
         };
     }
 
-    // No `instance_init`, unlike the store's: there is nothing to fill in yet.
-    // The mailbox is not known until `new_folder` has the `FolderInfo`, and a
-    // zeroed `Slot` — which is what GObject hands over — is already an empty
-    // one. `finalize` is not optional the same way, because the slot may by
-    // then have something in it.
+    // No `instance_init` (the store has one): there is nothing to fill in.
+    // The mailbox id is known only when `new_folder` has the `FolderInfo`, and
+    // a zeroed `Slot` (which GObject supplies) is empty. `finalize` is
+    // necessary, because the slots can then hold values.
 
     unsafe fn finalize(instance: *mut Self::Instance) {
-        // SAFETY: the instance is being finalized, so nothing can still reach
-        // it and no borrow handed out by `get` is alive. Without this the id
-        // leaks — once per folder the user ever opened — and the cache's
-        // reference on its `CamelDataCache` with it.
+        // SAFETY: the instance is in finalization, so nothing can still reach
+        // it and no borrow from `get` is alive. Without this, the id leaks
+        // (once for each folder that the user opened), and the reference of
+        // the cache on its `CamelDataCache` also leaks.
         unsafe {
             (*instance).mailbox.clear();
             (*instance).cache.clear();
@@ -345,9 +306,9 @@ unsafe impl ObjectSubclass for JmapFolder {
     }
 }
 
-/// `CamelFolderClass.cmp_uids`: orders two uids by their bytes, the way
-/// `strcmp` would. A NULL uid compares equal to anything, which is what the
-/// default answers after its `g_return_val_if_fail`.
+/// `CamelFolderClass.cmp_uids`: orders two uids by their bytes, as `strcmp`
+/// does. A NULL uid is equal to all uids, as in the default after its
+/// `g_return_val_if_fail`.
 unsafe extern "C" fn cmp_uids(
     _folder: *mut CamelFolder,
     uid1: *const gchar,
@@ -356,8 +317,8 @@ unsafe extern "C" fn cmp_uids(
     if uid1.is_null() || uid2.is_null() {
         return 0;
     }
-    // SAFETY: Camel hands over two NUL-terminated uids that it keeps alive
-    // for the length of the call.
+    // SAFETY: Camel supplies two NUL-terminated uids and keeps them alive for
+    // the duration of the call.
     let (uid1, uid2) = unsafe { (CStr::from_ptr(uid1), CStr::from_ptr(uid2)) };
     match uid1.cmp(uid2) {
         Ordering::Less => -1,
@@ -366,10 +327,10 @@ unsafe extern "C" fn cmp_uids(
     }
 }
 
-/// `CamelFolderClass.get_permanent_flags`: the flags the server keeps as
-/// keywords (RFC 8621 section 4.1.1), with `USER` for the labels, which are
-/// keywords too. Plus `DELETED`, which JMAP has no keyword for but Camel's
-/// summary keeps until the expunge, as IMAPX and evolution-ews also answer.
+/// `CamelFolderClass.get_permanent_flags`: the flags that the server keeps as
+/// keywords (RFC 8621 section 4.1.1), and `USER` for the labels, which are also
+/// keywords. Also `DELETED`: JMAP has no keyword for it, but the Camel summary
+/// keeps it until the expunge. IMAPX and evolution-ews also return it.
 extern "C" fn get_permanent_flags(_folder: *mut CamelFolder) -> u32 {
     CAMEL_MESSAGE_ANSWERED
         | CAMEL_MESSAGE_DELETED
@@ -382,20 +343,20 @@ extern "C" fn get_permanent_flags(_folder: *mut CamelFolder) -> u32 {
         | CAMEL_MESSAGE_USER
 }
 
-/// `CamelFolderClass.search_by_expression`, up to EDS 3.52: which of this
-/// folder's messages match `expression`.
+/// `CamelFolderClass.search_by_expression`, up to EDS 3.52: the messages of
+/// this folder that match `expression`.
 ///
-/// Tries the server first: [`search_sexp::translate`] turns `expression` into
-/// a JMAP filter when RFC 8621's contains-only conditions can express it, and
-/// `Email/query` answers over the whole mailbox rather than the cached
-/// summary, the one case a local search cannot get right, since a body it
-/// never downloaded is not there to search. Falls back to the local
-/// `CamelFolderSearch` this always ran, over the folder's own summary, when
-/// the expression cannot be translated or the folder/store are not in a state
-/// to ask, but never on a server error, which is reported rather than
-/// silently answered with a possibly-wrong local match set.
+/// It tries the server first. [`search_sexp::translate`] changes `expression`
+/// into a JMAP filter if the contains-only conditions of RFC 8621 can express
+/// it. `Email/query` then searches the full mailbox, not only the cached
+/// summary. A local search cannot search a body that it did not download.
 ///
-/// Gone from 3.58, where the base class does this itself: see `class_init`.
+/// It uses the local `CamelFolderSearch` over the folder summary if there is
+/// no translation, or if the folder or store cannot ask the server. It does
+/// not do this on a server error: it reports the error and does not return a
+/// local match set that can be wrong.
+///
+/// Removed from 3.58, where the base class does this: see `class_init`.
 #[cfg(camel_folder_search_object)]
 unsafe extern "C" fn search_by_expression(
     folder: *mut CamelFolder,
@@ -415,13 +376,12 @@ unsafe extern "C" fn search_by_expression(
     }
 }
 
-/// `CamelFolderClass.search_by_uids`: the same question narrowed to a list of
-/// uids, tried the same way. `Email/query` has no notion of "one of these
-/// ids", so a server match set is narrowed to `uids` afterwards, the one
-/// extra step the local path gets from `camel_folder_search_search`'s own
-/// extra argument.
+/// `CamelFolderClass.search_by_uids`: the same search, limited to a list of
+/// uids. `Email/query` cannot filter on a list of ids, so this function limits
+/// the server match set to `uids` after the query. The local path gets this
+/// step from an argument of `camel_folder_search_search`.
 ///
-/// Gone from 3.58 alongside its sibling.
+/// Removed from 3.58, together with `search_by_expression`.
 #[cfg(camel_folder_search_object)]
 unsafe extern "C" fn search_by_uids(
     folder: *mut CamelFolder,
@@ -434,7 +394,7 @@ unsafe extern "C" fn search_by_uids(
         guard_ptr("search_by_uids", error, || {
             let _cancel = observe(cancellable);
             // SAFETY: `uids` is NULL or a live `GPtrArray` of NUL-terminated
-            // strings, by the contract of the vfunc this backs.
+            // strings, by the contract of the vfunc that this function backs.
             let restrict = (!uids.is_null()).then(|| string_array(uids));
             match server_matches(folder, expression, restrict.as_deref()) {
                 Some(Ok(matched)) => pstring_uid_array(&matched),
@@ -445,13 +405,13 @@ unsafe extern "C" fn search_by_uids(
     }
 }
 
-/// The local `CamelFolderSearch` path both vfuncs above fall back to: a
-/// search over the folder's own summary, which is what a local search *is*,
-/// since the rows are already here and an expression over flags or headers
-/// needs nothing from the server. Built and dropped per call rather than kept
-/// on the folder: the object holds the folder it was pointed at, and a cached
-/// one would be a second owner of state Camel expects the search to read
-/// fresh.
+/// The local `CamelFolderSearch` fallback of the two search vfuncs: a search
+/// over the folder summary. An expression on flags or headers needs nothing
+/// from the server, because the rows are local.
+///
+/// Each call makes a new search object and drops it. The object holds its
+/// folder, and a kept object is a second owner of state that Camel expects
+/// the search to read fresh.
 ///
 /// # Safety
 ///
@@ -480,8 +440,8 @@ unsafe fn local_search_by_expression(
     }
 }
 
-/// The same, narrowed to `uids`: [`local_search_by_expression`] with the one
-/// extra argument `camel_folder_search_search` takes.
+/// The same search, limited to `uids`: [`local_search_by_expression`] with the
+/// `uids` argument of `camel_folder_search_search`.
 ///
 /// # Safety
 ///
@@ -504,20 +464,18 @@ unsafe fn local_search_by_uids(
     }
 }
 
-/// Tries the server for `expression`, scoped to `folder`'s mailbox and, when
-/// given, narrowed further to `restrict`.
+/// Sends `expression` to the server for the mailbox of `folder`. If `restrict`
+/// is given, the result contains only those uids.
 ///
-/// `None` means the expression cannot be answered this way: untranslatable,
-/// the folder/store not in a state to ask (mailbox not yet set, or no store
-/// behind the folder at all), or the store disconnected. Either way the
-/// caller falls back to the local search, exactly what it always answered
-/// before server-side search existed. A disconnected store folds to `None`
-/// rather than an error on purpose: it is the offline case the local summary
-/// search exists for, the same way every other read path in this provider
-/// treats no connection as "answer from what is already local" rather than a
-/// hard failure. `Some(Err(_))` means the server *was* asked, over a live
-/// connection, and failed; that is reported rather than masked by a silent
-/// fallback to a possibly stale local answer.
+/// `None` means that the server cannot answer: no translation, no mailbox id,
+/// no store, or a disconnected store. The caller then does the local search.
+/// A disconnected store gives `None` and not an error by design: the local
+/// summary search is for the offline case. All read paths of this provider
+/// answer from local data when there is no connection.
+///
+/// `Some(Err(_))` means that the server *was* asked on a live connection and
+/// failed. The caller reports this error and does not use a local answer that
+/// can be stale.
 ///
 /// # Safety
 ///
@@ -548,16 +506,15 @@ unsafe fn server_matches(
     }))
 }
 
-/// The server's match set narrowed to the uids the caller asked about.
+/// The server match set, limited to the uids that the caller asked about.
 ///
-/// Through a set rather than `[String]::contains`, and that is not a
-/// micro-optimisation: both lists are folder-sized, so a linear scan per match
-/// is `O(matches x restrict)`. `camel-vee-folder.c` hands `search_by_uids` a
-/// whole subfolder's uids on a rebuild, and a broad expression matches most of
-/// them, so the two sizes are the folder's message count twice over. Measured
-/// on 50 000 x 50 000 of Fastmail-shaped ids: 5.7 s in release and 21.6 s in
-/// debug for the scan, against 7.5 ms and 50 ms for this — a search that looks
-/// to the user like Evolution has hung.
+/// This uses a set and not `[String]::contains`, because a linear scan is
+/// `O(matches x restrict)` and both lists can have the size of the folder.
+/// `camel-vee-folder.c` gives `search_by_uids` all uids of a subfolder on a
+/// rebuild, and a broad expression matches most of them. Measured on
+/// 50 000 x 50 000 Fastmail-like ids: the scan took 5.7 s (release) and 21.6 s
+/// (debug), and the set took 7.5 ms and 50 ms. At 21.6 s, Evolution seems
+/// to hang.
 #[cfg(camel_folder_search_object)]
 fn narrow(matches: impl Iterator<Item = String>, restrict: &[String]) -> Vec<String> {
     let wanted: std::collections::HashSet<&str> = restrict.iter().map(String::as_str).collect();
@@ -566,15 +523,15 @@ fn narrow(matches: impl Iterator<Item = String>, restrict: &[String]) -> Vec<Str
         .collect()
 }
 
-/// The strings of a `GPtrArray` Camel handed over, copied out: a uid list for
-/// the search vfuncs below, a word list for [`crate::search_body`].
+/// Copies the strings out of a `GPtrArray` from Camel: a uid list for the
+/// search vfuncs above, a word list for [`crate::search_body`].
 ///
 /// # Safety
 ///
 /// `array` must be a live `GPtrArray` of NUL-terminated strings.
 pub(crate) unsafe fn string_array(array: *mut glib_sys::GPtrArray) -> Vec<String> {
-    // SAFETY: the contract above; every element lives at least as long as
-    // the array, which outlives this call.
+    // SAFETY: the contract above. Each element lives at least as long as the
+    // array, and the array lives longer than this call.
     unsafe {
         (0..(*array).len)
             .map(|index| {
@@ -585,18 +542,17 @@ pub(crate) unsafe fn string_array(array: *mut glib_sys::GPtrArray) -> Vec<String
     }
 }
 
-/// Builds the `GPtrArray` a search vfunc returns for a server match set, with
-/// every element allocated through Camel's string pool rather than plain
-/// `g_free`-able memory.
+/// Makes the `GPtrArray` that a search vfunc returns for a server match set.
+/// Each element comes from the Camel string pool, not from `g_malloc`.
 ///
-/// That is not a style choice: this class installs no `search_free` of its
-/// own, so the base implementation frees the result, and it frees each
-/// element with `camel_pstring_free`. A plain `g_strdup`'d string handed
-/// back through this path would be freed the wrong way.
+/// This is necessary: this class installs no `search_free`, so the base
+/// implementation frees the result with `camel_pstring_free` on each element.
+/// That is the wrong free for a `g_strdup` string.
 #[cfg(camel_folder_search_object)]
 fn pstring_uid_array(uids: &[String]) -> *mut glib_sys::GPtrArray {
-    // SAFETY: a fresh array, sized so every slot exists before any is
-    // written, the same shape `transfer.rs`'s `Reported` builds one in.
+    // SAFETY: a new array, with its size set so that all slots exist before
+    // the loop writes one. `Reported` in `transfer.rs` makes its array the
+    // same way.
     unsafe {
         let array = g_ptr_array_new();
         g_ptr_array_set_size(array, uids.len() as std::os::raw::c_int);
@@ -611,36 +567,36 @@ fn pstring_uid_array(uids: &[String]) -> *mut glib_sys::GPtrArray {
 
 /// Registers the folder type, or returns it if it is already registered.
 ///
-/// Statically, like the store's and for the same reason: a Camel provider is
-/// not a `GTypeModule`, so there is no unload for a dynamic type to be
-/// unregistered by.
+/// The registration is static, as for the store: a Camel provider is not a
+/// `GTypeModule`, so a dynamic type is never unregistered.
 pub fn folder_type() -> GType {
     register_static::<JmapFolder>()
 }
 
-/// Builds the folder for one mailbox of `store`, owned by the caller.
+/// Makes the folder for one mailbox of `store`. The caller owns the result.
 ///
-/// The three properties are Camel's, and all three are needed at construction:
-/// `parent-store` is construct-only, and a folder whose name arrived later
-/// would be one that existed, briefly, as a nameless folder in a store keyed by
-/// name. The mailbox id is filled in immediately afterwards rather than through
-/// a property of our own — a GObject property would have to be a construct
-/// parameter to be equally safe, and declaring one would put the id in the
-/// public API of a type whose only reader is this crate. Nothing can observe
-/// the folder between the two: the reference is still the only one.
+/// The three properties belong to Camel and are necessary at construction.
+/// `parent-store` is construct-only. A folder without a name for a short time
+/// is a nameless folder in a store keyed by name.
+///
+/// The mailbox id is set immediately after construction, not through a
+/// property. To be equally safe, a GObject property must be a construct
+/// parameter, and it puts the id in the public API, but only this crate reads
+/// it. Nothing can see the folder between the two steps, because this
+/// reference is the only one.
 ///
 /// # Safety
 ///
-/// `store` must point at a live `CamelStore`; Camel asserts on anything else
-/// and would leave a folder belonging to nothing.
+/// `store` must point at a live `CamelStore`. Camel asserts on other values,
+/// and the result is a folder that belongs to no store.
 pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut CamelFolder {
     let full_name = c_string(&mailbox.path);
     let display_name = c_string(&mailbox.display_name);
 
-    // SAFETY: a variadic construct call on a registered type. Every property
-    // named is one `CamelFolder` declares, the two names are NUL-terminated
-    // strings Camel copies, `store` is a live `CamelStore` by this function's
-    // contract, and the list is NULL-terminated.
+    // SAFETY: a variadic construct call on a registered type. `CamelFolder`
+    // declares each property named here, the two names are NUL-terminated
+    // strings that Camel copies, `store` is a live `CamelStore` by the
+    // contract of this function, and the list ends with NULL.
     let folder = unsafe {
         g_object_new(
             folder_type(),
@@ -656,14 +612,13 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
     .cast::<CamelFolder>();
 
     if folder.is_null() {
-        // g_object_new only fails on a bad type or an abstract one, both of
-        // which are bugs here rather than conditions; there is nothing to
-        // report to and nothing to fill in.
+        // g_object_new fails only on a bad or abstract type. Both are bugs
+        // here, not run-time conditions, so there is nothing to report or fill.
         return folder;
     }
 
-    // SAFETY: `folder` is a fresh instance of this type, and this reference is
-    // the only one — nothing else can be reading the slots.
+    // SAFETY: `folder` is a new instance of this type, and this reference is
+    // the only one, so no other code can read the slots.
     unsafe {
         (*folder.cast::<JmapFolder>())
             .mailbox
@@ -678,20 +633,20 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
     folder
 }
 
-/// The message cache of the account `store` is, or `None` if it has none.
+/// The message cache of the account that `store` is, or `None` if there is
+/// none.
 ///
-/// The directory is the one Camel gives the *service* — its session's cache
-/// directory with the account's uid under it — rather than one composed here:
-/// it is the directory Evolution's own "empty cache" clears and the one Camel
-/// removes when the account is deleted, and a provider that cached mail outside
-/// it would be a provider whose mail survives the account.
+/// The directory is the one that Camel gives the *service*: the session cache
+/// directory with the account uid below it. Evolution's "empty cache" clears
+/// this directory, and Camel removes it when the user deletes the account. Mail
+/// cached in a different directory stays after the account is deleted.
 ///
 /// # Safety
 ///
 /// `store` must point at a live `CamelStore`, which is a `CamelService`.
 unsafe fn account_cache(store: *mut CamelStore) -> Option<MessageCache> {
-    // SAFETY: the contract above; the string belongs to the service and is only
-    // read here.
+    // SAFETY: the contract above. The string belongs to the service, and this
+    // code only reads it.
     let directory = unsafe {
         let directory = camel_service_get_user_cache_dir(store.cast::<CamelService>());
         if directory.is_null() {
@@ -699,41 +654,35 @@ unsafe fn account_cache(store: *mut CamelStore) -> Option<MessageCache> {
         }
         CStr::from_ptr(directory)
     };
-    // A path Camel built out of a session directory and an ESource uid. Not
-    // UTF-8 on principle — a filesystem path is bytes — so a lossy read would
-    // point the cache somewhere else; refusing is the version that cannot
-    // silently write to the wrong directory.
+    // A filesystem path is bytes and is not always UTF-8. A lossy read can
+    // point the cache at a different directory, so a non-UTF-8 path gives no
+    // cache.
     MessageCache::open(directory.to_str().ok()?)
 }
 
-/// How Camel should treat this folder.
+/// How Camel must treat this folder.
 ///
-/// `HAS_SUMMARY_CAPABILITY` is on every folder, because every folder is given a
-/// summary by [`new_folder`] a line after this is read. It is the flag Camel
-/// tests before it asks a folder for a message count or a uid list at all, so
-/// the two have to be set together: the flag without the summary is a folder
-/// that says it can be counted and then cannot, and the summary without the
-/// flag is a folder whose contents are never asked for.
+/// `HAS_SUMMARY_CAPABILITY` is on all folders, because [`new_folder`] attaches
+/// a summary to each folder immediately after it sets these flags. Camel
+/// examines this flag before it asks for a message count or a uid list. Set
+/// the flag and the summary together. Without the summary, the count fails.
+/// Without the flag, Camel never asks for the contents.
 ///
-/// Beyond that only the inbox gets anything, and it gets the two bits that make
-/// new mail arriving in it run through the user's rules: `FILTER_RECENT` for
-/// the incoming filters, `FILTER_JUNK` for the junk test. Camel's own IMAPX
-/// sets exactly this pair, on the folder it identifies by comparing its name
-/// against `"INBOX"`; this provider knows which mailbox is the inbox from its
-/// JMAP role instead — the same decision taken from the account's data rather
-/// than from a convention about a name.
+/// Only the inbox gets other bits: the two that make the user's rules apply to
+/// new mail. `FILTER_RECENT` is for the incoming filters, and `FILTER_JUNK` is
+/// for the junk test. IMAPX sets the same two bits on the folder with the name
+/// `"INBOX"`. This provider finds the inbox from its JMAP role, which comes
+/// from the account data and not from a name convention.
 ///
-/// `IS_TRASH` and `IS_JUNK` are still not set from the role, and they are the
-/// one open question this function has left. The guess when it was written was
-/// that `camel_store_get_trash_folder_sync` marks the folder it *returns* with
-/// them; that is true of the virtual folder Camel builds itself and false of
-/// anything a store hands over — `tests/folders.rs` pins the flags word of the
-/// folder [`crate::folders`] answers that call with, and it is this one
-/// unchanged. So nothing in this provider tells Camel which folder is the trash
-/// beyond the answer to the question, and whether that is enough is decided by
-/// what reads the bit: it belongs with the increment that makes a delete file
-/// the message into the trash, not with one that only says which mailbox that
-/// is.
+/// This function does not set `IS_TRASH` or `IS_JUNK` from the role, and this
+/// is an open question. The first guess was that
+/// `camel_store_get_trash_folder_sync` sets them on the folder that it returns.
+/// That is true for the virtual folder that Camel makes, but false for a
+/// folder from a store. `tests/folders.rs` proves that the folder that
+/// [`crate::folders`] returns for that call keeps this flags word unchanged.
+/// Thus only that answer tells Camel which folder is the trash. Whether that
+/// is sufficient depends on the code that reads the bit. Decide this bit when
+/// a delete moves the message into the trash.
 fn flags(mailbox: &FolderInfo) -> CamelFolderFlags {
     let role = match mailbox.role {
         Some(FolderRole::Inbox) => CAMEL_FOLDER_FILTER_RECENT | CAMEL_FOLDER_FILTER_JUNK,
@@ -752,9 +701,9 @@ mod tests {
         range.map(|i| format!("Mdeadbeef{i:07}")).collect()
     }
 
-    /// The narrowing keeps the server's own order and drops exactly what the
-    /// caller did not ask about — the semantics `[String]::contains` gave,
-    /// which the set must not change.
+    /// `narrow` keeps the server order and removes only the uids that the
+    /// caller did not ask about. These are the semantics of `[String]::contains`,
+    /// and the set must keep them.
     #[test]
     fn narrowing_keeps_the_asked_for_uids_in_the_servers_order() {
         let matches = ["M3", "M1", "M2", "M9"].map(str::to_owned);
@@ -766,11 +715,10 @@ mod tests {
         assert!(narrow(matches.into_iter(), &[]).is_empty());
     }
 
-    /// The size a vFolder rebuild over a real mailbox reaches, at which the
-    /// linear scan this replaced took 21.6 s in a debug build. The deadline is
-    /// two orders of magnitude above what the set version measures (50 ms), so
-    /// it is a guard against the quadratic shape coming back rather than a
-    /// benchmark.
+    /// A vFolder rebuild over a real mailbox reaches this size. At this size,
+    /// the old linear scan took 21.6 s in a debug build. The limit is 100 times
+    /// the measured time of the set (50 ms), so this test catches a return of
+    /// the quadratic shape. It is not a benchmark.
     #[test]
     fn narrowing_a_folder_sized_match_set_does_not_take_seconds() {
         let matches = ids(0..50_000);
