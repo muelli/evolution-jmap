@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `SieveScript/get`, `/set`, `/query` and `/validate` (RFC 9661).
+//! SieveScript get, set, query, and validate methods (RFC 9661).
 
 use std::collections::BTreeMap;
 
@@ -18,8 +18,9 @@ use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::patch::apply_patch;
 use crate::state::{AccountState, ServerState};
 
-/// `SieveScript/get` (RFC 9661 §2.3): `ids: null` returns all scripts;
-/// unknown ids are listed in `notFound`.
+/// `SieveScript/get` (RFC 9661 §2.3).
+/// Return all scripts when `ids` is null.
+/// List unknown ids in `notFound`.
 pub fn sieve_script_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -51,9 +52,10 @@ pub fn sieve_script_get(state: &mut ServerState, arguments: Value) -> Result<Val
     })
 }
 
-/// `SieveScript/set` (RFC 9661 §2.4): `id` and `isActive` are server-managed,
-/// duplicate names are `alreadyExists`, and destroying the active script is
-/// rejected with `sieveIsActive`.
+/// `SieveScript/set` (RFC 9661 §2.4).
+/// Keep `id` and `isActive` as server-managed fields.
+/// Reject duplicate names with `alreadyExists`.
+/// Reject destruction of the active script with `sieveIsActive`.
 pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SieveScriptSetRequest = parse_arguments(arguments)?;
     let SieveScriptSetRequest {
@@ -236,8 +238,8 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
     })
 }
 
-/// `SieveScript/query` (RFC 9661 §2.5): filters by `name` substring and/or
-/// `isActive`.
+/// `SieveScript/query` (RFC 9661 §2.5).
+/// Filter by `name` substring, by `isActive`, or by both.
 pub fn sieve_script_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<SieveScriptQueryFilter> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -283,8 +285,10 @@ fn sieve_script_matches(script: &SieveScript, filter: &SieveScriptQueryFilter) -
     true
 }
 
-/// `SieveScript/validate` (RFC 9661 §2.6): checks only that `blobId` resolves.
-/// This mock does not parse Sieve source, so it never emits `invalidSieve`.
+/// `SieveScript/validate` (RFC 9661 §2.6).
+/// Check only that `blobId` resolves.
+/// This mock does not parse Sieve source.
+/// It never emits `invalidSieve`.
 pub fn sieve_script_validate(
     state: &mut ServerState,
     arguments: Value,
@@ -302,8 +306,8 @@ pub fn sieve_script_validate(
     ))
 }
 
-/// Activate only `target` (RFC 9661 §2.4 `onSuccessActivateScript`); `None`
-/// deactivates all scripts.
+/// Activate only `target` (RFC 9661 §2.4 `onSuccessActivateScript`).
+/// `None` deactivates all scripts.
 fn activate(account: &mut AccountState, target: Option<&Id>) {
     let ids: Vec<Id> = account
         .sieve_scripts
