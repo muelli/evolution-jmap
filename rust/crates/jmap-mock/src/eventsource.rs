@@ -3,8 +3,8 @@
 
 //! `GET /eventsource` push stream endpoint (RFC 8620 §7.3).
 //!
-//! Run each subscriber in a dedicated thread.
-//! Write chunks with `Request::into_writer` to flush updates before EOF.
+//! Start one dedicated thread for each subscriber.
+//! Use `Request::into_writer` chunk writes so updates flush before EOF.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -16,7 +16,7 @@ use jmap_proto::push::StateChange;
 
 use crate::state::ServerState;
 
-/// Parsed query parameters for `/eventsource` in this mock.
+/// Parsed query parameters for `/eventsource`.
 struct EventSourceParams {
     /// No type filter when this is `None`.
     types: Option<BTreeSet<String>>,
@@ -50,7 +50,7 @@ fn parse_params(query: &str) -> EventSourceParams {
     }
 }
 
-/// Subscribe this request and stream events from a dedicated thread.
+/// Subscribe this request and stream events from one dedicated thread.
 pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex<ServerState>) {
     let params = parse_params(query);
     let receiver = state
@@ -126,7 +126,7 @@ fn end_chunked_body(writer: &mut dyn Write) -> std::io::Result<()> {
 }
 
 /// Encode one `StateChange` as `event: state` with JSON `data`.
-/// Do not emit `id:` resume state.
+/// Do not emit `id` resume data.
 pub fn format_state_event(change: &StateChange) -> Vec<u8> {
     let data = serde_json::to_string(change).expect("StateChange serializes");
     format!("event: state\ndata: {data}\n\n").into_bytes()
