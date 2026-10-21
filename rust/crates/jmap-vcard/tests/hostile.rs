@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Test hostile server input for `ContactCard` data.
+//! Exercise hostile `ContactCard` input from a server.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Media};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 
-/// Strip line breaks before writing map keys as parameter text.
+/// Build a card with one email entry under key `key`.
 fn card_with_email_key(key: &str) -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
@@ -43,7 +43,7 @@ fn card_with_photo_uri(uri: &str) -> ContactCard {
     }
 }
 
-/// Reject unsupported URI schemes and emit no `PHOTO` line.
+/// Reject unsupported photo URI schemes on write.
 #[test]
 fn a_file_uri_photo_from_the_server_is_not_written_as_a_photo_line() {
     for uri in [
@@ -91,7 +91,7 @@ fn inbound_photo_uri_references_with_unsupported_schemes_are_dropped() {
     }
 }
 
-/// Accept inbound `VALUE=uri` values that carry `data:` payloads.
+/// Keep inbound `data:` photo URIs from `VALUE=uri` lines.
 #[test]
 fn inbound_photo_value_uri_data_payload_stays_mapped() {
     let line = "PHOTO;VALUE=uri:data:image/png;base64,aGVsbG8=";
@@ -104,7 +104,7 @@ fn inbound_photo_value_uri_data_payload_stays_mapped() {
     assert_eq!(photo.media_type.as_deref(), Some("image/png"));
 }
 
-/// Keep save output from emitting local bytes from `file://` URIs.
+/// Do not emit local-file photo bytes on save.
 #[test]
 fn inbound_file_uri_photo_does_not_turn_into_outbound_inline_data() {
     let inbound = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nPHOTO;VALUE=uri:file:///dev/zero\r\nEMAIL:vera@example.com\r\nEND:VCARD\r\n";
@@ -268,7 +268,7 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
 use jmap_vcard::VCardError;
 use std::time::{Duration, Instant};
 
-/// Return typed errors for truncated input. Do not panic or hang.
+/// Return typed errors for truncated input.
 #[test]
 fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     let not_vcard_cases = ["", "   ", "\r\n", "\n", "\t"];
@@ -369,7 +369,7 @@ fn absurd_folding_every_second_octet_matrix() {
     );
 }
 
-/// Parse a 10k-property card within the runtime bound.
+/// Parse a 10,000-property card within the runtime bound.
 #[test]
 fn card_with_10k_properties_bounded_execution() {
     let mut large_vcard = String::with_capacity(500_000);
@@ -401,7 +401,7 @@ fn card_with_10k_properties_bounded_execution() {
     );
 }
 
-/// Deeply nested AGENT vCards must stay within the runtime bound.
+/// Keep deeply nested AGENT vCards within the runtime bound.
 #[test]
 fn deeply_nested_agent_robustness() {
     for depth in [10, 50, 100, 500] {
