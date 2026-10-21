@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Build scheduling outbox messages for `CalendarEvent/set`.
-//! Origin accounts send `REQUEST` and `CANCEL`. Non-origin accounts send `REPLY`.
+//! Build outbox scheduling messages for `CalendarEvent/set`.
+//! Origin accounts send `REQUEST` and `CANCEL` messages.
+//! Non-origin accounts send `REPLY` messages.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,10 +37,10 @@ pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
         .collect()
 }
 
-/// Return true when all required recipients have an address.
+/// Return `true` when every required recipient has an address.
 pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     if !is_origin(event, own) {
-        // A non-origin update replies only to the organizer.
+        // A non-origin update sends only to the organizer.
         return event
             .organizer_calendar_address
             .as_deref()
@@ -83,7 +84,7 @@ fn messages_for(change: &EventChange, own: &BTreeSet<String>) -> Vec<RecordedSch
     }
 }
 
-/// Treat this account as origin when the organizer is missing or local (§10.9.5).
+/// Treat this account as the origin when the organizer is missing or local (§10.9.5).
 pub(crate) fn is_origin(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     match event.organizer_calendar_address.as_deref() {
         None => true,
@@ -126,9 +127,10 @@ fn origin_messages(
             }
         }
         (Some(before), Some(after)) => {
-            // Send one series-level `CANCEL` per recipient for series removals.
+            // Send one series-level `CANCEL` for each series-level removal.
             let mut withdrawn: BTreeSet<String> = BTreeSet::new();
-            // Track scoped `CANCEL` so override-only edits do not trigger `REQUEST`.
+            // Track scoped `CANCEL` messages.
+            // This prevents a `REQUEST` for override-only removals.
             let mut cancelled_occurrence = false;
             let current = participants(after);
             for (id, participant) in participants(before) {
@@ -176,7 +178,8 @@ fn origin_messages(
                 }
             }
 
-            // Re-invite all recipients for shared changes, except override-only cancellation.
+            // Re-invite all recipients when shared fields change.
+            // Skip this for override-only cancellation changes.
             let changed = changed_shared_properties(before, after);
             let invited = invitation_scopes(after, own);
             let cancelling_overrides =
@@ -206,7 +209,7 @@ fn reply_messages(
     own: &BTreeSet<String>,
 ) -> Vec<RecordedSchedulingMessage> {
     let Some(organizer) = subject.organizer_calendar_address.clone() else {
-        // Without an organizer, the event belongs to the origin account.
+        // Without an organizer, this event belongs to the origin account.
         return Vec::new();
     };
 
@@ -219,7 +222,7 @@ fn reply_messages(
             continue;
         }
         let answer = match (&change.before, &change.after) {
-            // Create and destroy can include an immediate answer.
+            // Create and destroy can include one immediate answer.
             (None, Some(_)) | (Some(_), None) => participation_status(participant),
             // Updates send only a changed status.
             (Some(before), Some(_)) => {
@@ -339,7 +342,7 @@ fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<St
             continue;
         };
         let patch = Map::from_iter([(tail.to_owned(), new_value.clone())]);
-        // Ignore invalid paths. Keep participants unchanged.
+        // Ignore invalid paths and keep participants unchanged.
         let _ = apply_patch(&mut participants, &patch);
     }
     match participants {
@@ -595,7 +598,8 @@ fn normalize_uri(uri: &str) -> String {
         {
             (scheme.to_ascii_lowercase() + ":", rest)
         }
-        // This is not URI-scheme syntax. Normalize percent encoding only.
+        // This is not a URI scheme.
+        // Normalize percent encoding only.
         _ => (String::new(), uri),
     };
 
