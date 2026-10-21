@@ -13696,7 +13696,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
 
     let emitted_all3 = card_to_vcard(&card_all3);
 
-    // Verify emission order: a_work (pref: 1) is first, followed by a_home and a_other
+    // Check emission order: `a_work` (`pref: 1`) is first, then `a_home`, then `a_other`.
     let adr_lines: Vec<&str> = emitted_all3
         .lines()
         .filter(|l| l.starts_with("ADR"))
@@ -13708,7 +13708,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     assert_eq!(adr_lines.len(), 3, "3 ADR lines: {emitted_all3}");
     assert_eq!(label_lines.len(), 3, "3 LABEL lines: {emitted_all3}");
 
-    // Work slot (E_CONTACT_ADDRESS_WORK / E_CONTACT_ADDRESS_LABEL_WORK):
+    // Check the work slot (`E_CONTACT_ADDRESS_WORK` and `E_CONTACT_ADDRESS_LABEL_WORK`).
     assert!(
         adr_lines[0].contains("X-JMAP-KEY=a_work")
             && adr_lines[0].contains("TYPE=WORK")
@@ -13724,7 +13724,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         label_lines[0]
     );
 
-    // Home slot (E_CONTACT_ADDRESS_HOME / E_CONTACT_ADDRESS_LABEL_HOME):
+    // Check the home slot (`E_CONTACT_ADDRESS_HOME` and `E_CONTACT_ADDRESS_LABEL_HOME`).
     assert!(
         adr_lines[1].contains("X-JMAP-KEY=a_home")
             && adr_lines[1].contains("TYPE=HOME")
@@ -13738,7 +13738,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         label_lines[1]
     );
 
-    // Other slot (E_CONTACT_ADDRESS_OTHER / E_CONTACT_ADDRESS_LABEL_OTHER):
+    // Check the other slot (`E_CONTACT_ADDRESS_OTHER` and `E_CONTACT_ADDRESS_LABEL_OTHER`).
     assert!(
         adr_lines[2].contains("X-JMAP-KEY=a_other") && !adr_lines[2].contains("TYPE="),
         "Other ADR (unslotted): {}",
@@ -13750,15 +13750,15 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         label_lines[2]
     );
 
-    // Inbound parse: all 3 addresses are restored with their structured components AND full labels
+    // Parse inbound data and restore all 3 addresses with structured components and full labels.
     let parsed_all3 = vcard_to_card(&emitted_all3).expect("parse back all3");
     assert_eq!(parsed_all3, card_all3);
 
-    // Roundtrip fixed-point
+    // Confirm a round-trip fixed point.
     let re_emitted_all3 = card_to_vcard(&parsed_all3);
     assert_eq!(re_emitted_all3, emitted_all3);
 
-    // --- 2. All 3 slots with standalone LABEL only (no structured ADR) ---
+    // 2. All 3 slots use standalone `LABEL` only, without structured `ADR`.
     let card_labels_only = ContactCard {
         card_type: Some("Card".to_owned()),
         version: Some("1.0".to_owned()),
@@ -13818,7 +13818,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     let parsed_labels = vcard_to_card(&emitted_labels).expect("parse labels only");
     assert_eq!(parsed_labels, card_labels_only);
 
-    // --- 3. Mixed slots (Work: ADR+LABEL, Home: LABEL only, Other: ADR only) ---
+    // 3. Mixed slots: work uses `ADR` plus `LABEL`, home uses `LABEL` only, other uses `ADR` only.
     let card_mixed = ContactCard {
         card_type: Some("Card".to_owned()),
         version: Some("1.0".to_owned()),
@@ -13865,8 +13865,8 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     let parsed_mixed = vcard_to_card(&emitted_mixed).expect("parse mixed slots");
     assert_eq!(parsed_mixed, card_mixed);
 
-    // 4. Unkeyed WORK, HOME, and OTHER ADR plus LABEL lines.
-    // Labels pair with matching ADR context; bare LABEL maps to OTHER.
+    // 4. Parse unkeyed `WORK`, `HOME`, and `OTHER` `ADR` plus `LABEL` lines.
+    // Pair each label with its `ADR` context; map a bare `LABEL` to `OTHER`.
     let unkeyed_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Unkeyed Address Contact\r\n",
@@ -13882,7 +13882,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
 
     let unkeyed_card = vcard_to_card(unkeyed_vcard).expect("parse unkeyed addresses");
     let unkeyed_addrs = unkeyed_card.addresses.as_ref().expect("addresses");
-    // a1 WORK, a2 HOME, a3 OTHER, a4 bare LABEL.
+    // `a1` is work, `a2` is home, `a3` is other, and `a4` is a bare label.
     assert_eq!(
         unkeyed_addrs.len(),
         4,
