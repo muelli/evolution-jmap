@@ -1295,14 +1295,15 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     fold_overlong_lines(out)
 }
 
-/// The RFC 2426 §2.6 folding width `card_to_vcard`'s output holds to, in
-/// octets, excluding the line break.
+/// Maximum physical line width from RFC 2426 §2.6, in octets.
+/// Excludes the trailing line break.
 const MAX_LINE_OCTETS: usize = 75;
 
 /// Fold physical lines longer than [`MAX_LINE_OCTETS`] at UTF-8 boundaries.
 ///
 /// `calcard` already folds lines.
-/// This pass enforces RFC 2426's 75-octet limit and keeps escaped pairs together.
+/// This pass enforces the RFC 2426 75-octet limit.
+/// This pass keeps escaped pairs on one folded line.
 fn fold_overlong_lines(vcard: String) -> String {
     if vcard
         .split("\r\n")
@@ -1326,8 +1327,7 @@ fn fold_overlong_lines(vcard: String) -> String {
             while cut > 0 && !rest.is_char_boundary(cut) {
                 cut -= 1;
             }
-            // If the cut ends with an odd backslash run, the final slash
-            // escapes the next octet.
+            // An odd trailing backslash run escapes the next octet.
             // Move the cut into that run so the escaped pair stays on one line.
             if rest[..cut]
                 .bytes()
@@ -1357,11 +1357,11 @@ fn fold_overlong_lines(vcard: String) -> String {
     out
 }
 
-/// Normalizes extended ISO 8601 values on calendar properties to basic format
-/// before parsing with `calcard`.
+/// Normalize extended ISO 8601 values on calendar properties before parsing
+/// with `calcard`.
 ///
-/// This import-side shim preserves day and timezone fields across supported
-/// vCard versions.
+/// This import shim preserves day and timezone fields across supported vCard
+/// versions.
 fn normalize_vcard_dates(vcard: &str) -> String {
     let mut out = String::with_capacity(vcard.len());
     let mut remaining = vcard;
@@ -1977,8 +1977,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 
     Ok(ContactCard {
         id: text("UID").map(Into::into),
-        // Membership follows from which EDS source is being served, not from
-        // the contact, so the backend fills it in on create.
+        // Membership depends on the EDS source being served.
+        // The backend fills it in during create.
         address_book_ids: None,
         card_type: Some("Card".to_owned()),
         version: Some("1.0".to_owned()),
@@ -1995,8 +1995,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         links: (!links.is_empty()).then_some(links),
         calendars: (!calendars.is_empty()).then_some(calendars),
         scheduling_addresses: (!scheduling_addresses.is_empty()).then_some(scheduling_addresses),
-        // vCard 3.0 exposes media only through `PHOTO`, so other media kinds
-        // stay absent here and are preserved through save-path extras.
+        // vCard 3.0 exposes media through `PHOTO` only.
+        // Other media kinds stay absent here and stay in save-path extras.
         media: (!media.is_empty()).then_some(media),
         online_services: (!online_services.is_empty()).then_some(online_services),
         keywords: read_keywords(&card.entries),
