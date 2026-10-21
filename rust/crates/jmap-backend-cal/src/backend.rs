@@ -615,12 +615,12 @@ unsafe extern "C" fn discard_alarm_sync(
     }
 }
 
-/// Chains up to the meta backend with each change on this thread marked as received.
+/// Chains up to the meta backend with the opflags marked as received.
 ///
 /// Evolution calls this for an accepted invitation and for an import. The data
 /// comes from another person, so the sync layer applies [`Itip::Received`].
-/// While offline, the meta backend stores the change and uploads it later
-/// without the mark. Thus the call fails while the backend cannot connect.
+/// The call fails while the backend cannot connect. If the backend goes offline
+/// after this check, the meta backend queues the change with the marked opflags.
 unsafe extern "C" fn receive_objects_sync(
     backend: *mut ECalBackendSync,
     cal: *mut EDataCal,
@@ -642,7 +642,7 @@ unsafe extern "C" fn receive_objects_sync(
             {
                 return;
             }
-            let _received = scheduling::receiving();
+            let opflags = scheduling::received(opflags);
             parent(backend, cal, cancellable, calobj, opflags, error);
         })
     }

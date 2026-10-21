@@ -14,7 +14,7 @@ use gobject_sys::{g_type_class_ref, g_type_class_unref};
 use jmap_backend_cal::backend::{JmapCalBackend, JmapCalBackendClass, parent_class};
 use jmap_backend_cal::scheduling::{
     CREATE_MESSAGES, ITIP_SUPPRESS_ON_REMOVE_SUPPORTED, SAVE_SCHEDULES, capabilities, dismissal,
-    itip, received, receiving,
+    itip, received,
 };
 use jmap_backend_core::subclass::register_static;
 use jmap_cal_sync::Itip;
@@ -105,34 +105,15 @@ fn disable_itip_message_is_read_as_one_bit_among_the_conflict_flags() {
 }
 
 #[test]
-fn a_change_while_receiving_is_marked_received_and_keeps_the_users_choice() {
-    let guard = receiving();
+fn a_received_change_is_marked_received_and_keeps_the_users_choice() {
     assert_eq!(
-        itip(E_CAL_OPERATION_FLAG_NONE),
+        itip(received(E_CAL_OPERATION_FLAG_NONE)),
         Itip::Received { reply: true }
     );
     assert_eq!(
-        itip(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE),
+        itip(received(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE)),
         Itip::Received { reply: false }
     );
-    drop(guard);
-    assert_eq!(itip(E_CAL_OPERATION_FLAG_NONE), Itip::Send);
-}
-
-#[test]
-fn the_receiving_mark_is_restored_by_each_guard_and_stays_on_its_thread() {
-    let outer = receiving();
-    drop(receiving());
-    assert_eq!(
-        itip(E_CAL_OPERATION_FLAG_NONE),
-        Itip::Received { reply: true },
-        "an inner guard keeps the outer mark"
-    );
-    let other = std::thread::spawn(|| itip(E_CAL_OPERATION_FLAG_NONE))
-        .join()
-        .unwrap();
-    assert_eq!(other, Itip::Send);
-    drop(outer);
     assert_eq!(itip(E_CAL_OPERATION_FLAG_NONE), Itip::Send);
 }
 
