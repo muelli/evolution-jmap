@@ -8408,10 +8408,8 @@ fn rfc2426_value_escaping_note_with_all_four_special_characters_roundtrip() {
 
 #[test]
 fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
-    // RFC 2426 §2 / §3.5.5: Commas inside ORG unit components and employer names:
-    // Semicolon (;) delimits components of ORG, while comma (,) inside a unit
-    // must be escaped as \, so it is not confused or lost, and semicolons inside
-    // a unit must be escaped as \; so it does not split the component.
+    // RFC 2426 §2 and §3.5.5: escape commas and semicolons inside ORG components.
+    // Keep `;` as the component separator. Escape data commas as `\,` and data semicolons as `\;`.
     let mut orgs = BTreeMap::new();
     orgs.insert(
         "o1".to_owned(),
@@ -8436,13 +8434,13 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
 
     let vcard = card_to_vcard(&card);
 
-    // Verify wire format contains escaped commas and semicolons
+    // Verify the wire format escapes commas and semicolons.
     assert!(
         vcard.contains(r"Acme\, Inc.") || vcard.contains("ORG;X-JMAP-KEY=o1:"),
         "vCard should contain escaped comma in ORG name: {vcard}"
     );
 
-    // Parse back
+    // Parse back.
     let read_card = vcard_to_card(&vcard).expect("parse org with escaped commas and semicolons");
     let read_org = &read_card.organizations.as_ref().unwrap()["o1"];
     assert_eq!(
@@ -8457,11 +8455,11 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
     assert_eq!(units[2].name, "Hardware; Systems Division");
     assert_eq!(units[3].name, "Unit with \\ backslash and \n newline");
 
-    // Fixed point convergence
+    // Verify fixed-point convergence.
     let vcard2 = card_to_vcard(&read_card);
     assert_eq!(vcard2, vcard, "Emitted vCard must reach fixed point");
 
-    // Test nameless organization with leading semicolon and commas in units
+    // Verify a nameless organization keeps a leading semicolon and escaped unit values.
     let mut nameless_orgs = BTreeMap::new();
     nameless_orgs.insert(
         "o_nameless".to_owned(),
@@ -8500,10 +8498,8 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
 
 #[test]
 fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
-    // RFC 2426 §2 / §3.2.1: Semicolons inside ADR components:
-    // Semicolon (;) is the component separator for ADR. A semicolon inside an
-    // individual component (e.g. street name "Suite 100; Building A") must be
-    // escaped as \; so it does not shift subsequent components into wrong slots.
+    // RFC 2426 §2 and §3.2.1: escape semicolons inside ADR components.
+    // Keep `;` as the ADR component separator. Escape data semicolons as `\;`.
     let mut addresses = BTreeMap::new();
     addresses.insert(
         "a1".to_owned(),
@@ -8534,7 +8530,7 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
 
     let vcard = card_to_vcard(&card);
 
-    // Parse back and verify no component shifting occurred
+    // Parse back and verify that no component shifts.
     let read_card = vcard_to_card(&vcard).expect("parse adr with escaped semicolons");
     let read_addr = &read_card.addresses.as_ref().unwrap()["a1"];
     let comps = read_addr.components.as_ref().unwrap();
@@ -8565,7 +8561,7 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
         )
     );
 
-    // Fixed point convergence
+    // Verify fixed-point convergence.
     let vcard2 = card_to_vcard(&read_card);
     assert_eq!(
         vcard2, vcard,
