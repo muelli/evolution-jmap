@@ -289,6 +289,61 @@ fn a_second_watch_of_the_same_child_is_refused_while_the_first_runs() {
     });
 }
 
+/// A child whose check panics. Its thread never gets to a server call.
+struct PanicsOnCheck(String);
+
+impl PendingChild for PanicsOnCheck {
+    fn uid(&self) -> String {
+        self.0.clone()
+    }
+
+    fn present(&self) -> bool {
+        panic!("the check of this child fails");
+    }
+
+    fn enabled(&self) -> bool {
+        unreachable!("present panics first")
+    }
+
+    fn due(&self) -> Option<Due> {
+        unreachable!("present panics first")
+    }
+
+    fn clear_due(&self) {
+        unreachable!("present panics first")
+    }
+
+    fn enable(&self) {
+        unreachable!("present panics first")
+    }
+
+    fn destroy_on_server(&self) -> Result<(), DeleteError> {
+        unreachable!("present panics first")
+    }
+
+    fn remove(&self) -> Result<(), String> {
+        unreachable!("present panics first")
+    }
+}
+
+/// Without this, a child whose thread panics can never be watched again, and
+/// its pending delete does not continue until the registry restarts.
+#[test]
+fn a_watch_thread_that_panics_lets_the_child_be_watched_again() {
+    with_timeout(|| {
+        let uid = unique("panics");
+        let handle = watch(PanicsOnCheck(uid.clone())).expect("a first watch of this child");
+        assert!(handle.join().is_err(), "the thread panics");
+
+        let again = Fake {
+            uid,
+            ..Fake::pending(past())
+        };
+        let handle = watch(again).expect("the panicked watch has ended");
+        assert_eq!(handle.join().expect("no panic"), Settled::Destroyed);
+    });
+}
+
 /// The vfunc defers and starts the watch in one step, so a check of an older
 /// watch cannot run between the two.
 #[test]
