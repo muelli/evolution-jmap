@@ -26,7 +26,7 @@ fn state_bumps_only_on_success() {
     });
     assert_eq!(store.state_counter(), initial);
 
-    // A create transaction advances state once.
+    // A successful create transaction advances state once.
     store.transaction(|transaction| {
         let a = transaction.alloc_id();
         transaction.create(a, "a".to_owned());

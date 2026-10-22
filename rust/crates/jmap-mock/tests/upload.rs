@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Check upload limits for `maxSizeUpload` (RFC 8620 §6.1).
+//! Verify `maxSizeUpload` limits (RFC 8620 §6.1).
 //! Use raw HTTP. `jmap-client` rejects oversize payloads on the client side.
 
 use std::io::{Read, Write};
@@ -52,7 +52,7 @@ fn an_upload_over_the_advertised_limit_is_refused_with_the_limit_it_broke() {
     assert!(status.contains("400"), "{status}");
     let problem: serde_json::Value = serde_json::from_str(&body).expect("problem details JSON");
     assert_eq!(problem["type"], "urn:ietf:params:jmap:error:limit");
-    // RFC 8620 §3.6.1 says limit errors name the exceeded capability.
+    // RFC 8620 §3.6.1 requires limit errors to name the exceeded capability.
     assert_eq!(problem["limit"], "maxSizeUpload");
 
     let state = server.state();
