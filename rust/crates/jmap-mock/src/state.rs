@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! In-memory state for the mock server.
-//! Store typed objects per account, allocate ids, and track type counters.
-//! Keep an append-only change log.
+//! Store typed objects per account and allocate ids.
+//! Track type counters and keep an append-only change log.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::Sender;
@@ -32,7 +32,7 @@ pub struct ServerState {
     pub calls_in_request: Option<u64>,
     /// Optional max ids in each `/changes` response. `None` returns all ids.
     pub changes_page_size: Option<u64>,
-    /// Whether invalid `/changes` `sinceState` uses Stalwart-style `invalidArguments`.
+    /// Use Stalwart-style `invalidArguments` for invalid `/changes` `sinceState`.
     pub stalwart_shaped_unrecognized_changes_state: bool,
     /// Optional `Email/get` id limit. `None` uses [`crate::DEFAULT_OBJECTS_IN_GET`].
     pub objects_in_get: Option<u64>,
@@ -44,11 +44,12 @@ pub struct ServerState {
     pub size_request: Option<u64>,
     /// Optional `maxSizeUpload` in bytes; `None` means unlimited.
     pub size_upload: Option<u64>,
-    /// Whether auth redirect tests route `/.well-known/jmap` to `/jmap/session`.
+    /// Route `/.well-known/jmap` to `/jmap/session` in auth redirect tests.
     pub session_via_redirect: bool,
     /// Optional origin override for `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
     pub advertise_origin: Option<String>,
-    /// Optional redirect origin for `GET /download/...`. `None` serves blobs.
+    /// Optional redirect origin for `GET /download/...`.
+    /// `None` serves blobs.
     pub download_via_redirect_to: Option<String>,
     /// Whether `GET /download/...` rejects `Accept: application/json` with `406`.
     pub reject_download_accept_json: bool,
@@ -63,8 +64,8 @@ pub struct ServerState {
     pub new_collections_default_unsubscribed: bool,
     /// Whether `CalendarEvent/set` create returns only `id` in `created`.
     pub terse_calendar_event_create: bool,
-    /// Whether this server disables scheduling.
-    /// If true, reject `sendSchedulingMessages` in `CalendarEvent/set` as unknown.
+    /// Disable scheduling support on this server when true.
+    /// Reject `sendSchedulingMessages` in `CalendarEvent/set` as unknown.
     /// See RFC 8620 section 3.9.
     pub without_scheduling: bool,
     /// Whether collection create omits echoed `name` and keeps the server value.
@@ -75,8 +76,8 @@ pub struct ServerState {
     pub reject_collection_create: bool,
     /// Optional `maxDelayedSend` value in the submission capability.
     pub max_delayed_send: Option<u64>,
-    /// Whether the Cyrus snooze extension is advertised.
-    /// When true, the server accepts `Email.snoozed`.
+    /// Advertise the Cyrus snooze extension when true.
+    /// In this mode, the server accepts `Email.snoozed`.
     pub snooze_extension: bool,
     /// Connected `/eventsource` subscribers for state-change delivery.
     pub event_source: EventSourceHub,
@@ -280,7 +281,7 @@ pub struct AccountState {
     /// Keep this per account because this mock maps one bearer token to one account.
     pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
     /// `CalendarEventNotification` records keyed by recipient id.
-    /// This store uses the same one-account model.
+    /// This store uses the same one-account mapping model.
     pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
     /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5).
     /// `None` omits it.
@@ -389,7 +390,7 @@ pub struct RecordedSchedulingMessage {
     pub ical: String,
 }
 
-/// What happened to an object, for the changes log.
+/// One object change kind for the changes log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeKind {
     Created,
