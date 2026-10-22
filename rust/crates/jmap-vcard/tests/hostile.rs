@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Test hostile `ContactCard` input from a server.
+//! Test hostile server input for `ContactCard`.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Media};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 
-/// Build a card with one email entry under key `key`.
+/// Build a card with one email map entry under `key`.
 fn card_with_email_key(key: &str) -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
@@ -25,7 +25,7 @@ fn card_with_email_key(key: &str) -> ContactCard {
     }
 }
 
-/// Build a card with one `photo` media entry under key `m1`.
+/// Build a card with one `photo` media entry under `m1`.
 fn card_with_photo_uri(uri: &str) -> ContactCard {
     let mut media = BTreeMap::new();
     media.insert(
@@ -104,7 +104,7 @@ fn inbound_photo_value_uri_data_payload_stays_mapped() {
     assert_eq!(photo.media_type.as_deref(), Some("image/png"));
 }
 
-/// Keep local-file photo bytes out of save output.
+/// Do not leak local-file photo bytes during save.
 #[test]
 fn inbound_file_uri_photo_does_not_turn_into_outbound_inline_data() {
     let inbound = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nPHOTO;VALUE=uri:file:///dev/zero\r\nEMAIL:vera@example.com\r\nEND:VCARD\r\n";
@@ -134,7 +134,7 @@ fn inbound_file_uri_photo_does_not_turn_into_outbound_inline_data() {
     );
 }
 
-/// Reject CRLF in map keys so `EMAIL` stays one line.
+/// Reject CRLF in map keys: `EMAIL` must stay one line.
 #[test]
 fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
     let vcard = card_to_vcard(&card_with_email_key("e1\r\nFN:Mallory\r\nX-TAIL"));
@@ -168,7 +168,7 @@ fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
     }
 }
 
-/// Keep embedded quotes from creating a second parameter.
+/// Do not let embedded quotes open a second parameter.
 #[test]
 fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     let vcard = card_to_vcard(&card_with_email_key("x\";FN=\"Mallory"));
@@ -216,6 +216,7 @@ fn x_jmap_key_caret_escapes_decode_on_read() {
     );
 }
 
+/// Reject CRLF in phone map keys.
 #[test]
 fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     let mut phones = BTreeMap::new();
