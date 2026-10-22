@@ -30,6 +30,16 @@ race_top:^g_closure_
 race_top:^_g_closure_is_void$
 race_top:^closure_invoke_notifiers$
 
+# GLib: type_data_make_W sets a bit field of the type node under the type
+# lock. g_type_is_a reads another bit of the same word with no lock. That bit
+# does not change after the type is registered.
+race_top:^type_data_make_W$
+
+# GLib: g_private_get makes its pthread key lazily with a
+# compare-and-exchange. When it loses the race, it reads the winner's key
+# with a plain load.
+race_top:^g_private_get$
+
 # GLib: get_tmp_file increments a static counter with no lock. The counter
 # only seeds the name, and a name that exists already gives a retry.
 race_top:^get_tmp_file$

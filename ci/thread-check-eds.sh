@@ -24,6 +24,7 @@ image=${THREAD_EDS_IMAGE:-evolution-jmap-tsan}
 
 DEFAULT_PACKAGES=(
     eds-sys
+    jmap-config
     jmap-mail
 )
 
