@@ -10,8 +10,9 @@
 // each child whose answer is the same as the answer of an earlier child. Each
 // case below is a way for this backend to lose offline data of the user.
 
-use std::ffi::CString;
+use std::ffi::{CString, c_void};
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_RESOURCE,
@@ -19,9 +20,12 @@ use eds_sys::{
     e_source_get_extension, e_source_has_extension, e_source_new_with_uid,
     e_source_resource_set_identity,
 };
-use glib_sys::GFALSE;
+use glib_sys::{
+    G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, GFALSE, GLogLevelFlags, g_log_remove_handler,
+    g_log_set_handler, gchar,
+};
 use gobject_sys::g_object_unref;
-use jmap_backend_collection::resource_id::{KIND_EXTENSIONS, resource_id_of};
+use jmap_backend_collection::resource_id::{KIND_EXTENSIONS, kind_of, resource_id_of};
 use jmap_collection_sync::child_source::{Connection, EXTENSION_ADDRESS_BOOK, EXTENSION_CALENDAR};
 use jmap_collection_sync::{Child, ChildKind};
 use jmap_proto::Id;
@@ -281,14 +285,67 @@ fn an_empty_identity_is_no_identity() {
     });
 }
 
+unsafe extern "C" fn count_message(
+    _domain: *const gchar,
+    _level: GLogLevelFlags,
+    _message: *const gchar,
+    counter: *mut c_void,
+) {
+    // SAFETY: the test gives the address of an `AtomicUsize` that outlives
+    // the handler.
+    unsafe { &*counter.cast::<AtomicUsize>() }.fetch_add(1, Ordering::SeqCst);
+}
+
 #[test]
 fn a_null_source_is_not_claimed_rather_than_dereferenced() {
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // EDS does not pass NULL. The vfunc is a C entry point, and a NULL check
-        // is the easiest protection against an incorrect caller.
+        // is the easiest protection against an incorrect caller. Without the
+        // check, `e_source_has_extension` also refuses NULL, but it logs an
+        // `e-data-server` critical. `G_DEBUG=fatal-criticals` makes that abort.
+        let criticals = AtomicUsize::new(0);
+        // SAFETY: the domain is a 'static literal. The handler reads
+        // `criticals` only until the removal of the handler below.
+        let handler = unsafe {
+            g_log_set_handler(
+                c"e-data-server".as_ptr(),
+                G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_WARNING,
+                Some(count_message),
+                ptr::from_ref(&criticals).cast_mut().cast(),
+            )
+        };
         // SAFETY: NULL is an explicitly permitted argument.
-        assert_eq!(unsafe { resource_id_of(ptr::null_mut()) }, None);
+        let (resource_id, kind) =
+            unsafe { (resource_id_of(ptr::null_mut()), kind_of(ptr::null_mut())) };
+        // SAFETY: the ID is from the call above, and the removal happens once.
+        unsafe { g_log_remove_handler(c"e-data-server".as_ptr(), handler) };
+
+        assert_eq!(resource_id, None);
+        assert_eq!(kind, None);
+        assert_eq!(
+            criticals.load(Ordering::SeqCst),
+            0,
+            "a NULL source reached EDS, which logged a critical"
+        );
+    });
+}
+
+#[test]
+fn a_source_with_both_kinds_is_read_as_an_address_book() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // This backend never writes such a source, but a user can edit one. The
+        // order of `KIND_EXTENSIONS` decides its resource id. A change of the
+        // order changes the id of an existing cache file, and EDS then deletes it.
+        let source = TestSource::new()
+            .with_extension(EXTENSION_CALENDAR)
+            .with_extension(EXTENSION_ADDRESS_BOOK)
+            .with_identity("X1");
+
+        assert_eq!(source.resource_id().as_deref(), Some("addressbook:X1"));
+        // SAFETY: a live source.
+        assert_eq!(unsafe { kind_of(source.0) }, Some(ChildKind::AddressBook));
     });
 }
 
