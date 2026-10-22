@@ -3006,7 +3006,7 @@ fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
 #[test]
 fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
     // vCard 3.0 has no `IMPP`, so this mapping uses EDS `X-*` IM lines.
-    // Set `TYPE` so the handle uses one HOME or WORK editor slot.
+    // Set `TYPE` so the handle lands in one HOME or WORK editor slot.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-JABBER"),
@@ -3026,8 +3026,8 @@ fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
 
 #[test]
 fn every_service_eds_has_a_field_for_gets_its_own_line() {
-    // Emit one line for each service with an EDS HOME or WORK slot.
-    // Match service names case-insensitively and punctuation-insensitively.
+    // Emit one line for each service that has an EDS HOME or WORK slot.
+    // Match service names without case or punctuation sensitivity.
     // Keep save output stable across spelling variants.
     for (service, property) in [
         ("AIM", "X-AIM"),
@@ -3057,7 +3057,7 @@ fn every_service_eds_has_a_field_for_gets_its_own_line() {
 fn a_service_eds_has_no_field_for_gets_no_line() {
     // Skip services without an editable EDS slot.
     // Skip missing service names because no property line can be selected.
-    // Hidden lines make save logic treat unseen data as visible.
+    // Hidden lines make save logic treat unknown data as visible.
     for service in [Some("Signal"), Some("Twitter"), Some("SIP"), Some(""), None] {
         let vcard = card_to_vcard(&on_service(service, Some("handle")));
         assert!(
@@ -3072,7 +3072,7 @@ fn unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader() {
     // libebook-contacts 3.52 stores X-TWITTER and X-SIP as unslotted attrs.
     // No _HOME_1..3 or _WORK_1..3 slot exists for these lines.
     // Ignore X-TWITTER, X-SIP, and unknown X-SIGNAL lines.
-    // This avoids unmodeled `online_services` entries.
+    // This avoids unmapped `online_services` entries.
     let vcard = "BEGIN:VCARD\r\n\
                  VERSION:3.0\r\n\
                  FN:Vera\r\n\
@@ -3123,7 +3123,7 @@ fn at_uri(service: Option<&str>, uri: &str) -> ContactCard {
 fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
     // RFC 9553 §2.3.2 allows `uri` or `user`.
     // Derive a handle only from known bare schemes.
-    // Require the URI payload to be exactly that handle.
+    // Require the URI payload to match that handle exactly.
     let vcard = card_to_vcard(&at_uri(Some("Jabber"), "xmpp:vera@jabber.example"));
     assert_eq!(
         line(&vcard, "X-JABBER"),
@@ -3200,7 +3200,7 @@ fn an_entry_stating_both_is_drawn_from_its_handle() {
 
 #[test]
 fn a_handle_no_x_line_can_carry_gets_no_line() {
-    // Skip handles that EDS normalizes so rendered text matches saved text.
+    // Skip handles that EDS normalizes, so rendered text matches saved text.
     for handle in [
         Some(""),
         None,
@@ -3237,7 +3237,7 @@ fn a_handle_holding_the_separators_is_escaped_and_comes_back_whole() {
 fn the_work_context_files_the_handle_in_evolutions_work_slot() {
     // `contexts` selects HOME or WORK.
     // Unknown or mixed contexts fall back to HOME.
-    // This keeps each line mapped to one editable slot.
+    // Keep each line mapped to one editable slot.
     let slotted = |contexts: Value| {
         let mut card = on_service(Some("Jabber"), Some("handle"));
         let services = card.online_services.as_mut().expect("online services");
@@ -3289,7 +3289,7 @@ fn reads_a_handle_on_a_line_that_never_carried_a_key() {
     .expect("parse");
 
     let services = card.online_services.expect("online services");
-    // Two, not three: `X-SIGNAL` is not a mapped service line.
+    // Expect two entries: `X-SIGNAL` is not a mapped service line.
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1", "s2"]);
     assert_eq!(services["s1"].service.as_deref(), Some("Matrix"));
     assert_eq!(services["s1"].user.as_deref(), Some("@vera:matrix.example"));
