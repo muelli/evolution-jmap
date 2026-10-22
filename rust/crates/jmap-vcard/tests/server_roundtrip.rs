@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Round-trip mapping tests with mock server responses.
+//! Test round-trip mapping with mock server responses.
 
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
@@ -9,7 +9,7 @@ use jmap_proto::contacts::ContactCard;
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 use serde_json::json;
 
-/// Keep stable IDs and map keys through a server update cycle.
+/// Keep stable IDs and map keys across a server update cycle.
 #[test]
 fn a_stored_card_survives_the_trip_through_vcard() {
     let server = MockServer::builder().start();
