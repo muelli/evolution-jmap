@@ -539,7 +539,7 @@ fn handle_request(
     oauth: &OAuthHandlers,
     origin: &str,
 ) {
-    // RFC 8414 metadata is public. This route bypasses auth.
+    // RFC 8414 metadata is public. Serve this route without auth.
     if request.method() == &tiny_http::Method::Get
         && request.url().split('?').next().unwrap_or_default()
             == "/.well-known/oauth-authorization-server"
@@ -555,7 +555,7 @@ fn handle_request(
         return;
     }
 
-    // Client registration also bypasses auth.
+    // Serve client registration without auth.
     if request.method() == &tiny_http::Method::Post
         && request.url().split('?').next().unwrap_or_default() == "/oauth/register"
     {
@@ -582,7 +582,7 @@ fn handle_request(
         return;
     }
 
-    // Token requests also bypass auth for public client flows.
+    // Serve token requests without auth for public client flows.
     if request.method() == &tiny_http::Method::Post
         && request.url().split('?').next().unwrap_or_default() == "/oauth/token"
     {
@@ -606,7 +606,7 @@ fn handle_request(
         return;
     }
 
-    // In redirect mode, serve both discovery routes before the normal 401 gate.
+    // In redirect mode, serve both discovery routes before the 401 gate.
     let session_via_redirect = state.lock().expect("mock state lock").session_via_redirect;
     if session_via_redirect {
         let path_only = request.url().split('?').next().unwrap_or_default();
@@ -875,11 +875,11 @@ fn respond_json(request: tiny_http::Request, status: u16, body: &Value) {
             tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
                 .expect("static header"),
         );
-    // The client can close the connection first. Ignore this case.
+    // Ignore response write errors. The client can close first.
     let _ = request.respond(response);
 }
 
-/// Capabilities every account offers unless a test omits one.
+/// List capabilities each account offers unless a test omits one.
 const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_MAIL,
     CAPABILITY_SUBMISSION,
@@ -892,7 +892,7 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
 ];
 
 /// Build a capability object for `capability`.
-/// Most capabilities map to `{}`.
+/// Return `{}` for capabilities with no extra fields.
 fn capability_value(capability: &str) -> Value {
     if capability == CAPABILITY_SIEVE {
         serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
@@ -911,7 +911,7 @@ fn capability_value(capability: &str) -> Value {
     }
 }
 
-/// Build the RFC 8620 section 2 session document from current state.
+/// Build the RFC 8620 section 2 session document from `state`.
 fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Session {
     let mut accounts = std::collections::BTreeMap::new();
     if authorized {
@@ -922,7 +922,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
                     .map(|capability| ((*capability).to_owned(), capability_value(capability)))
                     .collect();
-            // `submission` carries account data only when `maxDelayedSend` is set.
+            // Add `submission` account data only when `maxDelayedSend` is set.
             if let Some(seconds) = state.max_delayed_send
                 && !state.omitted_capabilities.contains(CAPABILITY_SUBMISSION)
             {
@@ -984,7 +984,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             .unwrap_or_default()
     };
 
-    // Build `core`. Omit optional limits when they are not set.
+    // Build `core`. Omit optional limits when unset.
     let mut core = json!({
         "maxConcurrentUpload": 4,
         "maxConcurrentRequests": 4,
