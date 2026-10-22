@@ -561,3 +561,18 @@ cargo-mutants makes no mutants here: every function is an `unsafe fn` or an
 - `expunge_folder`: a uid that is not UTF-8 goes to the server as lossy text,
   not skipped. Each uid in the summary comes from a JMAP `Id`, and RFC 8620
   section 1.2 limits an `Id` to ASCII. Thus no row has such a uid.
+
+## `src/summary.rs`
+
+The origin code is in `unsafe fn`s and `extern "C"` vfuncs, so cargo-mutants
+makes no mutants for it. The mutants below were made by hand.
+
+- `summary_header_load`: the origin is read for a version 1 header too. A
+  version 1 header holds the state and nothing after it.
+  `camel_util_bdata_get_string` (`camel-utils.c`, EDS 3.52.3) returns its
+  default, NULL, at the end of the data, so the origin is `None` in both forms.
+- `summary_header_load`: the filter that drops an empty origin is removed.
+  `store_state` writes an absent origin as an empty string, at the end of the
+  header. `camel_util_bdata_get_string` returns NULL for an empty string at
+  the end of the data, so the result is `None` in both forms. The filter is
+  insurance for a later field after the origin.
