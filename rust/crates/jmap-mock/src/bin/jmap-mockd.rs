@@ -9,6 +9,7 @@
 //!            [--query-page-size N] [--query-never-terminates]
 //!            [--email-get-includes-unrequested]
 //!            [--contact-photo-uses-file-uri]
+//!            [--calendar-event-link-uses-file-uri]
 //!            [--well-known-redirect-to ORIGIN]
 //!            [--advertise-origin ORIGIN]
 //!            [--shared-account-name-copies-user]
@@ -78,6 +79,9 @@ fn main() {
             }
             "--contact-photo-uses-file-uri" => {
                 builder = builder.contact_photo_uses_file_uri();
+            }
+            "--calendar-event-link-uses-file-uri" => {
+                builder = builder.calendar_event_link_uses_file_uri();
             }
             "--well-known-redirect-to" => {
                 let origin = arguments
@@ -172,6 +176,7 @@ fn usage(error: &str) -> ! {
          [--query-page-size N] [--query-never-terminates] \
          [--email-get-includes-unrequested] \
          [--contact-photo-uses-file-uri] \
+         [--calendar-event-link-uses-file-uri] \
          [--well-known-redirect-to ORIGIN] \
          [--advertise-origin ORIGIN] \
          [--shared-account-name-copies-user]"

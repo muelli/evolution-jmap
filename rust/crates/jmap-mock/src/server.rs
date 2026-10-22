@@ -69,6 +69,7 @@ pub struct MockServerBuilder {
     objects_in_get: Option<u64>,
     email_get_includes_unrequested: bool,
     contact_photo_uses_file_uri: bool,
+    calendar_event_link_uses_file_uri: bool,
     query_page_size: Option<u64>,
     query_never_terminates: bool,
     query_hides_limit: bool,
@@ -166,6 +167,12 @@ impl MockServerBuilder {
     /// Rewrite `ContactCard/get` photo media URIs to a local `file:` URI.
     pub fn contact_photo_uses_file_uri(mut self) -> Self {
         self.contact_photo_uses_file_uri = true;
+        self
+    }
+
+    /// Rewrite `CalendarEvent/get` link `href` values to a local `file:` URI.
+    pub fn calendar_event_link_uses_file_uri(mut self) -> Self {
+        self.calendar_event_link_uses_file_uri = true;
         self
     }
 
@@ -362,6 +369,7 @@ impl MockServerBuilder {
         state.objects_in_get = self.objects_in_get;
         state.email_get_includes_unrequested = self.email_get_includes_unrequested;
         state.contact_photo_uses_file_uri = self.contact_photo_uses_file_uri;
+        state.calendar_event_link_uses_file_uri = self.calendar_event_link_uses_file_uri;
         state.query_page_size = self.query_page_size;
         state.query_never_terminates = self.query_never_terminates;
         state.query_hides_limit = self.query_hides_limit;
@@ -447,6 +455,7 @@ impl MockServer {
             objects_in_get: None,
             email_get_includes_unrequested: false,
             contact_photo_uses_file_uri: false,
+            calendar_event_link_uses_file_uri: false,
             query_page_size: None,
             query_never_terminates: false,
             query_hides_limit: false,

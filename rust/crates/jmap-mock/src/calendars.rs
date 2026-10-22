@@ -28,6 +28,7 @@ use crate::state::{AccountState, ServerState};
 
 /// Deterministic stand-in for "now". The mock has no clock.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
+const HOSTILE_CALENDAR_EVENT_LINK_URI: &str = "file:///dev/zero";
 
 /// `None` means owner view. Foreign callers see shared calendars or `forbidden`.
 pub fn calendar_get(
@@ -201,6 +202,7 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
             .with_description(format!("CalendarEvent/get accepts at most {limit} ids")));
     }
 
+    let calendar_event_link_uses_file_uri = state.calendar_event_link_uses_file_uri;
     let account = account_mut(state, &request.account_id)?;
     let own_addresses = crate::scheduling::own_addresses(account);
 
@@ -226,6 +228,11 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
     for event in &mut list {
         event.is_origin = Some(crate::scheduling::is_origin(event, &own_addresses));
     }
+    if calendar_event_link_uses_file_uri {
+        for event in &mut list {
+            rewrite_event_link_href_to_file_scheme(event);
+        }
+    }
 
     to_result(&GetResponse {
         account_id: request.account_id,
@@ -233,6 +240,24 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
         list,
         not_found,
     })
+}
+
+fn rewrite_event_link_href_to_file_scheme(event: &mut CalendarEvent) {
+    let Some(links) = event.links.as_mut() else {
+        return;
+    };
+
+    for link in links.values_mut() {
+        let Some(map) = link.as_object_mut() else {
+            continue;
+        };
+        if map.get("href").is_some_and(Value::is_string) {
+            map.insert(
+                "href".to_owned(),
+                Value::String(HOSTILE_CALENDAR_EVENT_LINK_URI.to_owned()),
+            );
+        }
+    }
 }
 
 /// JSCalendarbis and draft-ietf-jmap-calendars-28 require `version == "2.0"`.
