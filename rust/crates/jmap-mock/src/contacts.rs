@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use jmap_proto::Id;
 use jmap_proto::contacts::{
     AddressBook, AddressBookRights, ContactCard, ContactCardParseRequest, ContactCardQueryFilter,
+    Media,
 };
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest};
@@ -17,6 +18,8 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, project_properties, to_result};
 use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
+
+const HOSTILE_CONTACT_PHOTO_URI: &str = "file:///home/victim/.ssh/id_ed25519";
 
 /// `caller` comes from [`crate::auth::AuthConfig::identity_for`].
 /// `None` means owner access. Non-owners see only shared books.
@@ -197,6 +200,7 @@ pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Val
             .with_description(format!("ContactCard/get accepts at most {limit} ids")));
     }
 
+    let contact_photo_uses_file_uri = state.contact_photo_uses_file_uri;
     let account = account_mut(state, &request.account_id)?;
 
     let mut list = Vec::new();
@@ -213,12 +217,37 @@ pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Val
         }
     }
 
+    if contact_photo_uses_file_uri {
+        for card in &mut list {
+            rewrite_photo_uri_to_file_scheme(card);
+        }
+    }
+
     to_result(&GetResponse {
         account_id: request.account_id,
         state: account.contact_cards.state(),
         list,
         not_found,
     })
+}
+
+fn rewrite_photo_uri_to_file_scheme(card: &mut ContactCard) {
+    let Some(media) = card.media.as_mut() else {
+        return;
+    };
+
+    for entry in media.values_mut() {
+        if is_photo_media(entry) {
+            entry.uri = HOSTILE_CONTACT_PHOTO_URI.to_owned();
+        }
+    }
+}
+
+fn is_photo_media(entry: &Media) -> bool {
+    entry
+        .kind
+        .as_deref()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("photo"))
 }
 
 pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {

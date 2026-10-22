@@ -68,6 +68,7 @@ pub struct MockServerBuilder {
     stalwart_shaped_unrecognized_changes_state: bool,
     objects_in_get: Option<u64>,
     email_get_includes_unrequested: bool,
+    contact_photo_uses_file_uri: bool,
     query_page_size: Option<u64>,
     query_never_terminates: bool,
     query_hides_limit: bool,
@@ -159,6 +160,12 @@ impl MockServerBuilder {
     /// Include unrequested objects in `Email/get` responses.
     pub fn email_get_includes_unrequested(mut self) -> Self {
         self.email_get_includes_unrequested = true;
+        self
+    }
+
+    /// Rewrite `ContactCard/get` photo media URIs to a local `file:` URI.
+    pub fn contact_photo_uses_file_uri(mut self) -> Self {
+        self.contact_photo_uses_file_uri = true;
         self
     }
 
@@ -354,6 +361,7 @@ impl MockServerBuilder {
             self.stalwart_shaped_unrecognized_changes_state;
         state.objects_in_get = self.objects_in_get;
         state.email_get_includes_unrequested = self.email_get_includes_unrequested;
+        state.contact_photo_uses_file_uri = self.contact_photo_uses_file_uri;
         state.query_page_size = self.query_page_size;
         state.query_never_terminates = self.query_never_terminates;
         state.query_hides_limit = self.query_hides_limit;
@@ -438,6 +446,7 @@ impl MockServer {
             stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
             email_get_includes_unrequested: false,
+            contact_photo_uses_file_uri: false,
             query_page_size: None,
             query_never_terminates: false,
             query_hides_limit: false,

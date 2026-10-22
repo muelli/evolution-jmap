@@ -8,6 +8,7 @@
 //!            [--changes-page-size N] [--changes-never-terminates]
 //!            [--query-page-size N] [--query-never-terminates]
 //!            [--email-get-includes-unrequested]
+//!            [--contact-photo-uses-file-uri]
 //!            [--well-known-redirect-to ORIGIN]
 //!            [--advertise-origin ORIGIN]
 //!            [--shared-account-name-copies-user]
@@ -74,6 +75,9 @@ fn main() {
             }
             "--email-get-includes-unrequested" => {
                 builder = builder.email_get_includes_unrequested();
+            }
+            "--contact-photo-uses-file-uri" => {
+                builder = builder.contact_photo_uses_file_uri();
             }
             "--well-known-redirect-to" => {
                 let origin = arguments
@@ -167,6 +171,7 @@ fn usage(error: &str) -> ! {
          [--changes-page-size N] [--changes-never-terminates] \
          [--query-page-size N] [--query-never-terminates] \
          [--email-get-includes-unrequested] \
+         [--contact-photo-uses-file-uri] \
          [--well-known-redirect-to ORIGIN] \
          [--advertise-origin ORIGIN] \
          [--shared-account-name-copies-user]"

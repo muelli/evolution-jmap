@@ -40,6 +40,8 @@ pub struct ServerState {
     pub objects_in_get: Option<u64>,
     /// Whether `Email/get` appends objects the client did not request.
     pub email_get_includes_unrequested: bool,
+    /// Whether `ContactCard/get` rewrites photo media URIs to a local `file:` URI.
+    pub contact_photo_uses_file_uri: bool,
     /// Optional max ids per `Email/query` page. `None` returns all ids.
     pub query_page_size: Option<u64>,
     /// Whether `Email/query` keeps returning capped non-empty pages forever.
@@ -118,6 +120,7 @@ impl ServerState {
             stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
             email_get_includes_unrequested: false,
+            contact_photo_uses_file_uri: false,
             query_page_size: None,
             query_never_terminates: false,
             query_hides_limit: false,
