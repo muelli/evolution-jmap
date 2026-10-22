@@ -17,11 +17,20 @@
 // the source after `e_collection_backend_new_child`. A source made by hand
 // shows only that the rule is correct for sources of the expected shape.
 
-use std::ffi::CString;
+use std::ffi::{CString, c_void};
+use std::path::PathBuf;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use eds_sys::{ESource, e_source_new_with_uid};
-use gobject_sys::g_object_unref;
+use eds_sys::{
+    ESource, ESourceRegistryServer, e_server_side_source_new, e_source_new_with_uid,
+    e_source_registry_server_new, g_file_new_for_path,
+};
+use glib_sys::{
+    G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, GLogLevelFlags, g_log_remove_handler,
+    g_log_set_handler, gchar,
+};
+use gobject_sys::{GObject, g_object_unref};
 use jmap_backend_collection::child_source::apply;
 use jmap_backend_collection::removal::{obsolete, remove_obsolete};
 use jmap_collection_sync::child_source::Connection;
@@ -283,9 +292,11 @@ fn a_child_that_cannot_be_removed_is_reported_with_what_eds_said() {
         let failures = removals(&fanout, &[&gone, &still_there]);
         assert_eq!(failures.len(), 1, "only the obsolete child is removed");
         assert_eq!(failures[0].resource_id, "addressbook:AB2");
+        // The refusal of EDS contains the display name in each language.
         assert!(
-            !failures[0].message.is_empty(),
-            "a refusal with no message leaves nothing to log"
+            failures[0].message.contains("Collection AB2"),
+            "the report lost what EDS said: {:?}",
+            failures[0].message
         );
     });
 }
@@ -307,6 +318,106 @@ fn a_removal_that_failed_does_not_stop_the_ones_after_it() {
             .map(|failure| failure.resource_id.as_str())
             .collect();
         assert_eq!(attempted, ["addressbook:AB1", "calendar:Cal1"]);
+    });
+}
+
+/// A child as `evolution-source-registry` holds it: an `EServerSideSource` with
+/// a keyfile on disk. EDS removes this type in the process, so the removal can
+/// succeed here. The tests above use plain sources, and EDS refuses each of them.
+struct ServerSide {
+    /// `e_server_side_source_new` keeps only a weak reference to the server.
+    server: *mut ESourceRegistryServer,
+    source: *mut ESource,
+    keyfile: PathBuf,
+}
+
+impl ServerSide {
+    fn child(kind: ChildKind, collection: &str) -> Self {
+        let keyfile = std::env::temp_dir().join(format!(
+            "jmap-removal-{}-{kind:?}-{collection}.source",
+            std::process::id()
+        ));
+        let path = CString::new(keyfile.clone().into_os_string().into_encoded_bytes())
+            .expect("no NUL in a temp path");
+        let mut error = ptr::null_mut();
+
+        // SAFETY: the constructor takes no arguments. The path is
+        // NUL-terminated and the callee copies it. This code releases the GFile.
+        let (server, source) = unsafe {
+            let server = e_source_registry_server_new().cast::<ESourceRegistryServer>();
+            let file = g_file_new_for_path(path.as_ptr());
+            let source = e_server_side_source_new(server, file, &mut error);
+            g_object_unref(file.cast());
+            (server, source)
+        };
+        assert!(!source.is_null(), "e_server_side_source_new failed");
+
+        // SAFETY: a live source that this process owns.
+        unsafe { apply(source, &child(kind, collection).settings(&connection())) }
+            .expect("a child this backend wrote");
+        std::fs::write(&keyfile, "[Data Source]\n").expect("write the keyfile");
+        Self {
+            server,
+            source,
+            keyfile,
+        }
+    }
+}
+
+impl Drop for ServerSide {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.keyfile);
+        // SAFETY: this struct holds the only reference to each object. The
+        // source goes first because it holds a weak reference to the server.
+        unsafe {
+            g_object_unref(self.source.cast());
+            g_object_unref(self.server.cast::<GObject>());
+        }
+    }
+}
+
+/// Counts each GLib message that reaches it.
+unsafe extern "C" fn count_message(
+    _domain: *const gchar,
+    _level: GLogLevelFlags,
+    _message: *const gchar,
+    counter: *mut c_void,
+) {
+    // SAFETY: the test gives the address of an `AtomicUsize` that outlives
+    // the handler.
+    unsafe { &*counter.cast::<AtomicUsize>() }.fetch_add(1, Ordering::SeqCst);
+}
+
+#[test]
+fn a_removal_that_eds_accepts_is_not_reported_and_deletes_the_keyfile() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let gone = ServerSide::child(ChildKind::AddressBook, "AB2");
+        let fanout = fanout(Parts::ALL, &["AB1"], &[]);
+
+        let criticals = AtomicUsize::new(0);
+        // SAFETY: the domain is a 'static literal. The handler reads
+        // `criticals` only until the removal of the handler below.
+        let handler = unsafe {
+            g_log_set_handler(
+                c"GLib".as_ptr(),
+                G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_WARNING,
+                Some(count_message),
+                ptr::from_ref(&criticals).cast_mut().cast(),
+            )
+        };
+        // SAFETY: the source is alive for the call.
+        let failures = unsafe { remove_obsolete(&fanout, &[gone.source]) };
+        // SAFETY: the ID is from the call above, and the removal happens once.
+        unsafe { g_log_remove_handler(c"GLib".as_ptr(), handler) };
+
+        assert!(failures.is_empty(), "EDS removed the child: {failures:?}");
+        assert!(!gone.keyfile.exists(), "the removal kept the keyfile");
+        assert_eq!(
+            criticals.load(Ordering::SeqCst),
+            0,
+            "a successful removal logged a GLib critical"
+        );
     });
 }
 

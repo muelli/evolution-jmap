@@ -66,3 +66,19 @@ panic-during-populate paths). The single mutant cargo-mutants did find
 (`Frozen::drop` replaced with `()`) was already caught by
 `the_freeze_is_given_back_even_when_the_work_panics` and its neighbours;
 no new test was needed.
+
+## `src/removal.rs`
+
+`cargo mutants` makes no mutants for this file, because each function is an
+`unsafe fn`. The mutants below were applied by hand. Two cannot occur with a
+real EDS, and a third is a leak that only LeakSanitizer finds:
+
+- In `remove_source`, the `g_error_free` on the success path removed (line
+  162). EDS sets no `GError` when `e_source_remove_sync` returns `TRUE`, so
+  this code runs only for a defective callee.
+- In `take_message`, the fallback for a `GError` with a NULL message replaced
+  with an empty string (line 216). `g_set_error` always sets a message, so no
+  EDS refusal has a NULL message.
+- In `take_message`, the `g_error_free` removed (line 214). No `cargo test`
+  can see the leak. `ci/leak-check.sh` finds it: the `removal` test binary
+  exits with code 23 under this mutant and with code 0 without it.
