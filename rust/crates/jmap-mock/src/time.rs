@@ -3,11 +3,11 @@
 
 //! Date arithmetic for the mock fixed clock.
 //!
-//! Keep the parser and formatter needed by reproducible tests.
+//! Provide only the parser and formatter that reproducible tests need.
 
 /// Parse `YYYY-MM-DDTHH:MM:SS[.fraction]Z` into Unix seconds.
-/// Accept fractional seconds and drop them.
-/// Return `None` for malformed fields and non-`Z` offsets.
+/// Accept fractional seconds, then drop the fraction.
+/// Return `None` for malformed fields and for offsets other than `Z`.
 /// Do not validate month-length combinations such as February 31.
 pub fn parse_utc(date: &str) -> Option<i64> {
     let rest = date.strip_suffix('Z')?;
