@@ -1479,7 +1479,7 @@ fn an_email_at_home_and_at_work_still_states_both() {
     // EDS files an `EMAIL` line by position: `E_CONTACT_EMAIL_1` to `_4`.
     // It does not file by `TYPE`.
     // A line with both contexts reaches one field, not two.
-    // Stating both lets a save read either context back.
+    // State both contexts so save can read either context back.
     assert_eq!(
         line(&card_to_vcard(&card), "EMAIL"),
         "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,HOME:vera@example.com"
@@ -3069,10 +3069,10 @@ fn a_service_eds_has_no_field_for_gets_no_line() {
 
 #[test]
 fn unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader() {
-    // libebook-contacts 3.52 stores X-TWITTER and X-SIP as unslotted attrs.
+    // libebook-contacts 3.52 stores X-TWITTER and X-SIP as unslotted attributes.
     // No _HOME_1..3 or _WORK_1..3 slot exists for these lines.
     // Ignore X-TWITTER, X-SIP, and unknown X-SIGNAL lines.
-    // This avoids unmapped `online_services` entries.
+    // This avoids unmapped `online_services` entries in reader output.
     let vcard = "BEGIN:VCARD\r\n\
                  VERSION:3.0\r\n\
                  FN:Vera\r\n\
@@ -3289,7 +3289,7 @@ fn reads_a_handle_on_a_line_that_never_carried_a_key() {
     .expect("parse");
 
     let services = card.online_services.expect("online services");
-    // Expect two entries: `X-SIGNAL` is not a mapped service line.
+    // Keep two entries because `X-SIGNAL` is not a mapped service line.
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1", "s2"]);
     assert_eq!(services["s1"].service.as_deref(), Some("Matrix"));
     assert_eq!(services["s1"].user.as_deref(), Some("@vera:matrix.example"));
