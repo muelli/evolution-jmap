@@ -539,3 +539,10 @@ mutants below were made by hand.
   the returned value is the same, and no sanitizer runs in `ci/checks.sh`.
 - `take_string`: `!s.is_null()` replaced with `s.is_null()`. `g_free(NULL)`
   does nothing, so this mutant also only leaks the copy. Same reason.
+
+## `src/message_info.rs`
+
+- `FLAGS_FROM_JMAP` (lines 838 to 844), each `|` replaced with `^`. The
+  eight `CAMEL_MESSAGE_*` constants are distinct single bits
+  (`camel-message-info.h`: bits 0, 2, 3, 4, 5, 7, 9 and 10). For two words
+  with no common bit, `a ^ b` equals `a | b`, so the mask is the same value.
