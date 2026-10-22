@@ -121,6 +121,7 @@ paths are relative to `rust/crates/`.
 | ID | Problem | Resolution |
 |---|---|---|
 | M1 | The address book and calendar list sent one `/query` and did not read its `limit` or `total`. A server can cap a query (RFC 8620 section 5.5). EDS then removed from its cache each card or event that the partial list did not have. | Fixed. The list gets all pages of the query. It fails when the ids do not agree with the `total` of the server. `jmap-book-sync/tests/sync.rs`, `a_capped_query_still_lists_every_card` and `a_query_that_drops_cards_without_a_limit_fails_the_list`. `jmap-cal-sync/tests/sync.rs`, `a_capped_query_still_lists_every_event` and `a_query_that_drops_events_without_a_limit_fails_the_list`. |
+| M3 | Delete only marked the message in Camel. Expunge then destroyed it, and the message never went to the trash of the server. Empty Trash removed nothing, because no message in the trash had the mark. | Fixed. If the account has a trash mailbox, a deleted message outside the trash moves into the trash when the folder synchronizes. A message is destroyed only in the trash, and an expunge of the trash removes every message there. This is the model of IMAPX with a real trash folder. `jmap-mail/tests/expunge.rs`, `a_deleted_message_moves_into_the_trash_on_synchronize` and `expunging_the_trash_removes_every_message_in_it`. |
 
 ### FFI soundness audit, 2026-08-19
 

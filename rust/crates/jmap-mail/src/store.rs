@@ -912,6 +912,25 @@ impl JmapStore {
         }
     }
 
+    /// Moves one message from a mailbox into the trash, or only out of the
+    /// mailbox if a different mailbox holds it. This is the write of a delete
+    /// outside the trash, for the reasons that [`MailSync::trash_message`]
+    /// gives. It locks the same as [`JmapStore::expunge_message`].
+    pub fn trash_message(&self, uid: &Id, mailbox: &Id, trash: &Id) -> Result<(), StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
+        retry_once_after(
+            || sync.trash_message(uid, mailbox, trash),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(&sync),
+        )
+        .map_err(Into::into)
+    }
+
     /// Removes one message from a mailbox permanently. This is the write of
     /// `expunge_sync`.
     ///
