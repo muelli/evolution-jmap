@@ -22,7 +22,7 @@
 pub(crate) mod date;
 pub mod error;
 pub mod folder;
-pub(crate) mod identity;
+pub mod identity;
 pub mod keywords;
 pub mod mailboxes;
 pub mod message;

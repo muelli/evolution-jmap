@@ -839,6 +839,7 @@ dependencies = [
  "evo-sys",
  "evolution-jmap-client",
  "evolution-jmap-collection-sync",
+ "evolution-jmap-mail-sync",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
  "gio-sys",

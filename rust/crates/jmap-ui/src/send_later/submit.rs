@@ -66,12 +66,10 @@ pub fn schedule_send(
         .call(|client| client.identities(account_id))
         .map_err(|error| crate::link::describe(&error))?;
     let sender = envelope.mail_from.email.as_str();
-    let identity_id = identities
-        .iter()
-        .find(|identity| identity.email.eq_ignore_ascii_case(sender))
-        .or(identities.first())
+    // Select the identity as Send does, and refuse as Send does.
+    let identity_id = jmap_mail_sync::identity::best_match(&identities, sender)
         .and_then(|identity| identity.id.clone())
-        .ok_or_else(|| translate(c"the account has no sending identity on the server"))?;
+        .ok_or_else(|| translate_with(c"this account cannot send mail as %1$s", &[sender]))?;
 
     let upload = link
         .call(|client| client.upload_blob(account_id, "message/rfc822", message.clone()))

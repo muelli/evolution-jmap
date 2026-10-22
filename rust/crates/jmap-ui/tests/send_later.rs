@@ -119,3 +119,72 @@ fn a_server_without_futurerelease_gates_the_feature_off() {
             .contains_key(CAPABILITY_MAIL)
     );
 }
+
+/// A server with Drafts, Sent and the given identities, ready for a hold.
+fn server_with_identities(identities: &[(&str, &str)]) -> MockServer {
+    let server = MockServer::builder().max_delayed_send(86_400).start();
+    let account_id = server.account_id();
+    let state = server.state();
+    let mut state = state.lock().unwrap();
+    let account = state.account_mut(&account_id).unwrap();
+    for (name, email) in identities {
+        account.seed_identity(name, email);
+    }
+    account.seed_mailbox("Drafts", Some(role::DRAFTS));
+    account.seed_mailbox("Sent", Some(role::SENT));
+    drop(state);
+    server
+}
+
+/// The identity must cover the sender, as for Send. The first identity of the
+/// account is not a fallback: the message would go out under a different name.
+#[test]
+fn a_scheduled_send_from_an_address_no_identity_covers_is_refused_before_upload() {
+    let server = server_with_identities(&[("Bob", "bob@example.com")]);
+    let account_id = server.account_id();
+    let link = link_to(&server);
+
+    let refused = schedule_send(&link, MESSAGE.to_vec(), envelope(), 600)
+        .expect_err("no identity covers alice@example.com");
+    assert!(
+        refused.contains("alice@example.com"),
+        "the refusal must name the sender: {refused}"
+    );
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(&account_id).unwrap();
+    assert_eq!(account.emails.iter().count(), 0, "nothing may be staged");
+    assert_eq!(account.submissions.iter().count(), 0);
+}
+
+/// An RFC 8621 §6 domain wildcard covers the sender. An exact identity in a
+/// different domain that the server lists first must not win.
+#[test]
+fn a_scheduled_send_uses_the_domain_wildcard_identity() {
+    let server = server_with_identities(&[
+        ("Bob", "bob@example.org"),
+        ("Example", "*@example.com"),
+    ]);
+    let account_id = server.account_id();
+    let wildcard = {
+        let state = server.state();
+        let state = state.lock().unwrap();
+        let account = state.account(&account_id).unwrap();
+        account
+            .identities
+            .iter()
+            .find(|(_, identity)| identity.email == "*@example.com")
+            .map(|(id, _)| id.clone())
+            .unwrap()
+    };
+    let link = link_to(&server);
+
+    schedule_send(&link, MESSAGE.to_vec(), envelope(), 600).unwrap();
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(&account_id).unwrap();
+    let (_, submission) = account.submissions.iter().next().expect("the submission");
+    assert_eq!(submission.identity_id, wildcard);
+}
