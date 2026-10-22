@@ -82,3 +82,16 @@ real EDS, and a third is a leak that only LeakSanitizer finds:
 - In `take_message`, the `g_error_free` removed (line 214). No `cargo test`
   can see the leak. `ci/leak-check.sh` finds it: the `removal` test binary
   exits with code 23 under this mutant and with code 0 without it.
+
+## `src/mail_child.rs`
+
+`cargo mutants` makes no mutants for this file, because each function is an
+`unsafe fn`. The mutants below were applied by hand. Both are equivalent,
+because the class initialisation of `ESource` registers each built-in source
+extension type (checked with EDS 3.52.3). Both functions get a live
+`ESource`, so that class initialisation is complete before they run:
+
+- In `mail_service_of`, the calls to `e_source_mail_account_get_type` and
+  `e_source_mail_transport_get_type` removed (lines 163 and 164).
+- In `follow_server`, the calls to `e_source_authentication_get_type` and
+  `e_source_security_get_type` removed (lines 202 and 203).
