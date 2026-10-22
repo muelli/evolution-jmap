@@ -105,7 +105,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let account_id = request.account_id.clone();
     let account = account_mut(state, &account_id)?;
 
-    // Keep pre-update `shareWith` values for `ShareNotification` diffs.
+    // Keep pre-update `shareWith` values for `ShareNotification` comparisons.
     let old_share_with: BTreeMap<Id, Option<BTreeMap<Id, AddressBookRights>>> = request
         .update
         .iter()
@@ -169,7 +169,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
         }
     }
 
-    // Simulate a non-compliant server that omits `id` in `created`.
+    // Simulate a noncompliant server that omits `id` in `created`.
     if id_omitting_collection_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -186,7 +186,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
 pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // Enforce `maxObjectsInGet`, like other `/get` handlers.
+    // Enforce `maxObjectsInGet`, as other `/get` handlers do.
     let limit = state.objects_in_get();
     if request
         .ids
@@ -226,7 +226,7 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let max_contact_size = state.max_contact_size;
     let account = account_mut(state, &request.account_id)?;
 
-    // Split borrows: validation reads books while `simple_set` mutates cards.
+    // Split borrows: validation reads books while `simple_set` updates cards.
     let AccountState {
         address_books,
         contact_cards,
@@ -325,7 +325,7 @@ pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<V
 }
 
 /// `ContactCard/parse` (RFC 9610 §3.4): parse vCard blobs to projected
-/// `ContactCard` responses without storing cards.
+/// `ContactCard` responses without storing them.
 pub fn contact_card_parse(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: ContactCardParseRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
