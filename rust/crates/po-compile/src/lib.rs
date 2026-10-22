@@ -11,7 +11,7 @@ pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Compile errors with 1-based source lines.
+/// Compile errors with 1-based source line numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// Missing the empty `msgid` header entry.
@@ -97,7 +97,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // Close the pending entry on blank lines and `#~` obsolete lines.
+        // End the pending entry on blank lines and on `#~` obsolete lines.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -202,7 +202,7 @@ fn take(
         });
     };
 
-    // Keep a fuzzy header entry so `charset=` stays available.
+    // Keep a fuzzy header entry so the `charset=` value stays available.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -245,7 +245,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // Reject a trailing backslash in a quoted string.
+        // Reject a trailing backslash in a quoted string literal.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -257,7 +257,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // Reject escapes outside this accepted set.
+            // Reject escapes that are outside this accepted set.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -311,7 +311,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // Do not count the trailing NUL byte in `.mo` table lengths.
+    // Do not include the trailing NUL byte in `.mo` table lengths.
     blob.push(0);
     Ok(())
 }
