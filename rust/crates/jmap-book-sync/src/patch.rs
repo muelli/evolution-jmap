@@ -1079,6 +1079,8 @@ fn merge_units(current: Option<&[OrgUnit]>, edited: Option<&[OrgUnit]>) -> Optio
 /// - The save moves an addition to a free key if an invisible entry holds its
 ///   key. The reader makes keys by counting visible entries, so a new title
 ///   can get the key of a hidden title.
+/// - The save writes nothing for an edited entry that is equal to the
+///   invisible entry under its key. Thus `diff(card, card)` stays empty.
 fn diff_entries<T: serde::Serialize>(
     patch: &mut Map<String, Value>,
     property: &str,
@@ -1121,6 +1123,9 @@ fn diff_entries<T: serde::Serialize>(
                 let path = format!("{property}/{}", escape(key));
                 diff_entry(patch, &path, existing, entry);
             }
+            None if current
+                .get(key)
+                .is_some_and(|hidden| json_of(hidden) == json_of(entry)) => {}
             None => {
                 let key = free_key(key, &taken);
                 patch.insert(format!("{property}/{}", escape(&key)), json_of(entry));
@@ -1382,6 +1387,22 @@ mod tests {
             "the hidden entry must not be overwritten"
         );
         assert!(patch.contains_key("titles/t1"));
+    }
+
+    /// A card that keeps a hidden photo under its own key has no diff to
+    /// itself. The save neither copies the photo to a free key nor touches it.
+    #[test]
+    fn a_hidden_photo_unchanged_under_its_own_key_patches_nothing() {
+        let card: ContactCard = serde_json::from_value(json!({
+            "@type": "Card",
+            "version": "1.0",
+            "uid": "u1",
+            "media": {"p1": {"@type": "Media", "kind": "photo", "uri": "aaa://0.jpg"}},
+        }))
+        .expect("a ContactCard");
+        assert!(!states_media(&card.media.as_ref().expect("media")["p1"]));
+
+        assert_eq!(diff(&card, &card), Map::new());
     }
 
     fn relations(entries: &[(&str, &[&str])]) -> BTreeMap<String, Relation> {

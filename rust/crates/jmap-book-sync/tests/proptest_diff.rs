@@ -29,7 +29,10 @@
 //! not make). Also out of scope: the `Timestamp` (point-in-time) date shape and
 //! its whole-value-replace branch. Out of scope for media: `data:` URI photos
 //! (so `mediaType` and the base64/subtype comparison in `same_photo` stay
-//! untested). Also out of scope: a second photo that is visible at the same
+//! untested). A photo URI with a scheme other than `http` or `https` is
+//! hidden (see `jmap_vcard::states_media`). The generator makes both, and
+//! `expected` keeps a hidden current photo, because the user did not see it.
+//! Also out of scope: a second photo that is visible at the same
 //! time (the "first unclaimed" order of `rekey_keyless`). Also out of scope:
 //! non-photo entries (`logo`, `sound`) that pass through `diff_entries`
 //! unchanged.
@@ -118,6 +121,7 @@ use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, Link, Media, Name,
     NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization, Relation, Title,
 };
+use jmap_vcard::states_media;
 use proptest::prelude::*;
 use serde_json::{Map, Value, json};
 
@@ -807,9 +811,14 @@ enum MediaSlot {
 }
 
 /// A URI that is not a `data:` URI, so `same_photo` compares only this string.
-/// `data:` URIs and `mediaType` are out of scope.
+/// `data:` URIs and `mediaType` are out of scope. Half of the URIs are visible
+/// (`http`, `https`), the other half are hidden.
 fn arb_photo_uri() -> impl Strategy<Value = String> {
-    "[a-z]{3,8}://[a-z0-9]{1,10}\\.jpg"
+    prop_oneof![
+        "https?://[a-z0-9]{1,10}\\.jpg",
+        "[a-z]{3,8}://[a-z0-9]{1,10}\\.jpg"
+            .prop_filter("hidden scheme", |uri| !uri.starts_with("http")),
+    ]
 }
 
 fn arb_media_slot() -> impl Strategy<Value = MediaSlot> {
@@ -834,7 +843,9 @@ fn card_with_media(map: BTreeMap<String, Media>) -> ContactCard {
 /// same key twice. `expected` is the result that `rekey_keyless` must give. A
 /// `Modified` slot goes under the key of current: this is the pairing under
 /// test. An `Added` slot keeps the key of edited, and a `Removed` slot leaves
-/// no entry.
+/// no entry. A hidden current photo never pairs and is never removed, so it
+/// stays under its key, and a `Modified` slot then adds the new photo under the
+/// key of edited.
 fn arb_media_cards() -> impl Strategy<Value = (ContactCard, ContactCard, ContactCard)> {
     arb_media_slot().prop_map(|slot| {
         let mut current = BTreeMap::new();
@@ -854,12 +865,20 @@ fn arb_media_cards() -> impl Strategy<Value = (ContactCard, ContactCard, Contact
                 expected.insert(edited_key, entry(uri));
             }
             MediaSlot::Removed(uri) => {
+                if !states_media(&entry(uri.clone())) {
+                    expected.insert(current_key.clone(), entry(uri.clone()));
+                }
                 current.insert(current_key, entry(uri));
             }
             MediaSlot::Modified(old, new) => {
-                current.insert(current_key.clone(), entry(old));
-                edited.insert(edited_key, entry(new.clone()));
-                expected.insert(current_key, entry(new));
+                current.insert(current_key.clone(), entry(old.clone()));
+                edited.insert(edited_key.clone(), entry(new.clone()));
+                if states_media(&entry(old.clone())) {
+                    expected.insert(current_key, entry(new));
+                } else {
+                    expected.insert(current_key, entry(old));
+                    expected.insert(edited_key, entry(new));
+                }
             }
         }
         (
