@@ -374,6 +374,7 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
             .with_description(format!("Email/get accepts at most {limit} ids")));
     }
 
+    let include_unrequested = state.email_get_includes_unrequested;
     let account = account_mut(state, &request.account_id)?;
 
     let mut list = Vec::new();
@@ -393,6 +394,15 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
                     None => not_found.push(id.clone()),
                 }
             }
+        }
+    }
+
+    if include_unrequested && let Some(requested_ids) = &request.ids {
+        for (id, email) in account.emails.iter() {
+            if requested_ids.contains(id) {
+                continue;
+            }
+            list.push(project_properties(email, request.properties.as_deref())?);
         }
     }
 

@@ -67,6 +67,7 @@ pub struct MockServerBuilder {
     changes_never_terminates: bool,
     stalwart_shaped_unrecognized_changes_state: bool,
     objects_in_get: Option<u64>,
+    email_get_includes_unrequested: bool,
     query_page_size: Option<u64>,
     query_never_terminates: bool,
     size_request: Option<u64>,
@@ -150,6 +151,12 @@ impl MockServerBuilder {
 
     pub fn objects_in_get(mut self, ids: u64) -> Self {
         self.objects_in_get = Some(ids);
+        self
+    }
+
+    /// Include unrequested objects in `Email/get` responses.
+    pub fn email_get_includes_unrequested(mut self) -> Self {
+        self.email_get_includes_unrequested = true;
         self
     }
 
@@ -331,6 +338,7 @@ impl MockServerBuilder {
         state.stalwart_shaped_unrecognized_changes_state =
             self.stalwart_shaped_unrecognized_changes_state;
         state.objects_in_get = self.objects_in_get;
+        state.email_get_includes_unrequested = self.email_get_includes_unrequested;
         state.query_page_size = self.query_page_size;
         state.query_never_terminates = self.query_never_terminates;
         state.size_request = self.size_request;
@@ -412,6 +420,7 @@ impl MockServer {
             changes_never_terminates: false,
             stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
+            email_get_includes_unrequested: false,
             query_page_size: None,
             query_never_terminates: false,
             size_request: Some(DEFAULT_SIZE_REQUEST),

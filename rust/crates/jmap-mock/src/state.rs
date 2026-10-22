@@ -38,6 +38,8 @@ pub struct ServerState {
     pub stalwart_shaped_unrecognized_changes_state: bool,
     /// Optional `Email/get` id limit. `None` uses [`crate::DEFAULT_OBJECTS_IN_GET`].
     pub objects_in_get: Option<u64>,
+    /// Whether `Email/get` appends objects the client did not request.
+    pub email_get_includes_unrequested: bool,
     /// Optional max ids per `Email/query` page. `None` returns all ids.
     pub query_page_size: Option<u64>,
     /// Whether `Email/query` keeps returning capped non-empty pages forever.
@@ -103,6 +105,7 @@ impl ServerState {
             changes_never_terminates: false,
             stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
+            email_get_includes_unrequested: false,
             query_page_size: None,
             query_never_terminates: false,
             size_request: Some(crate::DEFAULT_SIZE_REQUEST),

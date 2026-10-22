@@ -7,6 +7,7 @@
 //! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]
 //!            [--changes-page-size N] [--changes-never-terminates]
 //!            [--query-page-size N] [--query-never-terminates]
+//!            [--email-get-includes-unrequested]
 //!            [--well-known-redirect-to ORIGIN]
 //!            [--advertise-origin ORIGIN]
 //! ```
@@ -68,6 +69,9 @@ fn main() {
             }
             "--query-never-terminates" => {
                 builder = builder.query_never_terminates();
+            }
+            "--email-get-includes-unrequested" => {
+                builder = builder.email_get_includes_unrequested();
             }
             "--well-known-redirect-to" => {
                 let origin = arguments
@@ -152,6 +156,7 @@ fn usage(error: &str) -> ! {
         "usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2] \
          [--changes-page-size N] [--changes-never-terminates] \
          [--query-page-size N] [--query-never-terminates] \
+         [--email-get-includes-unrequested] \
          [--well-known-redirect-to ORIGIN] \
          [--advertise-origin ORIGIN]"
     );
