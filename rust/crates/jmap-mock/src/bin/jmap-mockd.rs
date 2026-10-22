@@ -57,6 +57,16 @@ fn main() {
             "--changes-never-terminates" => {
                 builder = builder.changes_never_terminates();
             }
+            "--query-page-size" => {
+                let ids = arguments
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or_else(|| usage("--query-page-size needs a number"));
+                builder = builder.query_page_size(ids);
+            }
+            "--query-never-terminates" => {
+                builder = builder.query_never_terminates();
+            }
             "--well-known-redirect-to" => {
                 let origin = arguments
                     .next()
@@ -133,6 +143,7 @@ fn usage(error: &str) -> ! {
     eprintln!(
         "usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2] \
          [--changes-page-size N] [--changes-never-terminates] \
+         [--query-page-size N] [--query-never-terminates] \
          [--well-known-redirect-to ORIGIN]"
     );
     std::process::exit(if error.is_empty() { 0 } else { 2 });
