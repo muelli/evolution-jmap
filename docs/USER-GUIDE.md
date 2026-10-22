@@ -143,6 +143,9 @@ Snooze needs the Cyrus snooze capability. Stalwart and Fastmail do not offer it.
 - To get detailed module logs, restart Evolution with this command:
   `EVOLUTION_JMAP_LOG=debug G_MESSAGES_DEBUG=all evolution`
 - To watch the live user-session logs, run `journalctl --user -f`.
+- At the `trace` level, the log contains the body of each JMAP request and response. These bodies contain your mail, contacts and calendar events: subjects, addresses, message previews, attachment names and the text of contacts and events. The log does not contain your password or your tokens.
+- Use `trace` only to find a problem. Set the level back to `debug` or lower when you are done.
+- Read a `trace` log before you attach it to a bug report. Remove the private data, or send only the lines that show the problem.
 - If journald is not available (for example in some containers), start Evolution from a terminal. Read stderr in that terminal.
 - The account source files are in `${XDG_CONFIG_HOME:-~/.config}/evolution/sources/`.
 

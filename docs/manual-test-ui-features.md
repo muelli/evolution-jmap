@@ -55,6 +55,8 @@ Install the module with `cmake --install`. Then run
 `evolution --force-shutdown`, so that the shell loads the new `.so`. Run
 Evolution with `EVOLUTION_JMAP_LOG=trace`. The log then shows each gate
 decision.
+The log also shows each JMAP request and response body, with mail data. Do
+this only with a test account.
 
 ## Vacation autoresponder
 
