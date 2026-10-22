@@ -13,17 +13,20 @@
 // live `GBinding`, not a copy.
 
 use std::ffi::{CStr, CString};
+use std::process::Command;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_AUTHENTICATION,
-    E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication, ESourceSecurity,
-    e_source_authentication_get_host, e_source_authentication_get_type,
-    e_source_authentication_set_host, e_source_authentication_set_method,
-    e_source_authentication_set_port, e_source_authentication_set_user, e_source_get_extension,
-    e_source_has_extension, e_source_new_with_uid, e_source_security_get_type,
-    e_source_security_set_secure,
+    E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication, ESourceRegistryServer,
+    ESourceSecurity, e_server_side_source_new, e_source_authentication_get_host,
+    e_source_authentication_get_type, e_source_authentication_set_host,
+    e_source_authentication_set_method, e_source_authentication_set_port,
+    e_source_authentication_set_user, e_source_get_extension, e_source_has_extension,
+    e_source_new_with_uid, e_source_parameter_to_key, e_source_registry_server_new,
+    e_source_security_get_secure, e_source_security_get_type, e_source_security_set_secure,
+    g_file_new_for_path,
 };
 // The token-cache-key accessors that the installed EDS has. See
 // `jmap_backend_collection::child_added::CREDENTIAL_PROPERTY`.
@@ -37,8 +40,8 @@ use eds_sys::{
     e_source_authentication_get_credential_store_id as get_credential_name,
     e_source_authentication_set_credential_store_id as set_credential_name,
 };
-use glib_sys::{GFALSE, GTRUE, gpointer};
-use gobject_sys::{g_object_unref, g_object_weak_ref};
+use glib_sys::{GFALSE, GTRUE, g_free, gpointer};
+use gobject_sys::{GObject, g_object_unref, g_object_weak_ref};
 use jmap_backend_collection::child_added::{BOUND, follow_collection};
 use jmap_backend_collection::child_source::apply;
 use jmap_backend_core::marshal::read_string;
@@ -491,6 +494,32 @@ fn a_child_that_authenticates_but_names_no_security_keeps_naming_none() {
     });
 }
 
+#[test]
+fn a_child_with_security_but_no_authentication_still_follows_the_secure_flag() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The rule applies to each group separately. A missing `[Authentication]`
+        // on the child does not stop the binding of `[Security]` after it.
+        let account = Source::account();
+        let child = Source::new("jmap-account-security-only");
+        child.set_secure(false);
+
+        // SAFETY: two live sources.
+        unsafe { follow_collection(account.0, child.0) };
+
+        let security: *mut ESourceSecurity = child.extension(E_SOURCE_EXTENSION_SECURITY);
+        // SAFETY: a live extension.
+        let secure = || unsafe { e_source_security_get_secure(security) } != GFALSE;
+        assert!(secure(), "the group after a skipped group was not bound");
+        account.set_secure(false);
+        assert!(!secure(), "the binding of [Security] is not live");
+        assert!(
+            !child.has(E_SOURCE_EXTENSION_AUTHENTICATION),
+            "the group only the account has was written onto the child anyway"
+        );
+    });
+}
+
 // ---------------------------------------------------------------------------
 // The `[JMAP OAuth2]` group has its own rule, because EDS gives the OAuth2
 // service the source that requested the token.
@@ -612,6 +641,116 @@ fn an_account_without_the_oauth2_group_leaves_the_child_without_it() {
         assert!(
             !child.has(jmap_config::oauth2::EXTENSION_NAME),
             "an account with no registration has nothing to carry to a child"
+        );
+    });
+}
+
+/// Set in the new process that
+/// [`the_oauth2_group_follows_in_a_process_that_never_registered_its_type`] starts.
+const FRESH_PROCESS: &str = "JMAP_CHILD_ADDED_FRESH_PROCESS";
+
+#[test]
+fn the_oauth2_group_follows_in_a_process_that_never_registered_its_type() {
+    // EDS finds an extension by its registered type. The other tests of this
+    // binary register the `[JMAP OAuth2]` type first, so this test runs again in
+    // a new process. There, only `follow_collection` can register it.
+    if std::env::var_os(FRESH_PROCESS).is_some() {
+        oauth2_group_follows_before_any_registration();
+        return;
+    }
+    let output = Command::new(std::env::current_exe().expect("no path to this test binary"))
+        .args([
+            "--exact",
+            "the_oauth2_group_follows_in_a_process_that_never_registered_its_type",
+            "--test-threads=1",
+        ])
+        .env(FRESH_PROCESS, "1")
+        .output()
+        .expect("could not start this test binary again");
+    assert!(
+        output.status.success(),
+        "the new process failed ({}):\n{}{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The keyfile key that EDS reads for a property name.
+fn keyfile_key(property: &CStr) -> String {
+    // SAFETY: a NUL-terminated name. The result is `(transfer full)`, so this
+    // code copies and frees it.
+    unsafe {
+        let raw = e_source_parameter_to_key(property.as_ptr());
+        assert!(!raw.is_null(), "e_source_parameter_to_key returned NULL");
+        let key = CStr::from_ptr(raw).to_string_lossy().into_owned();
+        g_free(raw.cast());
+        key
+    }
+}
+
+/// The body of the test above, in the new process.
+fn oauth2_group_follows_before_any_registration() {
+    with_timeout(|| {
+        // The account as `evolution-source-registry` loads it from its `.source`
+        // file. EDS keeps a group of an unregistered type in the keyfile.
+        let keyfile =
+            std::env::temp_dir().join(format!("jmap-child-added-{}.source", std::process::id()));
+        let group = jmap_config::oauth2::EXTENSION_NAME
+            .to_str()
+            .expect("an ASCII group name");
+        let text = format!(
+            "[Data Source]\nDisplayName=JMAP\n\n[{group}]\n{}=client-abc123\n{}=https://jmap.example.com/token\n",
+            keyfile_key(c"client-id"),
+            keyfile_key(c"token-endpoint"),
+        );
+        std::fs::write(&keyfile, text).expect("write the keyfile");
+        let path = CString::new(keyfile.clone().into_os_string().into_encoded_bytes())
+            .expect("no NUL in a temp path");
+        let mut error = ptr::null_mut();
+        // SAFETY: the constructor takes no arguments. The path is NUL-terminated
+        // and the callee copies it. This code releases the GFile.
+        let (server, account) = unsafe {
+            let server = e_source_registry_server_new().cast::<ESourceRegistryServer>();
+            let file = g_file_new_for_path(path.as_ptr());
+            let account = e_server_side_source_new(server, file, &mut error);
+            g_object_unref(file.cast());
+            (server, account)
+        };
+        assert!(!account.is_null(), "e_server_side_source_new failed");
+
+        // Without this, a registration somewhere above makes the test prove
+        // nothing. An EDS with its own client type can register it first.
+        #[cfg(not(eds_oauth2_dynamic))]
+        assert!(
+            // SAFETY: a live source and a NUL-terminated name.
+            unsafe {
+                e_source_has_extension(account, jmap_config::oauth2::EXTENSION_NAME.as_ptr())
+            } == GFALSE,
+            "the type was registered before follow_collection ran"
+        );
+
+        let child = Source::new("jmap-account-child");
+        // SAFETY: two live sources, the account and its child.
+        unsafe { follow_collection(account, child.0) };
+        // SAFETY: a live source.
+        let carried = unsafe { jmap_config::oauth2::read(child.0) };
+
+        let _ = std::fs::remove_file(&keyfile);
+        // SAFETY: this code holds the only reference to each object. The source
+        // goes first, because it holds a weak reference to the server.
+        unsafe {
+            g_object_unref(account.cast());
+            g_object_unref(server.cast::<GObject>());
+        }
+        assert_eq!(
+            carried.client_id.as_deref(),
+            Some("client-abc123"),
+            "the child got no client registration from the account file"
+        );
+        assert_eq!(
+            carried.token_endpoint.as_deref(),
+            Some("https://jmap.example.com/token")
         );
     });
 }
