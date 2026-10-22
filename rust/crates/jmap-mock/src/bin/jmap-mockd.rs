@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]
+//!            [--well-known-redirect-to ORIGIN]
 //! ```
 //!
 //! Serve one account (`A1`, `alice@example.com`) and seed demo data.
@@ -45,6 +46,12 @@ fn main() {
                 builder = builder.bearer_token(&token);
             }
             "--oauth2" => oauth2 = true,
+            "--well-known-redirect-to" => {
+                let origin = arguments
+                    .next()
+                    .unwrap_or_else(|| usage("--well-known-redirect-to needs an origin URL"));
+                builder = builder.well_known_redirect_to(origin);
+            }
             "--help" | "-h" => usage(""),
             other => usage(&format!("unknown argument: {other}")),
         }
@@ -112,6 +119,9 @@ fn usage(error: &str) -> ! {
     if !error.is_empty() {
         eprintln!("error: {error}\n");
     }
-    eprintln!("usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]");
+    eprintln!(
+        "usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2] \
+         [--well-known-redirect-to ORIGIN]"
+    );
     std::process::exit(if error.is_empty() { 0 } else { 2 });
 }

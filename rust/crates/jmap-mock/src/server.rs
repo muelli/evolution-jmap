@@ -71,6 +71,7 @@ pub struct MockServerBuilder {
     size_request: Option<u64>,
     size_upload: Option<u64>,
     session_via_redirect: bool,
+    well_known_redirect_to: Option<String>,
     advertise_origin: Option<String>,
     download_via_redirect_to: Option<String>,
     reject_download_accept_json: bool,
@@ -218,6 +219,12 @@ impl MockServerBuilder {
         self
     }
 
+    /// Redirect `GET /.well-known/jmap` to `origin` with path `/jmap/session`.
+    pub fn well_known_redirect_to(mut self, origin: impl Into<String>) -> Self {
+        self.well_known_redirect_to = Some(origin.into());
+        self
+    }
+
     /// Advertise API URLs on `origin` instead of the listener address.
     pub fn advertise_origin(mut self, origin: impl Into<String>) -> Self {
         self.advertise_origin = Some(origin.into());
@@ -321,6 +328,7 @@ impl MockServerBuilder {
         state.size_request = self.size_request;
         state.size_upload = self.size_upload;
         state.session_via_redirect = self.session_via_redirect;
+        state.well_known_redirect_to = self.well_known_redirect_to.clone();
         state.advertise_origin = self.advertise_origin.clone();
         state.download_via_redirect_to = self.download_via_redirect_to.clone();
         state.reject_download_accept_json = self.reject_download_accept_json;
@@ -400,6 +408,7 @@ impl MockServer {
             size_request: Some(DEFAULT_SIZE_REQUEST),
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
+            well_known_redirect_to: None,
             advertise_origin: None,
             download_via_redirect_to: None,
             reject_download_accept_json: false,
@@ -607,11 +616,18 @@ fn handle_request(
     }
 
     // In redirect mode, serve both discovery routes before the 401 gate.
-    let session_via_redirect = state.lock().expect("mock state lock").session_via_redirect;
-    if session_via_redirect {
+    let (session_via_redirect, well_known_redirect_to) = {
+        let state = state.lock().expect("mock state lock");
+        (
+            state.session_via_redirect,
+            state.well_known_redirect_to.clone(),
+        )
+    };
+    if session_via_redirect || well_known_redirect_to.is_some() {
         let path_only = request.url().split('?').next().unwrap_or_default();
         if request.method() == &tiny_http::Method::Get && path_only == "/.well-known/jmap" {
-            let location = format!("{origin}/jmap/session");
+            let target_origin = well_known_redirect_to.as_deref().unwrap_or(origin);
+            let location = format!("{target_origin}/jmap/session");
             let response = tiny_http::Response::empty(307).with_header(
                 tiny_http::Header::from_bytes(&b"Location"[..], location.as_bytes())
                     .expect("location header"),

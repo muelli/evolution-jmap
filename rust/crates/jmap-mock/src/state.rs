@@ -46,6 +46,9 @@ pub struct ServerState {
     pub size_upload: Option<u64>,
     /// Route `/.well-known/jmap` to `/jmap/session` in auth redirect tests.
     pub session_via_redirect: bool,
+    /// Optional redirect origin for `GET /.well-known/jmap`.
+    /// `None` keeps discovery on this origin.
+    pub well_known_redirect_to: Option<String>,
     /// Optional origin override for `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
     pub advertise_origin: Option<String>,
     /// Optional redirect origin for `GET /download/...`.
@@ -102,6 +105,7 @@ impl ServerState {
             size_request: Some(crate::DEFAULT_SIZE_REQUEST),
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
+            well_known_redirect_to: None,
             advertise_origin: None,
             download_via_redirect_to: None,
             reject_download_accept_json: false,
