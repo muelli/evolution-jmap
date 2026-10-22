@@ -162,10 +162,8 @@ fn a_scheduled_send_from_an_address_no_identity_covers_is_refused_before_upload(
 /// different domain that the server lists first must not win.
 #[test]
 fn a_scheduled_send_uses_the_domain_wildcard_identity() {
-    let server = server_with_identities(&[
-        ("Bob", "bob@example.org"),
-        ("Example", "*@example.com"),
-    ]);
+    let server =
+        server_with_identities(&[("Bob", "bob@example.org"), ("Example", "*@example.com")]);
     let account_id = server.account_id();
     let wildcard = {
         let state = server.state();
