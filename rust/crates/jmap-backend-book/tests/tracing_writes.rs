@@ -318,6 +318,9 @@ fn save_load_and_remove_contact_trace_structured_fields() {
     );
 
     assert!(!new_uid.is_null());
+    // SAFETY: the save hands over its extra, a GLib string or NULL.
+    unsafe { g_free(extra.cast()) };
+    extra = ptr::null_mut();
     let uid_str = unsafe { std::ffi::CStr::from_ptr(new_uid).to_str().unwrap() };
 
     let mut loaded_contact = ptr::null_mut();
@@ -337,6 +340,8 @@ fn save_load_and_remove_contact_trace_structured_fields() {
         ),
         "expected account_id in load_contact, got {captured_load:?}"
     );
+    // SAFETY: the load hands over its extra, a GLib string or NULL.
+    unsafe { g_free(extra.cast()) };
     assert!(
         has(&captured_load, Level::DEBUG, "uid", uid_str),
         "expected uid in load_contact, got {captured_load:?}"

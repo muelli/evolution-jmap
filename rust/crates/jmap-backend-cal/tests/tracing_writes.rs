@@ -349,6 +349,9 @@ fn save_load_and_remove_component_trace_structured_fields() {
     );
 
     assert!(!new_uid.is_null());
+    // SAFETY: the save hands over its extra, a GLib string or NULL.
+    unsafe { g_free(extra.cast()) };
+    extra = ptr::null_mut();
     let uid_str = unsafe { CStr::from_ptr(new_uid).to_str().unwrap() };
 
     let mut loaded_component = ptr::null_mut();
@@ -374,6 +377,8 @@ fn save_load_and_remove_component_trace_structured_fields() {
         ),
         "expected account_id in load_component, got {captured_load:?}"
     );
+    // SAFETY: the load hands over its extra, a GLib string or NULL.
+    unsafe { g_free(extra.cast()) };
     assert!(
         has(
             &captured_load,
