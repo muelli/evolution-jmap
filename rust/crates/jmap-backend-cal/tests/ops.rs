@@ -8,8 +8,11 @@ use std::ptr;
 
 use eds_sys::{
     E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG, E_CLIENT_ERROR_NOT_SUPPORTED,
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalComponent, ECalMetaBackendInfo, ICalComponent,
-    e_cal_client_error_quark, e_cal_component_get_icalcomponent, e_cal_component_new_from_string,
+    E_CLIENT_ERROR_OUT_OF_SYNC, E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_CONFLICT_RESOLUTION_FAIL,
+    E_CONFLICT_RESOLUTION_KEEP_LOCAL, E_CONFLICT_RESOLUTION_KEEP_SERVER,
+    E_CONFLICT_RESOLUTION_USE_NEWER, E_CONFLICT_RESOLUTION_WRITE_COPY, ECalComponent,
+    ECalMetaBackendInfo, EConflictResolution, ICalComponent, e_cal_client_error_quark,
+    e_cal_component_get_icalcomponent, e_cal_component_new_from_string,
     e_cal_meta_backend_info_free, e_client_error_quark, i_cal_component_set_uid,
 };
 use glib_sys::{
@@ -19,11 +22,12 @@ use glib_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 use jmap_backend_cal::ops::{self, Outcome};
-use jmap_cal_sync::{CalSync, Itip, SyncError, Unscheduled, Unsendable};
+use jmap_cal_sync::{CalSync, Itip, OnConflict, SyncError, Unscheduled, Unsendable};
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::calendars::CalendarEvent;
+use serde_json::json;
 
 /// A mock server with two calendars, so "only this calendar" stays observable,
 /// and the `CalSync` over the one the backend syncs.
@@ -398,7 +402,9 @@ fn saving_a_new_component_creates_it_under_the_identifier_the_server_assigns() {
         let ok = ops::save_component(
             &fixture.sync(),
             GFALSE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
             list,
+            ptr::null(),
             ptr::null_mut(),
             Itip::Send,
             &mut new_uid,
@@ -444,7 +450,9 @@ fn saving_an_existing_component_patches_it_rather_than_adding_a_second() {
         let ok = ops::save_component(
             &sync,
             GTRUE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
             list,
+            ptr::null(),
             ptr::null_mut(),
             Itip::Send,
             &mut new_uid,
@@ -487,7 +495,9 @@ fn an_edit_without_an_identifier_is_refused_rather_than_duplicating() {
         let ok = ops::save_component(
             &fixture.sync(),
             GTRUE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
             list,
+            ptr::null(),
             ptr::null_mut(),
             Itip::Send,
             &mut new_uid,
@@ -525,7 +535,9 @@ fn saving_instances_with_no_master_is_an_invalid_argument() {
         let ok = ops::save_component(
             &fixture.sync(),
             GFALSE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
             list,
+            ptr::null(),
             ptr::null_mut(),
             Itip::Send,
             ptr::null_mut(),
@@ -547,6 +559,8 @@ fn saving_instances_with_no_master_is_an_invalid_argument() {
         let ok = ops::save_component(
             &fixture.sync(),
             GFALSE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
+            ptr::null(),
             ptr::null(),
             ptr::null_mut(),
             Itip::Send,
@@ -837,6 +851,228 @@ fn get_changes_skips_unrequested_out_parameters_and_populates_requested_ones() {
         assert_eq!(g_slist_length(removed), 1);
         assert_eq!(nth_info(removed, 0).0, doomed.to_string());
         g_slist_free_full(removed, Some(e_cal_meta_backend_info_free));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the base of an edit, which EDS keeps as the extra of a component
+
+/// Loads `uid` through `ops::load_component` and returns the extra it stores.
+fn loaded_extra(sync: &CalSync, uid: &Id) -> String {
+    let uid = CString::new(uid.as_str()).unwrap();
+    let mut extra: *mut gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    unsafe {
+        let ok = ops::load_component(sync, uid.as_ptr(), ptr::null_mut(), &mut extra, &mut error);
+        assert_eq!(ok, GTRUE);
+        take_string(&mut extra)
+    }
+}
+
+/// The master `VEVENT` of a cached object, as EDS hands it back to a save.
+fn master(icalendar: &str) -> String {
+    let (_, rest) = icalendar
+        .split_once("BEGIN:VEVENT")
+        .expect("the object holds an event");
+    let (event, _) = rest.split_once("END:VEVENT").expect("the event ends");
+    format!("BEGIN:VEVENT{event}END:VEVENT\r\n")
+}
+
+/// Seeds "Standup", loads it, and has a different client add a description.
+/// Returns the id and the extra of the load.
+fn edited_remotely(fixture: &Fixture, sync: &CalSync, patch: serde_json::Value) -> (Id, String) {
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let extra = loaded_extra(sync, &id);
+    fixture
+        .client()
+        .event_update(&fixture.account_id, &id, patch)
+        .unwrap();
+    (id, extra)
+}
+
+/// Saves `vevent` as an edit with `extra`. Returns the result, the error and the new extra.
+fn save_edit(
+    sync: &CalSync,
+    vevent: &str,
+    extra: &str,
+    resolution: EConflictResolution,
+    itip: Itip,
+) -> (gboolean, *mut GError, String) {
+    let components = [instance(vevent)];
+    let list = instance_list(&components);
+    let extra = CString::new(extra).unwrap();
+    let mut new_uid: *mut gchar = ptr::null_mut();
+    let mut new_extra: *mut gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    unsafe {
+        let ok = ops::save_component(
+            sync,
+            GTRUE,
+            resolution,
+            list,
+            extra.as_ptr(),
+            ptr::null_mut(),
+            itip,
+            &mut new_uid,
+            &mut new_extra,
+            &mut error,
+        );
+        drop_instances(list, &components);
+        let new_extra = if ok == GTRUE {
+            g_free(new_uid.cast());
+            take_string(&mut new_extra)
+        } else {
+            assert!(new_extra.is_null(), "a failed save wrote an extra");
+            String::new()
+        };
+        (ok, error, new_extra)
+    }
+}
+
+#[test]
+fn every_listed_node_carries_its_icalendar_as_the_extra() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    let mut sync_tag: *mut gchar = ptr::null_mut();
+    let mut existing: *mut GSList = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    unsafe {
+        let ok = ops::list_existing(&sync, &mut sync_tag, &mut existing, &mut error);
+        assert_eq!(ok, GTRUE);
+        let node = g_slist_nth_data(existing, 0).cast::<ECalMetaBackendInfo>();
+        assert!(!(*node).extra.is_null(), "the node has no extra");
+        let extra = CStr::from_ptr((*node).extra).to_string_lossy().into_owned();
+        assert_eq!(extra, sync.load_component(id.as_str()).unwrap().icalendar);
+        g_free(sync_tag.cast());
+        g_slist_free_full(existing, Some(e_cal_meta_backend_info_free));
+    }
+}
+
+#[test]
+fn a_load_stores_the_icalendar_as_the_extra() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    assert_eq!(
+        loaded_extra(&sync, &id),
+        sync.load_component(id.as_str()).unwrap().icalendar
+    );
+}
+
+/// The M2 finding: an edit of one property must not revert a remote edit of another.
+#[test]
+fn an_edit_with_its_extra_keeps_a_remote_edit_of_another_property() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let (id, extra) = edited_remotely(&fixture, &sync, json!({"description": "Remote notes"}));
+
+    let edited = master(&extra).replace("SUMMARY:Standup\r\n", "SUMMARY:Standup local\r\n");
+    let (ok, error, new_extra) = save_edit(
+        &sync,
+        &edited,
+        &extra,
+        E_CONFLICT_RESOLUTION_KEEP_LOCAL,
+        Itip::Send,
+    );
+
+    assert_eq!(ok, GTRUE);
+    assert!(error.is_null());
+    let stored = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(stored.contains("SUMMARY:Standup local"), "{stored}");
+    assert!(
+        stored.contains("Remote notes"),
+        "the remote edit was reverted: {stored}"
+    );
+    assert_eq!(
+        new_extra, stored,
+        "the new extra is not the stored iCalendar"
+    );
+}
+
+/// A received change comes from the organizer and replaces the event, so it has no base.
+#[test]
+fn a_received_change_ignores_the_extra() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let (id, extra) = edited_remotely(&fixture, &sync, json!({"description": "Remote notes"}));
+
+    let edited = master(&extra).replace("SUMMARY:Standup\r\n", "SUMMARY:Standup moved\r\n");
+    let (ok, error, _) = save_edit(
+        &sync,
+        &edited,
+        &extra,
+        E_CONFLICT_RESOLUTION_KEEP_LOCAL,
+        Itip::Received { reply: false },
+    );
+
+    assert_eq!(ok, GTRUE);
+    assert!(error.is_null());
+    let stored = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(stored.contains("SUMMARY:Standup moved"), "{stored}");
+    assert!(!stored.contains("Remote notes"), "{stored}");
+}
+
+#[test]
+fn keep_server_keeps_the_remote_value_of_a_property_both_sides_changed() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let (id, extra) = edited_remotely(&fixture, &sync, json!({"title": "Standup remote"}));
+
+    let edited = master(&extra).replace("SUMMARY:Standup\r\n", "SUMMARY:Standup local\r\n");
+    let (ok, error, _) = save_edit(
+        &sync,
+        &edited,
+        &extra,
+        E_CONFLICT_RESOLUTION_KEEP_SERVER,
+        Itip::Send,
+    );
+
+    assert_eq!(ok, GTRUE);
+    assert!(error.is_null());
+    let stored = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(stored.contains("SUMMARY:Standup remote"), "{stored}");
+}
+
+#[test]
+fn fail_reports_out_of_sync_for_a_property_both_sides_changed() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let (id, extra) = edited_remotely(&fixture, &sync, json!({"title": "Standup remote"}));
+
+    let edited = master(&extra).replace("SUMMARY:Standup\r\n", "SUMMARY:Standup local\r\n");
+    let (ok, mut error, _) = save_edit(
+        &sync,
+        &edited,
+        &extra,
+        E_CONFLICT_RESOLUTION_FAIL,
+        Itip::Send,
+    );
+
+    assert_eq!(ok, GFALSE);
+    unsafe {
+        assert_error(
+            &mut error,
+            e_client_error_quark(),
+            E_CLIENT_ERROR_OUT_OF_SYNC as i32,
+        );
+    }
+    let stored = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(stored.contains("SUMMARY:Standup remote"), "{stored}");
+}
+
+#[test]
+fn each_conflict_resolution_maps_to_its_on_conflict() {
+    let cases = [
+        (E_CONFLICT_RESOLUTION_FAIL, OnConflict::Fail),
+        (E_CONFLICT_RESOLUTION_KEEP_SERVER, OnConflict::KeepServer),
+        (E_CONFLICT_RESOLUTION_KEEP_LOCAL, OnConflict::KeepLocal),
+        (E_CONFLICT_RESOLUTION_USE_NEWER, OnConflict::KeepLocal),
+        (E_CONFLICT_RESOLUTION_WRITE_COPY, OnConflict::KeepLocal),
+        (99, OnConflict::KeepLocal),
+    ];
+    for (resolution, expected) in cases {
+        assert_eq!(ops::on_conflict(resolution), expected, "{resolution}");
     }
 }
 
@@ -1375,7 +1611,9 @@ fn create_meeting_with_uid(sync: &CalSync, itip: Itip, uid: &str) -> String {
         let ok = ops::save_component(
             sync,
             GFALSE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
             list,
+            ptr::null(),
             ptr::null_mut(),
             itip,
             &mut new_uid,

@@ -7,9 +7,12 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use eds_sys::{
-    E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG,
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBookMetaBackendInfo, EContact, e_book_client_error_quark,
-    e_book_meta_backend_info_free, e_client_error_quark,
+    E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG, E_CLIENT_ERROR_OUT_OF_SYNC,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_CONFLICT_RESOLUTION_FAIL,
+    E_CONFLICT_RESOLUTION_KEEP_LOCAL, E_CONFLICT_RESOLUTION_KEEP_SERVER,
+    E_CONFLICT_RESOLUTION_USE_NEWER, E_CONFLICT_RESOLUTION_WRITE_COPY, EBookMetaBackendInfo,
+    EConflictResolution, EContact, e_book_client_error_quark, e_book_meta_backend_info_free,
+    e_client_error_quark,
 };
 use glib_sys::{
     GError, GFALSE, GSList, GTRUE, g_error_free, g_free, g_slist_free_full, g_slist_length,
@@ -17,11 +20,12 @@ use glib_sys::{
 };
 use jmap_backend_book::marshal;
 use jmap_backend_book::ops::{self, Outcome};
-use jmap_book_sync::{BookSync, SyncError};
+use jmap_book_sync::{BookSync, OnConflict, SyncError};
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::contacts::ContactCard;
+use serde_json::json;
 
 /// Mock server fixture providing two address books and `BookSync`.
 struct Fixture {
@@ -341,7 +345,9 @@ fn saving_a_new_contact_creates_it_under_the_identifier_the_server_assigns() {
         let ok = ops::save_contact(
             &fixture.sync(),
             GFALSE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
             contact,
+            ptr::null(),
             &mut new_uid,
             ptr::null_mut(),
             &mut error,
@@ -379,7 +385,9 @@ fn saving_an_existing_contact_patches_it_rather_than_adding_a_second() {
         let ok = ops::save_contact(
             &sync,
             GTRUE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
             contact,
+            ptr::null(),
             &mut new_uid,
             ptr::null_mut(),
             &mut error,
@@ -415,7 +423,9 @@ fn an_edit_without_an_identifier_is_refused_rather_than_duplicating() {
         let ok = ops::save_contact(
             &fixture.sync(),
             GTRUE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
             contact,
+            ptr::null(),
             &mut new_uid,
             ptr::null_mut(),
             &mut error,
@@ -442,7 +452,9 @@ fn saving_no_contact_at_all_is_an_invalid_argument_not_a_panic() {
         let ok = ops::save_contact(
             &fixture.sync(),
             GFALSE,
+            E_CONFLICT_RESOLUTION_KEEP_LOCAL,
             ptr::null_mut(),
+            ptr::null(),
             ptr::null_mut(),
             ptr::null_mut(),
             &mut error,
@@ -686,6 +698,201 @@ fn get_changes_skips_unrequested_out_parameters_and_populates_requested_ones() {
         assert_eq!(g_slist_length(removed), 1);
         assert_eq!(nth_info(removed, 0).0, doomed.to_string());
         g_slist_free_full(removed, Some(e_book_meta_backend_info_free));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the base of an edit, which EDS keeps as the extra of a contact
+
+/// The `extra` of node `n`, or an empty string for NULL.
+unsafe fn nth_extra(list: *mut GSList, n: u32) -> String {
+    unsafe {
+        let node = g_slist_nth_data(list, n).cast::<EBookMetaBackendInfo>();
+        assert!(!node.is_null(), "no node {n}");
+        let extra = (*node).extra;
+        if extra.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(extra).to_string_lossy().into_owned()
+        }
+    }
+}
+
+/// Loads `uid` through `ops::load_contact` and returns the extra it stores.
+fn loaded_extra(sync: &BookSync, uid: &Id) -> String {
+    let uid = CString::new(uid.as_str()).unwrap();
+    let mut extra: *mut gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    unsafe {
+        let ok = ops::load_contact(sync, uid.as_ptr(), ptr::null_mut(), &mut extra, &mut error);
+        assert_eq!(ok, GTRUE);
+        take_string(&mut extra)
+    }
+}
+
+/// Saves `vcard` as an edit of `extra` with `resolution`. Returns the result,
+/// the error and the new extra.
+fn save_edit(
+    sync: &BookSync,
+    vcard: &str,
+    extra: &str,
+    resolution: EConflictResolution,
+) -> (gboolean, *mut GError, String) {
+    let contact = marshal::contact_from_vcard(vcard);
+    assert!(!contact.is_null());
+    let extra = CString::new(extra).unwrap();
+    let mut new_uid: *mut gchar = ptr::null_mut();
+    let mut new_extra: *mut gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    unsafe {
+        let ok = ops::save_contact(
+            sync,
+            GTRUE,
+            resolution,
+            contact,
+            extra.as_ptr(),
+            &mut new_uid,
+            &mut new_extra,
+            &mut error,
+        );
+        marshal::contact_unref(contact);
+        let new_extra = if ok == GTRUE {
+            g_free(new_uid.cast());
+            take_string(&mut new_extra)
+        } else {
+            assert!(new_extra.is_null(), "a failed save wrote an extra");
+            String::new()
+        };
+        (ok, error, new_extra)
+    }
+}
+
+#[test]
+fn every_listed_node_carries_its_vcard_as_the_extra() {
+    let fixture = Fixture::start();
+    fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let mut sync_tag: *mut gchar = ptr::null_mut();
+    let mut existing: *mut GSList = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    unsafe {
+        let ok = ops::list_existing(&fixture.sync(), &mut sync_tag, &mut existing, &mut error);
+        assert_eq!(ok, GTRUE);
+        let (_, _, object) = nth_info(existing, 0);
+        assert!(object.contains("FN:Vera Oldenburg"), "{object}");
+        assert_eq!(nth_extra(existing, 0), object);
+        g_free(sync_tag.cast());
+        g_slist_free_full(existing, Some(e_book_meta_backend_info_free));
+    }
+}
+
+#[test]
+fn a_load_stores_the_vcard_as_the_extra() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+    assert_eq!(
+        loaded_extra(&sync, &id),
+        sync.load_contact(id.as_str()).unwrap().vcard
+    );
+}
+
+/// The M2 finding: an edit of one property must not revert a remote edit of another.
+#[test]
+fn an_edit_with_its_extra_keeps_a_remote_edit_of_another_property() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+    let extra = loaded_extra(&sync, &id);
+    fixture
+        .client()
+        .contact_update(
+            &fixture.account_id,
+            &id,
+            json!({"emails/e0/address": "vera@remote.example"}),
+        )
+        .unwrap();
+
+    let edited = extra.replace("FN:Vera Oldenburg", "FN:Vera Local");
+    let (ok, error, new_extra) =
+        save_edit(&sync, &edited, &extra, E_CONFLICT_RESOLUTION_KEEP_LOCAL);
+
+    assert_eq!(ok, GTRUE);
+    assert!(error.is_null());
+    let stored = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(stored.contains("FN:Vera Local"), "{stored}");
+    assert!(
+        stored.contains("vera@remote.example"),
+        "the remote edit was reverted: {stored}"
+    );
+    assert_eq!(new_extra, stored, "the new extra is not the stored vCard");
+}
+
+#[test]
+fn keep_server_keeps_the_remote_value_of_a_property_both_sides_changed() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+    let extra = loaded_extra(&sync, &id);
+    fixture
+        .client()
+        .contact_update(
+            &fixture.account_id,
+            &id,
+            json!({"emails/e0/address": "vera@remote.example"}),
+        )
+        .unwrap();
+
+    let edited = extra.replace("vera@example.com", "vera@local.example");
+    let (ok, error, _) = save_edit(&sync, &edited, &extra, E_CONFLICT_RESOLUTION_KEEP_SERVER);
+
+    assert_eq!(ok, GTRUE);
+    assert!(error.is_null());
+    let stored = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(stored.contains("vera@remote.example"), "{stored}");
+}
+
+#[test]
+fn fail_reports_out_of_sync_for_a_property_both_sides_changed() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+    let extra = loaded_extra(&sync, &id);
+    fixture
+        .client()
+        .contact_update(
+            &fixture.account_id,
+            &id,
+            json!({"emails/e0/address": "vera@remote.example"}),
+        )
+        .unwrap();
+
+    let edited = extra.replace("vera@example.com", "vera@local.example");
+    let (ok, mut error, _) = save_edit(&sync, &edited, &extra, E_CONFLICT_RESOLUTION_FAIL);
+
+    assert_eq!(ok, GFALSE);
+    unsafe {
+        assert_error(
+            &mut error,
+            e_client_error_quark(),
+            E_CLIENT_ERROR_OUT_OF_SYNC as i32,
+        );
+    }
+    let stored = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(stored.contains("vera@remote.example"), "{stored}");
+}
+
+#[test]
+fn each_conflict_resolution_maps_to_its_on_conflict() {
+    let cases = [
+        (E_CONFLICT_RESOLUTION_FAIL, OnConflict::Fail),
+        (E_CONFLICT_RESOLUTION_KEEP_SERVER, OnConflict::KeepServer),
+        (E_CONFLICT_RESOLUTION_KEEP_LOCAL, OnConflict::KeepLocal),
+        (E_CONFLICT_RESOLUTION_USE_NEWER, OnConflict::KeepLocal),
+        (E_CONFLICT_RESOLUTION_WRITE_COPY, OnConflict::KeepLocal),
+        (99, OnConflict::KeepLocal),
+    ];
+    for (resolution, expected) in cases {
+        assert_eq!(ops::on_conflict(resolution), expected, "{resolution}");
     }
 }
 

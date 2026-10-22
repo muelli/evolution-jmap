@@ -40,7 +40,8 @@ pub struct SavedComponent {
     pub icalendar: String,
 }
 
-/// Wraps `infos` as an allocated `GSList` of `ECalMetaBackendInfo`.
+/// Wraps `infos` as an allocated `GSList` of `ECalMetaBackendInfo`. The extra of
+/// each node is its iCalendar: EDS stores it with the component as the base of an edit.
 pub fn info_list(infos: &[ComponentInfo]) -> *mut GSList {
     let mut list = ptr::null_mut();
     // Prepending is O(1); iterate in reverse order to preserve input sequence.
@@ -48,13 +49,14 @@ pub fn info_list(infos: &[ComponentInfo]) -> *mut GSList {
         let uid = cstring_lossy(&info.uid);
         let revision = cstring_lossy(&info.revision);
         let object = cstring_lossy(&icalendar_with_time_zones(&info.icalendar));
-        // SAFETY: The three pointers are valid NUL-terminated strings copied by EDS.
+        let extra = cstring_lossy(&info.icalendar);
+        // SAFETY: The four pointers are valid NUL-terminated strings copied by EDS.
         let node = unsafe {
             e_cal_meta_backend_info_new(
                 uid.as_ptr(),
                 revision.as_ptr(),
                 object.as_ptr(),
-                ptr::null(),
+                extra.as_ptr(),
             )
         };
         // SAFETY: `list` is a valid GSList and ownership of `node` passes to it.

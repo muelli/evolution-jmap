@@ -6,8 +6,9 @@
 
 use eds_sys::{
     E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_NOT_SUPPORTED,
-    E_CLIENT_ERROR_PERMISSION_DENIED, ETimezoneCache, ICalComponent, e_cal_client_error_create,
-    e_client_error_create, time_t,
+    E_CLIENT_ERROR_PERMISSION_DENIED, E_CONFLICT_RESOLUTION_FAIL,
+    E_CONFLICT_RESOLUTION_KEEP_SERVER, EConflictResolution, ETimezoneCache, ICalComponent,
+    e_cal_client_error_create, e_client_error_create, time_t,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
@@ -15,7 +16,7 @@ use jmap_backend_core::error::{
 };
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{dup_string, read_string, set_out_list, set_out_string};
-use jmap_cal_sync::{CalSync, Itip, SyncError, Unscheduled, Unsendable};
+use jmap_cal_sync::{Base, CalSync, Itip, OnConflict, SyncError, Unscheduled, Unsendable};
 use jmap_proto::State;
 
 use crate::marshal;
@@ -195,7 +196,7 @@ pub unsafe fn load_component(
     sync: &CalSync,
     uid: *const gchar,
     out_component: *mut *mut ICalComponent,
-    _out_extra: *mut *mut gchar,
+    out_extra: *mut *mut gchar,
     error: *mut *mut GError,
 ) -> gboolean {
     let account_id = sync.account_id().as_str();
@@ -265,27 +266,34 @@ pub unsafe fn load_component(
         } else {
             *out_component = component;
         }
+        // EDS stores the extra with the component and gives it back as the base of an edit.
+        set_out_string(out_extra, &info.icalendar);
     }
     GTRUE
 }
 
 /// Creates or updates a component for `save_component_sync`.
 ///
-/// `itip` controls server meeting invitation dispatch.
+/// `itip` controls server meeting invitation dispatch. An edit with `extra` (the
+/// iCalendar that [`load_component`] stored) patches only the properties that the
+/// user changed, and resolves a conflict as `conflict_resolution` asks. A received
+/// change has no base: it replaces the event.
 ///
 /// # Safety
 ///
 /// Follows safety requirements of [`list_existing`]. `instances` must be a valid GSList of `ECalComponent *`,
-/// and `zones` null or a valid `ETimezoneCache`.
+/// `extra` null or a valid NUL-terminated string, and `zones` null or a valid `ETimezoneCache`.
 #[allow(clippy::too_many_arguments)] // C vfunc signature requires all parameters.
 pub unsafe fn save_component(
     sync: &CalSync,
     overwrite_existing: gboolean,
+    conflict_resolution: EConflictResolution,
     instances: *const GSList,
+    extra: *const gchar,
     zones: *mut ETimezoneCache,
     itip: Itip,
     out_new_uid: *mut *mut gchar,
-    _out_new_extra: *mut *mut gchar,
+    out_new_extra: *mut *mut gchar,
     error: *mut *mut GError,
 ) -> gboolean {
     let account_id = sync.account_id().as_str();
@@ -329,30 +337,43 @@ pub unsafe fn save_component(
         }
     };
 
+    // A create and a received change have no base.
+    let base_icalendar = match (&existing_uid, itip) {
+        (_, Itip::Received { .. }) | (None, _) => None,
+        // SAFETY: the caller guarantees a valid string or NULL.
+        (Some(_), _) => unsafe { read_string(extra) },
+    };
+    let base = base_icalendar.as_deref().map(|icalendar| Base {
+        icalendar,
+        on_conflict: on_conflict(conflict_resolution),
+    });
+
     tracing::debug!(
         account_id,
         calendar_id,
         overwrite_existing = is_overwrite,
         existing_uid = existing_uid.as_deref(),
         ?itip,
+        has_base = base.is_some(),
         "saving component"
     );
 
-    let info = match sync.save_component_with(&saved.icalendar, existing_uid.as_deref(), itip) {
-        Ok(info) => info,
-        // SAFETY: `error` satisfies fail_bool contract.
-        Err(failure) => {
-            tracing::debug!(
-                account_id,
-                calendar_id,
-                overwrite_existing = is_overwrite,
-                existing_uid = existing_uid.as_deref(),
-                ?failure,
-                "saving component failed"
-            );
-            return unsafe { fail_bool(error, &failure, to_gerror) };
-        }
-    };
+    let info =
+        match sync.save_component_since(base, &saved.icalendar, existing_uid.as_deref(), itip) {
+            Ok(info) => info,
+            // SAFETY: `error` satisfies fail_bool contract.
+            Err(failure) => {
+                tracing::debug!(
+                    account_id,
+                    calendar_id,
+                    overwrite_existing = is_overwrite,
+                    existing_uid = existing_uid.as_deref(),
+                    ?failure,
+                    "saving component failed"
+                );
+                return unsafe { fail_bool(error, &failure, to_gerror) };
+            }
+        };
 
     tracing::debug!(
         account_id,
@@ -362,9 +383,22 @@ pub unsafe fn save_component(
         "saved component"
     );
 
-    // SAFETY: `out_new_uid` receives ownership of allocated string.
-    unsafe { set_out_string(out_new_uid, &info.uid) };
+    // SAFETY: the out-parameters receive ownership of the allocated strings.
+    unsafe {
+        set_out_string(out_new_uid, &info.uid);
+        set_out_string(out_new_extra, &info.icalendar);
+    }
     GTRUE
+}
+
+/// The [`OnConflict`] for an `EConflictResolution`. The local save is the newer
+/// edit, so `USE_NEWER`, `WRITE_COPY` and an unknown value keep the local value.
+pub fn on_conflict(resolution: EConflictResolution) -> OnConflict {
+    match resolution {
+        E_CONFLICT_RESOLUTION_KEEP_SERVER => OnConflict::KeepServer,
+        E_CONFLICT_RESOLUTION_FAIL => OnConflict::Fail,
+        _ => OnConflict::KeepLocal,
+    }
 }
 
 /// Destroys a component for `remove_component_sync`.

@@ -55,7 +55,8 @@ fn an_info_list_carries_one_node_per_contact_in_order() {
                 "K1".to_owned(),
                 "r1".to_owned(),
                 "BEGIN:VCARD\r\nEND:VCARD\r\n".to_owned(),
-                None
+                // EDS stores the extra as the base of a later edit.
+                Some("BEGIN:VCARD\r\nEND:VCARD\r\n".to_owned())
             )
         );
         assert_eq!(nth_info(list, 1).0, "K2");

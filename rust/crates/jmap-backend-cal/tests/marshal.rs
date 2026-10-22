@@ -112,7 +112,8 @@ fn an_info_list_carries_one_node_per_event_in_order() {
                 "K1".to_owned(),
                 Some("r1".to_owned()),
                 Some(UNZONED_OBJECT.to_owned()),
-                None
+                // EDS stores the extra as the base of a later edit.
+                Some(UNZONED_OBJECT.to_owned())
             )
         );
         assert_eq!(nth_info(list, 1).0, "K2");
