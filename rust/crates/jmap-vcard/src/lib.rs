@@ -6,10 +6,10 @@
 //! Map JSContact contacts to Evolution vCard text.
 //!
 //! Evolution stores contacts as vCard text. JMAP stores contacts as JSContact
-//! `ContactCard` values from RFC 9553 and RFC 9610. This crate keeps
-//! conversion logic free of GLib so tests can cover mapping behavior.
+//! `ContactCard` values from RFC 9553 and RFC 9610. This crate keeps mapping
+//! logic free of GLib. Tests can then cover mapping behavior.
 //!
-//! See [`contact`] for field preservation rules.
+//! See [`contact`] for field-preservation rules.
 
 pub mod contact;
 pub mod error;
