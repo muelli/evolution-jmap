@@ -50,6 +50,7 @@ re-audit also runs the regression test of every earlier finding again.
 | 2026-10-21 | Logic review with a hostile server or a hostile sender of mail. | L1 to L7 |
 | 2026-10-21 | Changes since 2026-10-20, with the deferred delete of a collection. | F40 to F46 |
 | 2026-10-22 | Security and logic review: server data, logic, threads and data loss. | M1 to M6 |
+| 2026-10-22 | Review of unsafe code, FFI ownership and secrets. | N1 to N8 |
 
 ## Findings
 
@@ -126,6 +127,12 @@ paths are relative to `rust/crates/`.
 | M4 | A user deleted a collection, clicked Undo and deleted it again inside the first window. The thread of the first delete still waited, and it destroyed the collection at the first due time. Thus the second Undo window was too short. | Fixed. A new delete of a watched collection restarts the wait of its thread. `jmap-backend-collection/tests/deferred_delete.rs`, `a_delete_again_after_undo_waits_for_its_own_due_time`. |
 | M5 | The summary rows and the message cache used the `Email` id as the key. Two servers can give the same id to different messages. After a change of the host of an account, a row kept the subject and the sender of the old message, and the cache served the body of the old message under the id of the new one. | Fixed. The summary header and the cache directory record the origin (the API URL and the account id). A refresh with a different origin removes the rows, the state and the cached messages, and then lists the mailbox. `jmap-mail/tests/server_change.rs`, `a_refresh_from_another_server_replaces_a_row_that_shares_its_uid` and `a_body_cached_from_another_server_is_not_served_for_a_new_message`. |
 | M6 | Send Later used the identity with the exact sender address. If no identity had that address, it used the first identity of the account. Send uses the domain wildcard of RFC 8621 section 6 and refuses when no identity covers the sender. | Fixed. Send Later selects the identity as Send does and refuses with the same message, before the upload. `jmap-ui/tests/send_later.rs`, `a_scheduled_send_from_an_address_no_identity_covers_is_refused_before_upload` and `a_scheduled_send_uses_the_domain_wildcard_identity`. |
+
+### Unsafe code and secrets review, 2026-10-22
+
+| ID | Problem | Resolution |
+|---|---|---|
+| N1 | Code on a worker thread read the strings of an `ESource` through the borrowed getters of EDS. On an account edit, the main loop can free such a string during the copy. This is the defect of F36 in other crates. | Partly fixed. `jmap-backend-core` reads copies through the `dup_` getters. `jmap-backend-core/tests/source.rs`, `from_source_on_another_thread_copies_a_user_the_main_thread_is_replacing` and related tests. Open: `jmap-backend-collection` and `jmap-ui`. |
 
 ### FFI soundness audit, 2026-08-19
 

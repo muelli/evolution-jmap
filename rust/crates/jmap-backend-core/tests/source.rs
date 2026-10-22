@@ -454,3 +454,119 @@ fn a_source_without_an_identity_names_no_account_and_no_collection() {
     assert_eq!(config.account_id(), None);
     assert_eq!(config.collection_id(), None);
 }
+
+/// A source that two threads share, as the backend's worker thread and the
+/// main loop share it in EDS.
+struct Shared(*mut ESource);
+// SAFETY: an `ESource` and its extensions guard their state with a lock.
+unsafe impl Send for Shared {}
+unsafe impl Sync for Shared {}
+
+/// Runs `read` on this thread while another thread calls `write` 20,000
+/// times with the two long values in turn. Each `read` must give one of
+/// `allowed`. A borrowed getter copies freed memory and gives a torn value.
+fn read_while_another_thread_writes(
+    source: &TestSource,
+    values: [String; 2],
+    write: unsafe fn(*mut ESource, *const std::ffi::c_char),
+    read: impl Fn(*mut ESource) -> Option<String>,
+    allowed: &[Option<String>],
+) {
+    let shared = std::sync::Arc::new(Shared(source.0));
+    let names: Vec<CString> = values
+        .iter()
+        .map(|value| CString::new(value.as_str()).expect("no NUL"))
+        .collect();
+    let writer = {
+        let shared = std::sync::Arc::clone(&shared);
+        std::thread::spawn(move || {
+            for round in 0..20_000 {
+                // SAFETY: a live source and a NUL-terminated value.
+                unsafe { write(shared.0, names[round % 2].as_ptr()) };
+            }
+        })
+    };
+    while !writer.is_finished() {
+        let value = read(shared.0);
+        assert!(
+            allowed.contains(&value) || values.iter().any(|v| value.as_deref() == Some(v)),
+            "a torn value of {:?} bytes",
+            value.map(|v| v.len())
+        );
+    }
+    writer.join().expect("writer");
+}
+
+fn long_values(stem: &str) -> [String; 2] {
+    ["a".repeat(4000) + stem, "b".repeat(9000) + stem]
+}
+
+#[test]
+fn from_source_on_another_thread_copies_a_user_the_main_thread_is_replacing() {
+    let source = TestSource::new()
+        .host("jmap.example.com")
+        .user("vera@example.com");
+    unsafe fn set_user(source: *mut ESource, user: *const std::ffi::c_char) {
+        // SAFETY: a live source and a NUL-terminated user, by the contract.
+        unsafe {
+            let auth = e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr());
+            e_source_authentication_set_user(auth.cast(), user);
+        }
+    }
+    read_while_another_thread_writes(
+        &source,
+        long_values("@example.com"),
+        set_user,
+        // SAFETY: a live source.
+        |source| {
+            unsafe { SourceConfig::from_source(source) }
+                .expect("a valid source")
+                .user
+        },
+        &[Some("vera@example.com".into())],
+    );
+}
+
+#[test]
+fn from_source_on_another_thread_copies_an_identity_the_main_thread_is_replacing() {
+    let source = TestSource::new().host("jmap.example.com").identity("Ab1");
+    unsafe fn set_identity(source: *mut ESource, identity: *const std::ffi::c_char) {
+        // SAFETY: a live source and a NUL-terminated identity, by the contract.
+        unsafe {
+            let resource = e_source_get_extension(source, E_SOURCE_EXTENSION_RESOURCE.as_ptr());
+            e_source_resource_set_identity(resource.cast(), identity);
+        }
+    }
+    read_while_another_thread_writes(
+        &source,
+        long_values("Ab1"),
+        set_identity,
+        // SAFETY: a live source.
+        |source| {
+            unsafe { SourceConfig::from_source(source) }
+                .expect("a valid source")
+                .resource_id
+        },
+        &[Some("Ab1".into())],
+    );
+}
+
+#[test]
+fn destination_address_on_another_thread_copies_a_host_the_main_thread_is_replacing() {
+    let source = TestSource::new().host("jmap.example.com");
+    unsafe fn set_host(source: *mut ESource, host: *const std::ffi::c_char) {
+        // SAFETY: a live source and a NUL-terminated host, by the contract.
+        unsafe {
+            let auth = e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr());
+            e_source_authentication_set_host(auth.cast(), host);
+        }
+    }
+    read_while_another_thread_writes(
+        &source,
+        long_values(".example"),
+        set_host,
+        // SAFETY: a live source.
+        |source| unsafe { destination_address(source) }.map(|(host, _)| host),
+        &[Some("jmap.example.com".into())],
+    );
+}

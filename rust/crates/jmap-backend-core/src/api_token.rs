@@ -30,10 +30,10 @@ use std::ffi::CStr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, ESource, ESourceAuthentication,
-    e_source_authentication_get_method, e_source_authentication_get_type,
+    e_source_authentication_dup_method, e_source_authentication_get_type,
 };
 
-use crate::marshal::{extension_if_present, read_string};
+use crate::marshal::{extension_if_present, take_string};
 
 /// The literal [`jmap-config`](../../jmap_config/index.html)'s "API Token"
 /// combo entry writes to `[Authentication] Method`. Unlike
@@ -79,10 +79,9 @@ pub unsafe fn source_uses_api_token(source: *mut ESource) -> bool {
         return false;
     };
 
-    // SAFETY: the extension exists and the source owns it. The extension
-    // owns the string that the getter returns, and the string outlives this
-    // call.
-    let method = unsafe { read_string(e_source_authentication_get_method(auth)) };
+    // SAFETY: the extension exists and the source owns it. The `dup_` getter
+    // gives a copy (`transfer full`), so a setter on another thread cannot free it.
+    let method = unsafe { take_string(e_source_authentication_dup_method(auth)) };
 
     method_is_api_token(method.as_deref())
 }

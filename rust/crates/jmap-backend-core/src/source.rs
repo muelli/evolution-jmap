@@ -83,9 +83,9 @@ use eds_sys::{
     E_CLIENT_ERROR_INVALID_ARG, E_CLIENT_ERROR_TLS_NOT_AVAILABLE,
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_RESOURCE, E_SOURCE_EXTENSION_SECURITY,
     EClientError, ESource, ESourceAuthentication, ESourceResource, ESourceSecurity,
-    e_client_error_create, e_source_authentication_get_host, e_source_authentication_get_port,
-    e_source_authentication_get_type, e_source_authentication_get_user,
-    e_source_resource_get_identity, e_source_resource_get_type, e_source_security_get_secure,
+    e_client_error_create, e_source_authentication_dup_host, e_source_authentication_dup_user,
+    e_source_authentication_get_port, e_source_authentication_get_type,
+    e_source_resource_dup_identity, e_source_resource_get_type, e_source_security_get_secure,
     e_source_security_get_type,
 };
 use eds_sys::{EBackend, e_backend_get_source, e_backend_get_type};
@@ -93,7 +93,7 @@ use glib_sys::GError;
 
 use crate::error::cstring_lossy;
 use crate::i18n::{translate, translate_with};
-use crate::marshal::{extension_if_present, read_string};
+use crate::marshal::{extension_if_present, take_string};
 
 /// What a backend needs from its `ESource` in order to build a client.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,14 +272,16 @@ impl SourceConfig {
         // An absent extension gives the same defaults that a new, empty
         // extension would give (NULL host/user/identity, port 0). Thus no
         // read result changes; only the side effect (a new group) goes away.
+        // This runs on a worker thread, and the main loop can free the old
+        // string in a setter. Thus each read uses a `dup_` getter.
         // SAFETY: each `Some` pointer is a live extension of the type
         // `extension_if_present` selected.
         let host = match auth {
-            Some(auth) => unsafe { read_string(e_source_authentication_get_host(auth)) },
+            Some(auth) => unsafe { take_string(e_source_authentication_dup_host(auth)) },
             None => None,
         };
         let user = match auth {
-            Some(auth) => unsafe { read_string(e_source_authentication_get_user(auth)) },
+            Some(auth) => unsafe { take_string(e_source_authentication_dup_user(auth)) },
             None => None,
         };
         let port = match auth {
@@ -287,7 +289,7 @@ impl SourceConfig {
             None => 0,
         };
         let resource_id = match resource {
-            Some(resource) => unsafe { read_string(e_source_resource_get_identity(resource)) },
+            Some(resource) => unsafe { take_string(e_source_resource_dup_identity(resource)) },
             None => None,
         };
 
@@ -387,12 +389,12 @@ pub fn connect(
 /// second copy is a second thing to forget to fix.
 ///
 /// `host` is absent or non-empty, as both sides already make it
-/// ([`read_string`] on the EDS side, the same normalisation over the empty
+/// ([`take_string`] on the EDS side, the same normalisation over the empty
 /// construct default of Camel on the mail side). `port` is 0 for "not set",
 /// which is what an unwritten keyfile key and an unconfigured settings object
 /// both read back as.
 ///
-/// [`read_string`]: crate::marshal::read_string
+/// [`take_string`]: crate::marshal::take_string
 pub fn connect_target(
     host: Option<&str>,
     port: u16,
@@ -465,8 +467,9 @@ pub unsafe fn destination_address(source: *mut ESource) -> Option<(String, u16)>
     let auth = unsafe {
         extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
     }?;
-    // SAFETY: a live extension, by `extension_if_present`'s contract.
-    let host = unsafe { read_string(e_source_authentication_get_host(auth)) }?;
+    // SAFETY: a live extension, by `extension_if_present`'s contract. The
+    // `dup_` getter gives a copy that a setter on another thread cannot free.
+    let host = unsafe { take_string(e_source_authentication_dup_host(auth)) }?;
     if host.is_empty() {
         return None;
     }

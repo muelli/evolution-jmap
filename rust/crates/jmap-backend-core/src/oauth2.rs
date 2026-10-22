@@ -113,9 +113,9 @@ use std::sync::OnceLock;
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Services, ESource, ESourceAuthentication,
     ESourceCredentialsProvider, e_oauth2_services_is_oauth2_alias, e_oauth2_services_new,
-    e_source_authentication_get_method, e_source_authentication_get_type,
+    e_source_authentication_dup_method, e_source_authentication_get_type,
     e_source_credentials_provider_new, e_source_credentials_provider_ref_credentials_source,
-    e_source_get_oauth2_access_token_sync, e_source_get_parent, e_source_registry_new_sync,
+    e_source_dup_parent, e_source_get_oauth2_access_token_sync, e_source_registry_new_sync,
 };
 use gio_sys::{
     G_DBUS_ERROR_NAME_HAS_NO_OWNER, G_DBUS_ERROR_SERVICE_UNKNOWN, G_IO_ERROR_NOT_FOUND,
@@ -126,7 +126,7 @@ use glib_sys::{GError, GFALSE, g_error_free, g_free};
 use crate::connect::ConnectError;
 use crate::forever::Forever;
 use crate::i18n::{translate, translate_with};
-use crate::marshal::{extension_if_present, read_string};
+use crate::marshal::{extension_if_present, read_string, take_string};
 
 /// The generic spelling of "this source authenticates with OAuth 2.0", not
 /// the name of one particular service.
@@ -356,9 +356,9 @@ unsafe fn credentials_source(source: *mut ESource) -> (*mut ESource, bool) {
     // `evolution-source-registry` makes the process call itself over D-Bus.
     // The collection backend runs there and gives its own collection source,
     // whose parent is empty, so this returns first.
-    // SAFETY: a valid source by this function's contract. The source owns the
-    // parent string, and this code only reads it.
-    let parent = unsafe { read_string(e_source_get_parent(source)) };
+    // SAFETY: a valid source by this function's contract. The `dup_` getter
+    // gives a copy (`transfer full`), so a setter on another thread cannot free it.
+    let parent = unsafe { take_string(e_source_dup_parent(source)) };
     if parent.is_none_or(|parent| parent.is_empty()) {
         return (source, false);
     }
@@ -442,10 +442,9 @@ pub unsafe fn source_uses_oauth2(source: *mut ESource) -> bool {
         return false;
     };
 
-    // SAFETY: the extension exists and the source owns it. The extension
-    // owns the string that the getter returns, and the string outlives this
-    // call.
-    let method = unsafe { read_string(e_source_authentication_get_method(auth)) };
+    // SAFETY: the extension exists and the source owns it. The `dup_` getter
+    // gives a copy (`transfer full`), so a setter on another thread cannot free it.
+    let method = unsafe { take_string(e_source_authentication_dup_method(auth)) };
 
     method_is_oauth2(method.as_deref())
 }
