@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]
+//!            [--changes-page-size N] [--changes-never-terminates]
 //!            [--well-known-redirect-to ORIGIN]
 //! ```
 //!
@@ -46,6 +47,16 @@ fn main() {
                 builder = builder.bearer_token(&token);
             }
             "--oauth2" => oauth2 = true,
+            "--changes-page-size" => {
+                let ids = arguments
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or_else(|| usage("--changes-page-size needs a number"));
+                builder = builder.changes_page_size(ids);
+            }
+            "--changes-never-terminates" => {
+                builder = builder.changes_never_terminates();
+            }
             "--well-known-redirect-to" => {
                 let origin = arguments
                     .next()
@@ -121,6 +132,7 @@ fn usage(error: &str) -> ! {
     }
     eprintln!(
         "usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2] \
+         [--changes-page-size N] [--changes-never-terminates] \
          [--well-known-redirect-to ORIGIN]"
     );
     std::process::exit(if error.is_empty() { 0 } else { 2 });

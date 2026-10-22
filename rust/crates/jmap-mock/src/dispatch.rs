@@ -283,9 +283,10 @@ fn handle_method(
         | "ParticipantIdentity/changes" => {
             let request: jmap_proto::methods::ChangesRequest = parse_arguments(arguments)?;
             let page_size = state.changes_page_size;
+            let never_terminates = state.changes_never_terminates;
             let unrecognized_state_shape = state.stalwart_shaped_unrecognized_changes_state;
             let account = account_mut(state, &request.account_id)?;
-            let response = match name {
+            let mut response = match name {
                 "Mailbox/changes" => crate::setops::store_changes(
                     &account.mailboxes,
                     request,
@@ -341,6 +342,15 @@ fn handle_method(
                     unrecognized_state_shape,
                 ),
             }?;
+            if never_terminates
+                && (page_size.is_some() || response.has_more_changes)
+                && (!response.created.is_empty()
+                    || !response.updated.is_empty()
+                    || !response.destroyed.is_empty())
+            {
+                response.has_more_changes = true;
+                response.new_state = response.old_state.clone();
+            }
             to_result(&response)
         }
         "Calendar/get" => crate::calendars::calendar_get(state, arguments, caller),

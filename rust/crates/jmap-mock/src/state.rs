@@ -32,6 +32,8 @@ pub struct ServerState {
     pub calls_in_request: Option<u64>,
     /// Optional max ids in each `/changes` response. `None` returns all ids.
     pub changes_page_size: Option<u64>,
+    /// Whether `/changes` keeps returning non-terminating pages.
+    pub changes_never_terminates: bool,
     /// Use Stalwart-style `invalidArguments` for invalid `/changes` `sinceState`.
     pub stalwart_shaped_unrecognized_changes_state: bool,
     /// Optional `Email/get` id limit. `None` uses [`crate::DEFAULT_OBJECTS_IN_GET`].
@@ -98,6 +100,7 @@ impl ServerState {
             omit_primary_accounts: false,
             calls_in_request: Some(crate::DEFAULT_CALLS_IN_REQUEST),
             changes_page_size: None,
+            changes_never_terminates: false,
             stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
             query_page_size: None,

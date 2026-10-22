@@ -64,6 +64,7 @@ pub struct MockServerBuilder {
     omit_primary_accounts: bool,
     calls_in_request: Option<u64>,
     changes_page_size: Option<u64>,
+    changes_never_terminates: bool,
     stalwart_shaped_unrecognized_changes_state: bool,
     objects_in_get: Option<u64>,
     query_page_size: Option<u64>,
@@ -132,6 +133,12 @@ impl MockServerBuilder {
     /// Cap each `/changes` page to at most `ids` ids.
     pub fn changes_page_size(mut self, ids: u64) -> Self {
         self.changes_page_size = Some(ids);
+        self
+    }
+
+    /// Keep paginated `/changes` responses non-terminating.
+    pub fn changes_never_terminates(mut self) -> Self {
+        self.changes_never_terminates = true;
         self
     }
 
@@ -320,6 +327,7 @@ impl MockServerBuilder {
         state.omit_primary_accounts = self.omit_primary_accounts;
         state.calls_in_request = self.calls_in_request;
         state.changes_page_size = self.changes_page_size;
+        state.changes_never_terminates = self.changes_never_terminates;
         state.stalwart_shaped_unrecognized_changes_state =
             self.stalwart_shaped_unrecognized_changes_state;
         state.objects_in_get = self.objects_in_get;
@@ -401,6 +409,7 @@ impl MockServer {
             omit_primary_accounts: false,
             calls_in_request: Some(DEFAULT_CALLS_IN_REQUEST),
             changes_page_size: None,
+            changes_never_terminates: false,
             stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
             query_page_size: None,
