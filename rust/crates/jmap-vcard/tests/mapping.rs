@@ -7934,7 +7934,7 @@ fn x_property_name_casing_and_empty_values_handling() {
         "wedding"
     );
 
-    // Empty and unknown X- properties are safely ignored
+    // Ignore empty and unknown X- properties.
     assert!(card.extra.is_empty());
 
     let re_emitted = card_to_vcard(&card);
@@ -7988,7 +7988,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         ..ContactCard::default()
     };
 
-    // Write vCard output.
+    // Emit vCard text.
     let vcard = card_to_vcard(&card);
 
     // `NOTE` and `PHOTO` must include folded continuation lines.
@@ -8008,7 +8008,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         );
     }
 
-    // Parse output and check unfolded values.
+    // Parse the output and check unfolded values.
     let read_card = vcard_to_card(&vcard).expect("parse folded vcard");
 
     // `NOTE` must round-trip without text changes.
@@ -8024,7 +8024,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
     assert_eq!(read_media["m1"].media_type.as_deref(), Some("image/jpeg"));
     assert_eq!(read_media["m1"].uri, photo_uri);
 
-    // Emit the parsed card again and verify fixed-point stability.
+    // Re-emit the parsed card and verify a fixed point.
     let vcard2 = card_to_vcard(&read_card);
     assert_eq!(vcard2, vcard, "Emitted folded vCard must be at fixed-point");
 }
@@ -8070,7 +8070,7 @@ fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
         "+44 20 7946 0958"
     );
 
-    // ORG: note "  Service" has 2 spaces after CRLF -> 1 space in value
+    // ORG keeps one payload space after CRLF unfolding.
     let org = &card.organizations.as_ref().unwrap()["o1"];
     assert_eq!(org.name.as_deref(), Some("Metropolitan Police Service"));
     let units: Vec<&str> = org
@@ -8091,7 +8091,7 @@ fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
         "Lead Ballistics Specialist"
     );
 
-    // ADR structured components
+    // Check ADR structured components.
     let adr = &card.addresses.as_ref().unwrap()["a1"];
     let comp_map: BTreeMap<&str, &str> = adr
         .components
@@ -8108,35 +8108,35 @@ fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
     assert_eq!(comp_map.get("postcode"), Some(&"NW1 6XE"));
     assert_eq!(comp_map.get("country"), Some(&"United Kingdom"));
 
-    // LABEL
+    // Check LABEL.
     assert_eq!(
         adr.full.as_deref(),
         Some("221B Baker Street\nSuite 400\nLondon\nNW1 6XE\nUnited Kingdom")
     );
 
-    // NOTE: check multiline and leading space preservation
+    // Check NOTE multiline text and leading spaces.
     let note = &card.notes.as_ref().unwrap()["n1"].note;
     assert!(note.contains("First line of note.Continued with space.Continued with tab.  Three leading spaces (one fold + two data)."));
 
-    // CATEGORIES
+    // Check CATEGORIES.
     let keywords = card.keywords.as_ref().expect("keywords");
     assert!(keywords.contains_key("Forensics"));
     assert!(keywords.contains_key("Ballistics"));
     assert!(keywords.contains_key("Investigation"));
     assert!(keywords.contains_key("Scotland Yard"));
 
-    // URL
+    // Check URL.
     assert_eq!(
         card.links.as_ref().unwrap()["l1"].uri,
         "https://example.org/forensics/deep/case/archive"
     );
 
-    // PHOTO
+    // Check PHOTO.
     let photo = &card.media.as_ref().unwrap()["m1"];
     assert_eq!(photo.media_type.as_deref(), Some("image/PNG"));
     assert!(photo.uri.starts_with("data:image/PNG;base64,"));
 
-    // Re-emission must produce valid lines targeting 75 octets and reach fixed point
+    // Re-emission keeps valid line lengths and reaches a fixed point.
     let re_emitted = card_to_vcard(&card);
     for physical_line in re_emitted.split("\r\n") {
         assert!(
@@ -8151,22 +8151,22 @@ fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
 
 #[test]
 fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
-    // Tests that multi-byte UTF-8 sequences (2-byte, 3-byte, 4-byte) positioned
-    // across the 75-octet fold boundary are never split across line folds.
+    // This test checks fold boundaries around multi-byte UTF-8 data.
+    // A fold boundary must not split a UTF-8 code unit sequence.
     // Line folding must break on a valid UTF-8 character boundary.
 
     let test_cases = [
-        // 2-byte UTF-8 sequences (German umlauts, Cyrillic, accented Latin)
+        // 2-byte UTF-8 samples: umlauts, Cyrillic, accented Latin.
         ("2-byte umlauts", "äöüßéñДж"),
-        // 3-byte UTF-8 sequences (CJK characters, Japanese Hiragana, Devanagari)
+        // 3-byte UTF-8 samples: CJK, Hiragana, Devanagari.
         ("3-byte CJK & Hiragana", "漢字東京日本語संस्कृत"),
-        // 4-byte UTF-8 sequences (Emoji, musical and math symbols)
+        // 4-byte UTF-8 samples: emoji, musical symbols, math symbols.
         ("4-byte Emoji", "🦀🚀🌟🎉🔥𝄞𝕬🌍"),
     ];
 
     for (label, multibyte_sample) in test_cases {
-        // Test padding lengths from 40 to 85 bytes before the multi-byte characters
-        // to systematically exercise all possible boundary positions relative to 75 octets
+        // Vary prefix lengths from 40 to 85 bytes before multi-byte text.
+        // This hits many fold-boundary offsets near 75 octets.
         for pad_len in 40..=85 {
             let padding = "A".repeat(pad_len);
             let note_text = format!(
