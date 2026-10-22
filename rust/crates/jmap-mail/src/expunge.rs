@@ -12,9 +12,16 @@
 //!
 //! ## The write for each message
 //!
-//! `expunge_message` in `jmap-mail-sync` decides the write for each message. RFC
-//! 8621 §4.6 makes `mailboxIds` a set, so a message can also be in a different
-//! mailbox. In that case, a destroy would also remove that copy.
+//! If the account has a mailbox with the `trash` role, the model is IMAPX with
+//! a real trash. A deleted message outside the trash moves into the trash
+//! (`trash_message` in `jmap-mail-sync`). In the trash, a message is destroyed,
+//! and "Empty Trash" removes every message there, marked or not. Nothing marks
+//! a message that a move put in the trash. Without a trash, a deleted message
+//! is destroyed.
+//!
+//! `expunge_message` in `jmap-mail-sync` decides the destroy for each message.
+//! RFC 8621 §4.6 makes `mailboxIds` a set, so a message can also be in a
+//! different mailbox. In that case, a destroy would also remove that copy.
 //!
 //! ## The work list
 //!
@@ -56,6 +63,7 @@ use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::guard_bool;
+use jmap_mail_sync::FolderRole;
 use jmap_proto::Id;
 
 use crate::changes::Changes;
@@ -92,7 +100,7 @@ unsafe extern "C" fn expunge_sync(
             // outlives this observation. The observation stops every request
             // below when the user clicks Stop.
             let _cancel = observe(cancellable);
-            match expunge_folder(folder) {
+            match expunge_folder(folder, Walk::Expunge) {
                 Ok(()) => GTRUE,
                 Err(problem) => {
                     // SAFETY: `to_gerror` gives an owned GError. The contract
@@ -106,17 +114,36 @@ unsafe extern "C" fn expunge_sync(
     }
 }
 
+/// Which call walks the folder. The trash decides what each one removes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Walk {
+    /// `expunge_sync`: "Expunge" and "Empty Trash". In the trash, every row goes.
+    Expunge,
+    /// `synchronize_sync` with `expunge` set: only the marked rows go.
+    Synchronize,
+    /// `synchronize_sync` without `expunge`: marked rows outside the trash move
+    /// into it. Nothing is destroyed.
+    FileInTrash,
+}
+
 /// Walks the summary and removes the marked messages.
 ///
 /// Two Camel paths call this: the vfunc above ("Expunge" and "Empty Trash"),
-/// and the `expunge` argument of `synchronize_sync` in [`crate::synchronize`].
-/// Evolution sets that argument when it closes a folder on an account that
-/// expunges on exit.
+/// and `synchronize_sync` in [`crate::synchronize`]. Evolution sets its
+/// `expunge` argument when it closes a folder on an account that expunges on
+/// exit.
+///
+/// If the account has a mailbox with the `trash` role, this follows IMAPX with
+/// a real trash. A marked message outside the trash moves into the trash, and
+/// a destroy occurs only in the trash. If not, a marked message is destroyed.
 ///
 /// # Safety
 ///
 /// `folder` must point at a live `JmapFolder`.
-pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), StoreError> {
+pub(crate) unsafe fn expunge_folder(
+    folder: *mut CamelFolder,
+    walk: Walk,
+) -> Result<(), StoreError> {
     // SAFETY: the contract above.
     let summary = unsafe { camel_folder_get_folder_summary(folder) };
     if summary.is_null() {
@@ -131,20 +158,45 @@ pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), Stor
         // SAFETY: as above.
         None => return Err(StoreError::NoFolder(unsafe { name_of(folder) })),
     };
+    // SAFETY: as above. `rows` copies the uids out of the Camel array before
+    // the walk uses them.
+    let (marked, unmarked): (Vec<_>, Vec<_>) = unsafe { rows(summary) }
+        .into_iter()
+        .partition(|(_, deleted)| *deleted);
+    if marked.is_empty() && walk != Walk::Expunge {
+        // Evolution synchronises each folder when it closes it. This case
+        // must make no request.
+        return Ok(());
+    }
+    // SAFETY: as above. The folder holds a reference to its store for the walk.
+    let Some(store) = (unsafe { parent_store(folder) }) else {
+        return Err(StoreError::Disconnected);
+    };
+
+    // A failed listing gives an error, not "no trash": a destroy that the
+    // trash would have prevented loses mail.
+    let trash = store
+        .folders(0)?
+        .role(FolderRole::Trash)
+        .map(|trash| trash.id.clone());
+    let in_trash = trash.as_ref() == Some(&mailbox);
+    let work = match walk {
+        Walk::Expunge if in_trash => marked.into_iter().chain(unmarked).collect(),
+        Walk::FileInTrash if trash.is_none() || in_trash => return Ok(()),
+        _ => marked,
+    };
+    let move_into = trash.filter(|_| !in_trash);
 
     let mut changes = Changes::new();
     let mut failure = None;
-    // SAFETY: as above. `deleted_rows` copies the uids out of the Camel array
-    // before the walk uses them.
-    for uid in unsafe { deleted_rows(summary) } {
+    for (uid, _) in work {
         // A uid that is not valid UTF-8 cannot go to the server. Its row stays
         // marked deleted, because this function removes a row only after the
         // server write.
         let Ok(text) = uid.to_str() else { continue };
-        // SAFETY: as above.
-        let gone = match unsafe { parent_store(folder) } {
-            Some(store) => store.expunge_message(&Id::new(text), &mailbox),
-            None => Err(StoreError::Disconnected),
+        let gone = match &move_into {
+            Some(trash) => store.trash_message(&Id::new(text), &mailbox, trash),
+            None => store.expunge_message(&Id::new(text), &mailbox),
         };
         match gone {
             // The message left this mailbox, or the account has no such message.
@@ -173,7 +225,7 @@ pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), Stor
     }
 }
 
-/// Returns the uids of the rows that the user marked deleted.
+/// Returns the uid of each row, and if the user marked the row deleted.
 ///
 /// This walks the full summary, not the changed list (the module docs tell
 /// why). It copies the uids before the walk, because the walk removes rows from
@@ -182,7 +234,7 @@ pub(crate) unsafe fn expunge_folder(folder: *mut CamelFolder) -> Result<(), Stor
 /// # Safety
 ///
 /// `summary` must point at a live `CamelFolderSummary`.
-unsafe fn deleted_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
+unsafe fn rows(summary: *mut CamelFolderSummary) -> Vec<(CString, bool)> {
     // SAFETY: the contract above. `summary_dup_uids` returns an array that the
     // caller owns and frees with `summary_free_uids`. The array holds its own
     // reference to each uid in it.
@@ -197,7 +249,7 @@ unsafe fn deleted_rows(summary: *mut CamelFolderSummary) -> Vec<CString> {
                 if uid.is_null() {
                     return None;
                 }
-                is_deleted(summary, uid).then(|| CStr::from_ptr(uid).to_owned())
+                Some((CStr::from_ptr(uid).to_owned(), is_deleted(summary, uid)))
             })
             .collect();
         summary_free_uids(rows);

@@ -546,3 +546,33 @@ mutants below were made by hand.
   eight `CAMEL_MESSAGE_*` constants are distinct single bits
   (`camel-message-info.h`: bits 0, 2, 3, 4, 5, 7, 9 and 10). For two words
   with no common bit, `a ^ b` equals `a | b`, so the mask is the same value.
+
+## `src/expunge.rs`
+
+cargo-mutants makes no mutants here: every function is an `unsafe fn` or an
+`extern "C"` vfunc. The mutants below were made by hand.
+
+- `is_deleted`: a missing row gives `true`, not `false`. A row is missing only
+  if a refresh removes it between `summary_dup_uids` and
+  `camel_folder_summary_get`, and no test can put a refresh at that point. The
+  data result is the same: a refresh removes a row only after its message left
+  the mailbox, and `trash_message` and `expunge_message` then find the mailbox
+  not in `mailboxIds` and write nothing.
+- `expunge_folder`: a uid that is not UTF-8 goes to the server as lossy text,
+  not skipped. Each uid in the summary comes from a JMAP `Id`, and RFC 8620
+  section 1.2 limits an `Id` to ASCII. Thus no row has such a uid.
+
+## `src/summary.rs`
+
+The origin code is in `unsafe fn`s and `extern "C"` vfuncs, so cargo-mutants
+makes no mutants for it. The mutants below were made by hand.
+
+- `summary_header_load`: the origin is read for a version 1 header too. A
+  version 1 header holds the state and nothing after it.
+  `camel_util_bdata_get_string` (`camel-utils.c`, EDS 3.52.3) returns its
+  default, NULL, at the end of the data, so the origin is `None` in both forms.
+- `summary_header_load`: the filter that drops an empty origin is removed.
+  `store_state` writes an absent origin as an empty string, at the end of the
+  header. `camel_util_bdata_get_string` returns NULL for an empty string at
+  the end of the data, so the result is `None` in both forms. The filter is
+  insurance for a later field after the origin.

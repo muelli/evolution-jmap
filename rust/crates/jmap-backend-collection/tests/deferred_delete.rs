@@ -6,8 +6,8 @@
 
 use std::ffi::CString;
 use std::ptr;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use eds_sys::{ESource, e_source_get_enabled, e_source_new_with_uid};
@@ -425,5 +425,77 @@ fn a_clock_that_moves_back_during_the_wait_does_not_extend_it() {
         let handle = watch(child).expect("a first watch of this child");
 
         assert_eq!(handle.join().expect("no panic"), Settled::Destroyed);
+    });
+}
+
+/// A [`Fake`] that the test can change while a thread watches it.
+struct Shared(Arc<Fake>);
+
+impl PendingChild for Shared {
+    fn uid(&self) -> String {
+        self.0.uid()
+    }
+
+    fn present(&self) -> bool {
+        self.0.present()
+    }
+
+    fn enabled(&self) -> bool {
+        self.0.enabled()
+    }
+
+    fn due(&self) -> Option<Due> {
+        self.0.due()
+    }
+
+    fn clear_due(&self) {
+        self.0.clear_due();
+    }
+
+    fn enable(&self) {
+        self.0.enable();
+    }
+
+    fn destroy_on_server(&self) -> Result<(), DeleteError> {
+        self.0.destroy_on_server()
+    }
+
+    fn remove(&self) -> Result<(), String> {
+        self.0.remove()
+    }
+}
+
+/// Delete, Undo and delete again while the first thread still sleeps. The second
+/// delete gets its own full window, not the end of the first one.
+#[test]
+fn a_delete_again_after_undo_waits_for_its_own_due_time() {
+    with_timeout_duration(Duration::from_secs(20), || {
+        let source = Source::new();
+        let start = Instant::now();
+        let first = SystemTime::now() + Duration::from_secs(2) - UNDO_WINDOW;
+        let fake = Arc::new(Fake::pending(Due::after_window(first)));
+
+        // SAFETY: a live source, and the fake stands for it.
+        unsafe { delete_later(source.0, Shared(Arc::clone(&fake)), first) };
+        // Let the thread do its first check and sleep, then Undo.
+        std::thread::sleep(Duration::from_millis(300));
+        *fake.enabled.lock().unwrap() = true;
+        std::thread::sleep(Duration::from_millis(300));
+
+        let again = SystemTime::now() + Duration::from_secs(4) - UNDO_WINDOW;
+        *fake.due.lock().unwrap() = Some(Due::after_window(again));
+        *fake.enabled.lock().unwrap() = false;
+        // SAFETY: as above.
+        unsafe { delete_later(source.0, Shared(Arc::clone(&fake)), again) };
+
+        while !fake.calls().contains(&"destroy_on_server") {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_secs(4),
+            "destroyed after {elapsed:?}, before the second due time"
+        );
+        assert_eq!(fake.calls(), ["destroy_on_server", "remove"]);
     });
 }

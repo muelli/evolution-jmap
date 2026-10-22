@@ -36,7 +36,7 @@ use jmap_proto::calendars::{
     CalendarEvent, CalendarEventQueryFilter, RecurrenceRule, calendar_event_set_error,
 };
 use jmap_proto::{Id, State};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 pub use error::{SyncError, Unscheduled, Unsendable};
 pub use freebusy::FreeBusy;
@@ -52,6 +52,32 @@ pub struct ComponentInfo {
     pub uid: String,
     pub revision: String,
     pub icalendar: String,
+}
+
+/// The copy of an event that a local edit started from.
+///
+/// EDS keeps the `extra` string of a cached component through an offline edit.
+/// Store [`ComponentInfo::icalendar`] there, and give it back here on the save.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Base<'a> {
+    /// The iCalendar object of the event as the user saw it before the edit.
+    pub icalendar: &'a str,
+    /// What to do with a property that the server and the user both changed.
+    pub on_conflict: OnConflict,
+}
+
+/// What a save does with a property that the user and a different client both
+/// changed after the base copy (`EConflictResolution`). A property that only one
+/// side changed is not a conflict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnConflict {
+    /// Send the user's value (`E_CONFLICT_RESOLUTION_KEEP_LOCAL`).
+    #[default]
+    KeepLocal,
+    /// Keep the server's value, and send the other edits (`E_CONFLICT_RESOLUTION_KEEP_SERVER`).
+    KeepServer,
+    /// Write nothing and fail with [`SyncError::OutOfSync`] (`E_CONFLICT_RESOLUTION_FAIL`).
+    Fail,
 }
 
 /// What changed in the calendar since a given state.
@@ -89,6 +115,35 @@ pub enum Itip {
         /// False when EDS set `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`.
         reply: bool,
     },
+}
+
+/// The patch of an edit from `base`, with the conflicts resolved as `base` asks.
+fn patch_since(
+    base: Base<'_>,
+    current: &CalendarEvent,
+    edited: &CalendarEvent,
+    uid: &str,
+) -> Result<Map<String, Value>, SyncError> {
+    let base_copy = match ical_to_event(base.icalendar) {
+        Ok(copy) => copy,
+        Err(error) => {
+            // A bad base must not block every save of this event.
+            tracing::warn!(uid, %error, "the base copy of the event does not parse");
+            return Ok(patch::diff(current, edited));
+        }
+    };
+    let conflicts = patch::conflicts(&base_copy, current, edited);
+    if conflicts.is_empty() {
+        return Ok(patch::diff_since(&base_copy, current, edited));
+    }
+    tracing::info!(uid, ?conflicts, on_conflict = ?base.on_conflict, "event edit conflict");
+    match base.on_conflict {
+        OnConflict::KeepLocal => Ok(patch::diff_since(&base_copy, current, edited)),
+        OnConflict::KeepServer => Ok(patch::diff_since_except(
+            &base_copy, current, edited, &conflicts,
+        )),
+        OnConflict::Fail => Err(SyncError::OutOfSync(uid.to_owned())),
+    }
 }
 
 /// Returns `error` from a create, edit or delete as an [`Unscheduled`] refusal
@@ -241,11 +296,11 @@ impl CalSync {
     /// answers range queries from it, so a range here would hide events and not
     /// decrease work.
     pub fn list_existing(&self) -> Result<(State, Vec<ComponentInfo>), SyncError> {
-        let query = self.client.event_query(
+        let ids = self.client.event_query_every_id(
             &self.account_id,
             CalendarEventQueryFilter::in_calendar(self.calendar_id.clone()),
         )?;
-        let response = self.client.event_get(&self.account_id, &query.ids)?;
+        let response = self.client.event_get(&self.account_id, &ids)?;
         let events = response
             .list
             .iter()
@@ -302,6 +357,21 @@ impl CalSync {
     /// account organises fails with [`SyncError::OwnMeeting`].
     pub fn save_component_with(
         &self,
+        icalendar: &str,
+        existing_uid: Option<&str>,
+        itip: Itip,
+    ) -> Result<ComponentInfo, SyncError> {
+        self.save_component_since(None, icalendar, existing_uid, itip)
+    }
+
+    /// [`CalSync::save_component_with`] for an edit of `base`, the component that the user edited.
+    ///
+    /// The edit patches only the properties that differ from `base`. Each other
+    /// property keeps the value on the server, also when a different client changed it.
+    /// A property that both changed follows [`Base::on_conflict`].
+    pub fn save_component_since(
+        &self,
+        base: Option<Base<'_>>,
         icalendar: &str,
         existing_uid: Option<&str>,
         itip: Itip,
@@ -437,7 +507,10 @@ impl CalSync {
         };
 
         let current = self.fetch(uid)?;
-        let mut patch = patch::diff(&current, &event);
+        let mut patch = match base {
+            Some(base) => patch_since(base, &current, &event, uid)?,
+            None => patch::diff(&current, &event),
+        };
         let schedule = match itip {
             Itip::Received { reply } => {
                 let own = self.own_addresses()?;

@@ -161,6 +161,9 @@ const ALLOWED_TYPES: &[&str] = &[
     "CamelFolderInfoFlags",
     "CamelFolderSummary",
     "CamelFolderSummaryClass",
+    // The flags of the summary. `CAMEL_FOLDER_SUMMARY_DIRTY` tells
+    // `camel_folder_summary_save` that the header and rows need a write.
+    "CamelFolderSummaryFlags",
     // The flags of the folder object, different from `CamelFolderInfoFlags`
     // and with different bits. The info flags give the kind of folder. The
     // folder flags give how Camel treats it: for example, whether Camel

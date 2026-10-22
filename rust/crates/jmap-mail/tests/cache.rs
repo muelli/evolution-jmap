@@ -131,6 +131,29 @@ fn a_stored_message_reads_back_byte_for_byte() {
     );
 }
 
+/// A cache with no origin file keeps its entries when it adopts an origin. A
+/// different origin later removes them, and a second cache object on the same
+/// directory sees the same origin.
+#[test]
+fn a_different_origin_removes_the_entries() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+    assert!(cache.store("M1", SOURCE, None));
+
+    cache.adopt_origin("https://old.example/jmap A1");
+    assert_eq!(cache.load("M1", None).as_deref(), Some(SOURCE));
+    cache.adopt_origin("https://old.example/jmap A1");
+    assert_eq!(cache.load("M1", None).as_deref(), Some(SOURCE));
+
+    let other = MessageCache::open(scratch.as_str()).expect("a second cache");
+    other.adopt_origin("https://new.example/jmap A1");
+    assert_eq!(
+        cache.load("M1", None),
+        None,
+        "an entry of the old origin stayed"
+    );
+}
+
 /// The path that `filename` returns, read as an ordinary file, holds the
 /// exact bytes `store` wrote. This is the purpose of a filename:
 /// `CamelFolderClass::get_filename` can hand it to a caller instead of

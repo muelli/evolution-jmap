@@ -7,7 +7,7 @@
 use eds_sys::{E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, EContact, e_book_client_error_create};
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
-    cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, set_raw_gerror,
+    cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, out_of_sync_gerror, set_raw_gerror,
 };
 use jmap_backend_core::i18n::translate_with;
 use jmap_backend_core::marshal::{dup_string, read_string, set_out_string};
@@ -418,6 +418,7 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
                 e_book_client_error_create(E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, message.as_ptr())
             }
         }
+        SyncError::OutOfSync(_) => out_of_sync_gerror(&failure.to_string()),
         // Unreadable vCard represents an invalid argument.
         SyncError::VCard(_) => invalid_arg_gerror(&failure.to_string()),
         SyncError::PhotoTooLarge { photo_octets } => invalid_arg_gerror(&translate_with(

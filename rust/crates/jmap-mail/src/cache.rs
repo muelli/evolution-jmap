@@ -118,6 +118,7 @@
 //! [`store`]: MessageCache::store
 
 use std::ffi::{CStr, CString};
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -125,7 +126,7 @@ use std::time::Duration;
 #[cfg(not(camel_data_cache_atomic))]
 use eds_sys::camel_data_cache_add;
 use eds_sys::{
-    CamelDataCache, CamelFolder, CamelFolderClass, camel_data_cache_get,
+    CamelDataCache, CamelFolder, CamelFolderClass, camel_data_cache_clear, camel_data_cache_get,
     camel_data_cache_get_filename, camel_data_cache_new, camel_data_cache_remove,
     camel_data_cache_set_expire_access, camel_data_cache_set_expire_enabled, time_t,
 };
@@ -154,6 +155,10 @@ use crate::folder::JmapFolder;
 /// `"cur"`, as in a maildir. This name tells what the files are.
 const MESSAGES: &CStr = c"messages";
 
+/// The file in the cache directory that names the origin of the entries (see
+/// [`MessageCache::adopt_origin`]).
+const ORIGIN_FILE: &str = "jmap-origin";
+
 /// The quantity of data that one read takes from an entry. A message is one file
 /// and is read fully. The buffer only sets the number of `read` calls.
 const CHUNK: usize = 64 * 1024;
@@ -178,6 +183,8 @@ pub struct MessageCache {
     /// and never during a network fetch, because the fetch is the part of an
     /// open that must overlap.
     cache: Mutex<Owned<CamelDataCache>>,
+    /// The path of the origin file of the account.
+    origin_file: PathBuf,
 }
 
 // SAFETY: this reference is the only one to the `CamelDataCache` that this
@@ -250,7 +257,41 @@ impl MessageCache {
 
         Some(Self {
             cache: Mutex::new(cache),
+            origin_file: Path::new(directory).join(ORIGIN_FILE),
         })
+    }
+
+    /// Makes `origin` the origin of the entries, and removes all entries when
+    /// the cache holds those of a different origin.
+    ///
+    /// The key of an entry is the `Email` id, and two servers can give the same
+    /// id to different messages. The size check of [`Self::load`] does not
+    /// catch an old entry that is longer than the new message. Thus a change of
+    /// the server or the account removes the entries. The origin file is for
+    /// the account directory, not for one folder, because the entries are.
+    ///
+    /// A cache with no origin file adopts `origin` and keeps its entries. Such
+    /// a cache was written before this file existed. Best-effort, as each
+    /// operation here: when the file cannot be written, the next call removes
+    /// the entries again.
+    pub fn adopt_origin(&self, origin: &str) {
+        let cache = self.lock();
+        let known = std::fs::read_to_string(&self.origin_file).ok();
+        if known.as_deref() == Some(origin) {
+            return;
+        }
+        if known.is_some() {
+            // SAFETY: a live cache and a NUL-terminated path that is alive
+            // during the call.
+            unsafe { camel_data_cache_clear(cache.as_ptr(), MESSAGES.as_ptr()) };
+        }
+        let written = self.origin_file.with_extension("new");
+        if std::fs::write(&written, origin)
+            .and_then(|()| std::fs::rename(&written, &self.origin_file))
+            .is_err()
+        {
+            let _ = std::fs::remove_file(&written);
+        }
     }
 
     /// The cached bytes for `uid`, if any, checked against the size that the

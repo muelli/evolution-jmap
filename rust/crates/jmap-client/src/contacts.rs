@@ -217,6 +217,15 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
+    /// `ContactCard/query`: all matching card ids, on all pages of the server.
+    pub fn contact_query_every_id(
+        &self,
+        account_id: &Id,
+        filter: ContactCardQueryFilter,
+    ) -> Result<Vec<Id>, Error> {
+        self.query_every_id(USING, "ContactCard/query", account_id, filter)
+    }
+
     /// Parse an uploaded vCard blob into a `ContactCard` (RFC 9610 Section 3.4).
     ///
     /// The card is not added to an address book.

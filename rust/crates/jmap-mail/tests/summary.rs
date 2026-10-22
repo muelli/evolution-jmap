@@ -29,16 +29,17 @@ use std::ptr;
 use common::Account;
 use eds_sys::compat::{CamelSummaryFolderRecord, summary_dup_uids, summary_free_uids};
 use eds_sys::{
-    CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_FLAGGED,
-    CAMEL_MESSAGE_FOLDER_FLAGGED, CAMEL_MESSAGE_SEEN, CamelFolder, CamelFolderSummary,
-    CamelFolderSummaryClass, camel_folder_get_flags, camel_folder_get_folder_summary,
-    camel_folder_has_summary_capability, camel_folder_summary_check_uid,
-    camel_folder_summary_count, camel_folder_summary_get, camel_folder_summary_get_folder,
+    CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, CAMEL_FOLDER_SUMMARY_DIRTY, CAMEL_MESSAGE_DELETED,
+    CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FOLDER_FLAGGED, CAMEL_MESSAGE_SEEN, CamelFolder,
+    CamelFolderSummary, CamelFolderSummaryClass, camel_folder_get_flags,
+    camel_folder_get_folder_summary, camel_folder_has_summary_capability,
+    camel_folder_summary_check_uid, camel_folder_summary_count, camel_folder_summary_get,
+    camel_folder_summary_get_flags, camel_folder_summary_get_folder,
     camel_folder_summary_get_next_uid, camel_folder_summary_get_type,
     camel_folder_summary_get_unread_count, camel_folder_summary_header_load,
-    camel_folder_summary_load, camel_folder_summary_save, camel_message_info_clone,
-    camel_message_info_get_flags, camel_message_info_get_subject, camel_message_info_get_uid,
-    camel_message_info_get_user_flag, camel_message_info_set_flags,
+    camel_folder_summary_load, camel_folder_summary_save, camel_folder_summary_set_flags,
+    camel_message_info_clone, camel_message_info_get_flags, camel_message_info_get_subject,
+    camel_message_info_get_uid, camel_message_info_get_user_flag, camel_message_info_set_flags,
 };
 use glib_sys::{GError, GFALSE, GTRUE, gboolean};
 use gobject_sys::{
@@ -47,7 +48,8 @@ use gobject_sys::{
 use jmap_mail::folder::new_folder;
 use jmap_mail::message_info::{message_info_type, server_keywords, server_thread_id};
 use jmap_mail::summary::{
-    apply_delta, apply_listing, set_summary_state, summary_state, summary_type,
+    adopt_origin, apply_delta, apply_listing, set_summary_state, summary_origin, summary_state,
+    summary_type,
 };
 use jmap_mail_sync::{FolderInfo, Keywords, MessageFlags, MessageSummary};
 use jmap_proto::{Id, State};
@@ -980,6 +982,198 @@ fn a_header_from_an_unknown_format_loads_without_a_state() {
         );
 
         g_type_class_unref(class.cast());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The origin is stored in the header next to the state. Without it, a
+/// restart forgets the server of the rows, and a different server is then
+/// adopted without a check.
+#[test]
+fn the_origin_outlives_the_folder_that_listed_it() {
+    let account = Account::open();
+
+    // SAFETY: every folder is live until it is unreffed once; the error
+    // out-parameter is only read while it is in scope.
+    unsafe {
+        let folder = open_folder(&account);
+        adopt_origin(summary_of(folder), "https://old.example/jmap A1");
+        set_summary_state(summary_of(folder), State::new("EmailState11"));
+        let mut error: *mut GError = ptr::null_mut();
+        assert_ne!(
+            camel_folder_summary_save(summary_of(folder), ptr::addr_of_mut!(error)),
+            GFALSE,
+            "the summary would not save"
+        );
+        g_object_unref(folder.cast());
+
+        let reopened = open_folder(&account);
+        let name = CString::new("Inbox").expect("a path with no NUL in it");
+        assert_ne!(
+            camel_folder_summary_header_load(
+                summary_of(reopened),
+                account.store,
+                name.as_ptr(),
+                ptr::addr_of_mut!(error),
+            ),
+            GFALSE,
+            "the summary header would not load"
+        );
+        assert_eq!(
+            summary_origin(summary_of(reopened)).as_deref(),
+            Some("https://old.example/jmap A1")
+        );
+        assert_eq!(
+            summary_state(summary_of(reopened)),
+            Some(State::new("EmailState11"))
+        );
+        g_object_unref(reopened.cast());
+    }
+}
+
+/// A header of the format before the origin keeps its state. An upgrade does
+/// not list each mailbox again.
+#[test]
+fn a_header_with_a_state_and_no_origin_loads_its_state() {
+    let account = Account::open();
+    let bdata = CString::new(" 1 11-EmailState7").expect("a header with no NUL in it");
+
+    // SAFETY: as in the test above for an unknown format.
+    unsafe {
+        let folder = open_folder(&account);
+        let class = g_type_class_ref(summary_type()).cast::<CamelFolderSummaryClass>();
+        let load = header_load(class);
+
+        let mut record: CamelSummaryFolderRecord = std::mem::zeroed();
+        record.bdata = bdata.as_ptr().cast_mut();
+        assert_ne!(load(summary_of(folder), ptr::addr_of_mut!(record)), GFALSE);
+        assert_eq!(
+            summary_state(summary_of(folder)),
+            Some(State::new("EmailState7"))
+        );
+        assert_eq!(summary_origin(summary_of(folder)), None);
+
+        g_type_class_unref(class.cast());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A summary with no origin adopts the first one and keeps its rows. A
+/// different origin then removes the rows and the state, and reports the
+/// removals.
+#[test]
+fn a_different_origin_removes_the_rows_and_the_state() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001"), message("M1002")]);
+        set_summary_state(summary, State::new("EmailState3"));
+
+        let adopted = adopt_origin(summary, "https://old.example/jmap A1");
+        assert!(adopted.is_empty(), "the first origin removed rows");
+        assert_eq!(uids(summary).len(), 2);
+        assert!(adopt_origin(summary, "https://old.example/jmap A1").is_empty());
+
+        let replaced = adopt_origin(summary, "https://new.example/jmap A1");
+        assert!(uids(summary).is_empty(), "rows of the old origin stayed");
+        assert_eq!(replaced.removed().len(), 2);
+        assert_eq!(summary_state(summary), None, "the old state stayed");
+        assert_eq!(
+            summary_origin(summary).as_deref(),
+            Some("https://new.example/jmap A1")
+        );
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A header with a version and no state loads no state. An empty state would
+/// ask the server for the changes since nothing.
+#[test]
+fn a_header_with_a_version_and_no_state_loads_no_state() {
+    let account = Account::open();
+    let bdata = CString::new(" 2").expect("a header with no NUL in it");
+
+    // SAFETY: as in the test above for an unknown format.
+    unsafe {
+        let folder = open_folder(&account);
+        let class = g_type_class_ref(summary_type()).cast::<CamelFolderSummaryClass>();
+        let load = header_load(class);
+
+        let mut record: CamelSummaryFolderRecord = std::mem::zeroed();
+        record.bdata = bdata.as_ptr().cast_mut();
+        assert_ne!(load(summary_of(folder), ptr::addr_of_mut!(record)), GFALSE);
+        assert_eq!(summary_state(summary_of(folder)), None);
+
+        g_type_class_unref(class.cast());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// Clears the flag that tells Camel to write the summary, as a save does.
+///
+/// # Safety
+///
+/// `summary` must be live.
+unsafe fn mark_saved(summary: *mut CamelFolderSummary) {
+    // SAFETY: the contract above.
+    unsafe {
+        let flags = camel_folder_summary_get_flags(summary);
+        camel_folder_summary_set_flags(summary, flags & !CAMEL_FOLDER_SUMMARY_DIRTY);
+    }
+}
+
+/// Whether the next save writes the summary.
+///
+/// # Safety
+///
+/// `summary` must be live.
+unsafe fn is_dirty(summary: *mut CamelFolderSummary) -> bool {
+    // SAFETY: the contract above.
+    unsafe { camel_folder_summary_get_flags(summary) & CAMEL_FOLDER_SUMMARY_DIRTY != 0 }
+}
+
+/// A first origin must reach the database even when the state does not
+/// change. Otherwise a header of the old format never gets its origin, and a
+/// later server takes its rows without a check.
+#[test]
+fn a_first_origin_marks_the_summary_for_a_save() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        set_summary_state(summary, State::new("EmailState3"));
+        mark_saved(summary);
+
+        assert!(adopt_origin(summary, "https://old.example/jmap A1").is_empty());
+        assert!(is_dirty(summary), "the first origin is not saved");
+
+        mark_saved(summary);
+        adopt_origin(summary, "https://new.example/jmap A1");
+        assert!(is_dirty(summary), "the new origin is not saved");
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The same origin at each refresh changes nothing. Thus it must not cause a
+/// write of the database at each poll of each folder.
+#[test]
+fn the_known_origin_does_not_mark_the_summary_for_a_save() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live.
+    unsafe {
+        let summary = summary_of(folder);
+        adopt_origin(summary, "https://old.example/jmap A1");
+        mark_saved(summary);
+
+        assert!(adopt_origin(summary, "https://old.example/jmap A1").is_empty());
+        assert!(!is_dirty(summary), "the known origin marked a change");
         g_object_unref(folder.cast());
     }
 }

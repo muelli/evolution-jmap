@@ -158,6 +158,56 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
     patch
 }
 
+/// Returns [`diff`] from `current` to `edited`, limited to the properties that
+/// differ between `base` and `edited`.
+///
+/// `base` is the card that the user edited. A property that only another client
+/// changed since then keeps the server's value.
+pub fn diff_since(
+    base: &ContactCard,
+    current: &ContactCard,
+    edited: &ContactCard,
+) -> Map<String, Value> {
+    diff_since_except(base, current, edited, &BTreeSet::new())
+}
+
+/// Returns [`diff_since`] without the properties in `kept`, which keep the server's value.
+pub fn diff_since_except(
+    base: &ContactCard,
+    current: &ContactCard,
+    edited: &ContactCard,
+    kept: &BTreeSet<String>,
+) -> Map<String, Value> {
+    let touched = diff(base, edited);
+    let mut patch = diff(current, edited);
+    patch.retain(|path, _| {
+        let name = property(path);
+        !kept.contains(name) && touched.keys().any(|edit| property(edit) == name)
+    });
+    patch
+}
+
+/// Returns the properties that the user and a different client both changed
+/// after `base`, to different values.
+pub fn conflicts(
+    base: &ContactCard,
+    current: &ContactCard,
+    edited: &ContactCard,
+) -> BTreeSet<String> {
+    let remote = diff(current, base);
+    diff_since(base, current, edited)
+        .keys()
+        .map(|path| property(path))
+        .filter(|name| remote.keys().any(|theirs| property(theirs) == *name))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The top-level property that a patch path names.
+fn property(path: &str) -> &str {
+    path.split('/').next().unwrap_or(path)
+}
+
 /// Patches the mapped relations (`spouse`, `manager`, `assistant`). The line
 /// shows the key, so an edit withdraws a relation and adds a relation.
 ///

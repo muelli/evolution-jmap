@@ -31,6 +31,8 @@ evo-sys = { workspace = true }
 evolution-jmap-client = { workspace = true }
 # The undo window of a collection delete, and its due time on the source.
 evolution-jmap-collection-sync = { workspace = true }
+# The identity that covers a sender address, as Send selects it.
+evolution-jmap-mail-sync = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 # GTask (the async submit pair) and GCancellable.
 gio-sys = { workspace = true }

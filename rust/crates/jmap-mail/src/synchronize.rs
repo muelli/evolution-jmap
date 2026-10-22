@@ -61,13 +61,13 @@
 //!
 //! A message that another client destroyed is not a failure (see `push_row`).
 //!
-//! ## The other argument
+//! ## Deleted rows
 //!
-//! **`expunge`.** With this argument, Camel also asks the folder to remove the
-//! messages that the user marked deleted. That is a mailbox change, not a flag
-//! change. JMAP has no deleted keyword, so a deleted row gives no keyword change
-//! here. [`crate::expunge`] does all of the removal, and this vfunc calls it
-//! when the argument is set. The walk below runs first (see the call site).
+//! JMAP has no deleted keyword, so a deleted row gives no keyword change here.
+//! [`crate::expunge`] does all of the removal, and this vfunc calls it after the
+//! walk below. Without `expunge`, a deleted row outside the trash moves into the
+//! trash, as IMAPX does with a real trash. With `expunge`, Camel also asks the
+//! folder to remove the deleted rows.
 //!
 //! ## Stopping a synchronisation
 //!
@@ -95,6 +95,7 @@ use jmap_mail_sync::KeywordChange;
 use jmap_proto::Id;
 
 use crate::connect::StoreError;
+use crate::expunge::Walk;
 use crate::folder::parent_store;
 use crate::message_info::{row_keywords, server_keywords, set_server_keywords};
 
@@ -148,12 +149,15 @@ unsafe extern "C" fn synchronize_sync(
                 }
             }
 
-            // Expunge after the keyword walk, for two reasons. A row to be
-            // destroyed can have an unsaved change (read, then deleted, is
+            // Remove after the keyword walk, for two reasons. A row to be
+            // removed can have an unsaved change (read, then deleted, is
             // usual). Also, the walk clears the marks that would retry.
-            if expunge != GFALSE
-                && let Err(problem) = crate::expunge::expunge_folder(folder)
-            {
+            let walk = if expunge != GFALSE {
+                Walk::Synchronize
+            } else {
+                Walk::FileInTrash
+            };
+            if let Err(problem) = crate::expunge::expunge_folder(folder, walk) {
                 failure.get_or_insert(problem);
             }
 

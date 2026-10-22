@@ -504,6 +504,7 @@ pub fn calendar_event_query(
     arguments: Value,
 ) -> Result<Value, MethodError> {
     let request: QueryRequest<CalendarEventQueryFilter> = parse_arguments(arguments)?;
+    let paging = state.query_paging();
     let account = account_mut(state, &request.account_id)?;
 
     let filter = request.filter.unwrap_or_default();
@@ -515,12 +516,11 @@ pub fn calendar_event_query(
     matches.sort_by(|(_, a), (_, b)| a.start.cmp(&b.start));
 
     let total = matches.len() as u64;
-    let ids: Vec<Id> = matches
-        .into_iter()
-        .map(|(id, _)| id.clone())
-        .skip(request.position.max(0) as usize)
-        .take(request.limit.unwrap_or(u64::MAX) as usize)
-        .collect();
+    let (ids, limit) = paging.page(
+        matches.into_iter().map(|(id, _)| id.clone()),
+        request.position,
+        request.limit,
+    );
 
     to_result(&QueryResponse {
         account_id: request.account_id,
@@ -529,7 +529,7 @@ pub fn calendar_event_query(
         position: request.position.max(0) as u64,
         ids,
         total: request.calculate_total.then_some(total),
-        limit: None,
+        limit,
     })
 }
 

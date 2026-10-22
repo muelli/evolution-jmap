@@ -70,6 +70,7 @@ pub struct MockServerBuilder {
     email_get_includes_unrequested: bool,
     query_page_size: Option<u64>,
     query_never_terminates: bool,
+    query_hides_limit: bool,
     size_request: Option<u64>,
     size_upload: Option<u64>,
     session_via_redirect: bool,
@@ -160,7 +161,8 @@ impl MockServerBuilder {
         self
     }
 
-    /// Cap each `Email/query` page to at most `ids` ids.
+    /// Cap each `Email/query`, `ContactCard/query` and `CalendarEvent/query` page to at most
+    /// `ids` ids.
     pub fn query_page_size(mut self, ids: u64) -> Self {
         self.query_page_size = Some(ids);
         self
@@ -169,6 +171,12 @@ impl MockServerBuilder {
     /// Keep paginated `Email/query` responses non-terminating.
     pub fn query_never_terminates(mut self) -> Self {
         self.query_never_terminates = true;
+        self
+    }
+
+    /// Omit `limit` from a capped contact or event query page, against RFC 8620 section 5.5.
+    pub fn query_hides_limit(mut self) -> Self {
+        self.query_hides_limit = true;
         self
     }
 
@@ -341,6 +349,7 @@ impl MockServerBuilder {
         state.email_get_includes_unrequested = self.email_get_includes_unrequested;
         state.query_page_size = self.query_page_size;
         state.query_never_terminates = self.query_never_terminates;
+        state.query_hides_limit = self.query_hides_limit;
         state.size_request = self.size_request;
         state.size_upload = self.size_upload;
         state.session_via_redirect = self.session_via_redirect;
@@ -423,6 +432,7 @@ impl MockServer {
             email_get_includes_unrequested: false,
             query_page_size: None,
             query_never_terminates: false,
+            query_hides_limit: false,
             size_request: Some(DEFAULT_SIZE_REQUEST),
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,

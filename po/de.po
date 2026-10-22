@@ -27,7 +27,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-21 09:36+0000\n"
+"POT-Creation-Date: 2026-10-22 06:36+0000\n"
 "PO-Revision-Date: 2026-10-19 21:05+0000\n"
 "Last-Translator: Antigravity <agy@example.com>\n"
 "Language-Team: German <gnome-de@gnome.org>\n"
@@ -38,7 +38,7 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
 #. TRANSLATORS: shown when a contact could not be saved because of its picture. %1$s is the picture's size, such as "1.2 MB".
-#: rust/crates/jmap-backend-book/src/ops.rs:425
+#: rust/crates/jmap-backend-book/src/ops.rs:426
 #, c-format
 msgid ""
 "The server cannot store a contact with a picture this large (%1$s), so the "
@@ -49,14 +49,14 @@ msgstr ""
 "speichern Sie den Kontakt erneut."
 
 #. TRANSLATORS: shown when an invitation or import tries to change a meeting that the user organizes.
-#: rust/crates/jmap-backend-cal/src/ops.rs:450
+#: rust/crates/jmap-backend-cal/src/ops.rs:451
 msgid ""
 "You organize this meeting. A received invitation or an import cannot change "
 "its guests or its organizer, or delete it."
 msgstr ""
 
 #. TRANSLATORS: shown when the server refused to send a meeting's invitations.
-#: rust/crates/jmap-backend-cal/src/ops.rs:463
+#: rust/crates/jmap-backend-cal/src/ops.rs:464
 msgid ""
 "The server cannot send meeting invitations to every guest, so the change was "
 "not saved. Check that each guest has a valid email address."
@@ -66,7 +66,7 @@ msgstr ""
 "E-Mail-Adresse hat."
 
 #. TRANSLATORS: shown when the server refused to send a meeting's invitations. %1$s is a comma-separated list of guest addresses.
-#: rust/crates/jmap-backend-cal/src/ops.rs:467
+#: rust/crates/jmap-backend-cal/src/ops.rs:468
 #, c-format
 msgid ""
 "The server cannot send meeting invitations to every guest, so the change was "
@@ -77,7 +77,7 @@ msgstr ""
 "erreichen: %1$s."
 
 #. TRANSLATORS: shown when the server does not send meeting invitations.
-#: rust/crates/jmap-backend-cal/src/ops.rs:472
+#: rust/crates/jmap-backend-cal/src/ops.rs:473
 msgid ""
 "This server cannot send meeting invitations, so the change was not saved. To "
 "save it, choose not to send the invitations."
@@ -87,7 +87,7 @@ msgstr ""
 "nicht zu senden."
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.
-#: rust/crates/jmap-backend-cal/src/ops.rs:482
+#: rust/crates/jmap-backend-cal/src/ops.rs:483
 #, c-format
 msgid ""
 "This event repeats until %1$s, and the time zone it is in, %2$s, is not "
@@ -101,7 +101,7 @@ msgstr ""
 "der Wiederholung als Anzahl von Wiederholungen funktioniert stattdessen."
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.
-#: rust/crates/jmap-backend-cal/src/ops.rs:487
+#: rust/crates/jmap-backend-cal/src/ops.rs:488
 msgid ""
 "This event repeats in a way that cannot be stored on the server, so it was "
 "not created. Stating the recurrence as a repeat count is the spelling that "
@@ -154,9 +154,9 @@ msgstr "das Backend für %1$s hat kein Konto, mit dem es sich verbinden kann"
 #: rust/crates/jmap-backend-core/src/oauth2.rs:740
 #: rust/crates/jmap-backend-core/src/oauth2.rs:869
 #: rust/crates/jmap-ui/src/link.rs:308 rust/crates/jmap-ui/src/link.rs:313
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1080
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1083
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1105
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1095
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1098
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1120
 msgid "no further detail was given"
 msgstr "keine weiteren Details angegeben"
 
@@ -410,87 +410,88 @@ msgstr "Evolution"
 #. TRANSLATORS: shown when the server did not recognise this
 #. connection as authenticated at all, rather than rejecting a
 #. specific password.
-#: rust/crates/jmap-mail/src/connect.rs:262
+#: rust/crates/jmap-mail/src/connect.rs:250
 msgid "the server did not accept the account's credentials"
 msgstr "der Server hat die Anmeldedaten des Kontos nicht akzeptiert"
 
 #. TRANSLATORS: shown when Camel asks a JMAP store to do
 #. something that needs a connection it does not currently have.
-#: rust/crates/jmap-mail/src/connect.rs:269
+#: rust/crates/jmap-mail/src/connect.rs:257
 msgid "not connected to the JMAP server"
 msgstr "nicht mit dem JMAP-Server verbunden"
 
 #. TRANSLATORS: %1$s is the folder path Camel asked for.
-#: rust/crates/jmap-mail/src/connect.rs:273
+#: rust/crates/jmap-mail/src/connect.rs:261
 #, c-format
 msgid "no such folder: %1$s"
 msgstr "Ordner existiert nicht: %1$s"
 
 #. TRANSLATORS: %1$s is a JMAP mailbox role such as "inbox" or
 #. "trash", not translated: it is a protocol keyword, not prose.
-#: rust/crates/jmap-mail/src/connect.rs:279
+#: rust/crates/jmap-mail/src/connect.rs:267
 #, c-format
 msgid "no mailbox of this account has the %1$s role"
 msgstr "kein Postfach dieses Kontos hat die Rolle »%1$s«"
 
 #. TRANSLATORS: %1$s is the message id Camel asked for.
-#: rust/crates/jmap-mail/src/connect.rs:284
+#: rust/crates/jmap-mail/src/connect.rs:272
 #, c-format
 msgid "no such message: %1$s"
 msgstr "Nachricht existiert nicht: %1$s"
 
 #. TRANSLATORS: %1$s is the folder's display name.
-#: rust/crates/jmap-mail/src/connect.rs:289
+#: rust/crates/jmap-mail/src/connect.rs:277
 #, c-format
 msgid "you do not have permission to add messages to %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the email address the message was to be
 #. sent from.
-#: rust/crates/jmap-mail/src/connect.rs:295
+#: rust/crates/jmap-mail/src/connect.rs:283
+#: rust/crates/jmap-ui/src/send_later/submit.rs:72
 #, c-format
 msgid "this account cannot send mail as %1$s"
 msgstr "dieses Konto kann keine E-Mails als %1$s versenden"
 
-#: rust/crates/jmap-mail/src/connect.rs:299
+#: rust/crates/jmap-mail/src/connect.rs:287
 msgid "this account has no Drafts or Sent folder to send a message from"
 msgstr ""
 "dieses Konto hat keinen Entwurfs- oder Gesendet-Ordner, aus dem eine "
 "Nachricht gesendet werden kann"
 
-#: rust/crates/jmap-mail/src/envelope.rs:101
+#: rust/crates/jmap-mail/src/envelope.rs:68
 msgid "sender"
 msgstr "Absender"
 
-#: rust/crates/jmap-mail/src/envelope.rs:102
+#: rust/crates/jmap-mail/src/envelope.rs:69
 msgid "recipients"
 msgstr "Empfänger"
 
 #. TRANSLATORS: %1$s is "sender" or "recipients", already
 #. translated.
-#: rust/crates/jmap-mail/src/envelope.rs:108
+#: rust/crates/jmap-mail/src/envelope.rs:75
 #, c-format
 msgid "the %1$s are not internet addresses"
 msgstr "bei %1$s handelt es sich nicht um Internetadressen"
 
-#: rust/crates/jmap-mail/src/envelope.rs:112
+#: rust/crates/jmap-mail/src/envelope.rs:79
 msgid "the message has no sender address"
 msgstr "die Nachricht hat keine Absenderadresse"
 
-#: rust/crates/jmap-mail/src/envelope.rs:113
+#: rust/crates/jmap-mail/src/envelope.rs:80
 msgid "the message has no recipients"
 msgstr "die Nachricht hat keine Empfänger"
 
 #. TRANSLATORS: %1$s is the recipient's display name.
-#: rust/crates/jmap-mail/src/envelope.rs:117
+#: rust/crates/jmap-mail/src/envelope.rs:84
 #, c-format
 msgid "no address for the recipient \"%1$s\""
 msgstr "keine Adresse für den Empfänger »%1$s«"
 
 #. TRANSLATORS: %1$s is the recipient's 1-based position in
-#. the list Camel gave, used because this recipient has no
-#. display name to show instead.
-#: rust/crates/jmap-mail/src/envelope.rs:124
+#. the list. This text shows when the recipient has no
+#. display name.
+#: rust/crates/jmap-mail/src/envelope.rs:91
 #, c-format
 msgid "no address for recipient %1$s"
 msgstr "keine Adresse für Empfänger %1$s"
@@ -501,11 +502,11 @@ msgstr "keine Adresse für Empfänger %1$s"
 msgid "For reading and storing mail on JMAP servers."
 msgstr "Zum Lesen und Speichern von E-Mail auf JMAP-Servern."
 
-#: rust/crates/jmap-mail/src/sasl.rs:159
+#: rust/crates/jmap-mail/src/sasl.rs:156
 msgid "OAuth2 (JMAP)"
 msgstr "OAuth2 (JMAP)"
 
-#: rust/crates/jmap-mail/src/sasl.rs:172
+#: rust/crates/jmap-mail/src/sasl.rs:169
 msgid "Uses an OAuth 2.0 access token to connect to the JMAP server."
 msgstr ""
 "Verwendet ein OAuth-2.0-Zugriffstoken zum Verbinden mit dem JMAP-Server."
@@ -659,15 +660,11 @@ msgid "the server has no Drafts mailbox to stage the message in"
 msgstr ""
 "der Server hat kein Entwurfs-Postfach zur Zwischenspeicherung der Nachricht"
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:74
-msgid "the account has no sending identity on the server"
-msgstr "das Konto hat keine Absender-Identität auf dem Server"
-
-#: rust/crates/jmap-ui/src/send_later/submit.rs:87
+#: rust/crates/jmap-ui/src/send_later/submit.rs:85
 msgid "the server imported the message without naming its id"
 msgstr "der Server hat die Nachricht importiert, ohne deren Kennung zu nennen"
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:127
+#: rust/crates/jmap-ui/src/send_later/submit.rs:125
 #, c-format
 msgid ""
 "the server accepted the submission but named no release time (undoStatus "
@@ -733,13 +730,17 @@ msgstr "Kalender »%1$s« ist gelöscht."
 msgid ""
 "The calendar is deleted for all users who share it. To keep it, click Undo "
 "before this message closes."
-msgstr "Der Kalender ist für alle Benutzer gelöscht, die ihn teilen. Um ihn zu behalten, klicken Sie auf »Rückgängig«, bevor diese Meldung schließt."
+msgstr ""
+"Der Kalender ist für alle Benutzer gelöscht, die ihn teilen. Um ihn zu "
+"behalten, klicken Sie auf »Rückgängig«, bevor diese Meldung schließt."
 
 #: rust/crates/jmap-ui/src/undo_delete/notice.rs:99
 msgid ""
 "The calendar is deleted on the server. To keep it, click Undo before this "
 "message closes."
-msgstr "Der Kalender ist auf dem Server gelöscht. Um ihn zu behalten, klicken Sie auf »Rückgängig«, bevor diese Meldung schließt."
+msgstr ""
+"Der Kalender ist auf dem Server gelöscht. Um ihn zu behalten, klicken Sie "
+"auf »Rückgängig«, bevor diese Meldung schließt."
 
 #. TRANSLATORS: %1$s is the name of the address book.
 #: rust/crates/jmap-ui/src/undo_delete/notice.rs:104
@@ -752,13 +753,17 @@ msgstr "Adressbuch »%1$s« ist gelöscht."
 msgid ""
 "The address book is deleted for all users who share it. To keep it, click "
 "Undo before this message closes."
-msgstr "Das Adressbuch ist für alle Benutzer gelöscht, die es teilen. Um es zu behalten, klicken Sie auf »Rückgängig«, bevor diese Meldung schließt."
+msgstr ""
+"Das Adressbuch ist für alle Benutzer gelöscht, die es teilen. Um es zu "
+"behalten, klicken Sie auf »Rückgängig«, bevor diese Meldung schließt."
 
 #: rust/crates/jmap-ui/src/undo_delete/notice.rs:113
 msgid ""
 "The address book is deleted on the server. To keep it, click Undo before "
 "this message closes."
-msgstr "Das Adressbuch ist auf dem Server gelöscht. Um es zu behalten, klicken Sie auf »Rückgängig«, bevor diese Meldung schließt."
+msgstr ""
+"Das Adressbuch ist auf dem Server gelöscht. Um es zu behalten, klicken Sie "
+"auf »Rückgängig«, bevor diese Meldung schließt."
 
 #: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:279
 msgid "_Undo"
@@ -821,3 +826,6 @@ msgstr "_Betreff:"
 #: rust/crates/jmap-ui/src/vacation/page.rs:244
 msgid "_Message:"
 msgstr "_Nachricht:"
+
+#~ msgid "the account has no sending identity on the server"
+#~ msgstr "das Konto hat keine Absender-Identität auf dem Server"

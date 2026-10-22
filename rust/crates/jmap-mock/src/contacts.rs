@@ -295,17 +295,19 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
 
 pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<ContactCardQueryFilter> = parse_arguments(arguments)?;
+    let paging = state.query_paging();
     let account = account_mut(state, &request.account_id)?;
 
     let filter = request.filter.unwrap_or_default();
-    let ids: Vec<Id> = account
-        .contact_cards
-        .iter()
-        .filter(|(_, card)| card_matches(card, &filter))
-        .map(|(id, _)| id.clone())
-        .skip(request.position.max(0) as usize)
-        .take(request.limit.unwrap_or(u64::MAX) as usize)
-        .collect();
+    let (ids, limit) = paging.page(
+        account
+            .contact_cards
+            .iter()
+            .filter(|(_, card)| card_matches(card, &filter))
+            .map(|(id, _)| id.clone()),
+        request.position,
+        request.limit,
+    );
 
     let total = account
         .contact_cards
@@ -320,7 +322,7 @@ pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<V
         position: request.position.max(0) as u64,
         ids,
         total: request.calculate_total.then_some(total),
-        limit: None,
+        limit,
     })
 }
 

@@ -94,6 +94,7 @@ pub mod limits;
 mod mail;
 pub mod oauth;
 mod principals;
+mod query;
 mod quota;
 pub mod resolver;
 pub(crate) mod set;

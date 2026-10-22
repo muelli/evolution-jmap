@@ -11,7 +11,7 @@ use eds_sys::{
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
-    cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, set_raw_gerror,
+    cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, out_of_sync_gerror, set_raw_gerror,
 };
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{dup_string, read_string, set_out_list, set_out_string};
@@ -435,6 +435,7 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
             }
         }
         SyncError::ICal(_) => invalid_arg_gerror(&failure.to_string()),
+        SyncError::OutOfSync(_) => out_of_sync_gerror(&failure.to_string()),
         SyncError::Unsendable(reason) => invalid_arg_gerror(&refusal(reason)),
         SyncError::Unscheduled(reason @ Unscheduled::Unreachable { .. }) => {
             invalid_arg_gerror(&unscheduled(reason))

@@ -25,8 +25,8 @@ use std::ptr;
 
 use eds_sys::{
     E_CLIENT_ERROR_AUTHENTICATION_FAILED, E_CLIENT_ERROR_INVALID_ARG, E_CLIENT_ERROR_OTHER_ERROR,
-    E_CLIENT_ERROR_PERMISSION_DENIED, E_CLIENT_ERROR_REPOSITORY_OFFLINE, EClientError,
-    e_client_error_create,
+    E_CLIENT_ERROR_OUT_OF_SYNC, E_CLIENT_ERROR_PERMISSION_DENIED,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EClientError, e_client_error_create,
 };
 use glib_sys::{GError, GFALSE, GQuark, g_error_new_literal, g_quark_from_static_string, gboolean};
 use jmap_client::Error;
@@ -145,6 +145,15 @@ pub fn invalid_arg_gerror(message: &str) -> *mut GError {
     // SAFETY: the code is a value of the enum, and the call copies the
     // message.
     unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
+}
+
+/// A `GError` for a save that the server copy changed after the base copy, when
+/// EDS asked for `E_CONFLICT_RESOLUTION_FAIL`.
+pub fn out_of_sync_gerror(message: &str) -> *mut GError {
+    let message = cstring_lossy(message);
+    // SAFETY: the code is a value of the enum, and the call copies the
+    // message.
+    unsafe { e_client_error_create(E_CLIENT_ERROR_OUT_OF_SYNC, message.as_ptr()) }
 }
 
 /// Reports `failure` through `error`, and returns the null pointer that means
@@ -282,6 +291,22 @@ mod tests {
     fn the_error_domain_is_stable_across_calls() {
         assert_eq!(jmap_backend_error_quark(), jmap_backend_error_quark());
         assert_ne!(jmap_backend_error_quark(), 0);
+    }
+
+    #[test]
+    fn out_of_sync_gerror_carries_the_out_of_sync_code_and_the_message() {
+        let error = out_of_sync_gerror("changed on the server");
+        assert!(!error.is_null());
+        // SAFETY: a newly allocated GError that this test owns.
+        unsafe {
+            assert_eq!((*error).domain, e_client_error_quark());
+            assert_eq!((*error).code, eds_sys::E_CLIENT_ERROR_OUT_OF_SYNC as i32);
+            assert_eq!(
+                std::ffi::CStr::from_ptr((*error).message).to_string_lossy(),
+                "changed on the server"
+            );
+            glib_sys::g_error_free(error);
+        }
     }
 
     #[test]

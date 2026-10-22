@@ -35,7 +35,7 @@ use jmap_proto::mail::Identity;
 ///
 /// If several matches are equally good, the first wins. Thus, each retry of one
 /// message gets the same identity and signature.
-pub(crate) fn best_match<'a>(identities: &'a [Identity], address: &str) -> Option<&'a Identity> {
+pub fn best_match<'a>(identities: &'a [Identity], address: &str) -> Option<&'a Identity> {
     identities
         .iter()
         .filter_map(|identity| match_kind(&identity.email, address).map(|kind| (kind, identity)))

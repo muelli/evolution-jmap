@@ -13,7 +13,7 @@
 //! that stays on the server is the worst result, because the user cannot see
 //! or delete it again.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
@@ -139,14 +139,15 @@ fn destroy(child: &impl PendingChild) -> Settled {
     Settled::Destroyed
 }
 
-/// The uids that a [`watch`] thread watches now.
+/// The uids that a [`watch`] thread watches now, each with a count of the
+/// deletes that a [`delete_later`] started again while that thread ran.
 ///
 /// The lock also covers each check of a thread and each [`delete_later`].
 /// Without it, a check can clear the due time of a delete that starts after the
 /// check read the source, and that delete then has no thread.
-static WATCHED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+static WATCHED: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
 
-fn watched() -> MutexGuard<'static, BTreeSet<String>> {
+fn watched() -> MutexGuard<'static, BTreeMap<String, u64>> {
     WATCHED
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -166,6 +167,9 @@ impl Drop for Unwatch {
 /// Defers the delete of `source` (refer to [`defer`]) and starts a [`watch`]
 /// of `child`, under one lock.
 ///
+/// If a thread already watches `child`, that thread starts its wait again.
+/// Thus a delete after an Undo gets a full window.
+///
 /// # Safety
 ///
 /// `source` must be a valid `ESource`, and `child` must stand for it.
@@ -177,7 +181,12 @@ pub unsafe fn delete_later<C: PendingChild + Send + 'static>(
     let mut watched = watched();
     // SAFETY: the contract of this function.
     let due = unsafe { defer(source, now) };
-    let _ = start(&mut watched, child);
+    match watched.get_mut(&child.uid()) {
+        Some(restarts) => *restarts = restarts.wrapping_add(1),
+        None => {
+            let _ = start(&mut watched, child);
+        }
+    }
     due
 }
 
@@ -193,22 +202,32 @@ pub fn watch<C: PendingChild + Send + 'static>(child: C) -> Option<JoinHandle<Se
 }
 
 fn start<C: PendingChild + Send + 'static>(
-    uids: &mut BTreeSet<String>,
+    uids: &mut BTreeMap<String, u64>,
     child: C,
 ) -> Option<JoinHandle<Settled>> {
     let uid = child.uid();
-    if !uids.insert(uid.clone()) {
+    if uids.contains_key(&uid) {
         return None;
     }
+    uids.insert(uid.clone(), 0);
     let spawned = thread::Builder::new()
         .name("jmap-pending-delete".to_owned())
         .spawn(move || {
-            let mut unwatch = Unwatch(Some(child.uid()));
+            let uid_of_thread = child.uid();
+            let mut unwatch = Unwatch(Some(uid_of_thread.clone()));
             // The first wait sets the end on the monotonic clock, as the timer of
             // the info bar does. A wall clock that moves back cannot extend it.
             let mut end: Option<Instant> = None;
+            let mut restarts = 0;
             loop {
                 let mut watched = watched();
+                // A new delete of the same child sets a new end.
+                if let Some(&count) = watched.get(&uid_of_thread)
+                    && count != restarts
+                {
+                    restarts = count;
+                    end = None;
+                }
                 let mut checked = check(&child, SystemTime::now());
                 if let Checked::Done(Settled::Wait(left)) = checked {
                     let now = Instant::now();

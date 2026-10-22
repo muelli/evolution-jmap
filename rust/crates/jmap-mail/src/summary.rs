@@ -42,6 +42,10 @@
 //! without a stored state, the first refresh of each session lists every
 //! mailbox in full.
 //!
+//! The header also keeps the origin of the rows: the API URL and the account
+//! id. An `Email` id is unique only on one server, so [`adopt_origin`] removes
+//! the rows when the origin changes.
+//!
 //! Camel keeps one header record per folder next to the rows. The record has a
 //! `bdata` field for provider data that Camel does not have. The message row
 //! has a `bdata` field too, and [`crate::message_info`] keeps the keywords in
@@ -133,7 +137,21 @@ use crate::message_info::{
 /// The format number of the stored header. Increase it when the meaning of the
 /// fields after it changes. A header with a different number gives a summary
 /// with no state, the same as a folder that has never listed.
-const HEADER_VERSION: i64 = 1;
+///
+/// Version 2 adds the origin after the state.
+const HEADER_VERSION: i64 = 2;
+
+/// The format that stores the state only. It loads as a state with no origin.
+const HEADER_VERSION_STATE_ONLY: i64 = 1;
+
+/// What the summary records about its rows: the state and the origin of the
+/// listing that gave them.
+#[derive(Default)]
+struct Recorded {
+    state: Option<State>,
+    /// The server and account that gave the rows (see [`adopt_origin`]).
+    origin: Option<String>,
+}
 
 /// The instance struct: the summary of Camel, plus the one fact about its rows
 /// that Camel has no field for.
@@ -147,7 +165,7 @@ pub struct JmapSummary {
     /// A [`Slot`], because the struct starts zeroed and no destructor runs when
     /// it is freed. A [`Mutex`], because each refresh writes it and Camel uses a
     /// folder from more than one thread.
-    state: Slot<Mutex<Option<State>>>,
+    state: Slot<Mutex<Recorded>>,
 }
 
 impl JmapSummary {
@@ -215,7 +233,7 @@ unsafe impl ObjectSubclass for JmapSummary {
         //
         // SAFETY: the instance is being constructed, so this is the only
         // reference to it.
-        unsafe { (*instance).state.init(Mutex::new(None)) };
+        unsafe { (*instance).state.init(Mutex::new(Recorded::default())) };
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
@@ -238,12 +256,83 @@ unsafe impl ObjectSubclass for JmapSummary {
 pub unsafe fn summary_state(summary: *mut CamelFolderSummary) -> Option<State> {
     // SAFETY: the contract above, and `borrow` checks the type.
     let summary = unsafe { JmapSummary::borrow(summary) }?;
-    let state = summary
+    let recorded = summary
         .state
         .get()?
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    state.clone()
+    recorded.state.clone()
+}
+
+/// The origin of the rows of `summary`. `None` if the summary has not adopted
+/// an origin, or if it is not of this type.
+///
+/// # Safety
+///
+/// `summary` must be NULL or point at a live `CamelFolderSummary`.
+pub unsafe fn summary_origin(summary: *mut CamelFolderSummary) -> Option<String> {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let summary = unsafe { JmapSummary::borrow(summary) }?;
+    let recorded = summary
+        .state
+        .get()?
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    recorded.origin.clone()
+}
+
+/// Makes `origin` the origin of the rows, and removes the rows of a different
+/// origin. Returns the removals for the folder to emit.
+///
+/// The origin names the server and the account (the API URL and the account
+/// id). An `Email` id is unique only in one account of one server. Two servers
+/// can give the same id to different messages. A row keeps its immutable
+/// columns at each refresh, so a row from the old server keeps its subject
+/// under the id of a different message. Thus a change of origin removes all
+/// rows and the state, and the next listing builds the rows again.
+///
+/// A summary with no origin adopts `origin` and keeps its rows. Such a summary
+/// was written before the header had an origin, and its rows are most likely
+/// from the same server.
+///
+/// # Safety
+///
+/// `summary` must be NULL or point at a live `CamelFolderSummary`.
+pub unsafe fn adopt_origin(summary: *mut CamelFolderSummary, origin: &str) -> Changes {
+    let mut changes = Changes::new();
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let Some(slot) = (unsafe { JmapSummary::borrow(summary) }).and_then(|s| s.state.get()) else {
+        return changes;
+    };
+    // SAFETY: the summary is live and of this type, by the borrow above. The
+    // summary lock is recursive, and the row removal takes it again.
+    unsafe {
+        camel_folder_summary_lock(summary);
+        let replaced = {
+            let mut recorded = slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match recorded.origin.as_deref() {
+                Some(known) if known == origin => None,
+                known => {
+                    let replaced = known.is_some();
+                    if replaced {
+                        recorded.state = None;
+                    }
+                    recorded.origin = Some(origin.to_owned());
+                    Some(replaced)
+                }
+            }
+        };
+        if replaced == Some(true) {
+            remove_absent(summary, &BTreeSet::new(), &mut changes);
+        }
+        if replaced.is_some() {
+            camel_folder_summary_touch(summary);
+        }
+        camel_folder_summary_unlock(summary);
+    }
+    changes
 }
 
 /// The number of rows in `summary`. A refresh uses this number to decide how
@@ -295,13 +384,13 @@ pub unsafe fn set_summary_state(summary: *mut CamelFolderSummary, state: State) 
         let mut slot = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if slot.as_ref() == Some(&state) {
+        if slot.state.as_ref() == Some(&state) {
             // This is the usual result for a mailbox with no writes. If this
             // marked the summary as changed, Camel would write the database at
             // each poll of each folder.
             return;
         }
-        *slot = Some(state);
+        slot.state = Some(state);
     }
     // SAFETY: the summary is live and of this type, by the borrow above.
     unsafe { camel_folder_summary_touch(summary) };
@@ -399,9 +488,11 @@ unsafe fn store_state(summary: *mut CamelFolderSummary, record: *mut CamelSummar
         let Some(state) = summary_state(summary) else {
             return;
         };
+        let origin = summary_origin(summary).unwrap_or_default();
         let bdata = g_string_new(ptr::null());
         camel_util_bdata_put_number(bdata, HEADER_VERSION);
         camel_util_bdata_put_string(bdata, c_string(state.as_str()).as_ptr());
+        camel_util_bdata_put_string(bdata, c_string(&origin).as_ptr());
         g_free((*record).bdata.cast());
         (*record).bdata = g_string_free(bdata, GFALSE);
     }
@@ -433,27 +524,57 @@ unsafe extern "C" fn summary_header_load(
         // its `bdata` pointer that the reads below move through the string
         // without taking ownership of it; `get_string` gives a `g_malloc`ed
         // copy that this function frees.
-        let stored = unsafe {
+        let (stored, origin) = unsafe {
             let mut cursor = (*record).bdata;
             if cursor.is_null() {
                 return GTRUE;
             }
-            if camel_util_bdata_get_number(ptr::addr_of_mut!(cursor), 0) != HEADER_VERSION {
+            let version = camel_util_bdata_get_number(ptr::addr_of_mut!(cursor), 0);
+            if version != HEADER_VERSION && version != HEADER_VERSION_STATE_ONLY {
                 return GTRUE;
             }
-            let text = camel_util_bdata_get_string(ptr::addr_of_mut!(cursor), ptr::null());
-            if text.is_null() {
+            let Some(state) = take_string(ptr::addr_of_mut!(cursor)) else {
                 return GTRUE;
-            }
-            let state = CStr::from_ptr(text).to_string_lossy().into_owned();
-            g_free(text.cast());
-            state
+            };
+            let origin = if version == HEADER_VERSION {
+                take_string(ptr::addr_of_mut!(cursor)).filter(|origin| !origin.is_empty())
+            } else {
+                None
+            };
+            (state, origin)
         };
 
         // SAFETY: `summary` is of this type, by the guard above.
-        unsafe { set_summary_state(summary, State::new(stored)) };
+        unsafe {
+            if let Some(slot) = JmapSummary::borrow(summary).and_then(|s| s.state.get()) {
+                slot.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .origin = origin;
+            }
+            set_summary_state(summary, State::new(stored));
+        }
         GTRUE
     })
+}
+
+/// Reads one string at `cursor` and moves the cursor past it. `None` if the
+/// record has no string there.
+///
+/// # Safety
+///
+/// `cursor` must point at a pointer into a live NUL-terminated `bdata` string.
+unsafe fn take_string(cursor: *mut *mut gchar) -> Option<String> {
+    // SAFETY: the contract above; `get_string` gives a `g_malloc`ed copy that
+    // this function frees after it copies the text.
+    unsafe {
+        let text = camel_util_bdata_get_string(cursor, ptr::null());
+        if text.is_null() {
+            return None;
+        }
+        let value = CStr::from_ptr(text).to_string_lossy().into_owned();
+        g_free(text.cast());
+        Some(value)
+    }
 }
 
 /// The class of the parent, for chaining up.
