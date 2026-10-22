@@ -6,7 +6,9 @@
 //! ```text
 //! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]
 //!            [--changes-page-size N] [--changes-never-terminates]
+//!            [--query-page-size N] [--query-never-terminates]
 //!            [--well-known-redirect-to ORIGIN]
+//!            [--advertise-origin ORIGIN]
 //! ```
 //!
 //! Serve one account (`A1`, `alice@example.com`) and seed demo data.
@@ -72,6 +74,12 @@ fn main() {
                     .next()
                     .unwrap_or_else(|| usage("--well-known-redirect-to needs an origin URL"));
                 builder = builder.well_known_redirect_to(origin);
+            }
+            "--advertise-origin" => {
+                let origin = arguments
+                    .next()
+                    .unwrap_or_else(|| usage("--advertise-origin needs an origin URL"));
+                builder = builder.advertise_origin(origin);
             }
             "--help" | "-h" => usage(""),
             other => usage(&format!("unknown argument: {other}")),
@@ -144,7 +152,8 @@ fn usage(error: &str) -> ! {
         "usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2] \
          [--changes-page-size N] [--changes-never-terminates] \
          [--query-page-size N] [--query-never-terminates] \
-         [--well-known-redirect-to ORIGIN]"
+         [--well-known-redirect-to ORIGIN] \
+         [--advertise-origin ORIGIN]"
     );
     std::process::exit(if error.is_empty() { 0 } else { 2 });
 }
