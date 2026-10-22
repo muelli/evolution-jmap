@@ -877,7 +877,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     let mut entries = Vec::new();
 
     // EDS caches contacts by vCard `UID` and returns it on load and remove.
-    // Write the server id to `UID` and keep JSContact `uid` on `X-JMAP-UID`.
+    // Write server id to `UID`. Keep JSContact `uid` on `X-JMAP-UID`.
     // The two fields use different namespaces.
     if let Some(uid) = card
         .id
@@ -1016,8 +1016,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             );
         }
         // Write the same address for envelopes on RFC 2426 §3.2.2 `LABEL`.
-        // Place it after its `ADR` line.
-        // Emit it alone when no components are known and no `ADR` line exists.
+        // Place `LABEL` after its `ADR` line.
+        // Emit `LABEL` alone when no `ADR` line exists.
         if let Some(full) = address_label(address) {
             let mut params = vec![VCardParameter::new(
                 VCardParameterName::Other(X_JMAP_KEY.to_owned()),
@@ -1143,8 +1143,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    // Emit contact photos on `PHOTO`.
-    // Inline values keep subtype metadata; URI references use `VALUE=uri`.
+    // Write contact photos on `PHOTO`.
+    // Inline values keep subtype metadata.
+    // URI references use `VALUE=uri`.
     // See [`photo`] for media kinds that do not emit a line.
     for (key, media) in card.media.iter().flatten() {
         match photo(media) {
@@ -1167,7 +1168,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                         .with_value(base64),
                 );
             }
-            // EDS ignores URI photos without `VALUE=uri`, so include it.
+            // EDS ignores URI photos without `VALUE=uri`. Include it.
             Some(Photo::Uri(uri)) => {
                 entries.push(
                     VCardEntry::new(VCardProperty::Photo)
@@ -1185,7 +1186,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // Emit each service on its EDS slot line and include `TYPE`.
+    // Write each service on its EDS slot line and include `TYPE`.
     for (key, service) in card.online_services.iter().flatten() {
         let Some((property, handle)) = drawn_service(service) else {
             continue;
@@ -1215,7 +1216,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                     .with_value(date),
             );
         } else if anniversary.kind == "wedding" {
-            // Emit both lines for compatibility with EDS 3.52 and 3.60+.
+            // Emit both lines for compatibility with EDS 3.52 and EDS 3.60+.
             entries.push(
                 VCardEntry::new(VCardProperty::Other(X_EVOLUTION_ANNIVERSARY.to_owned()))
                     .with_param(VCardParameter::new(
@@ -1235,8 +1236,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // Emit only spouse, manager, and assistant relations because EDS exposes only these slots.
-    // Omit `X-JMAP-KEY` because RFC 9553 keys `relatedTo` by related entity name.
+    // Emit only spouse, manager, and assistant relations. EDS exposes only these slots.
+    // Omit `X-JMAP-KEY`. RFC 9553 keys `relatedTo` by related entity name.
     for (key, relation) in card.related_to.iter().flatten() {
         if states_spouse(key, relation) {
             entries.push(
@@ -1259,7 +1260,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     // Emit all mappable tags on one `CATEGORIES` line.
-    // Tags identify themselves, so this line omits `X-JMAP-KEY`.
+    // Tags identify themselves. This line omits `X-JMAP-KEY`.
     let tags = drawn_tags(card);
     if !tags.is_empty() {
         entries.push(
