@@ -57,6 +57,8 @@ pub struct ServerState {
     pub well_known_redirect_to: Option<String>,
     /// Optional origin override for `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
     pub advertise_origin: Option<String>,
+    /// Whether shared-account names in the session copy the user account name.
+    pub shared_account_name_copies_user: bool,
     /// Optional redirect origin for `GET /download/...`.
     /// `None` serves blobs.
     pub download_via_redirect_to: Option<String>,
@@ -124,6 +126,7 @@ impl ServerState {
             session_via_redirect: false,
             well_known_redirect_to: None,
             advertise_origin: None,
+            shared_account_name_copies_user: false,
             download_via_redirect_to: None,
             reject_download_accept_json: false,
             terse_submission_create: false,

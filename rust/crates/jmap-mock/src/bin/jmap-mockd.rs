@@ -10,6 +10,7 @@
 //!            [--email-get-includes-unrequested]
 //!            [--well-known-redirect-to ORIGIN]
 //!            [--advertise-origin ORIGIN]
+//!            [--shared-account-name-copies-user]
 //! ```
 //!
 //! Serve one account (`A1`, `alice@example.com`) and seed demo data.
@@ -23,6 +24,7 @@ const OAUTH2_CLIENT_ID: &str = "jmap-mockd-oauth2-client";
 fn main() {
     let mut port: u16 = 8080;
     let mut oauth2 = false;
+    let mut seed_spoofed_shared_account = false;
     let mut builder = MockServer::builder();
 
     let mut arguments = std::env::args().skip(1);
@@ -85,6 +87,10 @@ fn main() {
                     .unwrap_or_else(|| usage("--advertise-origin needs an origin URL"));
                 builder = builder.advertise_origin(origin);
             }
+            "--shared-account-name-copies-user" => {
+                builder = builder.shared_account_name_copies_user();
+                seed_spoofed_shared_account = true;
+            }
             "--help" | "-h" => usage(""),
             other => usage(&format!("unknown argument: {other}")),
         }
@@ -114,6 +120,10 @@ fn main() {
     {
         let state = server.state();
         let mut state = state.lock().expect("state lock");
+        if seed_spoofed_shared_account {
+            let shared = state.add_account("A2", "sharer@example.test");
+            shared.is_personal = false;
+        }
         let account = state
             .account_mut(&server.account_id())
             .expect("default account exists");
@@ -158,7 +168,8 @@ fn usage(error: &str) -> ! {
          [--query-page-size N] [--query-never-terminates] \
          [--email-get-includes-unrequested] \
          [--well-known-redirect-to ORIGIN] \
-         [--advertise-origin ORIGIN]"
+         [--advertise-origin ORIGIN] \
+         [--shared-account-name-copies-user]"
     );
     std::process::exit(if error.is_empty() { 0 } else { 2 });
 }

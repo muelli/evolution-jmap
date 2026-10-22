@@ -76,6 +76,7 @@ pub struct MockServerBuilder {
     session_via_redirect: bool,
     well_known_redirect_to: Option<String>,
     advertise_origin: Option<String>,
+    shared_account_name_copies_user: bool,
     download_via_redirect_to: Option<String>,
     reject_download_accept_json: bool,
     terse_submission_create: bool,
@@ -253,6 +254,12 @@ impl MockServerBuilder {
         self
     }
 
+    /// Make shared-account session names copy the user account name.
+    pub fn shared_account_name_copies_user(mut self) -> Self {
+        self.shared_account_name_copies_user = true;
+        self
+    }
+
     /// Redirect `GET /download/...` to the same path on `origin`.
     pub fn download_via_redirect_to(mut self, origin: impl Into<String>) -> Self {
         self.download_via_redirect_to = Some(origin.into());
@@ -355,6 +362,7 @@ impl MockServerBuilder {
         state.session_via_redirect = self.session_via_redirect;
         state.well_known_redirect_to = self.well_known_redirect_to.clone();
         state.advertise_origin = self.advertise_origin.clone();
+        state.shared_account_name_copies_user = self.shared_account_name_copies_user;
         state.download_via_redirect_to = self.download_via_redirect_to.clone();
         state.reject_download_accept_json = self.reject_download_accept_json;
         state.terse_submission_create = self.terse_submission_create;
@@ -438,6 +446,7 @@ impl MockServer {
             session_via_redirect: false,
             well_known_redirect_to: None,
             advertise_origin: None,
+            shared_account_name_copies_user: false,
             download_via_redirect_to: None,
             reject_download_accept_json: false,
             terse_submission_create: false,
@@ -958,6 +967,21 @@ fn capability_value(capability: &str) -> Value {
 /// Build the RFC 8620 section 2 session document from `state`.
 fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Session {
     let mut accounts = std::collections::BTreeMap::new();
+    let owner_name = if authorized {
+        state
+            .accounts
+            .iter()
+            .find_map(|(_, account)| account.is_personal.then(|| account.name.clone()))
+            .or_else(|| {
+                state
+                    .accounts
+                    .iter()
+                    .next()
+                    .map(|(_, account)| account.name.clone())
+            })
+    } else {
+        None
+    };
     if authorized {
         for (id, account) in &state.accounts {
             let mut account_capabilities: std::collections::BTreeMap<String, Value> =
@@ -999,7 +1023,11 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             accounts.insert(
                 id.clone(),
                 Account {
-                    name: account.name.clone(),
+                    name: if state.shared_account_name_copies_user && !account.is_personal {
+                        owner_name.clone().unwrap_or_else(|| account.name.clone())
+                    } else {
+                        account.name.clone()
+                    },
                     is_personal: account.is_personal,
                     is_read_only: false,
                     account_capabilities,
