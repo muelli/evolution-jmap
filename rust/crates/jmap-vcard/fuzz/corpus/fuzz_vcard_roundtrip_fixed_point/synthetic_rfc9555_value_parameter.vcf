@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:VALUE Parameter Seed
+TEL;VALUE=uri;TYPE=work:tel:+1-202-555-0110
+PHOTO;VALUE=uri:https://cdn.example.test/value-seed.png
+END:VCARD

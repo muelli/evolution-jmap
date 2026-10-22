@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Standalone mock JMAP server for manual testing (curl, Evolution).
+//! Run a standalone mock JMAP server for manual tests with curl or Evolution.
 //!
 //! ```text
 //! jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--oauth2]
 //! ```
 //!
-//! Serves one account (`A1`, alice@example.com) with seeded data.
+//! Serve one account (`A1`, `alice@example.com`) and seed demo data.
 
 use jmap_mock::{EmailSeed, MockServer};
 use serde_json::json;
 
-/// `client_id` returned by `--oauth2` registration.
+/// Return this `client_id` from the `--oauth2` registration endpoint.
 const OAUTH2_CLIENT_ID: &str = "jmap-mockd-oauth2-client";
 
 fn main() {
@@ -50,7 +50,8 @@ fn main() {
         }
     }
 
-    // Off by default so manual tests can cover deployments without OAuth metadata.
+    // Keep OAuth metadata disabled by default.
+    // Use this branch to test deployments without OAuth metadata.
     if oauth2 {
         builder = builder
             .oauth_authorization_server(|origin| {
@@ -69,7 +70,7 @@ fn main() {
 
     let server = builder.port(port).start();
 
-    // Seed demo data for visible startup state.
+    // Seed demo data so startup state is quick to inspect.
     {
         let state = server.state();
         let mut state = state.lock().expect("state lock");

@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `Quota/*` methods (RFC 9425). Read-only: the RFC defines no `Quota/set`.
+//! Implement `Quota/*` methods from RFC 9425.
+//! Keep this module read only.
+//! RFC 9425 defines no `Quota/set` method.
 
 use jmap_proto::Id;
 use jmap_proto::error::MethodError;
@@ -12,8 +14,9 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::ServerState;
 
-/// `Quota/get` (RFC 9425 §3): `ids: null` returns all quotas, unknown ids go to
-/// `notFound`.
+/// Handle `Quota/get` as RFC 9425 §3 defines.
+/// Return all quotas when `ids` is `null`.
+/// Report unknown ids in `notFound`.
 pub fn quota_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -40,7 +43,7 @@ pub fn quota_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     })
 }
 
-/// `Quota/query` (RFC 9425 §4.4).
+/// Handle `Quota/query` as RFC 9425 §4.4 defines.
 pub fn quota_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<QuotaQueryFilter> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -72,9 +75,10 @@ pub fn quota_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Match RFC 9425 §4.4 filter conditions. `name` uses substring checks,
-/// `type` matches one member in `types`, and `scope` plus `resourceType`
-/// are exact.
+/// Apply RFC 9425 §4.4 filter rules.
+/// Match `name` by substring.
+/// Match `type` against one member in `types`.
+/// Match `scope` and `resourceType` exactly.
 fn quota_matches(quota: &Quota, filter: &QuotaQueryFilter) -> bool {
     if let Some(name) = &filter.name
         && !quota.name.contains(name.as_str())

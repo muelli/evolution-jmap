@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:vcardname-rfc9555-1
+FN:vCardName Section Probe
+IMPP:xmpp:alice@jabber.example
+SOCIALPROFILE;SERVICE-TYPE=Mastodon:https://social.example/@alice
+X-JABBER;TYPE=WORK:legacy-alice@jabber.example
+END:VCARD

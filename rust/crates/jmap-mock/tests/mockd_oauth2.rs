@@ -1,21 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Covers `--oauth2` discovery and registration on standalone `jmap-mockd`.
-//! Uses a raw `TcpStream` to exercise CLI-only behavior without HTTP test deps.
+//! Verify `--oauth2` discovery and registration on standalone `jmap-mockd`.
+//! Use raw `TcpStream` I/O for CLI-only behavior without extra HTTP dependencies.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 
-/// A `jmap-mockd` child process, killed on drop.
+/// A `jmap-mockd` child process. Drop stops it.
 struct Mockd {
     child: Child,
     origin: String,
 }
 
 impl Mockd {
-    /// Spawn `jmap-mockd --port 0 <extra_args>` and wait for its bound port.
+    /// Spawn `jmap-mockd --port 0 <extra_args>` and wait for its origin.
     fn spawn(extra_args: &[&str]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_jmap-mockd"))
             .arg("--port")
@@ -37,7 +37,7 @@ impl Mockd {
             .unwrap_or_else(|| panic!("unexpected startup line: {first_line}"))
             .to_owned();
 
-        // Drain stdout so child `println!` calls do not hit EPIPE.
+        // Drain stdout so child `println!` calls keep the pipe live.
         std::thread::spawn(move || {
             let _ = std::io::copy(&mut reader, &mut std::io::sink());
         });

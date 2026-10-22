@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:LEVEL Parameter Seed
+EXPERTISE;LEVEL=high:Chess openings
+HOBBY;LEVEL=medium:Trail running
+INTEREST;LEVEL=low:Classical guitar
+END:VCARD

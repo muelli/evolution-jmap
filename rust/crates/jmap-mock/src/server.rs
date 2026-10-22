@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! HTTP surface: routing, session document, server lifecycle.
+//! HTTP routes, session documents, and server lifecycle.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,28 +25,28 @@ use crate::state::ServerState;
 pub const DEFAULT_ACCOUNT_ID: &str = "A1";
 pub const DEFAULT_ACCOUNT_NAME: &str = "alice@example.com";
 
-/// Default advertised and enforced `maxObjectsInGet`.
+/// Default for `maxObjectsInGet` in session output and request checks.
 pub const DEFAULT_OBJECTS_IN_GET: u64 = 256;
 
-/// Default advertised and enforced `maxSizeUpload`.
+/// Default for `maxSizeUpload` in session output and request checks.
 pub const DEFAULT_SIZE_UPLOAD: u64 = 50_000_000;
 
-/// Default advertised and enforced `maxCallsInRequest`.
+/// Default for `maxCallsInRequest` in session output and request checks.
 pub const DEFAULT_CALLS_IN_REQUEST: u64 = 16;
 
-/// Default advertised and enforced `maxSizeRequest`.
+/// Default for `maxSizeRequest` in session output and request checks.
 pub const DEFAULT_SIZE_REQUEST: u64 = 10_000_000;
 
-/// Builds RFC 8414 metadata from the server origin.
+/// Build RFC 8414 metadata from the server origin URL.
 type MetadataFn = dyn Fn(&str) -> Value + Send + Sync;
 
-/// Builds an RFC 7591 registration response from the request JSON body.
+/// Build an RFC 7591 registration response from the request JSON body.
 type RegistrationFn = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
 
-/// Builds an RFC 6749 token response from parsed form fields.
+/// Build an RFC 6749 token response from parsed form fields.
 type TokenFn = dyn Fn(&BTreeMap<String, String>) -> (u16, Value) + Send + Sync;
 
-/// Optional handlers for the three OAuth endpoints.
+/// Handlers for optional OAuth endpoints.
 #[derive(Clone, Default)]
 struct OAuthHandlers {
     metadata: Option<Arc<MetadataFn>>,
@@ -134,7 +134,7 @@ impl MockServerBuilder {
         self
     }
 
-    /// Return Stalwart-style invalid `sinceState` errors on `/changes`.
+    /// Return Stalwart style invalid `sinceState` errors on `/changes`.
     pub fn stalwart_shaped_unrecognized_changes_state(mut self) -> Self {
         self.stalwart_shaped_unrecognized_changes_state = true;
         self
@@ -248,8 +248,8 @@ impl MockServerBuilder {
         self
     }
 
-    /// Refuse a `ContactCard/set` create whose card is more than `bytes`
-    /// octets of JSON as `tooLarge`, as a server with a per-card limit does.
+    /// Reject a `ContactCard/set` create larger than `bytes` JSON octets as
+    /// `tooLarge`, like a server with a per-card size limit.
     pub fn max_contact_size(mut self, bytes: u64) -> Self {
         self.max_contact_size = Some(bytes);
         self
@@ -267,9 +267,9 @@ impl MockServerBuilder {
         self
     }
 
-    /// Act as a server that does not send scheduling messages: a
-    /// `CalendarEvent/set` carrying `sendSchedulingMessages` is refused with
-    /// `invalidArguments` (RFC 8620 section 3.9) and nothing in it is applied.
+    /// Simulate a server that sends no scheduling messages.
+    /// Reject `CalendarEvent/set` with `sendSchedulingMessages` as
+    /// `invalidArguments` (RFC 8620 section 3.9), and apply nothing.
     pub fn without_scheduling(mut self) -> Self {
         self.without_scheduling = true;
         self
@@ -372,7 +372,7 @@ impl MockServerBuilder {
     }
 }
 
-/// A running mock server bound to an ephemeral localhost port.
+/// Run a mock server on an ephemeral localhost port.
 pub struct MockServer {
     origin: String,
     state: Arc<Mutex<ServerState>>,
@@ -427,7 +427,7 @@ impl MockServer {
         jmap_proto::Id::new(DEFAULT_ACCOUNT_ID)
     }
 
-    /// Shared state handle for fixture seeding and white-box assertions.
+    /// Return shared state for fixture setup and white-box assertions.
     pub fn state(&self) -> Arc<Mutex<ServerState>> {
         Arc::clone(&self.state)
     }
@@ -448,7 +448,7 @@ impl MockServer {
             .expire_after(remaining);
     }
 
-    /// Method call names seen so far, copied in request order.
+    /// Return method call names in request order.
     pub fn method_calls(&self) -> Vec<String> {
         let state = self
             .state
@@ -457,7 +457,7 @@ impl MockServer {
         state.method_calls.clone()
     }
 
-    /// Number of API endpoint requests from [`ServerState::api_requests`].
+    /// Return the count from [`ServerState::api_requests`].
     pub fn api_requests(&self) -> usize {
         let state = self
             .state
@@ -466,7 +466,7 @@ impl MockServer {
         state.api_requests
     }
 
-    /// Number of 401 responses from [`ServerState::unauthorized_responses`].
+    /// Return the count from [`ServerState::unauthorized_responses`].
     pub fn unauthorized_responses(&self) -> usize {
         let state = self
             .state
@@ -484,7 +484,7 @@ impl MockServer {
         state.event_source.broadcast(change);
     }
 
-    /// Wait for at least one `/eventsource` subscriber or panic on timeout.
+    /// Wait for one `/eventsource` subscriber or panic at timeout.
     pub fn wait_for_event_source_subscriber(&self, timeout: Duration) {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -539,7 +539,7 @@ fn handle_request(
     oauth: &OAuthHandlers,
     origin: &str,
 ) {
-    // RFC 8414 metadata is public, so this route bypasses auth.
+    // RFC 8414 metadata is public. Serve this route without auth.
     if request.method() == &tiny_http::Method::Get
         && request.url().split('?').next().unwrap_or_default()
             == "/.well-known/oauth-authorization-server"
@@ -555,7 +555,7 @@ fn handle_request(
         return;
     }
 
-    // Registration also bypasses auth.
+    // Serve client registration without auth.
     if request.method() == &tiny_http::Method::Post
         && request.url().split('?').next().unwrap_or_default() == "/oauth/register"
     {
@@ -582,7 +582,7 @@ fn handle_request(
         return;
     }
 
-    // Token requests also bypass auth for public-client flows.
+    // Serve token requests without auth for public client flows.
     if request.method() == &tiny_http::Method::Post
         && request.url().split('?').next().unwrap_or_default() == "/oauth/token"
     {
@@ -606,7 +606,7 @@ fn handle_request(
         return;
     }
 
-    // In redirect mode, both discovery routes run before the normal 401 gate.
+    // In redirect mode, serve both discovery routes before the 401 gate.
     let session_via_redirect = state.lock().expect("mock state lock").session_via_redirect;
     if session_via_redirect {
         let path_only = request.url().split('?').next().unwrap_or_default();
@@ -835,7 +835,8 @@ fn handle_request(
     }
 }
 
-/// Split a request path, decoding each segment so `%2F` stays inside ids.
+/// Split a request path and decode each segment.
+/// Keep `%2F` as data inside an id.
 fn path_segments(path: &str) -> Vec<String> {
     path.trim_start_matches('/')
         .split('/')
@@ -843,7 +844,8 @@ fn path_segments(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parse an OAuth token body where `+` means space before percent-decoding.
+/// Parse an OAuth token body.
+/// Treat `+` as space before percent decoding.
 fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
     String::from_utf8_lossy(body)
         .split('&')
@@ -858,7 +860,7 @@ fn parse_form_body(body: &[u8]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Undo percent-encoding in one path segment.
+/// Decode percent escapes in one path segment.
 fn percent_decode(segment: &str) -> String {
     percent_encoding::percent_decode_str(segment)
         .decode_utf8_lossy()
@@ -873,11 +875,11 @@ fn respond_json(request: tiny_http::Request, status: u16, body: &Value) {
             tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
                 .expect("static header"),
         );
-    // The client may already have hung up; nothing useful to do about it.
+    // Ignore response write errors. The client can close first.
     let _ = request.respond(response);
 }
 
-/// Capabilities every account here offers unless a test omits one.
+/// List capabilities each account offers unless a test omits one.
 const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_MAIL,
     CAPABILITY_SUBMISSION,
@@ -889,7 +891,8 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_BLOB,
 ];
 
-/// Capability object for `capability`; most capabilities map to `{}`.
+/// Build a capability object for `capability`.
+/// Return `{}` for capabilities with no extra fields.
 fn capability_value(capability: &str) -> Value {
     if capability == CAPABILITY_SIEVE {
         serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
@@ -908,7 +911,7 @@ fn capability_value(capability: &str) -> Value {
     }
 }
 
-/// Build the RFC 8620 §2 session document from current state.
+/// Build the RFC 8620 section 2 session document from `state`.
 fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Session {
     let mut accounts = std::collections::BTreeMap::new();
     if authorized {
@@ -919,7 +922,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
                     .map(|capability| ((*capability).to_owned(), capability_value(capability)))
                     .collect();
-            // `submission` carries account data only when `maxDelayedSend` is set.
+            // Add `submission` account data only when `maxDelayedSend` is set.
             if let Some(seconds) = state.max_delayed_send
                 && !state.omitted_capabilities.contains(CAPABILITY_SUBMISSION)
             {
@@ -981,7 +984,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             .unwrap_or_default()
     };
 
-    // Build core dynamically so optional limits can be omitted.
+    // Build `core`. Omit optional limits when unset.
     let mut core = json!({
         "maxConcurrentUpload": 4,
         "maxConcurrentRequests": 4,

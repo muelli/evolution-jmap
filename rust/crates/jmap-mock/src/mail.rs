@@ -23,10 +23,10 @@ use crate::dispatch::{account_mut, parse_arguments, project_properties, to_resul
 use crate::patch::apply_patch;
 use crate::state::{AccountState, RecordedSubmission, ServerState};
 
-/// Deterministic stand-in for "now" for reproducible tests.
+/// Fixed stand-in for "now" in reproducible tests.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
-/// Owners see all mailboxes; foreign callers need a share grant.
+/// Owners can read all mailboxes. Other callers need a share grant.
 pub fn mailbox_get(
     state: &mut ServerState,
     arguments: Value,
@@ -113,7 +113,7 @@ pub fn mailbox_get(
     })
 }
 
-/// Rights `mailbox.share_with` grants `principal`, if any.
+/// Return rights from `mailbox.share_with` for `principal`, if present.
 fn mailbox_rights_for(
     mailbox: &Mailbox,
     principal: &Id,
@@ -121,7 +121,7 @@ fn mailbox_rights_for(
     mailbox.share_with.as_ref()?.get(principal).cloned()
 }
 
-/// Owners see every mailbox; shared callers only see granted ones with `myRights`.
+/// Owners see every mailbox. Shared callers see granted mailboxes with `myRights`.
 fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Option<Mailbox> {
     if is_owner {
         return Some(mailbox.clone());
@@ -133,7 +133,7 @@ fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Op
     Some(visible)
 }
 
-/// `Mailbox/set` (RFC 8621 §2.5), with cross-mailbox validation over the full request.
+/// Handle `Mailbox/set` (RFC 8621 §2.5) with full-request mailbox validation.
 pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Mailbox> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -172,7 +172,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
         if mailbox.sort_order.is_none() {
             mailbox.sort_order = Some(0);
         }
-        // Default new mailboxes to subscribed per RFC 8621 §2 server latitude.
+        // Default new mailboxes to subscribed (RFC 8621 §2 server latitude).
         if mailbox.is_subscribed.is_none() {
             mailbox.is_subscribed = Some(true);
         }
@@ -189,7 +189,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
             not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
             continue;
         };
-        // Keep pre-patch `shareWith` for share-notification diffs.
+        // Keep pre-patch `shareWith` to diff share notifications.
         let old_share_with = existing.share_with.clone();
         let Some(patch_map) = patch.as_object() else {
             not_updated.insert(id, SetError::new(error::set::INVALID_PATCH));
@@ -251,7 +251,8 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
             );
             continue;
         }
-        // `onDestroyRemoveEmails` is unsupported, so non-empty mailboxes fail with `hasEmail`.
+        // Reject non-empty mailboxes with `hasEmail`.
+        // This mock does not support `onDestroyRemoveEmails`.
         if account.emails.iter().any(|(_, email)| filed_in(email, &id)) {
             not_destroyed.insert(
                 id,
@@ -289,7 +290,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Validate RFC 8621 §2 placement rules for `of` (`None` on create).
+/// Validate RFC 8621 §2 mailbox placement rules for `of` (`None` on create).
 fn placeable(
     tree: &BTreeMap<Id, Mailbox>,
     of: Option<&Id>,
@@ -305,7 +306,7 @@ fn placeable(
                 .with_description(format!("parentId names {parent}, which is not a mailbox")));
         }
         if let Some(of) = of {
-            // Walk parent links with a bounded step count to avoid loops.
+            // Walk parent links with bounded steps to avoid loops.
             let mut above = Some(parent.clone());
             for _ in 0..=tree.len() {
                 let Some(here) = above else { break };
@@ -341,7 +342,7 @@ fn placeable(
     Ok(())
 }
 
-/// Return a newly created mailbox with explicit zero counts.
+/// Return a new mailbox with explicit zero counters.
 fn counted_empty(mailbox: &Mailbox) -> Mailbox {
     Mailbox {
         total_emails: Some(0),
@@ -403,12 +404,13 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     })
 }
 
-/// The `threadId` assigned to new emails in this one-email-per-thread mock.
+/// Assign the `threadId` for this one-email-per-thread mock.
 fn new_thread_id(email_id: &Id) -> Id {
     Id::new(format!("T{}", email_id.as_str()))
 }
 
-/// `Thread/get` (RFC 8621 §3.1): group by `threadId`, then sort by `receivedAt` oldest first.
+/// Handle `Thread/get` (RFC 8621 §3.1): group by `threadId`.
+/// Sort by `receivedAt` from oldest to newest.
 pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -453,7 +455,8 @@ pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, Me
     })
 }
 
-/// `SearchSnippet/get` (RFC 8621 §5.1): highlight filter text in subject and body.
+/// Handle `SearchSnippet/get` (RFC 8621 §5.1).
+/// Highlight filter terms in the subject and body.
 pub fn search_snippet_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SearchSnippetGetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -478,7 +481,7 @@ pub fn search_snippet_get(state: &mut ServerState, arguments: Value) -> Result<V
     })
 }
 
-/// RFC 8621 §5 preview cap after escaping text and HTML.
+/// Preview byte cap after text and HTML escaping (RFC 8621 §5).
 const PREVIEW_MAX_OCTETS: usize = 255;
 
 fn search_snippet(email_id: Id, email: &Email, filter: &Filter<EmailQueryFilter>) -> SearchSnippet {
@@ -507,7 +510,7 @@ fn search_snippet(email_id: Id, email: &Email, filter: &Filter<EmailQueryFilter>
     snippet
 }
 
-/// Collect snippet-highlight terms from `subject`, `body`, and `text` leaves.
+/// Collect snippet highlight terms from `subject`, `body`, and `text` leaves.
 fn collect_snippet_terms<'a>(
     filter: &'a Filter<EmailQueryFilter>,
     subject_terms: &mut Vec<&'a str>,
@@ -534,7 +537,7 @@ fn collect_snippet_terms<'a>(
     }
 }
 
-/// HTML-escape `text` and wrap non-overlapping longest term matches in `<mark>`.
+/// Escape `text` as HTML and wrap longest non-overlapping term matches in `<mark>`.
 fn mark_matches(text: &str, terms: &[&str]) -> String {
     let mut result = String::new();
     let mut rest = text;
@@ -598,7 +601,7 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
         .filter(|(_, email)| filter_matches(email, &filter))
         .collect();
 
-    // Default sort is `receivedAt` descending.
+    // Default sort uses `receivedAt` in descending order.
     let mut sort_property = "receivedAt".to_owned();
     let mut ascending = false;
     if let Some(comparators) = &request.sort
@@ -631,7 +634,7 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     let asked = request.limit.unwrap_or(u64::MAX);
     let never_terminates = query_never_terminates && !matches.is_empty();
     let ids: Vec<Id> = if never_terminates {
-        // Broken-server mode repeats a non-empty page regardless of `position`.
+        // Broken-server mode repeats a non-empty page and ignores `position`.
         matches
             .iter()
             .map(|(id, _)| (*id).clone())
@@ -659,7 +662,8 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     })
 }
 
-/// Evaluate a `Filter<EmailQueryFilter>` tree (RFC 8620 §5.5); NOT negates nested matches.
+/// Evaluate a `Filter<EmailQueryFilter>` tree per RFC 8620 §5.5.
+/// `NOT` negates nested matches.
 fn filter_matches(email: &Email, filter: &Filter<EmailQueryFilter>) -> bool {
     match filter {
         Filter::Condition(condition) => email_matches(email, condition),
@@ -1074,7 +1078,7 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     let mut destroyed: Vec<Id> = Vec::new();
     let mut not_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
 
-    // Compute patched emails outside the transaction, then apply one state bump.
+    // Patch emails before the transaction, then apply one state bump.
     let mut to_update: Vec<(Id, Email)> = Vec::new();
     for (id, patch) in request.update.unwrap_or_default() {
         let Some(existing) = account.emails.get(&id) else {
@@ -1413,12 +1417,12 @@ pub fn email_submission_set(
 
     let mut created: BTreeMap<String, EmailSubmission> = BTreeMap::new();
     let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
-    // creation id -> submission id, for onSuccessUpdateEmail `#` keys.
+    // Map creation IDs to submission IDs for `onSuccessUpdateEmail` `#` keys.
     let mut created_here: BTreeMap<String, Id> = BTreeMap::new();
 
     let mut to_create: Vec<(Id, EmailSubmission)> = Vec::new();
     for (creation_id, mut submission) in request.set.create.clone().unwrap_or_default() {
-        // Resolve a `#creationId` reference from an earlier Email/set create.
+        // Resolve each `#creationId` against earlier `Email/set` creates.
         if let Some(reference) = submission.email_id.as_str().strip_prefix('#') {
             match request_created_ids.get(reference) {
                 Some(id) => submission.email_id = id.clone(),
@@ -1461,7 +1465,7 @@ pub fn email_submission_set(
             continue;
         }
 
-        // SMTP FUTURERELEASE (RFC 4865), bounded by `maxDelayedSend`.
+        // Apply SMTP FUTURERELEASE (RFC 4865). Enforce `maxDelayedSend`.
         let hold = match hold_seconds(submission.envelope.as_ref()) {
             Ok(hold) => hold,
             Err(description) => {
@@ -1493,7 +1497,7 @@ pub fn email_submission_set(
             }
         }
 
-        // Derive the SMTP envelope from the message when absent (RFC 8621 §7).
+        // When absent, derive the SMTP envelope from the message (RFC 8621 §7).
         let envelope = submission.envelope.clone().unwrap_or_else(|| Envelope {
             mail_from: EnvelopeAddress::new(
                 email
@@ -1516,7 +1520,7 @@ pub fn email_submission_set(
         submission.thread_id = email.thread_id.clone();
         submission.envelope = Some(envelope.clone());
 
-        // Positive holds stay pending until `sendAt`; otherwise send now.
+        // Positive holds keep `pending` until `sendAt`. Others send now.
         match hold {
             Some(seconds) if seconds > 0 => {
                 let now = crate::time::parse_utc(MOCK_NOW).expect("MOCK_NOW parses");
@@ -1572,7 +1576,7 @@ pub fn email_submission_set(
         }
     });
 
-    // RFC 8621 §7.5: apply onSuccessUpdateEmail patches for successful sends.
+    // RFC 8621 §7.5: apply `onSuccessUpdateEmail` patches after successful sends.
     let mut email_patches: Vec<(Id, serde_json::Map<String, Value>)> = Vec::new();
     for (key, patch) in request.on_success_update_email.clone().unwrap_or_default() {
         let submission_id = match key.strip_prefix('#') {
@@ -1626,7 +1630,7 @@ pub fn email_submission_set(
         not_destroyed: None,
     })?;
 
-    // RFC 8620 §5.3: `created` omits properties the client already sent.
+    // RFC 8620 §5.3: `created` omits properties already sent by the client.
     if terse_submission_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {

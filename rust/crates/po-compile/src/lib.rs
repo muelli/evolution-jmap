@@ -1,34 +1,34 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Compiles a UTF-8-only subset of `.po` into `.mo` data.
+//! Compile a UTF-8 subset of `.po` text into `.mo` bytes.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Compiles `.po` text into `.mo` bytes sorted by `msgid`.
+/// Compile `.po` text into `.mo` bytes and sort entries by `msgid`.
 pub fn compile(po: &str) -> Result<Vec<u8>, Error> {
     emit(&parse(po)?)
 }
 
-/// Compilation failures with 1-based line numbers.
+/// Return compile errors with 1-based source line numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// Missing empty `msgid` header entry.
+    /// The catalogue misses the empty `msgid` header entry.
     NoHeader,
-    /// Header charset is missing or unsupported.
+    /// The header charset is missing or unsupported.
     Charset { declared: String },
-    /// Two entries translate the same message.
+    /// Two entries translate the same `msgid`.
     Duplicate { msgid: String, line: usize },
-    /// Unsupported `.po` construct.
+    /// The catalogue uses an unsupported `.po` construct.
     Unsupported { construct: String, line: usize },
-    /// A non-comment line this parser cannot classify.
+    /// A non-comment line does not match any parser rule.
     Unparsed { line: usize, text: String },
-    /// A backslash escape this parser does not accept.
+    /// A backslash escape is outside the accepted set.
     UnknownEscape { line: usize, escape: char },
-    /// A `msgid` whose entry ended before its `msgstr`.
+    /// A `msgid` entry ends before its `msgstr` line.
     NoMsgstr { line: usize, msgid: String },
-    /// Catalogue size exceeds `.mo` 32-bit offsets.
+    /// Catalogue size exceeds `.mo` 32-bit offset limits.
     TooLarge { bytes: usize },
 }
 
@@ -97,7 +97,7 @@ fn parse(po: &str) -> Result<BTreeMap<String, String>, Error> {
         let line = index + 1;
         let text = raw.trim();
 
-        // Blank and `#~` obsolete lines end the current entry.
+        // End the pending entry on blank lines and obsolete `#~` lines.
         if text.is_empty() || text.starts_with("#~") {
             take(&mut pending, &mut entries)?;
             reading = Reading::Nothing;
@@ -202,7 +202,7 @@ fn take(
         });
     };
 
-    // Keep the fuzzy header so `charset=` stays available.
+    // Keep a fuzzy header entry so the `charset=` value stays available.
     let header = entry.msgid.is_empty();
     if msgstr.is_empty() || (entry.fuzzy && !header) {
         return Ok(());
@@ -245,7 +245,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             decoded.push(character);
             continue;
         }
-        // Trailing backslash means the quoted string never closed.
+        // Reject a trailing backslash in a quoted string literal.
         let escaped = characters.next().ok_or_else(unparsed)?;
         decoded.push(match escaped {
             'n' => '\n',
@@ -257,7 +257,7 @@ fn unquote(text: &str, line: usize) -> Result<String, Error> {
             'v' => '\x0b',
             '"' => '"',
             '\\' => '\\',
-            // Reject escapes this subset does not implement.
+            // Reject escapes outside this accepted set.
             other => {
                 return Err(Error::UnknownEscape {
                     line,
@@ -273,7 +273,7 @@ fn emit(entries: &BTreeMap<String, String>) -> Result<Vec<u8>, Error> {
     let count = u32::try_from(entries.len()).map_err(|_| Error::TooLarge {
         bytes: entries.len(),
     })?;
-    // Header, two `(length, offset)` tables, then one string blob.
+    // Write the file header, both `(length, offset)` tables, and one string block.
     let strings_at = 28 + 16 * u64::from(count);
 
     let mut blob = Vec::new();
@@ -311,7 +311,7 @@ fn record(table: &mut Vec<u8>, blob: &mut Vec<u8>, strings_at: u64, s: &str) -> 
     table.extend_from_slice(&length.to_le_bytes());
     table.extend_from_slice(&offset.to_le_bytes());
     blob.extend_from_slice(s.as_bytes());
-    // `.mo` table lengths exclude the trailing NUL.
+    // Exclude the trailing NUL byte from `.mo` table lengths.
     blob.push(0);
     Ok(())
 }

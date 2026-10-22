@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JSContact [`ContactCard`] to vCard 3.0 mapping for Evolution address books.
-//! Emits only round-trippable fields; unsupported data is preserved by
-//! `states_*` save checks plus `X_JMAP_UID` and `X_JMAP_KEY` identity lines.
+//! Map JSContact [`ContactCard`] values to vCard 3.0 for Evolution address books.
+//! Emit only round-trippable fields.
+//! Preserve unsupported data through `states_*` save checks and
+//! `X_JMAP_UID` plus `X_JMAP_KEY` identity lines.
 
 use std::collections::BTreeMap;
 
@@ -24,9 +25,9 @@ use serde_json::{Map, Value, json};
 
 use crate::error::VCardError;
 
-/// Carries the JSContact `uid` when the vCard `UID` is taken by the JMAP id.
+/// Store JSContact `uid` when the vCard `UID` stores the JMAP id.
 const X_JMAP_UID: &str = "X-JMAP-UID";
-/// Carries the JSContact map key of an `emails`/`phones` entry.
+/// Store the JSContact map key for an `emails` or `phones` entry.
 const X_JMAP_KEY: &str = "X-JMAP-KEY";
 
 /// JSContact name component kinds mapped to vCard `N` field order.
@@ -38,10 +39,10 @@ const NAME_COMPONENTS: [(&str, usize); 5] = [
     ("credential", 4),
 ];
 
-/// JSContact `contexts` keys and emitted vCard `TYPE` values.
+/// JSContact `contexts` keys and emitted vCard `TYPE` tokens.
 const CONTEXTS: [(&str, &str); 2] = [("work", "WORK"), ("private", "HOME")];
 
-/// JSContact phone `features` and vCard `TYPE` values, most specific first.
+/// JSContact phone `features` and vCard `TYPE` tokens, most specific first.
 const PHONE_FEATURES: [(&str, &str); 5] = [
     ("mobile", "CELL"),
     ("pager", "PAGER"),
@@ -50,8 +51,8 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
     ("video", "VIDEO"),
 ];
 
-/// Accepted inbound `TYPE` spellings for each JSContact phone feature,
-/// including common synonyms such as `MOBILE` for `CELL`.
+/// Accepted inbound `TYPE` spellings for each JSContact phone feature.
+/// Include common aliases such as `MOBILE` for `CELL`.
 const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
     ("mobile", &["CELL", "MOBILE"]),
     ("pager", &["PAGER"]),
@@ -60,8 +61,8 @@ const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
     ("video", &["VIDEO"]),
 ];
 
-/// JSContact address component kinds mapped to vCard `ADR` field positions
-/// in RFC 2426 §3.2.1 wire order.
+/// JSContact address component kinds mapped to vCard `ADR` field positions.
+/// Keep RFC 2426 §3.2.1 wire order.
 const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("postOfficeBox", 0),
     ("apartment", 1),
@@ -72,16 +73,16 @@ const ADDRESS_COMPONENTS: [(&str, usize); 7] = [
     ("country", 6),
 ];
 
-/// JSContact kinds that share another kind's `ADR` field.
+/// JSContact kinds that share one `ADR` field.
 const JOINED_COMPONENTS: [(&str, &str); 1] = [("number", "name")];
 
-/// JSContact title `kind` values and the vCard property stating each.
+/// JSContact title `kind` values and matching vCard properties.
 const TITLE_KINDS: [(&str, &str); 2] = [("title", "TITLE"), ("role", "ROLE")];
 
 /// RFC 2426 §3.7.1 `CATEGORIES`, mapped to EDS `E_CONTACT_CATEGORY_LIST`.
 const CATEGORIES: &str = "CATEGORIES";
 
-/// RFC 9553 §2.6.4 media kind that vCard `PHOTO` states.
+/// RFC 9553 §2.6.4 media kind written to vCard `PHOTO`.
 const PHOTO_KIND: &str = "photo";
 
 /// RFC 2397 scheme for embedded media payloads.
@@ -97,10 +98,10 @@ const IMAGE_PREFIX: &str = "image/";
 /// Treat this as "no media type", not `image/X-EVOLUTION-UNKNOWN`.
 const UNKNOWN_TYPE: &str = "X-EVOLUTION-UNKNOWN";
 
-/// `VALUE` used when `PHOTO` carries a reference, not inline bytes.
+/// `VALUE` token used when `PHOTO` carries a reference, not inline bytes.
 const URI_VALUE: &str = "uri";
 
-/// Services with dedicated EDS IM slots and their vCard properties.
+/// Services with dedicated EDS IM slots and matching vCard properties.
 const ONLINE_SERVICES: [(&str, &str); 10] = [
     ("AIM", "X-AIM"),
     ("Gadu-Gadu", "X-GADUGADU"),
@@ -115,7 +116,7 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 ];
 
 /// URI schemes accepted as bare handles for each online service.
-/// `plain_handle` enforces the URI tail constraints.
+/// `plain_handle` enforces URI tail constraints.
 const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("AIM", "aim"),
     ("AIM", "aol"),
@@ -156,21 +157,21 @@ const X_EVOLUTION_MANAGER: &str = "X-EVOLUTION-MANAGER";
 /// Vendor line for EDS `E_CONTACT_ASSISTANT`.
 const X_EVOLUTION_ASSISTANT: &str = "X-EVOLUTION-ASSISTANT";
 
-/// RFC 9553 §2.1.8 relation types this mapping states on EDS relation lines.
+/// RFC 9553 §2.1.8 relation types this mapping writes on EDS relation lines.
 const SPOUSE_RELATION: &str = "spouse";
 const MANAGER_RELATION: &str = "manager";
 const ASSISTANT_RELATION: &str = "assistant";
 
-/// The line EDS keeps `E_CONTACT_BLOG_URL` on.
+/// EDS line that keeps `E_CONTACT_BLOG_URL`.
 const X_EVOLUTION_BLOG_URL: &str = "X-EVOLUTION-BLOG-URL";
 
-/// The line EDS keeps `E_CONTACT_VIDEO_URL` on.
+/// EDS line that keeps `E_CONTACT_VIDEO_URL`.
 const X_EVOLUTION_VIDEO_URL: &str = "X-EVOLUTION-VIDEO-URL";
 
 /// JSContact calendar kinds mapped to vCard lines EDS preserves.
 const CALENDAR_KINDS: [(&str, &str); 2] = [("calendar", "CALURI"), ("freeBusy", "FBURL")];
 
-/// RFC 9553 §2.2.4's default `kind` for a title that names none.
+/// RFC 9553 §2.2.4 default `kind` for a title with no explicit kind.
 const DEFAULT_TITLE_KIND: &str = "title";
 
 /// The kind of a JSContact title with the implicit default filled in.
@@ -381,28 +382,25 @@ fn has_relation_type(relation: &Relation, expected: &str) -> bool {
         == Some(&Value::Bool(true))
 }
 
-/// Whether a related entity reaches the user as a spouse, `key` being the
-/// entity's name.
+/// Whether this relation states a spouse with a stable display name.
 pub fn states_spouse(key: &str, relation: &Relation) -> bool {
     has_relation_type(relation, SPOUSE_RELATION) && names_a_person(key)
 }
 
-/// Whether a related entity reaches the user as a manager, `key` being the
-/// entity's name.
+/// Whether this relation states a manager with a stable display name.
 pub fn states_manager(key: &str, relation: &Relation) -> bool {
     has_relation_type(relation, MANAGER_RELATION) && names_a_person(key)
 }
 
-/// Whether a related entity reaches the user as an assistant, `key` being the
-/// entity's name.
+/// Whether this relation states an assistant with a stable display name.
 pub fn states_assistant(key: &str, relation: &Relation) -> bool {
     has_relation_type(relation, ASSISTANT_RELATION) && names_a_person(key)
 }
 
-/// Whether the marriage is all a relation says, so that withdrawing it leaves
-/// nothing of the entry to keep.
+/// Whether this relation states only the marriage marker.
+/// Keep no relation entry when this returns `true`.
 ///
-/// `@type` does not count as relation data, but unknown extra members do.
+/// `@type` in `extra` is metadata. Any other member counts as data.
 pub fn states_nothing_but_the_marriage(relation: &Relation) -> bool {
     relation.extra.keys().all(|member| member == "@type")
         && relation
@@ -412,8 +410,7 @@ pub fn states_nothing_but_the_marriage(relation: &Relation) -> bool {
             .all(|(kind, _)| kind == SPOUSE_RELATION)
 }
 
-/// Whether a `relatedTo` key is a name a line can show the user and a save can
-/// read back out unchanged.
+/// Whether a `relatedTo` key is a stable person name for write and readback.
 fn names_a_person(key: &str) -> bool {
     !key.is_empty() && !names_a_uri(key) && !edged_with_whitespace(key) && !key.contains('\r')
 }
@@ -432,23 +429,23 @@ fn names_a_uri(value: &str) -> bool {
         })
 }
 
-/// Whether a media entry reaches the user at all: it must be a photo, and the
-/// bytes or the URI it names must be something a `PHOTO` line can state.
+/// Whether this media entry can be emitted as `PHOTO`.
 ///
-/// `photo` is the shared decision point with [`card_to_vcard`].
+/// It must state photo kind and data that a `PHOTO` line can carry.
+/// [`photo`] shares this decision point with [`card_to_vcard`].
 pub fn states_media(media: &Media) -> bool {
     photo(media).is_some()
 }
 
-/// Renders one media entry as `PHOTO` content, or `None` when it cannot be emitted.
+/// Render one media entry as `PHOTO`, or return `None`.
 ///
-/// Returns `None` for non-photo kinds, empty URIs, or invalid `data:` base64.
+/// Return `None` for non-photo kinds, empty URIs, or invalid `data:` base64.
 fn photo(media: &Media) -> Option<Photo<'_>> {
     if media.kind.as_deref() != Some(PHOTO_KIND) || media.uri.is_empty() {
         return None;
     }
     let Some(rest) = strip_prefix_ci(&media.uri, DATA_SCHEME) else {
-        return Some(Photo::Uri(&media.uri));
+        return states_remote_photo_uri(&media.uri).then_some(Photo::Uri(&media.uri));
     };
     let (metadata, payload) = rest.split_once(',')?;
     let stated = strip_suffix_ci(metadata, BASE64_MARKER)?;
@@ -460,8 +457,7 @@ fn photo(media: &Media) -> Option<Photo<'_>> {
 
 /// Whether two media entries render to the same `PHOTO` line.
 ///
-/// Comparison uses rendered form so base64 padding and media-type case do not
-/// trigger false edits.
+/// Compare rendered forms so base64 padding and media-type case do not create false edits.
 pub fn same_photo(one: &Media, other: &Media) -> bool {
     match (photo(one), photo(other)) {
         (None, None) => true,
@@ -496,21 +492,55 @@ enum Photo<'a> {
     Uri(&'a str),
 }
 
-/// Returns the subtype from an `image/*` media type for `PHOTO` `TYPE`.
+/// Return the subtype from an `image/*` media type for `PHOTO` `TYPE`.
 ///
 /// Non-image types return `None` because EDS reconstructs `image/<TYPE>`.
 fn image_subtype(media_type: &str) -> Option<&str> {
-    // The media type's own parameters (`;charset=…`) are no part of its name.
+    // Media-type parameters (`;charset=`) are not part of the type name.
     let name = media_type.split(';').next().unwrap_or_default().trim();
     strip_prefix_ci(name, IMAGE_PREFIX).filter(|subtype| !subtype.is_empty())
 }
 
-/// Decodes base64 payload bytes, accepting padded and unpadded forms.
+/// Decode base64 payload bytes.
+/// Accept padded and unpadded forms.
 fn decoded(payload: &str) -> Option<Vec<u8>> {
     BASE64
         .decode(payload)
         .or_else(|_| BASE64_UNPADDED.decode(payload))
         .ok()
+}
+
+/// Whether this URI names a remote photo location to keep as `VALUE=uri`.
+fn states_remote_photo_uri(uri: &str) -> bool {
+    uri_scheme(uri).is_some_and(|scheme| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
+}
+
+/// Whether this URI scheme is outside the accepted photo forms.
+fn states_unsupported_photo_uri(uri: &str) -> bool {
+    uri_scheme(uri).is_some_and(|scheme| {
+        !scheme.eq_ignore_ascii_case("http")
+            && !scheme.eq_ignore_ascii_case("https")
+            && !scheme.eq_ignore_ascii_case("data")
+    })
+}
+
+/// Whether this value looks like a URI reference with an empty scheme.
+fn states_empty_scheme_photo_uri(uri: &str) -> bool {
+    uri.starts_with("://")
+}
+
+/// Return the URI scheme name when the value starts with one.
+fn uri_scheme(value: &str) -> Option<&str> {
+    let (scheme, _) = value.split_once(':')?;
+    let mut characters = scheme.chars();
+    characters
+        .next()
+        .filter(|first| first.is_ascii_alphabetic())?;
+    characters
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'))
+        .then_some(scheme)
 }
 
 /// Case-insensitive prefix strip used for URI schemes and media types.
@@ -521,7 +551,7 @@ fn strip_prefix_ci<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
         .then(|| &value[prefix.len()..])
 }
 
-/// `value` without `suffix`, compared as [`strip_prefix_ci`] compares.
+/// Return `value` without `suffix`, with the compare rule of [`strip_prefix_ci`].
 fn strip_suffix_ci<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
     let split = value.len().checked_sub(suffix.len())?;
     let end = value.get(split..)?;
@@ -533,7 +563,7 @@ pub fn states_online_service(service: &OnlineService) -> bool {
     drawn_service(service).is_some()
 }
 
-/// Returns mapped property and handle for an emit-ready service entry.
+/// Return mapped property and handle for a service entry ready to emit.
 fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     let property = service_property(service.service.as_deref()?)?;
     let handle = online_service_handle(service)?;
@@ -541,7 +571,7 @@ fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     drawable.then_some((property, handle))
 }
 
-/// Emits `user` when present, else extracts a plain handle from `uri`.
+/// Return `user` when present. Else parse a plain handle from `uri`.
 pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
     match service.user.as_deref() {
         Some(user) => Some(user),
@@ -549,21 +579,20 @@ pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
     }
 }
 
-/// The handle inside a service's URI, for a URI that states one and nothing
-/// else.
+/// Return the handle from a service URI that names one plain handle.
 fn handle_in_uri<'a>(service: &str, uri: &'a str) -> Option<&'a str> {
     let wanted = normalised_service(service);
     let (stated, handle) = uri.split_once(':')?;
-    // Case-insensitively, as RFC 3986 §3.1 requires of a scheme.
+    // RFC 3986 §3.1 says URI schemes compare case-insensitively.
     let matches = SERVICE_SCHEMES.iter().any(|(name, scheme)| {
         normalised_service(name) == wanted && stated.eq_ignore_ascii_case(scheme)
     });
     (matches && plain_handle(handle)).then_some(handle)
 }
 
-/// Returns `<scheme>:<handle>` for services with a known plain-handle URI form.
+/// Return `<scheme>:<handle>` for services with a plain-handle URI form.
 ///
-/// `None` means no compatible scheme exists or the handle is not URI-safe.
+/// Return `None` when no compatible scheme exists or the handle is not URI-safe.
 pub fn online_service_uri(service: &str, handle: &str) -> Option<String> {
     let scheme = service_scheme(service)?;
     plain_handle(handle).then(|| format!("{scheme}:{handle}"))
@@ -580,7 +609,7 @@ fn plain_handle(handle: &str) -> bool {
             .any(|character| character.is_whitespace() || character.is_control())
 }
 
-/// The URI scheme handles at this service are stated under.
+/// Return the URI scheme for handles at this service.
 fn service_scheme(service: &str) -> Option<&'static str> {
     let wanted = normalised_service(service);
     SERVICE_SCHEMES
@@ -589,7 +618,7 @@ fn service_scheme(service: &str) -> Option<&'static str> {
         .map(|(_, scheme)| *scheme)
 }
 
-/// The vCard property handles at this service are stated on.
+/// Return the vCard property used for handles at this service.
 fn service_property(service: &str) -> Option<&'static str> {
     let wanted = normalised_service(service);
     ONLINE_SERVICES
@@ -607,7 +636,7 @@ fn service_of(property: &str) -> Option<&'static str> {
 }
 
 /// Whether two service names are equivalent for mapping lookups.
-/// Compares case-insensitively and ignores punctuation and spacing aliases.
+/// Compare case-insensitively. Ignore punctuation and spacing aliases.
 pub fn same_service(one: Option<&str>, other: Option<&str>) -> bool {
     match (one, other) {
         (Some(one), Some(other)) => normalised_service(one) == normalised_service(other),
@@ -616,8 +645,8 @@ pub fn same_service(one: Option<&str>, other: Option<&str>) -> bool {
     }
 }
 
-/// A service name with everything that is not a letter or a digit removed, and
-/// the rest lower-cased.
+/// Service name normalised for lookups.
+/// Remove non-alphanumeric characters and lowercase the rest.
 fn normalised_service(name: &str) -> String {
     name.chars()
         .filter(|character| character.is_alphanumeric())
@@ -625,8 +654,8 @@ fn normalised_service(name: &str) -> String {
         .collect()
 }
 
-/// The EDS IM slot for this handle.
-/// Uses JSContact `contexts`; ambiguous or unsupported contexts fall back to [`DEFAULT_SLOT`].
+/// Return the EDS IM slot for this service entry.
+/// Read JSContact `contexts` first. Use [`DEFAULT_SLOT`] for ambiguous or unsupported contexts.
 fn service_slot(service: &OnlineService) -> &'static str {
     let context = |name: &str| {
         service
@@ -643,7 +672,7 @@ fn service_slot(service: &OnlineService) -> &'static str {
 }
 
 /// Whether one `keywords` entry can be emitted on `CATEGORIES`.
-/// Accepts only `true` set members with non-empty, trim-stable names and no carriage return.
+/// Accept only `true` set members with non-empty, trim-stable names and no carriage return.
 pub fn states_keyword(tag: &str, set: &Value) -> bool {
     set == &Value::Bool(true)
         && !tag.is_empty()
@@ -652,7 +681,7 @@ pub fn states_keyword(tag: &str, set: &Value) -> bool {
 }
 
 /// Whether a tag has leading or trailing ASCII whitespace.
-/// This superset avoids tags EDS may trim and rename on the next save.
+/// This wider check rejects tags that EDS can trim and rename on the next save.
 fn edged_with_whitespace(tag: &str) -> bool {
     let whitespace = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
     tag.starts_with(whitespace) || tag.ends_with(whitespace)
@@ -668,9 +697,9 @@ fn drawn_tags(card: &ContactCard) -> Vec<&str> {
         .collect()
 }
 
-/// Tags from all `CATEGORIES` lines as a JSContact `keywords` Set.
-/// Returns `None` when no non-empty tags are present, so absence stays distinct
-/// from an explicit empty set in save comparisons.
+/// Build the JSContact `keywords` Set from all `CATEGORIES` lines.
+/// Return `None` when no non-empty tags exist.
+/// This keeps absence distinct from an explicit empty set in save comparisons.
 fn read_keywords(entries: &[VCardEntry]) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = entries
         .iter()
@@ -704,9 +733,9 @@ pub fn states_organization(organization: &Organization) -> bool {
     organization_components(organization).is_some()
 }
 
-/// Whether the `ORG` line written for an organisation states this unit.
+/// Whether this org unit appears in the emitted `ORG` line.
 ///
-/// Units with empty names are not emitted and are therefore invisible to edits.
+/// Do not emit units with empty names. They cannot round-trip through edits.
 pub fn states_org_unit(unit: &OrgUnit) -> bool {
     !unit.name.is_empty()
 }
@@ -718,13 +747,12 @@ pub fn states_anniversary(anniversary: &Anniversary) -> bool {
     anniversary_property(&anniversary.kind).is_some() && anniversary_date(anniversary).is_some()
 }
 
-/// The day a vCard anniversary line states, if one can be read.
+/// Return the day from an anniversary line, if parsing succeeds.
 ///
-/// Save compares this canonical day so equivalent JSContact day shapes stay equal.
+/// Save compares this canonical day, so equivalent JSContact day shapes stay equal.
 pub fn anniversary_date(anniversary: &Anniversary) -> Option<String> {
     let date = anniversary.date.as_ref()?;
-    // A `Timestamp` states a point in time. The day it falls on is read in
-    // UTC, which is the only zone the card names.
+    // Read timestamp days in UTC. The vCard line names no other zone.
     let day = if let Some(utc) = date.get("utc").and_then(Value::as_str) {
         read_day(utc)?
     } else {
@@ -738,9 +766,9 @@ pub fn anniversary_date(anniversary: &Anniversary) -> Option<String> {
     day.survives_the_field_it_lands_in().then(|| day.text())
 }
 
-/// Whether an anniversary value is a point-in-time `Timestamp`.
+/// Whether an anniversary value uses point-in-time `Timestamp` shape.
 ///
-/// Save logic patches timestamps differently from calendar-day objects.
+/// Save logic patches timestamps and calendar days in different ways.
 pub fn states_a_point_in_time(anniversary: &Anniversary) -> bool {
     anniversary
         .date
@@ -756,11 +784,11 @@ fn anniversary_property(kind: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// The earliest year `e_contact_date_to_string()` will write, measured against
-/// libebook-contacts 3.52. See [`Day::survives_the_field_it_lands_in`].
+/// Earliest year `e_contact_date_to_string()` writes in libebook-contacts 3.52.
+/// See [`Day::survives_the_field_it_lands_in`].
 const EARLIEST_YEAR: u32 = 1000;
 
-/// One calendar day: the whole of what a vCard 3.0 date line can state.
+/// One calendar day, which is all a vCard 3.0 day line can state.
 struct Day {
     year: u32,
     month: u32,
@@ -802,11 +830,11 @@ impl Day {
     }
 }
 
-/// The day an anniversary line states, or `None` when none is present.
+/// Return the day from an anniversary line, or `None`.
 ///
-/// Accepts `YYYY-MM-DD` and `YYYYMMDD` because
-/// `e_contact_date_from_string()` accepts both.
-/// Trailing time text is dropped for compatibility.
+/// Accept both `YYYY-MM-DD` and `YYYYMMDD`.
+/// `e_contact_date_from_string()` accepts both forms.
+/// Drop trailing time text for compatibility.
 fn read_day(text: &str) -> Option<Day> {
     let digits: String = text
         .split(['T', 't'])
@@ -830,8 +858,8 @@ fn member(date: &Value, name: &str) -> Option<u32> {
     date.get(name)?.as_u64()?.try_into().ok()
 }
 
-/// Unwraps Apple-style `_$!<LabelName>!$_` markers into clean label names, or
-/// returns the trimmed input text if not wrapped in markers.
+/// Return the inner label from an Apple `_$!<LabelName>!$_` marker.
+/// Return trimmed input text when no marker exists.
 fn clean_apple_label(raw: &str) -> &str {
     let trimmed = raw.trim();
     if let Some(inner) = trimmed
@@ -844,15 +872,13 @@ fn clean_apple_label(raw: &str) -> &str {
     }
 }
 
-/// Render a contact card as a vCard 3.0 string, ready for
-/// `e_contact_new_from_vcard()`.
+/// Render one contact card as vCard 3.0 text for `e_contact_new_from_vcard()`.
 pub fn card_to_vcard(card: &ContactCard) -> String {
     let mut entries = Vec::new();
 
-    // EDS keys its cache on the vCard UID and passes it back to
-    // load_contact_sync()/remove_contact_sync(), so it has to be the
-    // identifier the JMAP methods take — the server-assigned id. The
-    // JSContact uid, which is a different namespace, rides alongside.
+    // EDS caches contacts by vCard `UID` and returns it on load and remove.
+    // Write server id to `UID`. Keep JSContact `uid` on `X-JMAP-UID`.
+    // The two fields use different namespaces.
     if let Some(uid) = card
         .id
         .as_ref()
@@ -868,11 +894,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     if let Some(name) = &card.name {
-        // An empty stated `full` reads back as absent (`read_name` below filters
-        // an empty FN to `None`, the same way it treats no FN at all), so it must
-        // be treated as absent here too — otherwise the first round trip keeps a
-        // literal empty FN while every later one derives and keeps a non-empty
-        // one, and the two never reach the same fixed point.
+        // Match `read_name`: treat an empty `full` value as absent for one fixed point.
         let full = name
             .full
             .as_deref()
@@ -906,9 +928,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    // One line per entry rather than RFC 2426 §3.1.3's comma-separated list,
-    // so that each keeps its JSContact key — and because EDS reads the value
-    // as one string either way.
+    // Write one `NICKNAME` line per key to match EDS behavior.
     for (key, nickname) in card.nicknames.iter().flatten() {
         if !states_nickname(nickname) {
             continue;
@@ -917,7 +937,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Nickname)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(nickname.name.clone()),
         );
@@ -931,18 +951,14 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
         let mut params = vec![VCardParameter::new(
             VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-            VCardParameterValue::Text(key.clone()),
+            param_value_text(key),
         )];
         for type_name in type_names(&CONTEXTS, email.contexts.as_ref()) {
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                type_name.to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text(type_name)));
         }
         if email.pref.is_some() {
             // vCard 3.0 has no ranking, only a preferred flag.
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                "PREF".to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text("PREF")));
         }
         entries.push(
             VCardEntry::new(VCardProperty::Email)
@@ -959,22 +975,16 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
         let mut params = vec![VCardParameter::new(
             VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-            VCardParameterValue::Text(key.clone()),
+            param_value_text(key),
         )];
         if let Some(type_name) = context_slot(phone.contexts.as_ref()) {
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                type_name.to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text(type_name)));
         }
         if let Some(type_name) = feature_slot(phone.features.as_ref()) {
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                type_name.to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text(type_name)));
         }
         if phone.pref.is_some() {
-            params.push(VCardParameter::typ(VCardParameterValue::Text(
-                "PREF".to_owned(),
-            )));
+            params.push(VCardParameter::typ(param_value_text("PREF")));
         }
         entries.push(
             VCardEntry::new(VCardProperty::Tel)
@@ -988,19 +998,15 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     for (key, address) in addresses {
         let mut type_params = Vec::new();
         if let Some(slot) = context_slot(address.contexts.as_ref()) {
-            type_params.push(VCardParameter::typ(VCardParameterValue::Text(
-                slot.to_owned(),
-            )));
+            type_params.push(VCardParameter::typ(param_value_text(slot)));
         }
         if address_pref(address).is_some() {
-            type_params.push(VCardParameter::typ(VCardParameterValue::Text(
-                "PREF".to_owned(),
-            )));
+            type_params.push(VCardParameter::typ(param_value_text("PREF")));
         }
         if let Some(fields) = address_fields(address) {
             let mut params = vec![VCardParameter::new(
                 VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                VCardParameterValue::Text(key.clone()),
+                param_value_text(key),
             )];
             params.extend(type_params.clone());
             entries.push(
@@ -1009,13 +1015,13 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                     .with_values(fields.into_iter().map(VCardValue::Text).collect()),
             );
         }
-        // The same address written out for an envelope, on the line RFC 2426
-        // §3.2.2 gives it — directly after its own `ADR`, and on its own when
-        // the components are not known and there is no `ADR` to follow.
+        // Write the same address for envelopes on RFC 2426 §3.2.2 `LABEL`.
+        // Place `LABEL` after its `ADR` line.
+        // Emit `LABEL` alone when no `ADR` line exists.
         if let Some(full) = address_label(address) {
             let mut params = vec![VCardParameter::new(
                 VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                VCardParameterValue::Text(key.clone()),
+                param_value_text(key),
             )];
             params.extend(type_params);
             entries.push(
@@ -1034,7 +1040,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Org)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_values(components.into_iter().map(VCardValue::Text).collect()),
         );
@@ -1059,7 +1065,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(prop)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(title.name.clone()),
         );
@@ -1073,7 +1079,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Note)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(note.note.clone()),
         );
@@ -1093,14 +1099,13 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(prop)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(link.uri.clone()),
         );
     }
 
-    // Emit calendar and free/busy URIs on their EDS-backed vCard lines.
-    // Entries with unsupported `kind` emit no line: see [`calendar_property`].
+    // Emit supported calendar kinds on their EDS-backed vCard lines.
     for (key, calendar) in card.calendars.iter().flatten() {
         let Some(name) = calendar_property(calendar.kind.as_deref()) else {
             continue;
@@ -1117,7 +1122,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(prop)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(calendar.uri.clone()),
         );
@@ -1132,32 +1137,30 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Caladruri)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
                 .with_value(address.uri.clone()),
         );
     }
 
-    // Emit the contact photo on `PHOTO`.
-    // Inline media keeps subtype metadata; references use `VALUE=uri`.
-    // Selection rules come from libebook-contacts 3.52; see [`photo`] for
-    // media kinds that emit no line.
+    // Write contact photos on `PHOTO`.
+    // Inline values keep subtype metadata.
+    // URI references use `VALUE=uri`.
+    // See [`photo`] for media kinds that do not emit a line.
     for (key, media) in card.media.iter().flatten() {
         match photo(media) {
             None => continue,
             Some(Photo::Inline { subtype, base64 }) => {
                 let mut params = vec![VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 )];
                 if let Some(subtype) = subtype {
-                    params.push(VCardParameter::typ(VCardParameterValue::Text(
-                        subtype.to_owned(),
-                    )));
+                    params.push(VCardParameter::typ(param_value_text(subtype)));
                 }
                 params.push(VCardParameter::new(
                     VCardParameterName::Other("ENCODING".to_owned()),
-                    VCardParameterValue::Text("b".to_owned()),
+                    param_value_text("b"),
                 ));
                 entries.push(
                     VCardEntry::new(VCardProperty::Photo)
@@ -1165,18 +1168,17 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                         .with_value(base64),
                 );
             }
-            // Without `VALUE=uri` EDS reaches no field at all, so the user is
-            // shown no picture rather than one fetched from the URI.
+            // EDS ignores URI photos without `VALUE=uri`. Include it.
             Some(Photo::Uri(uri)) => {
                 entries.push(
                     VCardEntry::new(VCardProperty::Photo)
                         .with_param(VCardParameter::new(
                             VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                            VCardParameterValue::Text(key.clone()),
+                            param_value_text(key),
                         ))
                         .with_param(VCardParameter::new(
                             VCardParameterName::Value,
-                            VCardParameterValue::Text("uri".to_owned()),
+                            param_value_text("uri"),
                         ))
                         .with_value(uri.to_owned()),
                 );
@@ -1184,8 +1186,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // Emit one line per service on the matching EDS slot property, and always
-    // include a slot type so Evolution maps it to a visible field.
+    // Write each service on its EDS slot line and include `TYPE`.
     for (key, service) in card.online_services.iter().flatten() {
         let Some((property, handle)) = drawn_service(service) else {
             continue;
@@ -1194,11 +1195,9 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             VCardEntry::new(VCardProperty::Other(property.to_owned()))
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
+                    param_value_text(key),
                 ))
-                .with_param(VCardParameter::typ(VCardParameterValue::Text(
-                    service_slot(service).to_owned(),
-                )))
+                .with_param(VCardParameter::typ(param_value_text(service_slot(service))))
                 .with_value(handle.to_owned()),
         );
     }
@@ -1212,18 +1211,17 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                 VCardEntry::new(VCardProperty::Bday)
                     .with_param(VCardParameter::new(
                         VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                        VCardParameterValue::Text(key.clone()),
+                        param_value_text(key),
                     ))
                     .with_value(date),
             );
         } else if anniversary.kind == "wedding" {
-            // Emit both X-EVOLUTION-ANNIVERSARY (for EDS 3.52 compatibility)
-            // and standard ANNIVERSARY (for EDS 3.60+ compatibility).
+            // Emit both lines for compatibility with EDS 3.52 and EDS 3.60+.
             entries.push(
                 VCardEntry::new(VCardProperty::Other(X_EVOLUTION_ANNIVERSARY.to_owned()))
                     .with_param(VCardParameter::new(
                         VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                        VCardParameterValue::Text(key.clone()),
+                        param_value_text(key),
                     ))
                     .with_value(date.clone()),
             );
@@ -1231,16 +1229,15 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                 VCardEntry::new(VCardProperty::Other("ANNIVERSARY".to_owned()))
                     .with_param(VCardParameter::new(
                         VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                        VCardParameterValue::Text(key.clone()),
+                        param_value_text(key),
                     ))
                     .with_value(date),
             );
         }
     }
 
-    // Emit only spouse, manager, and assistant relations because EDS exposes
-    // those three slots. These lines carry no `X-JMAP-KEY`: RFC 9553 keys
-    // `relatedTo` by the related entity name itself.
+    // Emit only spouse, manager, and assistant relations. EDS exposes only these slots.
+    // Omit `X-JMAP-KEY`. RFC 9553 keys `relatedTo` by related entity name.
     for (key, relation) in card.related_to.iter().flatten() {
         if states_spouse(key, relation) {
             entries.push(
@@ -1262,8 +1259,8 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    // Emit all mappable tags on one `CATEGORIES` line, matching EDS behavior.
-    // Tags are self-identifying, so this line carries no `X-JMAP-KEY`.
+    // Emit all mappable tags on one `CATEGORIES` line.
+    // Tags identify themselves. This line omits `X-JMAP-KEY`.
     let tags = drawn_tags(card);
     if !tags.is_empty() {
         entries.push(
@@ -1285,14 +1282,15 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     fold_overlong_lines(out)
 }
 
-/// The RFC 2426 §2.6 folding width `card_to_vcard`'s output holds to, in
-/// octets, excluding the line break.
+/// Maximum physical line width from RFC 2426 §2.6, in octets.
+/// Excludes the trailing line break.
 const MAX_LINE_OCTETS: usize = 75;
 
-/// Folds physical lines longer than [`MAX_LINE_OCTETS`] at UTF-8 boundaries.
+/// Fold physical lines longer than [`MAX_LINE_OCTETS`] at UTF-8 boundaries.
 ///
-/// calcard already folds. This pass enforces the 75-octet RFC 2426 limit and
-/// avoids splitting escaped pairs.
+/// `calcard` already folds lines.
+/// This pass still enforces the RFC 2426 75-octet limit.
+/// This pass keeps escaped pairs on one folded line.
 fn fold_overlong_lines(vcard: String) -> String {
     if vcard
         .split("\r\n")
@@ -1306,7 +1304,7 @@ fn fold_overlong_lines(vcard: String) -> String {
             out.push_str("\r\n");
         }
         let mut rest = line;
-        // A continuation line's leading space spends one of its 75 octets.
+        // The continuation space uses one of the 75 octets.
         let mut budget = MAX_LINE_OCTETS;
         while rest.len() > budget {
             if rest.is_empty() {
@@ -1316,9 +1314,8 @@ fn fold_overlong_lines(vcard: String) -> String {
             while cut > 0 && !rest.is_char_boundary(cut) {
                 cut -= 1;
             }
-            // An odd run of backslashes ending at the cut means the last one
-            // escapes the octet on the far side — step inside the run so the
-            // pair stays on one line.
+            // An odd trailing backslash run escapes the next octet.
+            // Move the cut into that run so the escaped pair stays on one line.
             if rest[..cut]
                 .bytes()
                 .rev()
@@ -1330,8 +1327,8 @@ fn fold_overlong_lines(vcard: String) -> String {
                 cut -= 1;
             }
             if cut == 0 {
-                // Defensive fallback: pick the first UTF-8 boundary so the loop
-                // always advances. Unfolding restores the octets either way.
+                // Fallback: cut at the first UTF-8 boundary to keep progress.
+                // Unfolding restores octets in both cases.
                 cut = (1..=rest.len())
                     .find(|&i| rest.is_char_boundary(i))
                     .unwrap_or(rest.len());
@@ -1346,11 +1343,11 @@ fn fold_overlong_lines(vcard: String) -> String {
     out
 }
 
-/// Normalizes extended ISO 8601 values on calendar properties to basic format
-/// before parsing with `calcard`.
+/// Normalize extended ISO 8601 values on calendar properties before `calcard`
+/// parses them.
 ///
-/// This import-side shim preserves day and timezone fields across supported
-/// vCard versions.
+/// This import shim keeps day and timezone fields across supported vCard
+/// versions.
 fn normalize_vcard_dates(vcard: &str) -> String {
     let mut out = String::with_capacity(vcard.len());
     let mut remaining = vcard;
@@ -1418,7 +1415,7 @@ fn normalize_date_value(prop_name: &str, val: &str) -> String {
         && bytes[7] == b'-'
         && bytes[8..10].iter().all(u8::is_ascii_digit)
     {
-        // Extended date YYYY-MM-DD -> basic YYYYMMDD
+        // Convert extended `YYYY-MM-DD` dates to basic `YYYYMMDD`.
         let year = &val[0..4];
         let month = &val[5..7];
         let day = &val[8..10];
@@ -1431,7 +1428,7 @@ fn normalize_date_value(prop_name: &str, val: &str) -> String {
         && bytes[7] == b'-'
         && bytes[8..10].iter().all(u8::is_ascii_digit)
     {
-        // vCard 4.0 ANNIVERSARY with timestamp: convert to basic format
+        // Convert vCard 4.0 `ANNIVERSARY` timestamps to basic format.
         let year = &val[0..4];
         let month = &val[5..7];
         let day = &val[8..10];
@@ -1455,7 +1452,7 @@ fn normalize_date_value(prop_name: &str, val: &str) -> String {
 
 /// Read a vCard 3.0 string into a contact card.
 ///
-/// `id` comes from `UID`, including local placeholders Evolution invents for
+/// `id` comes from `UID`. Evolution can use local placeholders there for
 /// unsynced contacts. Callers must drop local-only IDs before create.
 pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let normalized = normalize_vcard_dates(vcard);
@@ -1679,10 +1676,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 notes.insert(entry_key(entry, "n", &notes), note);
             }
             "URL" | X_EVOLUTION_BLOG_URL | X_EVOLUTION_VIDEO_URL => {
-                // Read as one value, which is what calcard makes of a URI:
-                // neither the comma nor the semicolon inside it separates
-                // anything, so a query string listing tags arrives as the URI
-                // the line stated rather than as a fragment of it.
+                // Read URI text as one value.
+                // `calcard` does not split URI commas or semicolons.
+                // Query tags stay inside the URI the line states.
                 let mut kind = if name_upper == "URL" {
                     None
                 } else if name_upper == X_EVOLUTION_BLOG_URL {
@@ -1766,8 +1762,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 media.insert(entry_key(entry, "m", &media), photo);
             }
-            // Keep every related-name line EDS shows so save does not drop it.
-            // Keys follow line text here, and this path ignores `X-JMAP-KEY`.
+            // Keep each related-name line that EDS exposes, or save can drop data.
+            // This path keys by line text and ignores `X-JMAP-KEY`.
             X_EVOLUTION_SPOUSE
             | X_EVOLUTION_MANAGER
             | X_EVOLUTION_ASSISTANT
@@ -1918,10 +1914,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     }
                 }
             }
-            // One of the `X-` lines EDS keeps instant-messaging handles on, and
-            // nothing else: a line for a service this mapping does not state is
-            // left where it is rather than read as an entry the server never
-            // had. The `TYPE` is not read — it is the slot, not the contexts.
+            // EDS stores IM handles on these `X-` lines.
+            // Skip services this mapping does not state.
+            // Do not read `TYPE`: the slot name selects the service.
             name => {
                 let Some(service) = service_of(name) else {
                     continue;
@@ -1942,7 +1937,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         }
     }
 
-    // Process `LABEL` after `ADR` so labels can attach to parsed addresses.
+    // Read `LABEL` after `ADR` so labels attach to parsed addresses.
     for entry in card
         .entries
         .iter()
@@ -1968,8 +1963,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 
     Ok(ContactCard {
         id: text("UID").map(Into::into),
-        // Membership follows from which EDS source is being served, not from
-        // the contact, so the backend fills it in on create.
+        // Membership depends on the EDS source being served.
+        // The backend fills it in during create.
         address_book_ids: None,
         card_type: Some("Card".to_owned()),
         version: Some("1.0".to_owned()),
@@ -1986,13 +1981,13 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         links: (!links.is_empty()).then_some(links),
         calendars: (!calendars.is_empty()).then_some(calendars),
         scheduling_addresses: (!scheduling_addresses.is_empty()).then_some(scheduling_addresses),
-        // vCard 3.0 exposes media only through `PHOTO`, so other media kinds
-        // stay absent here and are preserved through save-path extras.
+        // vCard 3.0 exposes media through `PHOTO` only.
+        // Other media kinds stay absent here and stay in save-path extras.
         media: (!media.is_empty()).then_some(media),
         online_services: (!online_services.is_empty()).then_some(online_services),
         keywords: read_keywords(&card.entries),
-        // Keep only relations represented by mapped vCard lines on read. Other
-        // relation kinds stay absent here and are preserved through extras.
+        // Keep only relations represented by mapped vCard lines on read.
+        // Keep other relation kinds in extras.
         related_to: (!related_to.is_empty()).then_some(related_to),
         crypto_keys: None,
         directories: None,
@@ -2006,20 +2001,16 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     })
 }
 
-/// Decodes a `PHOTO` line into one media entry.
+/// Decode one `PHOTO` line into one media entry.
 ///
-/// Supports URI references (`VALUE=uri`) and inline image bytes. `calcard`
-/// already applies transfer decoding, so `Text` and `Binary` are consumed
-/// as-is. Media type follows EDS behavior via `MEDIATYPE` or normalized `TYPE`.
+/// Read URI references (`VALUE=uri`) and inline image bytes.
+/// `calcard` already applies transfer decoding.
+/// Read `Text` and `Binary` values as-is.
+/// Derive media type from `MEDIATYPE` or normalized `TYPE`.
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
     let raw_text = entry_text(entry);
-    let states_a_reference = (entry_param(entry, "VALUE")
-        .is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE))
-        && !raw_text.starts_with("data:"))
-        || raw_text.starts_with("http://")
-        || raw_text.starts_with("https://")
-        || raw_text.starts_with("ftp://")
-        || raw_text.starts_with("file://");
+    let states_value_uri =
+        entry_param(entry, "VALUE").is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE));
 
     let media_type_param = entry_param(entry, "MEDIATYPE")
         .or_else(|| {
@@ -2047,12 +2038,29 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
         })
         .or_else(|| entry_binary_content_type(entry).map(str::to_owned));
 
-    // `PHOTO` can only state images. Drop non-image types so parse and emit
-    // stay symmetric.
+    // `PHOTO` can only state images.
+    // Drop non-image types so parse and emit stay symmetric.
     let media_type = media_type_param.filter(|mt| image_subtype(mt).is_some());
 
-    if states_a_reference {
+    if states_value_uri {
+        if states_remote_photo_uri(&raw_text) {
+            return (!raw_text.is_empty()).then(|| photo_entry(raw_text, media_type));
+        }
+        if !raw_text.is_empty() {
+            return None;
+        }
+    }
+
+    if states_remote_photo_uri(&raw_text) {
         return (!raw_text.is_empty()).then(|| photo_entry(raw_text, media_type));
+    }
+
+    if states_unsupported_photo_uri(&raw_text) {
+        return None;
+    }
+
+    if states_empty_scheme_photo_uri(&raw_text) {
+        return None;
     }
 
     let (bytes, stated_media_type) = if let Some(rest) = strip_prefix_ci(&raw_text, DATA_SCHEME) {
@@ -2105,8 +2113,8 @@ fn is_known_image_subtype(subtype: &str) -> bool {
     )
 }
 
-/// A media entry for a picture of the contact — the one kind a `PHOTO` line
-/// states, so the only kind this side reads back.
+/// A media entry for a contact picture.
+/// `PHOTO` states this kind, so this reader accepts only this kind.
 fn photo_entry(uri: String, media_type: Option<String>) -> Media {
     Media {
         kind: Some(PHOTO_KIND.to_owned()),
@@ -2166,7 +2174,7 @@ fn read_anniversary(entry: &VCardEntry) -> Option<Anniversary> {
 /// The seven `ADR` fields for an address, or `None` when no mapped component
 /// has text.
 ///
-/// Empty fields are preserved because field position carries meaning.
+/// Keep empty fields. Field position carries meaning.
 fn address_fields(address: &Address) -> Option<Vec<String>> {
     let components = address.components.as_ref()?;
     let mut fields = vec![String::new(); ADDRESS_COMPONENTS.len()];
@@ -2191,8 +2199,9 @@ fn address_fields(address: &Address) -> Option<Vec<String>> {
 /// Components from an edited `ADR` line, restoring split source parts when a
 /// shared field still equals its original joined text.
 ///
-/// Shared fields round trip as one component because split boundaries are
-/// ambiguous. `restore_shared_fields` repairs unchanged joined text.
+/// Keep one component for shared fields on round trip.
+/// Split boundaries are ambiguous.
+/// `restore_shared_fields` repairs unchanged joined text.
 pub fn restore_address_components(
     current: &[AddressComponent],
     edited: &[AddressComponent],
@@ -2367,8 +2376,8 @@ fn read_organization(entry: &VCardEntry) -> Option<Organization> {
 /// Picks the `addresses` key for a `LABEL` line.
 ///
 /// Prefer explicit `X-JMAP-KEY` when it does not conflict. Otherwise match by
-/// context and label text, then allocate a new key because EDS can synthesize
-/// `LABEL` lines without preserving `X-JMAP-KEY`.
+/// context and label text, then allocate a new key.
+/// EDS can synthesize `LABEL` lines without preserving `X-JMAP-KEY`.
 fn label_entry(
     entry: &VCardEntry,
     contexts: Option<&Value>,
@@ -2390,8 +2399,8 @@ fn label_entry(
     entry_key(entry, "a", addresses)
 }
 
-/// The JSContact map key for an entry: the one we round-tripped, or the
-/// first free `e1`, `e2`, … for a vCard that never had one.
+/// The JSContact map key for an entry: use the round-tripped key first.
+/// If it is absent, use the first free `e1`, `e2`, … for a vCard without one.
 fn entry_key<T>(entry: &VCardEntry, prefix: &str, taken: &BTreeMap<String, T>) -> String {
     if let Some(key) = entry_param(entry, X_JMAP_KEY).filter(|key| !key.is_empty())
         && !taken.contains_key(&key)
@@ -2451,9 +2460,9 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
     let full = find("FN").map(entry_text).filter(|f| !f.is_empty());
     let fields = find("N").map(entry_components).unwrap_or_default();
 
-    // Each component reads only the kind and value that `N` states.
-    // RFC 9553 §2.2.1 `phonetic` data has no vCard 3.0 slot here, so the save
-    // path is responsible for restoring it on the right component.
+    // Read only the kind and value that each `N` field states.
+    // RFC 9553 §2.2.1 `phonetic` data has no vCard 3.0 slot here.
+    // The save path restores it on the matching component.
     let mut components = Vec::new();
     for (kind, index) in NAME_COMPONENTS {
         let Some(value) = fields.get(index).filter(|value| !value.is_empty()) else {
@@ -2472,9 +2481,9 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
         extra.insert("fileAs".to_string(), Value::String(file_as));
     }
 
-    // No FN, no usable N, and no fileAs means the card does not name anyone.
-    // We do not split FN to guess N fields, because a wrong guess would be
-    // written back on the next save.
+    // No FN, no usable N, and no fileAs means the card names nobody.
+    // Do not split FN to guess `N` fields.
+    // A wrong guess could be saved on the next write.
     if full.is_none() && components.is_empty() && extra.is_empty() {
         return None;
     }
@@ -2522,9 +2531,53 @@ fn read_phone_flags(entry: &VCardEntry) -> Option<Value> {
     (!flags.is_empty()).then_some(Value::Object(flags))
 }
 
+/// A vCard parameter value with RFC 6868 caret escapes applied.
+fn param_value_text(value: impl AsRef<str>) -> VCardParameterValue {
+    VCardParameterValue::Text(caret_encoded(value.as_ref()))
+}
+
+/// A parameter value with RFC 6868 section 3 caret escapes applied.
+fn caret_encoded(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '^' => out.push_str("^^"),
+            '"' => out.push_str("^'"),
+            '\n' => out.push_str("^n"),
+            '\r' => {
+                chars.next_if_eq(&'\n');
+                out.push_str("^n");
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// A parameter value with RFC 6868 section 3 caret escapes resolved.
+fn caret_decoded(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let decoded = match (ch, chars.peek()) {
+            ('^', Some('^')) => '^',
+            ('^', Some('\'')) => '"',
+            ('^', Some('n' | 'N')) => '\n',
+            _ => {
+                out.push(ch);
+                continue;
+            }
+        };
+        chars.next();
+        out.push(decoded);
+    }
+    out
+}
+
 fn param_text(value: &VCardParameterValue) -> String {
     match value {
-        VCardParameterValue::Text(text) => text.clone(),
+        VCardParameterValue::Text(text) => caret_decoded(text),
         VCardParameterValue::Integer(number) => number.to_string(),
         VCardParameterValue::Timestamp(stamp) => stamp.to_string(),
         VCardParameterValue::Bool(true) => "TRUE".to_owned(),
@@ -2544,8 +2597,8 @@ fn value_text(value: &VCardValue) -> Option<String> {
         VCardValue::Component(items) => Some(items.join(",")),
         VCardValue::PartialDateTime(date) => {
             let day = date.day.or_else(|| {
-                // calcard can parse the second `-` into `tz_hour`; clamp that
-                // fallback to day-range values.
+                // calcard can parse the second `-` into `tz_hour`.
+                // Use it as fallback day only in the valid day range.
                 date.tz_hour.filter(|d| (1..=31).contains(d))
             });
             if let (Some(y), Some(m), Some(d)) = (date.year, date.month, day) {

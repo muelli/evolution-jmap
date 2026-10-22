@@ -1,0 +1,8 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:X-ABLabel Section Probe
+item1.TEL:+1-555-0199
+item1.X-ABLabel:Direct Line
+item2.EMAIL:team@example.com
+item2.X-ABLabel:Project Alias
+END:VCARD

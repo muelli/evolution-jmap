@@ -20,9 +20,8 @@ fuzz_target!(|data: &[u8]| {
             let fourth_card = jmap_vcard::vcard_to_card(&fourth_vcard)
                 .expect("fourth parse of emitted vCard must succeed");
 
-            if third_vcard == fourth_vcard {
-                assert_eq!(third_card, fourth_card);
-            }
+            assert_eq!(third_vcard, fourth_vcard);
+            assert_eq!(third_card, fourth_card);
         }
     }
 });

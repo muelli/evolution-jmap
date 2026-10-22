@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Calendar methods (`Calendar/get`, `CalendarEvent/get|set|query`,
-//! draft-ietf-jmap-calendars) and calendar seeding helpers.
+//! Calendar methods (`Calendar/get`, `CalendarEvent/get|set|query`).
+//! Include draft-ietf-jmap-calendars handlers and calendar seeding helpers.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,7 +29,7 @@ use crate::state::{AccountState, ServerState};
 /// Deterministic stand-in for "now". The mock has no clock.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
-/// `None` means owner view; foreign callers see only shared calendars or `forbidden`.
+/// `None` means owner view. Foreign callers see shared calendars or `forbidden`.
 pub fn calendar_get(
     state: &mut ServerState,
     arguments: Value,
@@ -88,7 +88,7 @@ fn calendar_rights_for(calendar: &Calendar, principal: &Id) -> Option<CalendarRi
     calendar.share_with.as_ref()?.get(principal).cloned()
 }
 
-/// Owners get calendars unchanged; shared viewers get granted `myRights`.
+/// Owners get calendars unchanged. Shared viewers get granted `myRights`.
 fn visible_calendar(calendar: &Calendar, is_owner: bool, caller: Option<&Id>) -> Option<Calendar> {
     if is_owner {
         return Some(calendar.clone());
@@ -100,7 +100,7 @@ fn visible_calendar(calendar: &Calendar, is_owner: bool, caller: Option<&Id>) ->
     Some(visible)
 }
 
-/// `Calendar/set` (draft §4) has no hierarchy and rejects create `id` or empty `name`.
+/// `Calendar/set` (draft §4) has no hierarchy. It rejects create `id` and empty `name`.
 pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Calendar> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
@@ -110,7 +110,7 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
     let account_id = request.account_id.clone();
     let account = account_mut(state, &account_id)?;
 
-    // Capture pre-update `shareWith` for `ShareNotification` diffs.
+    // Keep pre-update `shareWith` values for `ShareNotification` diffs.
     let old_share_with: BTreeMap<Id, Option<BTreeMap<Id, CalendarRights>>> = request
         .update
         .iter()
@@ -173,7 +173,7 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
         }
     }
 
-    // Optional RFC-violating mode for tests: omit required `id` in created objects.
+    // Use optional RFC-violating test mode: omit required `id` in created objects.
     if id_omitting_collection_create
         && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
     {
@@ -190,7 +190,7 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
 pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
-    // Enforce `maxObjectsInGet`, consistent with other `/get` handlers.
+    // Enforce `maxObjectsInGet` like other `/get` handlers.
     let limit = state.objects_in_get();
     if request
         .ids
@@ -222,7 +222,7 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
             }
         }
     }
-    // Recompute `isOrigin` on each fetch because participant identities can change.
+    // Recompute `isOrigin` on each fetch. Participant identities can change.
     for event in &mut list {
         event.is_origin = Some(crate::scheduling::is_origin(event, &own_addresses));
     }
@@ -235,7 +235,7 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
     })
 }
 
-/// jscalendarbis and draft-ietf-jmap-calendars-28 require `version == "2.0"`.
+/// JSCalendarbis and draft-ietf-jmap-calendars-28 require `version == "2.0"`.
 fn version_is_2_0(event: &CalendarEvent) -> Result<(), SetError> {
     if event.version.as_deref() != Some("2.0") {
         return Err(SetError::new(error::set::INVALID_PROPERTIES).with_properties(["version"]));
@@ -274,7 +274,7 @@ pub fn calendar_event_set(
     let request = request.set;
     let account = account_mut(state, &request.account_id)?;
 
-    // Capture pre-change events for notification recipients and scheduling deltas.
+    // Keep pre-change events for notification recipients and scheduling deltas.
     let before: BTreeMap<Id, CalendarEvent> = request
         .update
         .iter()
@@ -289,9 +289,10 @@ pub fn calendar_event_set(
         })
         .collect();
     let own_addresses = crate::scheduling::own_addresses(account);
-    // Stalwart holds a `uid` once per account and refuses a create that
-    // repeats one ("An event with UID ... already exists"), which is how a
-    // guest's second copy of a delivered meeting is turned away.
+    // Stalwart keeps each `uid` unique per account.
+    // A create that repeats a `uid` fails with
+    // "An event with UID ... already exists".
+    // This rejection blocks a guest's second copy of one delivered meeting.
     let taken: BTreeSet<String> = account
         .calendar_events
         .iter()
@@ -350,7 +351,8 @@ pub fn calendar_event_set(
         |_id, existing| schedulable(existing, &own_addresses, send_scheduling_messages),
     )?;
 
-    // Draft §8 notifies other sharing principals; `actor` (caller or owner) is excluded.
+    // Draft §8 notifies other sharing principals.
+    // Exclude `actor` (caller or owner).
     let actor = caller
         .or(account.current_user_principal_id.as_ref())
         .cloned();
@@ -409,7 +411,7 @@ pub fn calendar_event_set(
         }
     }
 
-    // draft §5.9.2: emit iTIP messages from the applied create, update, and destroy sets.
+    // Draft §5.9.2: emit iTIP messages from applied create, update, and destroy sets.
     if send_scheduling_messages {
         let mut changes = Vec::new();
         for event in response.created.iter().flatten().map(|(_, event)| event) {
@@ -458,7 +460,7 @@ pub fn calendar_event_set(
     Ok(result)
 }
 
-/// `CalendarEvent/parse` (draft §5.7) uses JSON projection for `properties` filtering.
+/// `CalendarEvent/parse` (draft §5.7) uses JSON projection to filter `properties`.
 pub fn calendar_event_parse(
     state: &mut ServerState,
     arguments: Value,
@@ -531,7 +533,7 @@ pub fn calendar_event_query(
     })
 }
 
-/// Mock simplification: compare local `start` textually; correct for `Etc/UTC` test data.
+/// Mock simplification: compare local `start` textually. This is correct for `Etc/UTC` test data.
 fn event_matches(event: &CalendarEvent, filter: &CalendarEventQueryFilter) -> bool {
     if let Some(calendar_id) = &filter.in_calendar
         && !event
@@ -575,7 +577,7 @@ fn event_matches(event: &CalendarEvent, filter: &CalendarEventQueryFilter) -> bo
     true
 }
 
-/// Record draft §8 notifications for owners and shared principals, excluding `actor`.
+/// Record draft §8 notifications for owners and shared principals. Exclude `actor`.
 fn record_event_change_notifications(
     account: &mut AccountState,
     event_id: &Id,
@@ -796,7 +798,7 @@ pub fn calendar_event_notification_set(
 }
 
 impl AccountState {
-    /// Seed a draft-ietf-jmap-calendars-28 `ParticipantIdentity` without bumping state.
+    /// Seed a draft-ietf-jmap-calendars-28 `ParticipantIdentity` without a state bump.
     pub fn seed_participant_identity(
         &mut self,
         name: &str,
@@ -813,7 +815,7 @@ impl AccountState {
         id
     }
 
-    /// Seed a calendar; returns its id. Does not bump state.
+    /// Seed a calendar and return its id. Do not bump state.
     pub fn seed_calendar(&mut self, name: &str, is_default: bool) -> Id {
         let id = self.calendars.alloc_id();
         let calendar = Calendar {
@@ -828,7 +830,7 @@ impl AccountState {
     }
 }
 
-/// `ParticipantIdentity/get` (draft-ietf-jmap-calendars-28 §3.1), where `ids: null` returns all identities.
+/// `ParticipantIdentity/get` (draft-ietf-jmap-calendars-28 §3.1): `ids: null` returns all identities.
 pub fn participant_identity_get(
     state: &mut ServerState,
     arguments: Value,
@@ -863,7 +865,7 @@ pub fn participant_identity_get(
     })
 }
 
-/// `ParticipantIdentity/set` keeps `id` and `isDefault` server-set values.
+/// `ParticipantIdentity/set` keeps server-set `id` and `isDefault` values.
 pub fn participant_identity_set(
     state: &mut ServerState,
     arguments: Value,
@@ -1001,7 +1003,7 @@ pub fn participant_identity_set(
         }
     });
 
-    // draft-ietf-jmap-calendars-28 §3.2: unresolved ids are ignored, not errors.
+    // Draft-ietf-jmap-calendars-28 §3.2: ignore unresolved ids.
     if let Some(reference) = on_success_set_is_default {
         let id = match reference.strip_prefix('#') {
             Some(creation_id) => created_here.get(creation_id).cloned(),

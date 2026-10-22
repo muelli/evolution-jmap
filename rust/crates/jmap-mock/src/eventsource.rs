@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `GET /eventsource` push stream endpoint (RFC 8620 §7.3).
+//! Handle the `GET /eventsource` push endpoint (RFC 8620 section 7.3).
 //!
-//! Each subscriber runs on a dedicated thread, and chunked writes go through
-//! `Request::into_writer` so updates flush before EOF.
+//! Run one dedicated thread for each subscriber.
+//! Write chunked data through `Request::into_writer` so each update flushes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -16,9 +16,9 @@ use jmap_proto::push::StateChange;
 
 use crate::state::ServerState;
 
-/// Parsed `/eventsource` query parameters used by this mock.
+/// Parsed query parameters for `/eventsource`.
 struct EventSourceParams {
-    /// `None` means no type filter.
+    /// No type filter when this field is `None`.
     types: Option<BTreeSet<String>>,
     close_after_state: bool,
     ping_interval: Option<Duration>,
@@ -50,7 +50,7 @@ fn parse_params(query: &str) -> EventSourceParams {
     }
 }
 
-/// Subscribe this request and stream from a dedicated thread.
+/// Subscribe this request and stream events on one dedicated thread.
 pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex<ServerState>) {
     let params = parse_params(query);
     let receiver = state
@@ -77,7 +77,7 @@ pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex
     });
 }
 
-/// Stream `state` and optional `ping` events as flushed HTTP chunks.
+/// Stream `state` and optional `ping` events as flushed chunks.
 fn stream_events(
     writer: &mut dyn Write,
     receiver: &Receiver<Vec<u8>>,
@@ -111,7 +111,7 @@ fn stream_events(
     }
 }
 
-/// Frame `data` as one HTTP chunk and flush it.
+/// Write one HTTP chunk from `data`, then flush.
 fn write_chunk(writer: &mut dyn Write, data: &[u8]) -> std::io::Result<()> {
     write!(writer, "{:x}\r\n", data.len())?;
     writer.write_all(data)?;
@@ -125,13 +125,14 @@ fn end_chunked_body(writer: &mut dyn Write) -> std::io::Result<()> {
     writer.flush()
 }
 
-/// Encode one `StateChange` as `event: state` plus JSON `data`, without `id:` resume data.
+/// Encode one `StateChange` as `event: state` with JSON `data`.
+/// Skip the `id` resume field.
 pub fn format_state_event(change: &StateChange) -> Vec<u8> {
     let data = serde_json::to_string(change).expect("StateChange serializes");
     format!("event: state\ndata: {data}\n\n").into_bytes()
 }
 
-/// Encode a `ping` event with its interval in seconds.
+/// Encode a `ping` event with the interval in seconds.
 fn format_ping_event(interval: Duration) -> Vec<u8> {
     format!(
         "event: ping\ndata: {{\"interval\":{}}}\n\n",

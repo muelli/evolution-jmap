@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! In-memory server state: per-account typed object stores with id
-//! allocation, per-type state counters, and an append-only changes log.
+//! In-memory state for the mock server.
+//! Store typed objects per account and allocate ids.
+//! Track type counters and keep an append-only change log.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::Sender;
@@ -10,14 +11,14 @@ use std::sync::mpsc::Sender;
 use jmap_proto::push::StateChange;
 use jmap_proto::{Id, State};
 
-/// Snapshot of [`ServerState::type_state_snapshot`]: per-account type counters.
+/// Per-account type counters from [`ServerState::type_state_snapshot`].
 pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 
-/// Global mock-server state for fixture seeding and assertions.
+/// Mock server state for fixture seeding and assertions.
 pub struct ServerState {
     pub session_state: u64,
     pub accounts: BTreeMap<Id, AccountState>,
-    /// Method names answered, in call order, for request-shape assertions.
+    /// Method names in call order for request-shape assertions.
     pub method_calls: Vec<String>,
     /// Authenticated API requests dispatched to method handlers.
     pub api_requests: usize,
@@ -27,13 +28,13 @@ pub struct ServerState {
     pub omitted_capabilities: BTreeSet<String>,
     /// Whether `primaryAccounts` is omitted from the session document.
     pub omit_primary_accounts: bool,
-    /// Optional `maxCallsInRequest` at `/api`; `None` means unlimited.
+    /// Optional `maxCallsInRequest` at `/api`. `None` means unlimited.
     pub calls_in_request: Option<u64>,
-    /// Optional max ids per `/changes` response. `None` returns all ids.
+    /// Optional max ids in each `/changes` response. `None` returns all ids.
     pub changes_page_size: Option<u64>,
-    /// Whether invalid `/changes` `sinceState` uses Stalwart-style `invalidArguments`.
+    /// Use Stalwart-style `invalidArguments` for invalid `/changes` `sinceState`.
     pub stalwart_shaped_unrecognized_changes_state: bool,
-    /// Optional `Email/get` ids limit; `None` uses [`crate::DEFAULT_OBJECTS_IN_GET`].
+    /// Optional `Email/get` id limit. `None` uses [`crate::DEFAULT_OBJECTS_IN_GET`].
     pub objects_in_get: Option<u64>,
     /// Optional max ids per `Email/query` page. `None` returns all ids.
     pub query_page_size: Option<u64>,
@@ -43,30 +44,31 @@ pub struct ServerState {
     pub size_request: Option<u64>,
     /// Optional `maxSizeUpload` in bytes; `None` means unlimited.
     pub size_upload: Option<u64>,
-    /// Whether `/.well-known/jmap` redirects to `/jmap/session` for auth-sensitive redirect tests.
+    /// Route `/.well-known/jmap` to `/jmap/session` in auth redirect tests.
     pub session_via_redirect: bool,
-    /// Optional origin override for session `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
+    /// Optional origin override for `apiUrl`, `downloadUrl`, `uploadUrl`, and `eventSourceUrl`.
     pub advertise_origin: Option<String>,
-    /// Optional redirect origin for `GET /download/...`. `None` serves blobs.
+    /// Optional redirect origin for `GET /download/...`.
+    /// `None` serves blobs.
     pub download_via_redirect_to: Option<String>,
-    /// Whether `GET /download/...` with `Accept: application/json` is rejected as `406`.
+    /// Whether `GET /download/...` rejects `Accept: application/json` with `406`.
     pub reject_download_accept_json: bool,
     /// Whether `EmailSubmission/set` create omits echoed `identityId` and `emailId`.
     pub terse_submission_create: bool,
-    /// Whether `ContactCard/set` create returns only `id` in `created`.
+    /// Whether `ContactCard/set` create keeps only `id` in `created`.
     pub terse_contact_create: bool,
-    /// Optional largest `ContactCard` a create may file, in octets of its
-    /// JSON; a bigger one is refused as `tooLarge` (RFC 8620 section 5.3).
+    /// Optional largest `ContactCard` create payload in JSON octets.
+    /// Reject a larger payload as `tooLarge` (RFC 8620 section 5.3).
     pub max_contact_size: Option<u64>,
     /// Whether new `AddressBook` and `Calendar` objects default to `isSubscribed: false`.
     pub new_collections_default_unsubscribed: bool,
     /// Whether `CalendarEvent/set` create returns only `id` in `created`.
     pub terse_calendar_event_create: bool,
-    /// Whether this server does not schedule and, as RFC 8620 section 3.9
-    /// asks, refuses `CalendarEvent/set`'s `sendSchedulingMessages` as an
-    /// unknown argument.
+    /// Disable scheduling support on this server when true.
+    /// Reject `sendSchedulingMessages` in `CalendarEvent/set` as unknown.
+    /// See RFC 8620 section 3.9.
     pub without_scheduling: bool,
-    /// Whether collection create omits echoed `name` while keeping server-computed fields.
+    /// Whether collection create omits echoed `name` and keeps the server value.
     pub terse_collection_create: bool,
     /// Whether collection create omits `id` to model an RFC-violating server.
     pub id_omitting_collection_create: bool,
@@ -74,9 +76,10 @@ pub struct ServerState {
     pub reject_collection_create: bool,
     /// Optional `maxDelayedSend` value in the submission capability.
     pub max_delayed_send: Option<u64>,
-    /// Whether the Cyrus snooze extension is advertised and `Email.snoozed` is accepted.
+    /// Advertise the Cyrus snooze extension when true.
+    /// In this mode, the server accepts `Email.snoozed`.
     pub snooze_extension: bool,
-    /// Connected `/eventsource` subscribers for push delivery.
+    /// Connected `/eventsource` subscribers for state-change delivery.
     pub event_source: EventSourceHub,
 }
 
@@ -135,7 +138,7 @@ impl ServerState {
         State::new(self.session_state.to_string())
     }
 
-    /// Current per-account state counters for pushed types and `/changes`.
+    /// Per-account state counters for pushed types and `/changes`.
     pub fn type_state_snapshot(&self) -> TypeStateSnapshot {
         self.accounts
             .iter()
@@ -166,7 +169,7 @@ impl ServerState {
             .collect()
     }
 
-    /// Effective `maxObjectsInGet` shared by session advertisement and request enforcement.
+    /// Effective `maxObjectsInGet` for session output and request checks.
     pub fn objects_in_get(&self) -> u64 {
         self.objects_in_get.unwrap_or(crate::DEFAULT_OBJECTS_IN_GET)
     }
@@ -178,7 +181,7 @@ impl Default for ServerState {
     }
 }
 
-/// One `/eventsource` subscriber and its optional `types` filter.
+/// One `/eventsource` subscriber with an optional `types` filter.
 struct Subscriber {
     sender: Sender<Vec<u8>>,
     types: Option<BTreeSet<String>>,
@@ -195,7 +198,8 @@ impl EventSourceHub {
         Self::default()
     }
 
-    /// Registers a subscriber and returns its SSE byte receiver; `None` means all types.
+    /// Register one subscriber and return the SSE byte receiver.
+    /// `None` means the subscriber listens to all types.
     pub fn subscribe(
         &mut self,
         types: Option<BTreeSet<String>>,
@@ -205,8 +209,8 @@ impl EventSourceHub {
         receiver
     }
 
-    /// Send `change` to each subscriber after optional type filtering.
-    /// Drop disconnected subscribers, but keep connected subscribers with no matching type.
+    /// Send `change` after optional type filtering.
+    /// Drop disconnected subscribers and keep connected non-matches.
     pub fn broadcast(&mut self, change: &StateChange) {
         self.subscribers.retain(
             |subscriber| match filter_for(change, subscriber.types.as_ref()) {
@@ -219,15 +223,15 @@ impl EventSourceHub {
         );
     }
 
-    /// How many `/eventsource` clients are connected for
-    /// [`crate::MockServer::wait_for_event_source_subscriber`].
+    /// Return the number of connected `/eventsource` clients.
+    /// [`crate::MockServer::wait_for_event_source_subscriber`] reads this value.
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.len()
     }
 }
 
-/// Return `change` narrowed to `types`; `None` keeps all types.
-/// Returns `None` when no account has any matching type.
+/// Return `change` narrowed to `types`. `None` keeps all types.
+/// Return `None` when no account has a matching type.
 fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<StateChange> {
     let Some(types) = types else {
         return Some(change.clone());
@@ -247,26 +251,26 @@ fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<
     (!changed.is_empty()).then(|| StateChange::new(changed))
 }
 
-/// One account's data.
+/// Data for one account.
 pub struct AccountState {
     pub name: String,
     pub mailboxes: Store<jmap_proto::mail::Mailbox>,
     pub emails: Store<jmap_proto::mail::Email>,
-    /// `Thread` objects (RFC 8621 §3), kept in lockstep with `emails`.
+    /// `Thread` objects (RFC 8621 §3), updated with `emails`.
     pub threads: Store<jmap_proto::mail::Thread>,
     pub identities: Store<jmap_proto::mail::Identity>,
     pub submissions: Store<jmap_proto::mail::EmailSubmission>,
     /// `VacationResponse` singleton (RFC 8621 §8.1), seeded as `"singleton"`.
     pub vacation_response: Store<jmap_proto::mail::VacationResponse>,
-    /// `Quota` objects (RFC 9425 §2), seeded once and read-only to clients.
+    /// `Quota` objects (RFC 9425 §2), seeded once and read only for clients.
     pub quotas: Store<jmap_proto::quota::Quota>,
-    /// `SieveScript` objects (RFC 9661 §2.1), empty until tests create them.
+    /// `SieveScript` objects (RFC 9661 §2.1), seeded empty.
     pub sieve_scripts: Store<jmap_proto::sieve::SieveScript>,
-    /// Accepted `EmailSubmission` records, for test assertions.
+    /// Accepted `EmailSubmission` records for test assertions.
     pub outbox: Vec<RecordedSubmission>,
-    /// iTIP scheduling messages from `CalendarEvent/set`, recorded for assertions.
+    /// iTIP scheduling messages from `CalendarEvent/set`, stored for assertions.
     pub scheduling_outbox: Vec<RecordedSchedulingMessage>,
-    /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3), seeded by tests.
+    /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3), seeded in tests.
     pub participant_identities: Store<jmap_proto::calendars::ParticipantIdentity>,
     pub address_books: Store<jmap_proto::contacts::AddressBook>,
     pub contact_cards: Store<jmap_proto::contacts::ContactCard>,
@@ -274,14 +278,16 @@ pub struct AccountState {
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
     pub principals: Store<jmap_proto::principals::Principal>,
     /// `ShareNotification` records (RFC 9670 §4), keyed by recipient id.
-    /// Stored per account because this mock maps bearer tokens into one account.
+    /// Keep this per account because this mock maps one bearer token to one account.
     pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
-    /// `CalendarEventNotification` records keyed by recipient id in the same single-account model.
+    /// `CalendarEventNotification` records keyed by recipient id.
+    /// This store uses the same one-account mapping model.
     pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
-    /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5); `None` omits it.
+    /// Principal id reported as `currentUserPrincipalId` (RFC 9670 §2.5).
+    /// `None` omits it.
     pub current_user_principal_id: Option<Id>,
-    /// The session's `isPersonal` for this account (RFC 8620 §1.6.2). `false`
-    /// makes it an account shared with the login, as RFC 9670 sharing does.
+    /// Session `isPersonal` value for this account (RFC 8620 §1.6.2).
+    /// `false` marks an account shared with the login (RFC 9670).
     pub is_personal: bool,
     pub blobs: BTreeMap<Id, Blob>,
     next_blob_id: u64,
@@ -359,7 +365,7 @@ pub struct Blob {
     pub data: Vec<u8>,
 }
 
-/// A submission the mock accepted for "delivery".
+/// A submission the mock accepted for delivery.
 pub struct RecordedSubmission {
     pub id: Id,
     pub email_id: Id,
@@ -384,7 +390,7 @@ pub struct RecordedSchedulingMessage {
     pub ical: String,
 }
 
-/// What happened to an object, for the changes log.
+/// One object change kind for the changes log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeKind {
     Created,
@@ -392,7 +398,7 @@ pub enum ChangeKind {
     Destroyed,
 }
 
-/// One changes-log entry: object `id` changed when state reached `state`.
+/// One change-log entry: object `id` changed at state `state`.
 #[derive(Debug, Clone)]
 pub struct Change {
     pub state: u64,
@@ -400,7 +406,7 @@ pub struct Change {
     pub id: Id,
 }
 
-/// Typed object store with monotonic state and debug-friendly prefixed ids.
+/// Typed object store with monotonic state and prefixed ids.
 pub struct Store<T> {
     prefix: &'static str,
     next_id: u64,
@@ -465,12 +471,13 @@ impl<T> Store<T> {
         id
     }
 
-    /// Insert under a caller-chosen id without touching state.
+    /// Insert under a caller-chosen id without a state bump.
     pub fn seed_with_id(&mut self, id: Id, value: T) {
         self.objects.insert(id, value);
     }
 
-    /// Apply staged mutations as one state transition and log one state bump.
+    /// Apply staged mutations as one state transition.
+    /// Record one state bump in the change log.
     pub fn transaction<R>(&mut self, f: impl FnOnce(&mut Transaction<'_, T>) -> R) -> R {
         let mut transaction = Transaction {
             store: self,
@@ -490,7 +497,7 @@ impl<T> Store<T> {
         result
     }
 
-    /// All changes since the given state counter value.
+    /// All changes after the given state counter value.
     pub fn changes_since(&self, since: u64) -> impl Iterator<Item = &Change> {
         self.changes
             .iter()

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structure-aware property tests for JSContact and vCard 3.0 mapping.
-//! Covers panic-free conversion and round-trip fixed-point stability.
+//! Property tests for JSContact to vCard 3.0 mapping.
+//! Verify panic safety and fixed-point stability.
 
 use std::collections::BTreeMap;
 
@@ -725,7 +725,7 @@ prop_compose! {
             Just("X-SIGNAL".to_string()),
             Just("X-TELEGRAM".to_string()),
             Just("X-CUSTOM".to_string()),
-            // vCard 4.0 names that vCard 3.0 treats as unknown properties.
+            // Include vCard 4.0 property names. vCard 3.0 keeps them as unknown properties.
             Just("IMPP".to_string()),
             Just("RELATED".to_string()),
             Just("ANNIVERSARY".to_string()),
@@ -790,7 +790,7 @@ prop_compose! {
                 Just(";ALTID=group1;LANGUAGE=ja".to_string()),
                 Just(";X-CUSTOM-PARAM=val1".to_string()),
                 Just(";X-VENDOR-STATUS=ACTIVE".to_string()),
-                // vCard 4.0 parameter forms seen by vCard 3.0 parsers.
+                // Include vCard 4.0 parameter forms. vCard 3.0 parsers accept these forms.
                 Just(";MEDIATYPE=image/png".to_string()),
                 Just(";MEDIATYPE=image/jpeg".to_string()),
                 Just(";MEDIATYPE=image/webp".to_string()),
@@ -810,7 +810,7 @@ prop_compose! {
                 Just(";PREF=1".to_string()),
                 Just(";PREF=2".to_string()),
                 Just(";PREF=10".to_string()),
-                // vCard 2.1 bare parameter tokens from older producers.
+                // Include bare vCard 2.1 parameter tokens from legacy clients.
                 Just(";WORK".to_string()),
                 Just(";HOME".to_string()),
                 Just(";CELL".to_string()),
@@ -1144,7 +1144,7 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
     Ok(())
 }
 
-// Empty stated full name with only `given` must stay stable.
+// Keep fixed-point stability when `full` is empty and only `given` exists.
 #[test]
 fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
     let card = ContactCard {
@@ -1168,7 +1168,7 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
-// Empty organization names with units keep the leading slot semicolon.
+// Keep the leading slot semicolon when the name is empty and units exist.
 #[test]
 fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first_emit() {
     let mut organizations = BTreeMap::new();
@@ -1233,7 +1233,7 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
     assert_eq!(parsed1.organizations, None);
 }
 
-// Regression seed keeps ADR lines at or below 75 octets.
+// Use this regression seed so `ADR` lines stay at 75 octets.
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
@@ -1316,14 +1316,14 @@ proptest! {
     fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
         let vcard = card_to_vcard(&card);
         for line in vcard.split("\r\n") {
-            // RFC 2426 §2.6: physical lines stay within 75 octets.
+            // RFC 2426 §2.6 limits each physical line to 75 octets.
             prop_assert!(
                 line.len() <= 75,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
                 line.len(),
                 line
             );
-            // Folding preserves UTF-8 code point boundaries.
+            // Keep UTF-8 code point boundaries intact during line folding.
             prop_assert!(
                 std::str::from_utf8(line.as_bytes()).is_ok(),
                 "Invalid UTF-8 sequence in line slice: {:?}",
@@ -1502,7 +1502,22 @@ proptest! {
             ..ContactCard::default()
         };
 
+        let uri_is_supported_remote = uri.starts_with("http://") || uri.starts_with("https://");
         let vcard1 = card_to_vcard(&card);
+        if is_uri && !uri_is_supported_remote {
+            prop_assert!(!vcard1.contains("PHOTO;"));
+            prop_assert!(!vcard1.contains(&uri));
+
+            let parsed1 = vcard_to_card(&vcard1).expect("parse card without emitted photo");
+            prop_assert!(parsed1.media.is_none());
+
+            let vcard2 = card_to_vcard(&parsed1);
+            let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip");
+            let vcard3 = card_to_vcard(&parsed2);
+            prop_assert_eq!(vcard2, vcard3, "Photo roundtrip must reach fixed point");
+            return Ok(());
+        }
+
         prop_assert!(vcard1.contains("PHOTO;"));
         if is_uri {
             prop_assert!(vcard1.contains("VALUE=uri"));

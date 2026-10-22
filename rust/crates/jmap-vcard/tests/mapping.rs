@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JSContact `ContactCard` ↔ vCard 3.0, the minimal property set the
-//! address book backend needs: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
+//! JSContact `ContactCard` ↔ vCard 3.0 mapping for the minimal property set.
+//! The address book backend needs UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL,
 //! ORG, TITLE, ROLE, NOTE, BDAY, URL, CALADRURI, CALURI, FBURL, PHOTO,
-//! CATEGORIES and the
-//! `X-` lines EDS keeps instant-messaging handles and the spouse on.
+//! CATEGORIES, and `X-` lines for EDS instant-messaging handles and spouse data.
 
 use std::collections::BTreeMap;
 
@@ -59,7 +58,7 @@ fn emits_a_vcard_30_envelope() {
 
 #[test]
 fn uid_is_the_jmap_id_and_the_jscontact_uid_is_kept_aside() {
-    // EDS keys and returns contacts by vCard UID, so UID must carry the JMAP id.
+    // EDS indexes and returns contacts by vCard UID. UID must carry the JMAP id.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "UID:"), "UID:C1");
     assert_eq!(
@@ -85,15 +84,46 @@ fn a_card_without_a_jscontact_uid_omits_the_extra_property() {
     assert_eq!(line(&vcard, "UID:"), "UID:C9");
     assert!(!vcard.contains("X-JMAP-UID"), "{vcard}");
 
-    // Reading it back, the JMAP id is the only identifier there is.
+    // After readback, the JMAP id is the only identifier.
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.id.as_ref().unwrap().as_str(), "C9");
     assert_eq!(back.uid, None);
 }
 
 #[test]
+fn uid_parsing_is_case_insensitive_and_stabilizes_duplicate_uid_lines() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "uid:server-id-primary\r\n",
+        "UID:server-id-secondary\r\n",
+        "x-jmap-uid:urn:uuid:8e96c46a-f5d2-42ea-a43d-492a7a2cf5aa\r\n",
+        "FN:Vera\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse mixed-case duplicate UID vcard");
+    assert_eq!(card.id.as_ref().unwrap().as_str(), "server-id-primary");
+    assert_eq!(
+        card.uid.as_deref(),
+        Some("urn:uuid:8e96c46a-f5d2-42ea-a43d-492a7a2cf5aa")
+    );
+
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("UID:server-id-primary\r\n"));
+    assert!(!emitted.contains("UID:server-id-secondary\r\n"));
+    assert!(emitted.contains("X-JMAP-UID:urn:uuid:8e96c46a-f5d2-42ea-a43d-492a7a2cf5aa\r\n"));
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized UID vcard");
+    assert_eq!(reparsed.id.as_ref().unwrap().as_str(), "server-id-primary");
+    assert_eq!(
+        reparsed.uid.as_deref(),
+        Some("urn:uuid:8e96c46a-f5d2-42ea-a43d-492a7a2cf5aa")
+    );
+}
+
+#[test]
 fn a_vcard_from_evolution_has_no_jmap_id_yet() {
-    // Evolution invents this UID locally, so callers must not treat it as a JMAP id.
+    // Evolution invents this UID locally. Callers must not treat it as a JMAP id.
     let vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:pas-id-6890AB\r\nFN:Vera\r\nEND:VCARD\r\n";
     let card = vcard_to_card(vcard).expect("parse");
     assert_eq!(card.id.as_ref().unwrap().as_str(), "pas-id-6890AB");
@@ -127,7 +157,7 @@ fn maps_name_components_onto_the_structured_n_property() {
 
 #[test]
 fn derives_the_missing_half_of_the_name() {
-    // No `full`: derive it from components in reading order for display.
+    // If `full` is absent, derive it from components in display order.
     let components = ContactCard {
         name: Some(Name {
             components: Some(vec![
@@ -143,7 +173,7 @@ fn derives_the_missing_half_of_the_name() {
         "FN:Vera Oldenburg"
     );
 
-    // No N in the vCard: keep `components` unset instead of guessing.
+    // If the vCard has no N value, keep `components` unset instead of guessing.
     let card = vcard_to_card("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera Oldenburg\r\nEND:VCARD\r\n")
         .expect("parse");
     let name = card.name.unwrap();
@@ -193,7 +223,7 @@ fn maps_phones_with_their_features() {
 
 #[test]
 fn keys_survive_the_round_trip_so_patches_address_the_right_entry() {
-    // JSContact patches address map keys, so roundtrip keeps them stable.
+    // JSContact patches address map keys. Roundtrip must keep them stable.
     let card = fixture_card();
     let back = vcard_to_card(&card_to_vcard(&card)).expect("parse");
     assert_eq!(
@@ -204,7 +234,7 @@ fn keys_survive_the_round_trip_so_patches_address_the_right_entry() {
 
 #[test]
 fn invents_keys_for_entries_that_have_none() {
-    // A vCard straight from Evolution carries no X-JMAP-KEY.
+    // A vCard from Evolution carries no X-JMAP-KEY line.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "EMAIL;TYPE=HOME:vera@example.org\r\n",
@@ -224,7 +254,7 @@ fn invents_keys_for_entries_that_have_none() {
             .values()
             .any(|e| e.contexts == Some(json!({"private": true})))
     );
-    // No TYPE at all means no contexts, not an empty object.
+    // No TYPE means no context, not an empty context object.
     assert!(emails.values().any(|e| e.contexts.is_none()));
 
     let phone = card.phones.expect("phones").into_values().next().unwrap();
@@ -595,7 +625,8 @@ fn multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip() {
 
 #[test]
 fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully() {
-    // ORG component order tracks EDS slots: org name, department, office, then extra units.
+    // Keep ORG component order to match EDS slots.
+    // Order is organization name, department, office, then extra units.
     let card = ContactCard {
         organizations: Some(
             [(
@@ -630,7 +661,7 @@ fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.organizations, card.organizations);
 
-    // Unkeyed ORG input still keeps all four components on generated key `o1`.
+    // Keep unkeyed ORG components under generated key `o1`.
     let unkeyed_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG:Acme Ltd;Research;Optics;Lenses\r\n",
@@ -655,7 +686,7 @@ fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully
 
 #[test]
 fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_roundtrip() {
-    // 1. Deep 6-component hierarchy: OrgName + 5 units.
+    // Keep a deep hierarchy with one name and five units.
     let deep_card = ContactCard {
         organizations: Some(
             [(
@@ -684,7 +715,8 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
     let deep_back = vcard_to_card(&deep_vcard).expect("parse");
     assert_eq!(deep_back.organizations, deep_card.organizations);
 
-    // 2. Nameless organisation with 4 units: leading semicolon preserves unit positions.
+    // Keep unit positions for nameless organizations.
+    // The writer uses a leading semicolon to hold the empty name slot.
     let nameless_card = ContactCard {
         organizations: Some(
             [(
@@ -712,7 +744,8 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
     let nameless_back = vcard_to_card(&nameless_vcard).expect("parse");
     assert_eq!(nameless_back.organizations, nameless_card.organizations);
 
-    // EDS may clear the office slot in place. Readback drops empty units and keeps position order stable.
+    // EDS can clear the office slot in place.
+    // Readback drops empty units and keeps stable unit order.
     let cleared_office_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG;X-JMAP-KEY=o1:Acme Ltd;Research;;Lenses\r\n",
@@ -854,7 +887,8 @@ fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
     let back = vcard_to_card(&vcard).expect("parse");
     assert_eq!(back.organizations, card.organizations);
 
-    // Expected titles in roundtrip: t1, t2, r1, r2 with canonical kind (None for default title).
+    // Expect four title keys after roundtrip: t1, t2, r1, r2.
+    // Canonical kind is None for default titles.
     let expected_titles = [
         (
             "t1".to_owned(),
@@ -969,8 +1003,7 @@ fn maps_addresses_onto_the_structured_adr_property() {
 
 #[test]
 fn maps_every_field_the_adr_value_has() {
-    // A vCard straight from Evolution carries no X-JMAP-KEY, and fills in
-    // fields the fixture leaves empty.
+    // Evolution omits X-JMAP-KEY and fills empty ADR slots.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ADR;TYPE=HOME:PO Box 12;Apt 4;Hauptstraße 1;Berlin;Brandenburg;10115;Germany\r\n",
@@ -1001,7 +1034,7 @@ fn maps_every_field_the_adr_value_has() {
 
 #[test]
 fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
-    // Kinds like floor and room have no ADR field in vCard 3.0, so they are not emitted.
+    // vCard 3.0 has no ADR field for floor or room.
     let card = one_address(
         "a1",
         Address {
@@ -1059,7 +1092,7 @@ fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
     let vcard = card_to_vcard(&german);
     assert_eq!(line(&vcard, "ADR"), "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1;;;;");
 
-    // Readback keeps one `name` component because `Hauptstraße 1` is locale-ambiguous.
+    // Readback keeps one `name` component. `Hauptstraße 1` is locale-ambiguous.
     let back = vcard_to_card(&vcard).expect("parse");
     let addresses = back.addresses.expect("addresses");
     assert_eq!(
@@ -1070,7 +1103,7 @@ fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
 
 #[test]
 fn an_address_that_states_only_a_house_number_is_on_the_line() {
-    // A standalone house number is still address data, so it gets an ADR line.
+    // A standalone house number is valid address data, so emit ADR.
     let card = one_address(
         "a1",
         Address {
@@ -1258,11 +1291,11 @@ fn multiple_addresses_with_different_types_and_labels_pair_accurately() {
     assert!(vcard.contains("ADR;X-JMAP-KEY=a-home;TYPE=HOME:"));
     assert!(vcard.contains("LABEL;X-JMAP-KEY=a-home;TYPE=HOME:"));
 
-    // Roundtrip directly on the emitted vCard
+    // Roundtrip the emitted vCard directly.
     let roundtrip = vcard_to_card(&vcard).expect("parse emitted");
     assert_eq!(roundtrip.addresses, card.addresses);
 
-    // And simulate EDS where LABEL lines have TYPE but no X-JMAP-KEY
+    // Simulate EDS with LABEL lines that keep TYPE but drop X-JMAP-KEY.
     let eds_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ADR;X-JMAP-KEY=a-work;TYPE=WORK:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
@@ -1331,9 +1364,9 @@ fn a_phone_at_home_and_at_work_states_one_slot_rather_than_both() {
         ..ContactCard::default()
     };
 
-    // One feature is stated here anyway, so the feature `TYPE` is the same
-    // either way; `a_number_that_is_a_voice_line_and_a_fax_states_one_feature`
-    // is where the feature side of the narrowing is pinned.
+    // This case states one feature either way.
+    // The test `a_number_that_is_a_voice_line_and_a_fax_states_one_feature`
+    // already pins feature narrowing.
     assert_eq!(
         line(&card_to_vcard(&card), "TEL"),
         "TEL;X-JMAP-KEY=p1;TYPE=HOME,VOICE:+49 30 111"
@@ -1361,10 +1394,10 @@ fn phone_line(contexts: Option<Value>, features: Option<Value>) -> String {
 
 #[test]
 fn a_number_that_is_a_voice_line_and_a_fax_states_one_feature() {
-    // `TEL;TYPE=VOICE,FAX` reaches *no* field of libebook-contacts 3.52 at
-    // all — the number is simply not in the contact editor — and with a
-    // context it reaches two that overwrite each other. See `eds-sys`'
-    // `a_line_wearing_several_feature_types_reaches_two_fields_or_none`.
+    // `TEL;TYPE=VOICE,FAX` maps to no field in libebook-contacts 3.52.
+    // The contact editor then shows no number.
+    // With context, EDS maps it to two fields that overwrite each other.
+    // See `eds-sys` `a_line_wearing_several_feature_types_reaches_two_fields_or_none`.
     assert_eq!(
         phone_line(None, Some(json!({"voice": true, "fax": true}))),
         "TEL;X-JMAP-KEY=p1;TYPE=FAX:+49 30 111"
@@ -1380,12 +1413,12 @@ fn a_number_that_is_a_voice_line_and_a_fax_states_one_feature() {
 
 #[test]
 fn a_mobile_that_is_also_a_pager_states_the_mobile() {
-    // The one pair EDS itself files into two fields with no context needed.
+    // EDS maps this pair to two fields without context.
     assert_eq!(
         phone_line(None, Some(json!({"mobile": true, "pager": true}))),
         "TEL;X-JMAP-KEY=p1;TYPE=CELL:+49 30 111"
     );
-    // A mobile outranks the unmarked `voice` and the fax alike.
+    // A mobile outranks unmarked `voice` and `fax`.
     assert_eq!(
         phone_line(
             None,
@@ -1397,14 +1430,14 @@ fn a_mobile_that_is_also_a_pager_states_the_mobile() {
 
 #[test]
 fn a_video_number_that_is_also_a_voice_line_states_the_voice_line() {
-    // `VIDEO` is the one feature no EDS field matches, so it can never be the
-    // slot while another feature is there to be stated.
+    // EDS has no field for `VIDEO`.
+    // When another feature is present, write the mapped feature slot.
     assert_eq!(
         phone_line(None, Some(json!({"voice": true, "video": true}))),
         "TEL;X-JMAP-KEY=p1;TYPE=VOICE:+49 30 111"
     );
-    // On its own it is still written — dropping it would say the number is a
-    // voice line, which the card never claimed.
+    // When `VIDEO` is alone, keep it on write.
+    // Dropping it would wrongly claim a voice line.
     assert_eq!(
         phone_line(None, Some(json!({"video": true}))),
         "TEL;X-JMAP-KEY=p1;TYPE=VIDEO:+49 30 111"
@@ -1413,8 +1446,8 @@ fn a_video_number_that_is_also_a_voice_line_states_the_voice_line() {
 
 #[test]
 fn a_line_with_several_features_is_still_read_as_all_of_them() {
-    // Narrowing is about what *we* write. A card that arrives from elsewhere
-    // saying the number is both keeps saying so.
+    // Narrowing applies only to writer output.
+    // Reader input that states both features keeps both.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "TEL;X-JMAP-KEY=p1;TYPE=WORK,VOICE,FAX:+49 30 111\r\n",
@@ -1443,10 +1476,10 @@ fn an_email_at_home_and_at_work_still_states_both() {
         ..ContactCard::default()
     };
 
-    // EDS files an `EMAIL` line by its *position* — `E_CONTACT_EMAIL_1` to
-    // `_4` — rather than by its `TYPE`, so a line wearing both contexts
-    // reaches one field rather than two and there is nothing to protect the
-    // user from. Stating both is what lets the save read either back.
+    // EDS files an `EMAIL` line by position: `E_CONTACT_EMAIL_1` to `_4`.
+    // It does not file by `TYPE`.
+    // A line with both contexts reaches one field, not two.
+    // State both contexts so save can read either context back.
     assert_eq!(
         line(&card_to_vcard(&card), "EMAIL"),
         "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,HOME:vera@example.com"
@@ -1509,9 +1542,9 @@ fn one_note(key: &str, note: &str) -> ContactCard {
 
 #[test]
 fn maps_notes_onto_note_lines() {
-    // RFC 9553 §2.8.3 keys the notes like every other JSContact map; RFC
-    // 2426 §3.6.2's NOTE is plain text, so the key rides in X-JMAP-KEY as it
-    // does on an EMAIL.
+    // RFC 9553 §2.8.3 keys notes like other JSContact maps.
+    // RFC 2426 §3.6.2 defines NOTE as plain text.
+    // Store the key in X-JMAP-KEY as for EMAIL.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "NOTE"), "NOTE;X-JMAP-KEY=n1:met at FOSDEM");
 
@@ -1523,9 +1556,8 @@ fn maps_notes_onto_note_lines() {
 
 #[test]
 fn a_note_keeps_the_line_breaks_and_separators_it_was_written_with() {
-    // A note is the one mapped property that routinely holds prose, so the
-    // characters vCard gives structural meaning to are exactly the ones a
-    // user types into it.
+    // Notes often contain prose text.
+    // Escape vCard separators because users can type them in note text.
     let card = one_note("n1", "met at FOSDEM;\nbuys the next round, apparently");
     let vcard = card_to_vcard(&card);
     assert_eq!(
@@ -1553,8 +1585,8 @@ fn a_note_with_no_text_is_skipped_in_both_directions() {
 
 #[test]
 fn invents_a_key_for_a_note_that_has_none() {
-    // Evolution has one Notes field per contact and writes no X-JMAP-KEY,
-    // so a note it typed arrives needing a key of its own.
+    // Evolution stores one Notes field per contact and writes no X-JMAP-KEY.
+    // Create a key when such a note arrives.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "NOTE:met at FOSDEM\r\n",
@@ -1588,7 +1620,8 @@ fn one_anniversary(kind: &str, date: serde_json::Value) -> ContactCard {
 
 #[test]
 fn maps_a_birthday_onto_the_bday_line() {
-    // RFC 9553 maps memorable dates by `kind`; BDAY carries only the birthday.
+    // RFC 9553 maps memorable dates by `kind`.
+    // BDAY carries only birthdays.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "BDAY"), "BDAY;X-JMAP-KEY=y1:1964-03-27");
 
@@ -1603,8 +1636,8 @@ fn maps_a_birthday_onto_the_bday_line() {
 
 #[test]
 fn maps_a_wedding_day_onto_the_line_evolution_reads_as_the_anniversary() {
-    // vCard 3.0 has no ANNIVERSARY property, so Evolution's anniversary field
-    // is fed through X-EVOLUTION-ANNIVERSARY.
+    // vCard 3.0 has no ANNIVERSARY property.
+    // Use X-EVOLUTION-ANNIVERSARY for Evolution's anniversary field.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-EVOLUTION-ANNIVERSARY"),
@@ -1647,7 +1680,8 @@ fn a_date_that_names_no_single_day_gets_no_line() {
 
 #[test]
 fn a_date_before_the_year_eds_can_write_gets_no_line() {
-    // `e_contact_date_to_string()` clamps years to 1000..=9999, so older years emit no line.
+    // `e_contact_date_to_string()` writes years only in 1000..=9999.
+    // Do not emit a line for older years.
     for date in [
         json!({"year": 800, "month": 6, "day": 21}),
         json!({"year": 999, "month": 12, "day": 31}),
@@ -1668,7 +1702,8 @@ fn a_date_before_the_year_eds_can_write_gets_no_line() {
 
 #[test]
 fn an_anniversary_stated_as_a_point_in_time_crosses_as_the_day_it_names() {
-    // Timestamps map to a day-only vCard date; time-of-day is intentionally not encoded.
+    // Timestamps map to day-only vCard dates.
+    // Do not encode time-of-day.
     let vcard = card_to_vcard(&one_anniversary(
         "birth",
         json!({"@type": "Timestamp", "utc": "1953-10-15T23:10:00Z"}),
@@ -1697,7 +1732,7 @@ fn a_date_line_that_states_no_day_is_skipped_in_both_directions() {
     let card = one_anniversary("birth", json!({}));
     assert!(!card_to_vcard(&card).contains("\r\nBDAY"));
 
-    // Empty, free text, and impossible dates state no valid day.
+    // Empty text, free text, and impossible dates state no valid day.
     for value in ["", "sometime in March", "1964-13-45", "1964-03"] {
         let back = vcard_to_card(&format!(
             "BEGIN:VCARD\r\nVERSION:3.0\r\nBDAY:{value}\r\nEND:VCARD\r\n"
@@ -1817,7 +1852,7 @@ fn one_nickname(key: &str, name: &str) -> ContactCard {
 
 #[test]
 fn maps_nicknames_onto_nickname_lines() {
-    // NICKNAME is plain text, so the JSContact key rides in X-JMAP-KEY and survives EDS rewrites.
+    // NICKNAME is plain text. Keep the JSContact key in X-JMAP-KEY so EDS rewrites keep the link.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "NICKNAME"), "NICKNAME;X-JMAP-KEY=k1:Vee");
 
@@ -1870,9 +1905,10 @@ fn each_nickname_gets_a_line_of_its_own() {
 
 #[test]
 fn a_nickname_that_reads_as_a_list_is_still_one_nickname() {
-    // The other side of the same decision. A comma in the value is escaped on
-    // the way out, exactly as EDS escapes it, and read back as the text it
-    // was — never split into two entries the server would then be told about.
+    // This is the other side of the same decision.
+    // A comma in the value is escaped on write, exactly as EDS escapes it.
+    // On read, it stays the original text.
+    // It never splits into two entries sent to the server.
     let vcard = card_to_vcard(&one_nickname("k1", "Jim, the tall one"));
     assert_eq!(
         line(&vcard, "NICKNAME"),
@@ -1893,6 +1929,32 @@ fn a_nickname_that_reads_as_a_list_is_still_one_nickname() {
     let nicknames = card.nicknames.expect("nicknames");
     assert_eq!(nicknames.len(), 1);
     assert_eq!(nicknames["k1"].name, "Jim,Jimmie");
+}
+
+#[test]
+fn nickname_list_value_reaches_fixed_point_in_eds_profile() {
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "NICKNAME:Jim,Jimmie\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(raw_vcard).expect("parse nickname list");
+    let nicknames = parsed.nicknames.as_ref().expect("nicknames");
+    assert_eq!(nicknames.len(), 1);
+    assert_eq!(nicknames["k1"].name, "Jim,Jimmie");
+
+    let emitted = card_to_vcard(&parsed);
+    assert_eq!(
+        line(&emitted, "NICKNAME"),
+        "NICKNAME;X-JMAP-KEY=k1:Jim\\,Jimmie"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized nickname list");
+    assert_eq!(reparsed.nicknames, parsed.nicknames);
+
+    let re_emitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, re_emitted);
 }
 
 #[test]
@@ -1942,11 +2004,11 @@ fn one_link(key: &str, uri: &str) -> ContactCard {
 
 #[test]
 fn maps_links_onto_url_lines() {
-    // RFC 2426 §3.6.8's `URL` is a bare URI with no room for anything else,
-    // so the JSContact key rides in X-JMAP-KEY as it does on an EMAIL — and
-    // EDS rewrites the value of that line in place, leaving the parameter
-    // where it was, verified against libebook-contacts 3.52. Evolution shows
-    // the first `URL` as the contact's home page.
+    // RFC 2426 §3.6.8 defines `URL` as a bare URI.
+    // Store the JSContact key in `X-JMAP-KEY`, as for `EMAIL`.
+    // EDS rewrites the value and keeps this parameter.
+    // Verify this behavior with libebook-contacts 3.52.
+    // Evolution shows the first `URL` as the contact Home Page.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "URL"),
@@ -1965,12 +2027,13 @@ fn maps_links_onto_url_lines() {
 
 #[test]
 fn a_link_of_a_kind_no_vcard_30_property_states_gets_no_line() {
-    // `kind=contact` maps to vCard 4.0 `CONTACT-URI`, not vCard 3.0 `URL`, so it is omitted.
+    // `kind=contact` maps to vCard 4.0 `CONTACT-URI`.
+    // vCard 3.0 has no matching field, so omit this link.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("\r\nURL").count(), 1, "{vcard}");
     assert!(!vcard.contains("write-to-me"), "{vcard}");
 
-    // Unknown link kinds are omitted for the same reason.
+    // Omit unknown link kinds for the same reason.
     let mut card = one_link("l1", "https://vera.example/");
     card.links.as_mut().expect("links").insert(
         "l2".to_owned(),
@@ -1986,10 +2049,10 @@ fn a_link_of_a_kind_no_vcard_30_property_states_gets_no_line() {
 
 #[test]
 fn a_link_that_points_nowhere_is_skipped_in_both_directions() {
-    // Empty URIs are treated as absent entries.
+    // Treat empty URIs as absent entries.
     assert!(!card_to_vcard(&one_link("l1", "")).contains("\r\nURL"));
 
-    // EDS can leave an empty `URL` line after clearing the Home Page field.
+    // EDS can leave an empty `URL` line after it clears Home Page.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "URL;X-JMAP-KEY=l1:\r\n",
@@ -2001,7 +2064,8 @@ fn a_link_that_points_nowhere_is_skipped_in_both_directions() {
 
 #[test]
 fn a_uri_keeps_the_punctuation_a_vcard_value_gives_meaning_to() {
-    // URI punctuation that vCard also uses structurally must roundtrip without splitting the URI.
+    // Keep URI punctuation through roundtrip.
+    // Do not split on punctuation that vCard uses structurally.
     let vcard = card_to_vcard(&one_link("l1", "https://vera.example/q?tags=a,b;c"));
     assert_eq!(
         line(&vcard, "URL"),
@@ -2064,7 +2128,8 @@ fn one_scheduling_address(key: &str, uri: &str) -> ContactCard {
 
 #[test]
 fn maps_calendars_onto_the_caluri_and_fburl_lines() {
-    // `calendar` maps to `CALURI` and `freeBusy` maps to `FBURL`; both use `X-JMAP-KEY`.
+    // `calendar` maps to `CALURI` and `freeBusy` maps to `FBURL`.
+    // Both lines carry the `X-JMAP-KEY` parameter.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "CALURI"),
@@ -2090,12 +2155,13 @@ fn maps_calendars_onto_the_caluri_and_fburl_lines() {
 
 #[test]
 fn a_calendar_of_a_kind_no_eds_field_holds_gets_no_line() {
-    // Unknown calendar kinds have no `CALURI` or `FBURL` target and are omitted.
+    // Unknown calendar kinds have no `CALURI` or `FBURL` target.
+    // Omit them.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(vcard.matches("\r\nCALURI").count(), 1, "{vcard}");
     assert!(!vcard.contains("nameless"), "{vcard}");
 
-    // Vendor calendar kinds are omitted too.
+    // Omit vendor calendar kinds too.
     let vcard = card_to_vcard(&one_calendar(
         "c1",
         Some("example.com:tasks"),
@@ -2106,11 +2172,11 @@ fn a_calendar_of_a_kind_no_eds_field_holds_gets_no_line() {
 
 #[test]
 fn a_calendar_that_points_nowhere_is_skipped_in_both_directions() {
-    // Empty calendar URIs are treated as absent entries.
+    // Treat empty calendar URIs as absent entries.
     let vcard = card_to_vcard(&one_calendar("c1", Some("calendar"), ""));
     assert!(!vcard.contains("\r\nCALURI"), "{vcard}");
 
-    // EDS can leave empty `CALURI` and `FBURL` lines after clearing fields.
+    // EDS can leave empty `CALURI` and `FBURL` lines after it clears fields.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CALURI;X-JMAP-KEY=c1:\r\n",
@@ -2123,7 +2189,7 @@ fn a_calendar_that_points_nowhere_is_skipped_in_both_directions() {
 
 #[test]
 fn invents_a_key_for_a_calendar_that_has_none() {
-    // Reader-generated keys must stay unique across keyless `CALURI` and `FBURL` lines.
+    // Keep reader-generated keys unique across keyless `CALURI` and `FBURL` lines.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "CALURI:https://vera.example/cal/vera.ics\r\n",
@@ -2646,6 +2712,42 @@ fn reads_a_reference_photo_line_back_as_the_uri_it_names() {
 }
 
 #[test]
+fn photo_mediatype_parameter_on_value_uri_is_parse_only_in_this_profile() {
+    // RFC 9555 section 2.3.14 maps MEDIATYPE into JSContact media type on read.
+    let input = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Photo MEDIATYPE VALUE URI\r\n",
+        "PHOTO;MEDIATYPE=image/jpeg;VALUE=uri:https://vera.example/me.jpg\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(input).expect("parse MEDIATYPE VALUE=uri photo");
+    let parsed_media = parsed.media.as_ref().expect("media");
+    assert_eq!(parsed_media["m1"].uri, "https://vera.example/me.jpg");
+    assert_eq!(parsed_media["m1"].media_type.as_deref(), Some("image/jpeg"));
+
+    // EDS stores URI photos without media type metadata, so normalized emit drops MEDIATYPE.
+    let emitted = card_to_vcard(&parsed);
+    assert_eq!(
+        line(&emitted, "PHOTO"),
+        "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://vera.example/me.jpg"
+    );
+    assert!(
+        !emitted.contains("MEDIATYPE="),
+        "normalized URI photo must not emit MEDIATYPE in this profile: {emitted}"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized photo");
+    let reparsed_media = reparsed.media.as_ref().expect("media");
+    assert_eq!(reparsed_media["m1"].media_type, None);
+
+    let emitted_again = card_to_vcard(&reparsed);
+    let reparsed_again = vcard_to_card(&emitted_again).expect("reparse emitted again");
+    assert_eq!(emitted, emitted_again);
+    assert_eq!(reparsed, reparsed_again);
+}
+
+#[test]
 fn a_photo_whose_bytes_are_not_text_reads_back_byte_for_byte() {
     // Non-UTF-8 payload bytes must roundtrip via bytes, not text coercion.
     let media = photo_line("PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgr//g==");
@@ -2726,7 +2828,8 @@ fn tagged(tags: &[&str]) -> ContactCard {
 
 #[test]
 fn maps_keywords_onto_one_categories_line() {
-    // Keywords serialize to one `CATEGORIES` line to avoid hidden duplicate category fields in EDS.
+    // Serialize keywords on one `CATEGORIES` line.
+    // This avoids hidden duplicate category fields in EDS.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:hiking");
     assert_eq!(vcard.matches("\r\nCATEGORIES").count(), 1, "{vcard}");
@@ -2741,7 +2844,7 @@ fn maps_keywords_onto_one_categories_line() {
 
 #[test]
 fn every_tag_goes_on_the_one_line_in_sorted_order() {
-    // Set members serialize in sorted map order so repeated renders stay stable.
+    // Serialize set members in sorted map order so repeated renders stay stable.
     let vcard = card_to_vcard(&tagged(&["Work", "Friends", "hiking"]));
     assert_eq!(line(&vcard, "CATEGORIES"), "CATEGORIES:Friends,Work,hiking");
 }
@@ -2808,7 +2911,7 @@ fn a_keyword_set_to_anything_but_true_gets_no_line() {
 #[test]
 fn states_keyword_answers_for_the_tag_the_line_left_off() {
     // Visibility is evaluated per tag, not for the full set.
-    // Hidden tags are restored on save, matching the emitter predicate.
+    // Save restores hidden tags to match the emitter predicate.
     for tag in ["", "two\rlines", " leading", "trailing ", "\u{b}vertical"] {
         assert!(
             !states_keyword(tag, &json!(true)),
@@ -2837,7 +2940,7 @@ fn a_card_with_no_tags_states_none() {
 
 #[test]
 fn reads_the_tags_of_every_categories_line() {
-    // EDS UI shows only the first categories line, but preserves the rest.
+    // The EDS UI shows only the first categories line, but preserves the rest.
     // Read all lines so hidden tags survive; duplicates collapse and empty items drop.
     let card = vcard_to_card(concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
@@ -2902,8 +3005,8 @@ fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
 
 #[test]
 fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
-    // vCard 3.0 has no `IMPP`, so online services map to EDS `X-*` IM lines.
-    // `TYPE` is required so the handle lands in one HOME or WORK editor slot.
+    // vCard 3.0 has no `IMPP`, so this mapping uses EDS `X-*` IM lines.
+    // Set `TYPE` so the handle lands in one HOME or WORK slot.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-JABBER"),
@@ -2917,15 +3020,15 @@ fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
     assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
     assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
-    // EDS stores this as a handle text field, not as a URI.
+    // EDS stores this value as handle text, not as a URI value.
     assert_eq!(services["s1"].uri, None);
 }
 
 #[test]
 fn every_service_eds_has_a_field_for_gets_its_own_line() {
-    // Services with EDS HOME or WORK slots get dedicated lines.
-    // Matching is case-insensitive and punctuation-insensitive to keep save
-    // behavior stable across spelling variants.
+    // Emit one line for each service with an EDS HOME or WORK slot.
+    // Match service names without case or punctuation sensitivity.
+    // Keep save output stable across spelling variants.
     for (service, property) in [
         ("AIM", "X-AIM"),
         ("aim", "X-AIM"),
@@ -2952,10 +3055,9 @@ fn every_service_eds_has_a_field_for_gets_its_own_line() {
 
 #[test]
 fn a_service_eds_has_no_field_for_gets_no_line() {
-    // Skip services without an editable EDS slot. Emitting a hidden line would
-    // mislead save logic into treating unseen data as user-visible.
-    // Missing service names are also skipped because there is no property line
-    // to select.
+    // Skip services without an editable EDS slot.
+    // Skip missing service names because no property line can be selected.
+    // Hidden lines make save logic treat unknown data as visible.
     for service in [Some("Signal"), Some("Twitter"), Some("SIP"), Some(""), None] {
         let vcard = card_to_vcard(&on_service(service, Some("handle")));
         assert!(
@@ -2967,10 +3069,10 @@ fn a_service_eds_has_no_field_for_gets_no_line() {
 
 #[test]
 fn unmapped_or_unslotted_im_and_sip_lines_in_vcard_are_ignored_by_reader() {
-    // libebook-contacts 3.52 knows X-TWITTER and X-SIP as EContactAttrList fields
-    // with no slotted fields (_HOME_1..3, _WORK_1..3). When parsing a vCard with
-    // X-TWITTER, X-SIP, or unknown X-SIGNAL, vcard_to_card safely ignores them rather
-    // than creating unmodeled online_services entries.
+    // libebook-contacts 3.52 stores X-TWITTER and X-SIP as unslotted attributes.
+    // No _HOME_1..3 or _WORK_1..3 slot exists for these lines.
+    // Ignore X-TWITTER, X-SIP, and unknown X-SIGNAL lines.
+    // This avoids unmapped `online_services` entries in reader output.
     let vcard = "BEGIN:VCARD\r\n\
                  VERSION:3.0\r\n\
                  FN:Vera\r\n\
@@ -3019,15 +3121,16 @@ fn at_uri(service: Option<&str>, uri: &str) -> ContactCard {
 
 #[test]
 fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
-    // RFC 9553 §2.3.2 allows `uri` or `user`; this mapping derives a handle only
-    // from known bare schemes whose payload is exactly that handle.
+    // RFC 9553 §2.3.2 allows `uri` or `user`.
+    // Derive a handle only from known bare schemes.
+    // Require the URI payload to match that handle exactly.
     let vcard = card_to_vcard(&at_uri(Some("Jabber"), "xmpp:vera@jabber.example"));
     assert_eq!(
         line(&vcard, "X-JABBER"),
         "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example"
     );
 
-    // Reader output keeps only the handle text from the emitted line.
+    // Reader output keeps only handle text from the emitted line.
     let services = vcard_to_card(&vcard)
         .expect("parse")
         .online_services
@@ -3035,12 +3138,12 @@ fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
     assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
     assert_eq!(services["s1"].uri, None);
 
-    // The scheme is compared case-insensitively, as RFC 3986 §3.1 requires.
+    // Compare the scheme case-insensitively, as RFC 3986 §3.1 requires.
     assert!(
         card_to_vcard(&at_uri(Some("Jabber"), "XMPP:vera@jabber.example"))
             .contains(":vera@jabber.example")
     );
-    // Only the service's own scheme is accepted for handle extraction.
+    // Accept only the service's own scheme for handle extraction.
     assert!(
         !card_to_vcard(&at_uri(Some("Jabber"), "https://jabber.example/vera")).contains("vera")
     );
@@ -3048,7 +3151,7 @@ fn an_entry_stated_only_as_a_uri_is_drawn_from_the_uri() {
 
 #[test]
 fn a_uri_at_a_service_with_no_known_scheme_gets_no_line() {
-    // Only services with known `scheme:handle` forms are drawn from URI values.
+    // Draw URI values only for services with known `scheme:handle` forms.
     for (service, uri) in [
         (Some("Matrix"), "matrix:u/vera:matrix.example"),
         (Some("GroupWise"), "vera.oldenburg"),
@@ -3066,8 +3169,8 @@ fn a_uri_at_a_service_with_no_known_scheme_gets_no_line() {
 
 #[test]
 fn a_uri_that_says_more_than_a_handle_gets_no_line() {
-    // Accept only bare `scheme:handle` values with no path, query, fragment,
-    // percent-encoding, or leading whitespace.
+    // Accept only bare `scheme:handle` values.
+    // Reject path, query, fragment, percent-encoding, and leading whitespace.
     for uri in [
         "xmpp:",
         "xmpp:vera@jabber.example/work",
@@ -3097,7 +3200,7 @@ fn an_entry_stating_both_is_drawn_from_its_handle() {
 
 #[test]
 fn a_handle_no_x_line_can_carry_gets_no_line() {
-    // Skip handles that EDS normalizes so rendered text matches saved text.
+    // Skip handles that EDS normalizes, so rendered text matches saved text.
     for handle in [
         Some(""),
         None,
@@ -3132,8 +3235,9 @@ fn a_handle_holding_the_separators_is_escaped_and_comes_back_whole() {
 
 #[test]
 fn the_work_context_files_the_handle_in_evolutions_work_slot() {
-    // `contexts` selects HOME or WORK, and unknown or mixed contexts fall back
-    // to HOME so each line maps to one editable slot.
+    // `contexts` selects HOME or WORK.
+    // Unknown or mixed contexts fall back to HOME.
+    // Keep each line mapped to one editable slot.
     let slotted = |contexts: Value| {
         let mut card = on_service(Some("Jabber"), Some("handle"));
         let services = card.online_services.as_mut().expect("online services");
@@ -3185,7 +3289,7 @@ fn reads_a_handle_on_a_line_that_never_carried_a_key() {
     .expect("parse");
 
     let services = card.online_services.expect("online services");
-    // Two, not three: `X-SIGNAL` is not a mapped service line.
+    // Keep two entries because `X-SIGNAL` is not a mapped service line.
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1", "s2"]);
     assert_eq!(services["s1"].service.as_deref(), Some("Matrix"));
     assert_eq!(services["s1"].user.as_deref(), Some("@vera:matrix.example"));
@@ -4635,7 +4739,7 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
         line(&emitted, "X-EVOLUTION-ANNIVERSARY"),
         "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y4:1996-08-03"
     );
-    // Unstated entries are absent
+    // Entries that state nothing stay absent.
     assert!(!emitted.contains("X-JMAP-KEY=y1"), "{emitted}");
     assert!(!emitted.contains("X-JMAP-KEY=y3"), "{emitted}");
     assert!(!emitted.contains("X-JMAP-KEY=y5"), "{emitted}");
@@ -4643,7 +4747,7 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
     assert!(!emitted.contains("X-JMAP-KEY=y7"), "{emitted}");
     assert!(!emitted.contains("X-JMAP-KEY=y8"), "{emitted}");
 
-    // Inbound roundtrip parses the emitted lines back losslessly
+    // A parse roundtrip keeps the emitted lines unchanged.
     let roundtripped = vcard_to_card(&emitted).expect("parse back");
     let recovered = roundtripped.anniversaries.expect("anniversaries");
     assert_eq!(recovered.len(), 2);
@@ -4661,8 +4765,8 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
 
 #[test]
 fn bare_year_and_partial_dates_with_custom_attributes_roundtrip() {
-    // Tests that PartialDate objects carrying custom or alternative calendar attributes
-    // with bare years are safely handled and do not panic or emit malformed vCard lines.
+    // PartialDate values with custom calendar attributes and bare years stay safe.
+    // The mapper must not panic or emit malformed vCard lines.
     let card = ContactCard {
         anniversaries: Some(
             [
@@ -4708,9 +4812,9 @@ fn bare_year_and_partial_dates_with_custom_attributes_roundtrip() {
 
 #[test]
 fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
-    // 1. `states_org_unit` predicate characterization:
-    // A unit is stated on the wire only if its name is non-empty.
-    // An empty name with or without sortAs in extra is unstated.
+    // Check when `states_org_unit` reports true.
+    // A unit is stated only when its name is non-empty.
+    // An empty name stays unstated, even when `extra` has `sortAs`.
     let empty_unit = OrgUnit::new("");
     assert!(!states_org_unit(&empty_unit));
 
@@ -4734,8 +4838,8 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     let whitespace_unit = OrgUnit::new("   ");
     assert!(states_org_unit(&whitespace_unit));
 
-    // 2. `states_organization` predicate with combinations of empty units:
-    // Org with empty name and only empty units states nothing.
+    // Check `states_organization` with empty unit combinations.
+    // An empty org name plus empty units states nothing.
     let empty_org = Organization {
         name: None,
         units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
@@ -4750,7 +4854,7 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     };
     assert!(!states_organization(&empty_named_org));
 
-    // Org with employer name states an ORG line even if all units are empty.
+    // An employer name states an ORG line, even when units are empty.
     let named_org_empty_units = Organization {
         name: Some("Acme Corp".to_owned()),
         units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
@@ -4758,7 +4862,7 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     };
     assert!(states_organization(&named_org_empty_units));
 
-    // Org with no employer name but at least one non-empty unit states an ORG line.
+    // No employer name still states ORG when one unit has a name.
     let nameless_org_valid_unit = Organization {
         name: None,
         units: Some(vec![OrgUnit::new(""), OrgUnit::new("Finance")]),
@@ -4769,8 +4873,8 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
 
 #[test]
 fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
-    // 1. Org with employer name and only empty-name units:
-    // Emits employer name alone on the ORG line; empty units are dropped from wire format.
+    // Case 1: employer name with only empty units.
+    // Emit the employer name alone on ORG. Drop empty units from wire output.
     let card1 = ContactCard {
         organizations: Some(
             [(
@@ -4799,8 +4903,8 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
     assert_eq!(org1.name.as_deref(), Some("Acme Corp"));
     assert_eq!(org1.units, None);
 
-    // 2. Org with employer name, leading/intermediate empty units, and valid units:
-    // Empty units are omitted from ORG components, leaving non-empty units in sequence.
+    // Case 2: employer name with empty and non-empty units.
+    // Omit empty units. Keep non-empty units in order.
     let card2 = ContactCard {
         organizations: Some(
             [(
@@ -4838,8 +4942,8 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
         Some([OrgUnit::new("Research"), OrgUnit::new("Optics")].as_slice())
     );
 
-    // 3. Nameless org with leading empty unit and valid units:
-    // Leading semicolon keeps unit in department slot; empty unit is omitted.
+    // Case 3: nameless org with leading empty unit and valid units.
+    // A leading semicolon keeps the department slot. Empty units are omitted.
     let card3 = ContactCard {
         organizations: Some(
             [(
@@ -4864,8 +4968,8 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
         Some([OrgUnit::new("Engineering")].as_slice())
     );
 
-    // 4. Inbound vCards with various empty component patterns:
-    // - ORG with empty employer and empty unit components:
+    // Case 4: inbound vCards with empty component patterns.
+    // ORG with empty employer and empty unit components.
     let empty_components_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG;X-JMAP-KEY=o1:;;;\r\n",
@@ -4874,7 +4978,7 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
     let from_empty = vcard_to_card(empty_components_vcard).expect("parse");
     assert_eq!(from_empty.organizations, None);
 
-    // - ORG with empty intermediate components and trailing empty semicolons:
+    // ORG with empty middle components and trailing empty semicolons.
     let multi_empty_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ORG;X-JMAP-KEY=o1:Acme Corp;;Research;;Development;\r\n",
@@ -4891,7 +4995,7 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
 
 #[test]
 fn name_and_address_component_predicates_and_context_mapping_fidelity() {
-    // states_name_component: requires non-empty value AND mapped kind
+    // `states_name_component` needs a non-empty value and a mapped kind.
     assert!(states_name_component(&NameComponent::new("given", "Alice")));
     assert!(states_name_component(&NameComponent::new(
         "surname", "Smith"
@@ -4901,7 +5005,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         "unmapped_kind",
         "Alice"
     )));
-    // states_name: checks if any mapped component, full name, or file-as is stated
+    // `states_name` checks mapped components, full name, or file-as.
     assert!(states_name(&Name {
         full: Some("Alice".to_string()),
         ..Name::default()
@@ -4921,7 +5025,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         ..Name::default()
     }));
 
-    // maps_context: covers "work" and "private"
+    // `maps_context` supports only `work` and `private`.
     assert!(maps_context("work"));
     assert!(maps_context("private"));
     assert!(!maps_context("other"));
@@ -4929,7 +5033,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
     assert!(!maps_context("home"));
     assert!(!maps_context(""));
 
-    // states_address_component: requires non-empty value AND mapped kind (including joined kind)
+    // `states_address_component` needs non-empty text and a mapped kind.
     assert!(states_address_component(&AddressComponent::new(
         "name",
         "Main Street"
@@ -4952,7 +5056,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         ""
     )));
 
-    // states_address: requires address_fields or address_label
+    // `states_address` needs address fields or an address label.
     assert!(states_address(&Address {
         components: Some(vec![AddressComponent::new("locality", "Berlin")]),
         ..Address::default()
@@ -4989,7 +5093,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         None
     );
 
-    // states_email, states_phone, states_note, states_link, states_nickname, title_kind
+    // Check simple field predicates and `title_kind`.
     assert!(states_email(&ContactEmail {
         address: "alice@example.com".into(),
         ..ContactEmail::default()
@@ -5036,7 +5140,7 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
 
 #[test]
 fn calendar_and_spouse_predicates_fidelity() {
-    // states_calendar: requires non-empty uri AND mapped kind (calendar, freeBusy)
+    // `states_calendar` needs a non-empty URI and a mapped kind.
     assert!(states_calendar(&Calendar {
         kind: Some("calendar".into()),
         uri: "https://calendar.example.com".into(),
@@ -5068,7 +5172,7 @@ fn calendar_and_spouse_predicates_fidelity() {
         ..Calendar::default()
     }));
 
-    // states_spouse and states_nothing_but_the_marriage:
+    // Check `states_spouse` and `states_nothing_but_the_marriage`.
     let rel_spouse_only = Relation {
         relation: Some([("spouse".into(), json!(true))].into()),
         extra: [("@type".into(), json!("Relation"))].into(),
@@ -5117,7 +5221,7 @@ fn calendar_and_spouse_predicates_fidelity() {
 
 #[test]
 fn media_photo_and_online_service_predicates_and_comparisons() {
-    // states_media and same_photo
+    // Check `states_media` and `same_photo`.
     let m_uri1 = Media {
         kind: Some("photo".into()),
         uri: "https://example.com/photo1.jpg".into(),
@@ -5202,7 +5306,7 @@ fn media_photo_and_online_service_predicates_and_comparisons() {
     assert!(!same_photo(&m_data1, &m_data_diff_type));
     assert!(!same_photo(&m_data1, &m_uri1));
 
-    // states_online_service, same_service, online_service_handle, online_service_uri
+    // Check online-service predicates and helper mappings.
     let s_matrix = OnlineService {
         service: Some("Matrix".into()),
         user: Some("@alice:matrix.org".into()),
@@ -5386,7 +5490,7 @@ fn restore_address_and_name_components_reconstruction() {
 
 #[test]
 fn vcard_parser_errors_and_error_display_formatting() {
-    // Unterminated vCard error
+    // Unterminated input returns `VCardError::Unterminated`.
     let unterminated = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\n";
     let err_unterminated = vcard_to_card(unterminated).expect_err("should fail unterminated");
     assert_eq!(err_unterminated, VCardError::Unterminated);
@@ -5395,7 +5499,7 @@ fn vcard_parser_errors_and_error_display_formatting() {
         "truncated vCard: missing END:VCARD"
     );
 
-    // Not a vCard error (e.g. empty input or iCalendar envelope)
+    // Non-vCard input returns `VCardError::NotAVCard`.
     let not_vcard = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n";
     let err_not_vcard = vcard_to_card(not_vcard).expect_err("should fail not a vCard");
     assert_eq!(err_not_vcard, VCardError::NotAVCard);
@@ -5407,7 +5511,7 @@ fn vcard_parser_errors_and_error_display_formatting() {
     let empty_not_vcard = vcard_to_card("").expect_err("empty string is not a vcard");
     assert_eq!(empty_not_vcard, VCardError::NotAVCard);
 
-    // Malformed line error formatting
+    // A malformed content line returns `VCardError::Malformed`.
     let malformed_vcard =
         "BEGIN:VCARD\r\nVERSION:3.0\r\nINVALID CONTENT LINE WITHOUT COLON\r\nEND:VCARD\r\n";
     let malformed_err = vcard_to_card(malformed_vcard).expect_err("should fail malformed line");
@@ -5423,7 +5527,7 @@ fn vcard_parser_errors_and_error_display_formatting() {
 
 #[test]
 fn label_entry_with_empty_key_and_duplicate_keys_allocates_fresh_keys() {
-    // Inbound vCard with empty X-JMAP-KEY parameter on LABEL must not assign "" as map key
+    // An empty `X-JMAP-KEY` on `LABEL` must not become the map key `""`.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ADR;TYPE=HOME:;;123 Home St;Berlin;;10115;Germany\r\n",
@@ -5439,7 +5543,7 @@ fn label_entry_with_empty_key_and_duplicate_keys_allocates_fresh_keys() {
         Some("123 Home St\nBerlin\n10115\nGermany")
     );
 
-    // Inbound vCard with multiple unkeyed emails allocates sequential e1, e2, e3
+    // Multiple unkeyed `EMAIL` lines allocate keys `e1`, `e2`, and `e3`.
     let vcard_emails = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "EMAIL:alice@example.com\r\n",
@@ -5514,8 +5618,8 @@ fn inbound_vcard_with_multi_component_name_field() {
 
 #[test]
 fn vcard_kind_group_and_member_lines_characterization() {
-    // Group-card signals (`KIND`, `MEMBER`) are unmapped for vCard 3.0 and are
-    // dropped rather than being rewritten into incorrect mapped fields.
+    // vCard 3.0 group signals (`KIND`, `MEMBER`) are unmapped.
+    // Drop them instead of writing incorrect mapped fields.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:group-dev-team\r\n",
@@ -5538,7 +5642,7 @@ fn vcard_kind_group_and_member_lines_characterization() {
         notes.values().next().map(|n| n.note.as_str()),
         Some("Core engineering team")
     );
-    // `KIND` and `MEMBER` are unmapped properties, so `extra` is empty
+    // `KIND` and `MEMBER` are unmapped, so `extra` stays empty.
     assert!(card.extra.is_empty());
 
     // Serialization keeps mapped fields and does not invent KIND or MEMBER lines.
@@ -6464,8 +6568,8 @@ fn jscontact_server_localizations_and_preferred_languages_characterization() {
 
 #[test]
 fn email_pref_ordering_primary_selection_and_tie_breaking() {
-    // 1. Multiple emails with distinct pref values: lowest pref must be emitted first
-    // so it lands in EDS's E_CONTACT_EMAIL_1 (primary email), followed by higher ranks and None.
+    // 1. Multiple emails with distinct pref values: emit lowest pref first.
+    // EDS maps the first email to E_CONTACT_EMAIL_1, then higher ranks and None.
     let card = ContactCard {
         emails: Some(
             [
@@ -6541,7 +6645,7 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
         email_lines[3]
     );
 
-    // 2. Tie-breaking: when multiple emails have identical pref (e.g. pref: 1), break tie by key
+    // 2. Break ties on equal `pref` values by key.
     let tie_card = ContactCard {
         emails: Some(
             [
@@ -6576,7 +6680,7 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
     assert!(tie_lines[0].contains("X-JMAP-KEY=e_alpha"));
     assert!(tie_lines[1].contains("X-JMAP-KEY=e_beta"));
 
-    // 3. No-PREF-present fallback: when all emails have pref: None, fall back to key order
+    // 3. Use key order when all `pref` values are `None`.
     let none_card = ContactCard {
         emails: Some(
             [
@@ -6611,7 +6715,7 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
     assert!(none_lines[0].contains("X-JMAP-KEY=e_a") && !none_lines[0].contains("PREF"));
     assert!(none_lines[1].contains("X-JMAP-KEY=e_z") && !none_lines[1].contains("PREF"));
 
-    // 4. Fixed-point roundtrip stability
+    // 4. Verify fixed-point roundtrip stability.
     let back = vcard_to_card(&emitted).expect("parse back");
     let re_emitted = card_to_vcard(&back);
     assert_eq!(emitted, re_emitted);
@@ -6937,8 +7041,8 @@ fn adr_all_seven_structured_components_roundtrip() {
 
 #[test]
 fn adr_label_parameter_parsing_and_emission_fidelity() {
-    // vCard 4.0 / RFC 6350 §6.3.1 allows a `LABEL` parameter directly on the `ADR` property line:
-    // `ADR;TYPE=WORK;LABEL="...":PO Box 123;...`
+    // RFC 6350 §6.3.1 allows a LABEL parameter directly on ADR.
+    // Example: `ADR;TYPE=WORK;LABEL="...":PO Box 123;...`
     let raw_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Alice Developer\r\n",
@@ -6969,7 +7073,7 @@ fn adr_label_parameter_parsing_and_emission_fidelity() {
         ]
     );
 
-    // Emitting via card_to_vcard produces both standard vCard 3.0 ADR and standalone LABEL lines
+    // Emission keeps both vCard 3.0 ADR and standalone LABEL lines.
     let vcard = card_to_vcard(&card);
     let unfolded_vcard = unfolded(&vcard);
     assert!(unfolded_vcard.contains(
@@ -6977,11 +7081,11 @@ fn adr_label_parameter_parsing_and_emission_fidelity() {
     ));
     assert!(unfolded_vcard.contains("LABEL;X-JMAP-KEY=a1;TYPE=WORK:Alice Dev\\n100 Tech Blvd\\nSuite 200\\nAustin\\, TX 78701\\nUSA"));
 
-    // Parsing back round-trips with identical Address components and label
+    // Parsing back keeps identical Address components and label.
     let back = vcard_to_card(&vcard).expect("parse back");
     assert_eq!(back.addresses, card.addresses);
 
-    // Test ADR with empty structured components but non-empty LABEL parameter
+    // Test ADR with empty structured components and a non-empty LABEL parameter.
     let empty_components_with_label_param = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Bob Builder\r\n",
@@ -7355,13 +7459,13 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
         "X-ANNIVERSARY:2015-08-20\r\n",
         "X-ASSISTANT:Alice Assistant\r\n",
         "X-MANAGER:Carol Manager\r\n",
-        // Custom instant-messaging / communications services not mapped to EDS slots
+        // Keep unmapped instant messaging service lines.
         "X-DISCORD:vera#1234\r\n",
         "X-SIGNAL:+491701234567\r\n",
         "X-TELEGRAM:@vera_schmidt\r\n",
         "X-SLACK:U12345678\r\n",
         "X-WHATSAPP:+491701234567\r\n",
-        // Arbitrary enterprise & vendor properties
+        // Keep arbitrary enterprise and vendor lines.
         "X-CUSTOM-EXTENSION:Value 123\r\n",
         "X-KEY-ID:0xDEADBEEF\r\n",
         "X-DEPARTMENT-CODE:DE-SEC-09\r\n",
@@ -7370,8 +7474,7 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
         "END:VCARD\r\n"
     );
 
-    // 1. Parsing into ContactCard: all modeled properties parse cleanly, while all
-    //    unknown X- properties are safely ignored rather than corrupting fields.
+    // 1. Parse into `ContactCard`. Parse mapped fields and ignore unknown X- fields.
     let card = vcard_to_card(vcard).expect("parse vcard with vendor X- properties");
     assert_eq!(card.id.as_ref().unwrap().as_str(), "c101");
     assert_eq!(
@@ -7393,17 +7496,17 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
     assert!(card.titles.as_ref().unwrap().contains_key("t1"));
     assert!(card.titles.as_ref().unwrap().contains_key("r1"));
     assert!(card.links.as_ref().unwrap().contains_key("l1"));
-    // online_services contains nothing from X-DISCORD/X-SIGNAL/X-TELEGRAM/X-SLACK/X-WHATSAPP
+    // Keep `online_services` empty for these unmapped service lines.
     assert_eq!(card.online_services, None);
-    // related_to contains nothing from X-SPOUSE (non-EDS), X-ASSISTANT, X-MANAGER
+    // Keep `related_to` empty for X-SPOUSE, X-ASSISTANT, and X-MANAGER.
     assert_eq!(card.related_to, None);
-    // anniversaries contains nothing from vendor X-ANNIVERSARY
+    // Keep `anniversaries` empty for vendor X-ANNIVERSARY.
     assert_eq!(card.anniversaries, None);
-    // card.extra is empty: vcard_to_card never injects raw vCard lines into JSContact extra
+    // Keep `card.extra` empty. Parser never copies raw vCard lines there.
     assert!(card.extra.is_empty());
 
-    // 2. Emission: card_to_vcard produces clean vCard 3.0 lines with standard properties
-    //    and X-JMAP-KEY parameters, with zero unmapped X- lines.
+    // 2. Emit vCard 3.0 lines with standard fields and X-JMAP-KEY parameters.
+    //    Do not emit unmapped X- lines.
     let re_emitted = card_to_vcard(&card);
     assert!(re_emitted.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
     assert!(re_emitted.ends_with("END:VCARD\r\n"));
@@ -7419,7 +7522,7 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
     assert!(re_emitted.contains("ROLE;X-JMAP-KEY=r1:Group Lead\r\n"));
     assert!(re_emitted.contains("URL;X-JMAP-KEY=l1:https://vera.example.com\r\n"));
 
-    // Verify none of the unknown X- lines were emitted
+    // Confirm emission drops unknown X- lines.
     assert!(!re_emitted.contains("X-MOZILLA"));
     assert!(!re_emitted.contains("X-PHONETIC"));
     assert!(!re_emitted.contains("X-AB"));
@@ -7439,7 +7542,7 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
     assert!(!re_emitted.contains("X-KEY-ID"));
     assert!(!re_emitted.contains("X-DEPARTMENT-CODE"));
 
-    // 3. Fixed-point round-trip convergence: parsing re_emitted reproduces the exact same card.
+    // 3. Confirm fixed-point convergence after parse and re-emission.
     let card2 = vcard_to_card(&re_emitted).expect("parse re-emitted");
     assert_eq!(card2, card);
     let re_emitted2 = card_to_vcard(&card2);
@@ -7448,14 +7551,14 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
 
 #[test]
 fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
-    // Characterizes how EDS-specific and vendor X- properties that are unmapped in jmap-vcard
-    // behave on inbound parsing and outbound serialization.
+    // Characterize unmapped EDS and vendor X- properties.
+    // Parse ignores them. Emission does not restore them.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:eds-custom-001\r\n",
         "FN:EDS Custom Contact\r\n",
         "EMAIL;TYPE=WORK:eds.user@example.com\r\n",
-        // Unslotted online services in EDS
+        // EDS uses unslotted online service lines.
         "X-TWITTER:@eds_user\r\n",
         "X-SIP:sip:eds.user@sip.example.com\r\n",
         // Vendor manager and assistant fields without X-EVOLUTION-
@@ -7609,9 +7712,9 @@ fn supported_evolution_and_im_x_properties_complete_roundtrip() {
 
 #[test]
 fn properties_with_custom_and_unknown_x_parameters_characterization() {
-    // Tests standard properties carrying unknown X- parameters from external clients:
-    // Parser must extract property value + known parameters without failing on unknown X- params;
-    // Emitter outputs standard parameters + X-JMAP-KEY, omitting unknown X- parameters.
+    // Standard properties can carry unknown X- parameters from external clients.
+    // Parser keeps values and known parameters when unknown X- parameters appear.
+    // Emitter writes standard parameters plus X-JMAP-KEY, and drops unknown X- parameters.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Custom Params User\r\n",
@@ -7678,7 +7781,7 @@ fn properties_with_custom_and_unknown_x_parameters_characterization() {
         )
     );
 
-    // Outbound emission: emits clean parameters, dropping unknown X- parameters
+    // Drop unknown X- parameters during emission.
     let re_emitted = card_to_vcard(&card);
     assert!(!re_emitted.contains("X-CUSTOM-PARAM"));
     assert!(!re_emitted.contains("X-VENDOR-STATUS"));
@@ -7693,7 +7796,7 @@ fn properties_with_custom_and_unknown_x_parameters_characterization() {
     assert!(!re_emitted.contains("X-VERIFIED"));
     assert!(!re_emitted.contains("X-TAG-SYSTEM"));
 
-    // Roundtrip fixed point
+    // Confirm round-trip fixed point.
     let back = vcard_to_card(&re_emitted).expect("parse re-emitted");
     assert_eq!(back, card);
     let re_emitted2 = card_to_vcard(&back);
@@ -7702,8 +7805,8 @@ fn properties_with_custom_and_unknown_x_parameters_characterization() {
 
 #[test]
 fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
-    // Tests a server-originated JSContact card containing unmodeled RFC 9553 / custom
-    // properties in card.extra and individual property extra maps.
+    // Build a server-originated JSContact card with unmodeled RFC 9553 and custom data.
+    // Store unmodeled data in `card.extra` and property `extra` maps.
     let mut extra = BTreeMap::new();
     extra.insert(
         "preferredLanguages".to_owned(),
@@ -7754,13 +7857,13 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
         ..ContactCard::default()
     };
 
-    // 1. Emission: card_to_vcard emits only modeled properties and ignores card.extra
+    // 1. Emit only modeled fields. Ignore `card.extra`.
     let vcard = card_to_vcard(&card);
     assert!(vcard.contains("FN:Server Card With Extra\r\n"));
     assert!(vcard.contains("EMAIL;X-JMAP-KEY=e1:extra@example.com\r\n"));
     assert!(vcard.contains("NOTE;X-JMAP-KEY=n1:Modeled note\r\n"));
 
-    // Verify none of the unmodeled extra properties leaked into the vCard stream
+    // Confirm no unmodeled extra data leaks into vCard output.
     assert!(!vcard.contains("preferredLanguages"));
     assert!(!vcard.contains("localizations"));
     assert!(!vcard.contains("cryptoKeys"));
@@ -7769,7 +7872,7 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
     assert!(!vcard.contains("2026-08-19T10:00:00Z"));
     assert!(!vcard.contains("author"));
 
-    // 2. Reading back: reconstructs modeled fields cleanly
+    // 2. Read back modeled fields.
     let read_back = vcard_to_card(&vcard).expect("parse emitted vcard");
     assert_eq!(
         read_back.name.as_ref().and_then(|n| n.full.as_deref()),
@@ -7782,14 +7885,14 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
     assert_eq!(read_back.notes.as_ref().unwrap()["n1"].note, "Modeled note");
     assert!(read_back.extra.is_empty());
 
-    // 3. Fixed-point convergence
+    // 3. Confirm fixed-point convergence.
     let vcard2 = card_to_vcard(&read_back);
     assert_eq!(vcard2, vcard);
 }
 
 #[test]
 fn x_property_name_casing_and_empty_values_handling() {
-    // Tests lowercase/mixed-case X- property names and empty X- property values:
+    // Parse lowercase and mixed-case X- names, plus empty X- values.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "fn:Case Insensitive User\r\n",
@@ -7831,7 +7934,7 @@ fn x_property_name_casing_and_empty_values_handling() {
         "wedding"
     );
 
-    // Empty and unknown X- properties are safely ignored
+    // Ignore empty and unknown X- properties.
     assert!(card.extra.is_empty());
 
     let re_emitted = card_to_vcard(&card);
@@ -7841,7 +7944,7 @@ fn x_property_name_casing_and_empty_values_handling() {
 
 #[test]
 fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
-    // Long NOTE values fold at 75 octets and unfold losslessly.
+    // NOTE values longer than 75 octets must fold and unfold without loss.
     let long_note_text = "This is an extremely long note that exceeds seventy-five octets by a substantial margin. \
         It contains detailed historical records, meeting minutes, action items, and extensive documentation \
         that must be folded across multiple physical lines according to RFC 2426 Section 2.6, and unfolded \
@@ -7857,7 +7960,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         },
     );
 
-    // 2. Inline base64 PHOTO round-trip: large binary image payload encoded as data URI
+    // Build an inline `PHOTO` payload as a data URI.
     let binary_data: Vec<u8> = (0..350).map(|i| (i % 256) as u8).collect();
     let base64_payload = base64::engine::general_purpose::STANDARD.encode(&binary_data);
     let photo_uri = format!("data:image/jpeg;base64,{base64_payload}");
@@ -7885,13 +7988,13 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         ..ContactCard::default()
     };
 
-    // Emit vCard
+    // Emit vCard text.
     let vcard = card_to_vcard(&card);
 
-    // Assert that folding occurred on the NOTE and PHOTO lines
+    // `NOTE` and `PHOTO` must include folded continuation lines.
     assert!(vcard.contains("\r\n "));
 
-    // Assert that physical lines in the vCard output target 75 octets and never exceed 77 octets
+    // Each physical line must stay within the RFC line-length limit.
     for physical_line in vcard.split("\r\n") {
         assert!(
             physical_line.len() <= 77,
@@ -7905,33 +8008,32 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         );
     }
 
-    // Read back and verify lossless unfolding
+    // Parse the output and check unfolded values.
     let read_card = vcard_to_card(&vcard).expect("parse folded vcard");
 
-    // Verify NOTE unfolded losslessly
+    // `NOTE` must round-trip without text changes.
     let read_notes = read_card.notes.as_ref().expect("notes present");
     assert_eq!(
         read_notes["n1"].note, long_note_text,
         "Folded NOTE did not unfold losslessly"
     );
 
-    // Verify PHOTO unfolded losslessly and preserved media_type and binary content
+    // `PHOTO` must keep media type and payload text.
     let read_media = read_card.media.as_ref().expect("media present");
     assert_eq!(read_media["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(read_media["m1"].media_type.as_deref(), Some("image/jpeg"));
     assert_eq!(read_media["m1"].uri, photo_uri);
 
-    // Verify fixed-point stability: emitting the parsed card produces identical vCard
+    // Re-emit the parsed card and verify a fixed point.
     let vcard2 = card_to_vcard(&read_card);
     assert_eq!(vcard2, vcard, "Emitted folded vCard must be at fixed-point");
 }
 
 #[test]
 fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
-    // RFC 2426 §2.6: Lines can be folded with CRLF + space OR CRLF + tab.
-    // Unfolding removes the CRLF and the immediately following space/tab continuation marker.
-    // If multiple spaces/tabs follow, only the first is the folding marker;
-    // subsequent spaces/tabs are part of the value.
+    // RFC 2426 §2.6: fold lines with `CRLF` plus space or tab.
+    // Unfolding removes `CRLF` and one continuation marker.
+    // Keep later spaces or tabs as payload bytes.
     let prefolded_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "UID:prefolded-card-1\r\n",
@@ -7968,7 +8070,7 @@ fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
         "+44 20 7946 0958"
     );
 
-    // ORG: note "  Service" has 2 spaces after CRLF -> 1 space in value
+    // ORG keeps one payload space after CRLF unfolding.
     let org = &card.organizations.as_ref().unwrap()["o1"];
     assert_eq!(org.name.as_deref(), Some("Metropolitan Police Service"));
     let units: Vec<&str> = org
@@ -7989,7 +8091,7 @@ fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
         "Lead Ballistics Specialist"
     );
 
-    // ADR structured components
+    // Check ADR structured components.
     let adr = &card.addresses.as_ref().unwrap()["a1"];
     let comp_map: BTreeMap<&str, &str> = adr
         .components
@@ -8006,35 +8108,35 @@ fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
     assert_eq!(comp_map.get("postcode"), Some(&"NW1 6XE"));
     assert_eq!(comp_map.get("country"), Some(&"United Kingdom"));
 
-    // LABEL
+    // Check LABEL.
     assert_eq!(
         adr.full.as_deref(),
         Some("221B Baker Street\nSuite 400\nLondon\nNW1 6XE\nUnited Kingdom")
     );
 
-    // NOTE: check multiline and leading space preservation
+    // Check NOTE multiline text and leading spaces.
     let note = &card.notes.as_ref().unwrap()["n1"].note;
     assert!(note.contains("First line of note.Continued with space.Continued with tab.  Three leading spaces (one fold + two data)."));
 
-    // CATEGORIES
+    // Check CATEGORIES.
     let keywords = card.keywords.as_ref().expect("keywords");
     assert!(keywords.contains_key("Forensics"));
     assert!(keywords.contains_key("Ballistics"));
     assert!(keywords.contains_key("Investigation"));
     assert!(keywords.contains_key("Scotland Yard"));
 
-    // URL
+    // Check URL.
     assert_eq!(
         card.links.as_ref().unwrap()["l1"].uri,
         "https://example.org/forensics/deep/case/archive"
     );
 
-    // PHOTO
+    // Check PHOTO.
     let photo = &card.media.as_ref().unwrap()["m1"];
     assert_eq!(photo.media_type.as_deref(), Some("image/PNG"));
     assert!(photo.uri.starts_with("data:image/PNG;base64,"));
 
-    // Re-emission must produce valid lines targeting 75 octets and reach fixed point
+    // Re-emission keeps valid line lengths and reaches a fixed point.
     let re_emitted = card_to_vcard(&card);
     for physical_line in re_emitted.split("\r\n") {
         assert!(
@@ -8049,22 +8151,22 @@ fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
 
 #[test]
 fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
-    // Tests that multi-byte UTF-8 sequences (2-byte, 3-byte, 4-byte) positioned
-    // across the 75-octet fold boundary are never split across line folds.
+    // This test checks fold boundaries around multi-byte UTF-8 data.
+    // A fold boundary must not split a UTF-8 code unit sequence.
     // Line folding must break on a valid UTF-8 character boundary.
 
     let test_cases = [
-        // 2-byte UTF-8 sequences (German umlauts, Cyrillic, accented Latin)
+        // 2-byte UTF-8 samples: umlauts, Cyrillic, accented Latin.
         ("2-byte umlauts", "äöüßéñДж"),
-        // 3-byte UTF-8 sequences (CJK characters, Japanese Hiragana, Devanagari)
+        // 3-byte UTF-8 samples: CJK, Hiragana, Devanagari.
         ("3-byte CJK & Hiragana", "漢字東京日本語संस्कृत"),
-        // 4-byte UTF-8 sequences (Emoji, musical and math symbols)
+        // 4-byte UTF-8 samples: emoji, musical symbols, math symbols.
         ("4-byte Emoji", "🦀🚀🌟🎉🔥𝄞𝕬🌍"),
     ];
 
     for (label, multibyte_sample) in test_cases {
-        // Test padding lengths from 40 to 85 bytes before the multi-byte characters
-        // to systematically exercise all possible boundary positions relative to 75 octets
+        // Vary prefix lengths from 40 to 85 bytes before multi-byte text.
+        // This hits many fold-boundary offsets near 75 octets.
         for pad_len in 40..=85 {
             let padding = "A".repeat(pad_len);
             let note_text = format!(
@@ -8135,8 +8237,8 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
 
 #[test]
 fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
-    // Validate folding around the 75-octet boundary.
-    // Prefix "NOTE;X-JMAP-KEY=n1:" is 19 octets.
+    // Check behavior near the 75-octet fold boundary.
+    // Prefix "NOTE;X-JMAP-KEY=n1:" adds 19 octets.
 
     for (target_line_len, expect_folded) in [
         (70, false),
@@ -8169,7 +8271,7 @@ fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
 
         let vcard = card_to_vcard(&card);
 
-        // Find the lines corresponding to NOTE
+        // Collect NOTE and continuation lines.
         let note_lines: Vec<&str> = vcard
             .split("\r\n")
             .filter(|l| l.starts_with("NOTE") || l.starts_with(' '))
@@ -8194,7 +8296,7 @@ fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
             );
         }
 
-        // Parse back and verify lossless recovery
+        // Parse back and confirm value recovery.
         let read_card = vcard_to_card(&vcard).expect("parse bounded card");
         assert_eq!(read_card.notes.as_ref().unwrap()["n1"].note, value);
     }
@@ -8202,10 +8304,9 @@ fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
 
 #[test]
 fn rfc2426_line_folding_with_escaped_delimiters_and_backslashes() {
-    // Tests line folding interacting with escaped characters:
-    // RFC 2426 §2 escaping: \n, \;, \,, \\ in Note values.
-    // Verify that newlines, commas, semicolons, and backslashes in multiline text
-    // fold and unfold without splitting escape tokens or losing characters.
+    // Check folding with escaped text delimiters.
+    // RFC 2426 section 2 escapes \n, \;, \,, and \\ in NOTE values.
+    // Folding must not split escape pairs or lose characters.
 
     let multiline_note = "Line 1 with text.\nLine 2 with semicolon ; and comma , and backslash \\.\nLine 3 with more text.";
     let long_note_with_escapes = multiline_note.repeat(4);
@@ -8306,10 +8407,8 @@ fn rfc2426_value_escaping_note_with_all_four_special_characters_roundtrip() {
 
 #[test]
 fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
-    // RFC 2426 §2 / §3.5.5: Commas inside ORG unit components and employer names:
-    // Semicolon (;) delimits components of ORG, while comma (,) inside a unit
-    // must be escaped as \, so it is not confused or lost, and semicolons inside
-    // a unit must be escaped as \; so they don't split the component.
+    // RFC 2426 §2 and §3.5.5: escape commas and semicolons inside ORG components.
+    // Keep `;` as the component separator. Escape data commas as `\,` and data semicolons as `\;`.
     let mut orgs = BTreeMap::new();
     orgs.insert(
         "o1".to_owned(),
@@ -8334,13 +8433,13 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
 
     let vcard = card_to_vcard(&card);
 
-    // Verify wire format contains escaped commas and semicolons
+    // Verify the wire format escapes commas and semicolons.
     assert!(
         vcard.contains(r"Acme\, Inc.") || vcard.contains("ORG;X-JMAP-KEY=o1:"),
         "vCard should contain escaped comma in ORG name: {vcard}"
     );
 
-    // Parse back
+    // Parse back.
     let read_card = vcard_to_card(&vcard).expect("parse org with escaped commas and semicolons");
     let read_org = &read_card.organizations.as_ref().unwrap()["o1"];
     assert_eq!(
@@ -8355,11 +8454,11 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
     assert_eq!(units[2].name, "Hardware; Systems Division");
     assert_eq!(units[3].name, "Unit with \\ backslash and \n newline");
 
-    // Fixed point convergence
+    // Verify fixed-point convergence.
     let vcard2 = card_to_vcard(&read_card);
     assert_eq!(vcard2, vcard, "Emitted vCard must reach fixed point");
 
-    // Test nameless organization with leading semicolon and commas in units
+    // Verify a nameless organization keeps a leading semicolon and escaped unit values.
     let mut nameless_orgs = BTreeMap::new();
     nameless_orgs.insert(
         "o_nameless".to_owned(),
@@ -8398,10 +8497,8 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
 
 #[test]
 fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
-    // RFC 2426 §2 / §3.2.1: Semicolons inside ADR components:
-    // Semicolon (;) is the component separator for ADR. A semicolon inside an
-    // individual component (e.g. street name "Suite 100; Building A") must be
-    // escaped as \; so it does not shift subsequent components into wrong slots.
+    // RFC 2426 §2 and §3.2.1: escape semicolons inside ADR components.
+    // Keep `;` as the ADR component separator. Escape data semicolons as `\;`.
     let mut addresses = BTreeMap::new();
     addresses.insert(
         "a1".to_owned(),
@@ -8432,7 +8529,7 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
 
     let vcard = card_to_vcard(&card);
 
-    // Parse back and verify no component shifting occurred
+    // Parse back and verify that no component shifts.
     let read_card = vcard_to_card(&vcard).expect("parse adr with escaped semicolons");
     let read_addr = &read_card.addresses.as_ref().unwrap()["a1"];
     let comps = read_addr.components.as_ref().unwrap();
@@ -8463,7 +8560,7 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
         )
     );
 
-    // Fixed point convergence
+    // Verify fixed-point convergence.
     let vcard2 = card_to_vcard(&read_card);
     assert_eq!(
         vcard2, vcard,
@@ -9421,11 +9518,11 @@ fn nickname_empty_absent_and_predicate_fidelity() {
 
 #[test]
 fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
-    // Characterizes URL properties into EDS fields:
-    // 1. Single URL (kind: None): maps to EDS E_CONTACT_HOMEPAGE_URL.
-    // 2. Multiple URLs (kind: None): emitted as multiple URL;X-JMAP-KEY=... lines.
-    //    EDS 3.52 maps the first URL line to E_CONTACT_HOMEPAGE_URL and preserves subsequent lines.
-    // 3. Roundtrips preserve all keys and URIs without data loss.
+    // Characterize URL properties in EDS fields.
+    // 1. One URL with kind None maps to E_CONTACT_HOMEPAGE_URL.
+    // 2. Multiple URLs with kind None emit multiple URL;X-JMAP-KEY=... lines.
+    // EDS 3.52 maps the first URL line to E_CONTACT_HOMEPAGE_URL and keeps later lines.
+    // 3. Roundtrips keep all keys and URIs.
 
     let mut links = BTreeMap::new();
     links.insert(
@@ -9500,9 +9597,8 @@ fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
 
 #[test]
 fn url_kind_filtering_and_contact_uri_omission() {
-    // JSContact `kind: "contact"` maps to vCard 4.0 CONTACT-URI, but vCard 3.0
-    // only has homepage-style URL. Emit URL only for plain website links
-    // (`kind: None`) so contact or vendor-specific kinds are not mislabeled.
+    // vCard 3.0 has URL but no CONTACT-URI field.
+    // Emit URL only for plain website links with `kind: None`.
 
     let mut links = BTreeMap::new();
     links.insert(
@@ -9558,7 +9654,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
     };
 
     let vcard = card_to_vcard(&card);
-    // Only the plain website link gets a URL line (feed, contact, news, vendor kinds are omitted)
+    // Emit `URL` only for plain website links.
     assert_eq!(vcard.matches("\r\nURL").count(), 1);
     assert_eq!(
         line(&vcard, "URL"),
@@ -9578,8 +9674,8 @@ fn url_kind_filtering_and_contact_uri_omission() {
 
 #[test]
 fn url_eds_blog_video_and_custom_extensions_characterization() {
-    // EDS blog and video URL properties map to link kinds.
-    // Vendor-prefixed variants without X-EVOLUTION- stay ignored.
+    // Map EDS blog and video URL properties to link kinds.
+    // Ignore vendor-prefixed variants without `X-EVOLUTION-`.
     let raw_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Alice Baker\r\n",
@@ -10411,7 +10507,8 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
 
 #[test]
 fn inbound_vcard_charset_parameter_variations_and_normalization() {
-    // Accept case-variant `CHARSET=UTF-8` input and normalize outbound vCard 3.0 by omitting CHARSET.
+    // Accept case-variant `CHARSET=UTF-8` input.
+    // Normalize outbound vCard 3.0 by omitting `CHARSET`.
     let vcard_inbound = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -10818,12 +10915,10 @@ fn photo_inline_base64_media_type_variants_and_roundtrip() {
 
 #[test]
 fn photo_uri_variant_and_lossy_media_type_characterization() {
-    // 1. Valid URI variants: HTTPS, HTTP, file://, URN
+    // 1. Supported URI variants: HTTPS and HTTP.
     let test_uris = [
         "https://example.com/alice.jpg",
         "http://photos.org/pic.png?size=large&format=raw",
-        "file:///home/user/.face",
-        "urn:uuid:6a2f7965-728b-47e2-8924-d2e7d7ffba44",
     ];
 
     for uri in test_uris {
@@ -10858,6 +10953,19 @@ fn photo_uri_variant_and_lossy_media_type_characterization() {
         assert_eq!(vcard, vcard2);
     }
 
+    // Unsupported URI schemes are not emitted as `PHOTO` lines.
+    for unsupported_uri in [
+        "file:///home/user/.face",
+        "ftp://photos.org/pic.png",
+        "urn:uuid:6a2f7965-728b-47e2-8924-d2e7d7ffba44",
+    ] {
+        let vcard = card_to_vcard(&one_photo(unsupported_uri, None));
+        assert!(
+            !vcard.contains("\r\nPHOTO"),
+            "unsupported URI must not emit PHOTO: {unsupported_uri} in {vcard}"
+        );
+    }
+
     // 2. Inbound parameter variations: VALUE=URI, value=uri, mixed case
     for val_param in ["VALUE=URI", "value=uri", "Value=Uri", "VALUE=uri"] {
         let vcard_in = format!(
@@ -10876,10 +10984,10 @@ fn photo_uri_variant_and_lossy_media_type_characterization() {
         );
     }
 
-    // 3. Lossy-by-design characterization: media_type on remote URI
-    // In JSContact, a remote URI may specify media_type: Some("image/jpeg").
-    // But RFC 2426 §3.1.4 states no TYPE on URI references, and EDS reads no TYPE off URI lines.
-    // Therefore, card_to_vcard omits TYPE by design, which reads back as media_type: None.
+    // 3. Lossy by design: media_type on a remote URI.
+    // JSContact can set media_type to Some("image/jpeg") on a remote URI.
+    // RFC 2426 §3.1.4 allows no TYPE on URI references, and EDS reads no TYPE there.
+    // card_to_vcard omits TYPE by design, so reads return media_type as None.
     let card_with_media_type = one_photo("https://example.org/photo.jpg", Some("image/jpeg"));
     let vcard_lossy = card_to_vcard(&card_with_media_type);
     assert_eq!(
@@ -11305,10 +11413,10 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
 
 #[test]
 fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
-    // Unsupported standard properties parse safely and are dropped on emission:
-    // GEO, TZ, MAILER, KIND, GENDER, LANG, SOCIALPROFILE, EXPERTISE, HOBBY,
-    // INTEREST, MEMBER, CONTACT-URI, ORG-DIRECTORY, SOURCE, XML, CREATED, PRODID, REV,
-    // SORT-STRING, CLASS, SOUND, LOGO.
+    // Parse unsupported standard properties and drop them on emit.
+    // Coverage list: GEO, TZ, MAILER, KIND, GENDER, GRAMGENDER, PRONOUNS, LANG, LANGUAGE,
+    // SOCIALPROFILE, EXPERTISE, HOBBY, INTEREST, MEMBER, CONTACT-URI, ORG-DIRECTORY,
+    // SOURCE, XML, CREATED, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
 
     let vcard_full = concat!(
         "BEGIN:VCARD\r\n",
@@ -11341,7 +11449,11 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "MAILER:Evolution 3.52 / JMAP Client\r\n",
         "KIND:group\r\n",
         "GENDER:M\r\n",
+        "GRAMGENDER:NEUTER\r\n",
+        "PRONOUNS;PREF=1:xe/xir\r\n",
+        "PRONOUNS;PREF=2:they/them\r\n",
         "LANG;TYPE=WORK;PREF=1:en\r\n",
+        "LANGUAGE:de-AT\r\n",
         "SOCIALPROFILE;SERVICE-TYPE=Mastodon:https://social.example/@albert\r\n",
         "EXPERTISE;LEVEL=beginner;INDEX=2:Chinese literature\r\n",
         "HOBBY;LEVEL=high;INDEX=1:reading\r\n",
@@ -11433,8 +11545,16 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
         "LANG must not project to preferred_languages in this profile"
     );
     assert!(
+        parsed.language.is_none(),
+        "LANGUAGE must not project to language in this profile"
+    );
+    assert!(
         parsed.personal_info.is_none(),
         "EXPERTISE/HOBBY/INTEREST must not project to personal_info in this profile"
+    );
+    assert!(
+        parsed.speak_to_as.is_none(),
+        "GRAMGENDER/PRONOUNS must not project to speak_to_as in this profile"
     );
 
     // Only PHOTO enters media; SOUND and LOGO are ignored.
@@ -11457,7 +11577,19 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert!(!emitted.contains("MAILER:"), "MAILER must not be emitted");
     assert!(!emitted.contains("KIND:"), "KIND must not be emitted");
     assert!(!emitted.contains("GENDER:"), "GENDER must not be emitted");
+    assert!(
+        !emitted.contains("GRAMGENDER:") && !emitted.contains("GRAMGENDER;"),
+        "GRAMGENDER must not be emitted"
+    );
+    assert!(
+        !emitted.contains("PRONOUNS:") && !emitted.contains("PRONOUNS;"),
+        "PRONOUNS must not be emitted"
+    );
     assert!(!emitted.contains("LANG:") && !emitted.contains("LANG;"));
+    assert!(
+        !emitted.contains("LANGUAGE:") && !emitted.contains("LANGUAGE;"),
+        "LANGUAGE must not be emitted"
+    );
     assert!(
         !emitted.contains("SOCIALPROFILE:") && !emitted.contains("SOCIALPROFILE;"),
         "SOCIALPROFILE must not be emitted"
@@ -11637,6 +11769,60 @@ fn standard_properties_individual_variations_and_parameters() {
         );
     }
 
+    // GRAMGENDER variants.
+    for gramgender_val in [
+        "GRAMGENDER:NEUTER",
+        "GRAMGENDER:FEMININE",
+        "GRAMGENDER:MASCULINE",
+        "GRAMGENDER:COMMON",
+        "gramgender:neuter",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Gramgender User\r\n{gramgender_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse GRAMGENDER");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Gramgender User")
+        );
+        assert!(
+            parsed.speak_to_as.is_none(),
+            "GRAMGENDER must not project to speak_to_as"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("GRAMGENDER:") && !emitted.contains("GRAMGENDER;"),
+            "GRAMGENDER must not be emitted"
+        );
+    }
+
+    // PRONOUNS variants.
+    for pronouns_val in [
+        "PRONOUNS;PREF=1:xe/xir",
+        "PRONOUNS;PREF=2:they/them",
+        "PRONOUNS;LANGUAGE=en:they/them",
+        "PRONOUNS;TYPE=work;PREF=3:ze/zir",
+        "pronouns;pref=1:elle/ella",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Pronouns User\r\n{pronouns_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse PRONOUNS");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Pronouns User")
+        );
+        assert!(
+            parsed.speak_to_as.is_none(),
+            "PRONOUNS must not project to speak_to_as"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("PRONOUNS:") && !emitted.contains("PRONOUNS;"),
+            "PRONOUNS must not be emitted"
+        );
+    }
+
     // LANG variants.
     for lang_val in [
         "LANG;TYPE=work;PREF=1:en",
@@ -11660,6 +11846,33 @@ fn standard_properties_individual_variations_and_parameters() {
         assert!(
             !emitted.contains("LANG:") && !emitted.contains("LANG;"),
             "LANG must not be emitted"
+        );
+    }
+
+    // LANGUAGE variants.
+    for language_val in [
+        "LANGUAGE:de-AT",
+        "LANGUAGE:en-US",
+        "LANGUAGE:zh-Hant",
+        "LANGUAGE:x-klingon",
+        "language:fr",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Language User\r\n{language_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse LANGUAGE");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Language User")
+        );
+        assert!(
+            parsed.language.is_none(),
+            "LANGUAGE must not project to language"
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("LANGUAGE:") && !emitted.contains("LANGUAGE;"),
+            "LANGUAGE must not be emitted"
         );
     }
 
@@ -12152,6 +12365,9 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "LANG:   ",
         "lang:",
         "LANG;TYPE=work:",
+        "LANGUAGE:",
+        "LANGUAGE:   ",
+        "language:",
         "SOCIALPROFILE:",
         "SOCIALPROFILE:   ",
         "socialprofile:",
@@ -12173,6 +12389,13 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         "GENDER:",
         "GENDER:   ",
         "gender:",
+        "GRAMGENDER:",
+        "GRAMGENDER:   ",
+        "gramgender:",
+        "PRONOUNS:",
+        "PRONOUNS:   ",
+        "pronouns:",
+        "PRONOUNS;PREF=1:",
         "MEMBER:",
         "MEMBER:   ",
         "member:",
@@ -12259,6 +12482,43 @@ fn contact_uri_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
 }
 
 #[test]
+fn clientpidmap_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:clientpidmap-profile-boundary-1\r\n",
+        "FN:CLIENTPIDMAP Profile Boundary\r\n",
+        "NOTE;X-JMAP-KEY=n1:Mapped note survives\r\n",
+        "CLIENTPIDMAP:1;urn:uuid:53e374d9-337e-4727-8803-a1e9c14e0556\r\n",
+        "clientpidmap:2;urn:uuid:53e374d9-337e-4727-8803-a1e9c14e0557\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse CLIENTPIDMAP profile boundary card");
+    let notes = parsed.notes.as_ref().expect("note map");
+    assert_eq!(notes.len(), 1, "only mapped NOTE line should remain");
+    assert_eq!(notes["n1"].note.as_str(), "Mapped note survives");
+    assert!(
+        parsed.extra.is_empty(),
+        "CLIENTPIDMAP must not project into card extra data"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("NOTE;X-JMAP-KEY=n1:Mapped note survives"),
+        "Mapped NOTE payload must survive"
+    );
+    assert!(
+        !emitted.contains("CLIENTPIDMAP:") && !emitted.contains("clientpidmap:"),
+        "CLIENTPIDMAP must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, reemitted, "Export reaches fixed point");
+}
+
+#[test]
 fn org_directory_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
     let vcard = concat!(
         "BEGIN:VCARD\r\n",
@@ -12297,6 +12557,120 @@ fn org_directory_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
     let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
     let reemitted = card_to_vcard(&reparsed);
     assert_eq!(emitted, reemitted, "Export reaches fixed point");
+}
+
+#[test]
+fn gramgender_and_pronouns_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:gramgender-pronouns-profile-boundary-1\r\n",
+        "FN:GRAMGENDER PRONOUNS Profile Boundary\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:Alex\r\n",
+        "GRAMGENDER:NEUTER\r\n",
+        "PRONOUNS;PREF=1:xe/xir\r\n",
+        "pronouns;PREF=2:they/them\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse GRAMGENDER/PRONOUNS profile boundary card");
+    let nicknames = parsed.nicknames.as_ref().expect("nickname map");
+    assert_eq!(nicknames.len(), 1, "only NICKNAME should remain mapped");
+    assert_eq!(nicknames["k1"].name.as_str(), "Alex");
+    assert!(
+        parsed.speak_to_as.is_none(),
+        "GRAMGENDER and PRONOUNS must not project to speak_to_as in this profile"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("NICKNAME;X-JMAP-KEY=k1:Alex"),
+        "Mapped NICKNAME payload must survive"
+    );
+    assert!(
+        !emitted.contains("GRAMGENDER:") && !emitted.contains("GRAMGENDER;"),
+        "GRAMGENDER must not be emitted"
+    );
+    assert!(
+        !emitted.contains("PRONOUNS:") && !emitted.contains("PRONOUNS;"),
+        "PRONOUNS must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, reemitted, "Export reaches fixed point");
+}
+
+#[test]
+fn x_ablabel_group_lines_stay_parse_safe_and_unmapped_in_eds_profile() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:x-ablabel-profile-boundary-1\r\n",
+        "FN:X-ABLabel Profile Boundary\r\n",
+        "item1.TEL:+1-555-0199\r\n",
+        "item1.X-ABLabel:Direct Line\r\n",
+        "item2.EMAIL:team@example.com\r\n",
+        "item2.X-ABLabel:Project Alias\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse X-ABLabel profile boundary card");
+
+    let phones = parsed.phones.as_ref().expect("phone map");
+    assert_eq!(phones.len(), 1, "one grouped phone must remain mapped");
+    let phone = phones.values().next().expect("grouped phone entry");
+    assert_eq!(phone.number, "+1-555-0199");
+    assert_eq!(phone.label(), Some("Direct Line"));
+
+    let emails = parsed.emails.as_ref().expect("email map");
+    assert_eq!(emails.len(), 1, "one grouped email must remain mapped");
+    let email = emails.values().next().expect("grouped email entry");
+    assert_eq!(email.address, "team@example.com");
+    assert_eq!(email.label(), Some("Project Alias"));
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("TEL;X-JMAP-KEY=p1:+1-555-0199"),
+        "Mapped TEL payload must survive"
+    );
+    assert!(
+        emitted.contains("EMAIL;X-JMAP-KEY=e1:team@example.com"),
+        "Mapped EMAIL payload must survive"
+    );
+    assert!(
+        !emitted.contains("X-ABLabel:") && !emitted.contains("X-ABLABEL:"),
+        "X-ABLabel annotations must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(emitted, reemitted, "Export reaches fixed point");
+
+    let reparsed_phone = reparsed
+        .phones
+        .as_ref()
+        .expect("reparsed phone map")
+        .values()
+        .next()
+        .expect("reparsed phone entry");
+    assert_eq!(
+        reparsed_phone.label(),
+        None,
+        "label metadata from grouped X-ABLabel does not survive vCard 3.0 profile export"
+    );
+    let reparsed_email = reparsed
+        .emails
+        .as_ref()
+        .expect("reparsed email map")
+        .values()
+        .next()
+        .expect("reparsed email entry");
+    assert_eq!(
+        reparsed_email.label(),
+        None,
+        "email label metadata from grouped X-ABLabel does not survive vCard 3.0 profile export"
+    );
 }
 
 #[test]
@@ -12351,7 +12725,7 @@ fn geo_tz_lines_with_adr_stay_parse_safe_and_unmapped_in_eds_profile() {
 
 #[test]
 fn phone_mobile_type_synonym_and_permutations_characterization() {
-    // `TYPE=MOBILE` should parse as mobile and normalize back to `TYPE=CELL`.
+    // Parse `TYPE=MOBILE` as mobile and normalize back to `TYPE=CELL`.
     let vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -12567,7 +12941,7 @@ fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
 
     assert_eq!(phones["p13_other_fax"].features, Some(json!({"fax": true})));
 
-    // Specialized telephony aliases should remain parseable and stateful.
+    // Specialized telephony aliases remain parseable and stateful.
     for (key, num) in [
         ("p14_car", "+1-555-0113"),
         ("p15_isdn", "+1-555-0114"),
@@ -13038,7 +13412,7 @@ fn evolution_links_and_relations_case_insensitivity_and_whitespace() {
         "X-Evolution-Assistant:Helper Person\r\n",
         "x-evolution-blog-url;X-JMAP-KEY=l_b:https://blogs.example.com/case\r\n",
         "X-Evolution-Video-Url;X-JMAP-KEY=l_v:https://video.example.com/case\r\n",
-        // Empty lines that should be ignored
+        // Ignore empty lines.
         "X-EVOLUTION-MANAGER:\r\n",
         "X-EVOLUTION-ASSISTANT:   \r\n",
         "X-EVOLUTION-BLOG-URL:\r\n",
@@ -13316,7 +13690,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
 
     let emitted_all3 = card_to_vcard(&card_all3);
 
-    // Verify emission order: a_work (pref: 1) is first, followed by a_home and a_other
+    // Check emission order: `a_work` (`pref: 1`) is first, then `a_home`, then `a_other`.
     let adr_lines: Vec<&str> = emitted_all3
         .lines()
         .filter(|l| l.starts_with("ADR"))
@@ -13328,7 +13702,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     assert_eq!(adr_lines.len(), 3, "3 ADR lines: {emitted_all3}");
     assert_eq!(label_lines.len(), 3, "3 LABEL lines: {emitted_all3}");
 
-    // Work slot (E_CONTACT_ADDRESS_WORK / E_CONTACT_ADDRESS_LABEL_WORK):
+    // Check the work slot (`E_CONTACT_ADDRESS_WORK` and `E_CONTACT_ADDRESS_LABEL_WORK`).
     assert!(
         adr_lines[0].contains("X-JMAP-KEY=a_work")
             && adr_lines[0].contains("TYPE=WORK")
@@ -13344,7 +13718,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         label_lines[0]
     );
 
-    // Home slot (E_CONTACT_ADDRESS_HOME / E_CONTACT_ADDRESS_LABEL_HOME):
+    // Check the home slot (`E_CONTACT_ADDRESS_HOME` and `E_CONTACT_ADDRESS_LABEL_HOME`).
     assert!(
         adr_lines[1].contains("X-JMAP-KEY=a_home")
             && adr_lines[1].contains("TYPE=HOME")
@@ -13358,7 +13732,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         label_lines[1]
     );
 
-    // Other slot (E_CONTACT_ADDRESS_OTHER / E_CONTACT_ADDRESS_LABEL_OTHER):
+    // Check the other slot (`E_CONTACT_ADDRESS_OTHER` and `E_CONTACT_ADDRESS_LABEL_OTHER`).
     assert!(
         adr_lines[2].contains("X-JMAP-KEY=a_other") && !adr_lines[2].contains("TYPE="),
         "Other ADR (unslotted): {}",
@@ -13370,15 +13744,15 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         label_lines[2]
     );
 
-    // Inbound parse: all 3 addresses are restored with their structured components AND full labels
+    // Parse inbound data and restore all 3 addresses with structured components and full labels.
     let parsed_all3 = vcard_to_card(&emitted_all3).expect("parse back all3");
     assert_eq!(parsed_all3, card_all3);
 
-    // Roundtrip fixed-point
+    // Confirm a round-trip fixed point.
     let re_emitted_all3 = card_to_vcard(&parsed_all3);
     assert_eq!(re_emitted_all3, emitted_all3);
 
-    // --- 2. All 3 slots with standalone LABEL only (no structured ADR) ---
+    // 2. All 3 slots use standalone `LABEL` only, without structured `ADR`.
     let card_labels_only = ContactCard {
         card_type: Some("Card".to_owned()),
         version: Some("1.0".to_owned()),
@@ -13438,7 +13812,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     let parsed_labels = vcard_to_card(&emitted_labels).expect("parse labels only");
     assert_eq!(parsed_labels, card_labels_only);
 
-    // --- 3. Mixed slots (Work: ADR+LABEL, Home: LABEL only, Other: ADR only) ---
+    // 3. Mixed slots: work uses `ADR` plus `LABEL`, home uses `LABEL` only, other uses `ADR` only.
     let card_mixed = ContactCard {
         card_type: Some("Card".to_owned()),
         version: Some("1.0".to_owned()),
@@ -13485,8 +13859,8 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     let parsed_mixed = vcard_to_card(&emitted_mixed).expect("parse mixed slots");
     assert_eq!(parsed_mixed, card_mixed);
 
-    // 4. Unkeyed WORK, HOME, and OTHER ADR plus LABEL lines.
-    // Labels pair with matching ADR context; bare LABEL maps to OTHER.
+    // 4. Parse unkeyed `WORK`, `HOME`, and `OTHER` `ADR` plus `LABEL` lines.
+    // Pair each label with its `ADR` context; map a bare `LABEL` to `OTHER`.
     let unkeyed_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Unkeyed Address Contact\r\n",
@@ -13502,7 +13876,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
 
     let unkeyed_card = vcard_to_card(unkeyed_vcard).expect("parse unkeyed addresses");
     let unkeyed_addrs = unkeyed_card.addresses.as_ref().expect("addresses");
-    // a1 WORK, a2 HOME, a3 OTHER, a4 bare LABEL.
+    // `a1` is work, `a2` is home, `a3` is other, and `a4` is a bare label.
     assert_eq!(
         unkeyed_addrs.len(),
         4,
@@ -13625,7 +13999,8 @@ fn email_and_address_label_edge_cases_and_parameter_permutations() {
 
 #[test]
 fn vcard_21_outlook_representative_fixture_import_and_normalization() {
-    // Representative Outlook vCard 2.1 fixture with legacy type words and quoted-printable payloads.
+    // Use a representative Outlook vCard 2.1 fixture.
+    // Keep legacy type words and quoted-printable payloads.
     let outlook_vcard_21 = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:2.1\r\n",
@@ -17083,7 +17458,7 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
             extra: BTreeMap::new(),
         },
     );
-    // Unmapped relations (no EDS slots — agent, child, colleague)
+    // Unmapped relations have no EDS slots: agent, child, colleague.
     related_to.insert(
         "David Agent".to_owned(),
         Relation {
@@ -17247,8 +17622,8 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
 
 #[test]
 fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
-    // Full-card regression: mapped fields survive while AGENT and SOUND stay parse-safe and omitted.
-    // Asserts fixed-point stability after AGENT/SOUND stripping.
+    // Full-card regression for AGENT and SOUND.
+    // Keep mapped fields, drop AGENT and SOUND, and keep fixed-point stability.
 
     let vcard_input = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
@@ -18101,7 +18476,7 @@ fn real_exporter_fixture_outlook_modern_vcard30_detailed_roundtrip() {
     let vcard_text = read_fixture("outlook_vcard30_export.vcf");
     let card = vcard_to_card(&vcard_text).expect("parse Outlook 3.0 fixture");
 
-    // 1. Verify 4-unit ORG hierarchy (Company, Unit 1, Unit 2, Office)
+    // 1. Confirm the four-level ORG hierarchy: company, unit 1, unit 2, office.
     let orgs = card.organizations.as_ref().unwrap();
     let org = orgs.values().next().unwrap();
     assert_eq!(org.name.as_deref(), Some("Nordic Solutions AB"));
@@ -18111,7 +18486,7 @@ fn real_exporter_fixture_outlook_modern_vcard30_detailed_roundtrip() {
     assert_eq!(units[1].name, "Platform Security");
     assert_eq!(units[2].name, "Executive Team");
 
-    // 2. Verify postal addresses and labels
+    // 2. Confirm postal address parsing and label content.
     let addresses = card.addresses.as_ref().unwrap();
     let work_adr = addresses
         .values()
@@ -18125,7 +18500,7 @@ fn real_exporter_fixture_outlook_modern_vcard30_detailed_roundtrip() {
             .contains("Stureplan 4, 5 tr")
     );
 
-    // 3. Export and ensure X-MS-* extensions are cleanly dropped
+    // 3. Export and confirm X-MS-* extensions are dropped.
     let export1 = card_to_vcard(&card);
     assert!(!export1.contains("X-MS-OL-DESIGN"));
     assert!(!export1.contains("X-MS-CARDPICTURE"));
@@ -18146,7 +18521,7 @@ fn real_exporter_fixture_outlook_classic_vcard21_detailed_roundtrip() {
     let vcard_text = read_fixture("outlook_vcard21_export.vcf");
     let card = vcard_to_card(&vcard_text).expect("parse Outlook 2.1 fixture");
 
-    // 1. Verify German umlauts decoded from QP
+    // 1. Confirm quoted-printable decoding of German umlauts.
     let name = card.name.as_ref().unwrap();
     assert_eq!(name.full.as_deref(), Some("Dr. Wolfgang Klaus Müller"));
 
@@ -18155,7 +18530,7 @@ fn real_exporter_fixture_outlook_classic_vcard21_detailed_roundtrip() {
     assert!(note_text.contains("Großkunde für Logistiklösungen"));
     assert!(note_text.contains("telefonische Kontaktaufnahme"));
 
-    // 2. Verify QP address decoded
+    // 2. Confirm quoted-printable address decoding.
     let addresses = card.addresses.as_ref().unwrap();
     let work_adr = addresses
         .values()
@@ -18163,7 +18538,7 @@ fn real_exporter_fixture_outlook_classic_vcard21_detailed_roundtrip() {
         .expect("work adr");
     assert!(work_adr.full.as_ref().unwrap().contains("Gebäude B"));
 
-    // 3. Export to strict vCard 3.0 UTF-8
+    // 3. Export as strict UTF-8 vCard 3.0.
     let export1 = card_to_vcard(&card);
     assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
     assert!(!export1.contains("QUOTED-PRINTABLE"));
@@ -18183,7 +18558,7 @@ fn real_exporter_fixture_nextcloud_carddav_vcard40_detailed_roundtrip() {
     let vcard_text = read_fixture("nextcloud_carddav_export.vcf");
     let card = vcard_to_card(&vcard_text).expect("parse Nextcloud fixture");
 
-    // 1. Verify data URI photo
+    // 1. Confirm data URI photo parsing.
     let media = card.media.as_ref().unwrap();
     let photo = media
         .values()
@@ -18192,7 +18567,7 @@ fn real_exporter_fixture_nextcloud_carddav_vcard40_detailed_roundtrip() {
     assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
     assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
 
-    // 2. Verify IMPP online services
+    // 2. Confirm IMPP online service mapping.
     let services = card.online_services.as_ref().unwrap();
     assert!(
         services
@@ -18205,7 +18580,7 @@ fn real_exporter_fixture_nextcloud_carddav_vcard40_detailed_roundtrip() {
             .any(|s| s.service.as_deref() == Some("Jabber"))
     );
 
-    // 3. Export to canonical vCard 3.0
+    // 3. Export as canonical vCard 3.0.
     let export1 = card_to_vcard(&card);
     assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
     assert!(!export1.contains("GENDER"));
@@ -18225,14 +18600,14 @@ fn real_exporter_fixture_evolution_native_vcard30_detailed_roundtrip() {
     let vcard_text = read_fixture("evolution_native_export.vcf");
     let card = vcard_to_card(&vcard_text).expect("parse Evolution fixture");
 
-    // 1. Verify File-As
+    // 1. Confirm File-As extraction.
     let name = card.name.as_ref().unwrap();
     assert_eq!(
         name.extra.get("fileAs"),
         Some(&serde_json::json!("Dubois, Henri (Aéronautique)"))
     );
 
-    // 2. Verify EDS relations, blogs, videos, and slotted IMs
+    // 2. Confirm EDS relation, blog, video, and slotted IM mappings.
     let relations = card.related_to.as_ref().unwrap();
     assert!(states_spouse(
         "Marie-Claire Dubois",
@@ -20507,12 +20882,10 @@ fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
 
 #[test]
 fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
-    // 1. Setting and emitting URI photos across various schemes
+    // 1. Setting and emitting URI photos on supported schemes.
     let uri_schemes = [
         "https://example.com/photos/avatar.jpg",
         "http://photos.internal.net/user.png",
-        "file:///home/runner/.photos/contact_profile.webp",
-        "ftp://files.example.org/images/id_badge.jpg",
     ];
 
     for uri in uri_schemes {
@@ -20536,6 +20909,23 @@ fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
         assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
         assert_eq!(media["m1"].uri, uri);
         assert_eq!(media["m1"].media_type, None);
+    }
+
+    // Unsupported URI schemes do not state media.
+    for uri in [
+        "file:///home/runner/.photos/contact_profile.webp",
+        "ftp://files.example.org/images/id_badge.jpg",
+    ] {
+        let card = one_photo(uri, None);
+        assert!(
+            !states_media(&card.media.as_ref().unwrap()["m1"]),
+            "unsupported URI must not state PHOTO: {uri}"
+        );
+        let vcard = card_to_vcard(&card);
+        assert!(
+            !vcard.contains("\r\nPHOTO"),
+            "unsupported URI leaked into PHOTO: {uri} in {vcard}"
+        );
     }
 
     // 2. Setting and emitting inlined binary photos across multiple MIME types
@@ -20691,20 +21081,8 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
             "http://example.org/pic.png",
         ),
         (
-            "PHOTO:file:///local/path/photo.webp",
-            "file:///local/path/photo.webp",
-        ),
-        (
-            "PHOTO:ftp://server.org/user.jpg",
-            "ftp://server.org/user.jpg",
-        ),
-        (
             "PHOTO;VALUE=URI:https://example.com/avatar.jpg",
             "https://example.com/avatar.jpg",
-        ),
-        (
-            "PHOTO;VALUE=uri:file:///local/photo.png",
-            "file:///local/photo.png",
         ),
     ];
 
@@ -20713,6 +21091,22 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
         assert_eq!(media.kind.as_deref(), Some("photo"));
         assert_eq!(media.uri, expected_uri);
         assert_eq!(media.media_type, None);
+    }
+
+    // Unsupported URI schemes are dropped on import.
+    for unsupported_line in [
+        "PHOTO:file:///local/path/photo.webp",
+        "PHOTO:ftp://server.org/user.jpg",
+        "PHOTO;VALUE=uri:file:///local/photo.png",
+        "PHOTO;VALUE=uri:smb://server/share/photo.png",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{unsupported_line}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse card with unsupported URI reference");
+        assert!(
+            parsed.media.is_none(),
+            "unsupported URI must not survive import: {unsupported_line}"
+        );
     }
 
     // Direct RFC 2397 data URIs parse as-is.
@@ -20902,19 +21296,19 @@ fn photo_roundtrip_fixpoint_multi_pass_convergence() {
     ];
 
     for original_card in test_cards {
-        // Pass 1: Card -> vCard1 -> Card1
+        // Run pass 1: card -> vCard1 -> card1.
         let vcard1 = card_to_vcard(&original_card);
         let card1 = vcard_to_card(&vcard1).expect("parse vcard1");
 
-        // Pass 2: Card1 -> vCard2 -> Card2
+        // Run pass 2: card1 -> vCard2 -> card2.
         let vcard2 = card_to_vcard(&card1);
         let card2 = vcard_to_card(&vcard2).expect("parse vcard2");
 
-        // Pass 3: Card2 -> vCard3 -> Card3
+        // Run pass 3: card2 -> vCard3 -> card3.
         let vcard3 = card_to_vcard(&card2);
         let card3 = vcard_to_card(&vcard3).expect("parse vcard3");
 
-        // Fixed point convergence: pass 2 and pass 3 must be strictly identical
+        // Pass 2 and pass 3 must be strictly identical.
         assert_eq!(
             vcard2, vcard3,
             "vCard output must reach fixed point at pass 2"
@@ -20932,10 +21326,10 @@ fn photo_roundtrip_fixpoint_multi_pass_convergence() {
 
 #[test]
 fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
-    // Only complete dates with year >= 1000 are anniversary-significant.
-    // Bare year, partial dates, ancient years, and deathday never emit anniversary lines.
+    // Emit anniversary lines only for complete dates with year >= 1000.
+    // Reject bare years, partial dates, ancient years, and death anniversaries.
 
-    // Birth variants.
+    // Birth cases.
     let bday_bare_year = one_anniversary("birth", json!({"year": 1984}));
     let bday_year_month = one_anniversary("birth", json!({"year": 1984, "month": 5}));
     let bday_month_day = one_anniversary("birth", json!({"month": 5, "day": 20}));
@@ -20944,13 +21338,13 @@ fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
     let bday_date_ancient = one_anniversary("birth", json!({"year": 800, "month": 6, "day": 21}));
     let bday_full = one_anniversary("birth", json!({"year": 1984, "month": 5, "day": 20}));
 
-    // Wedding variants.
+    // Wedding cases.
     let wedding_bare_year = one_anniversary("wedding", json!({"year": 2005}));
     let wedding_year_month = one_anniversary("wedding", json!({"year": 2005, "month": 11}));
     let wedding_month_day = one_anniversary("wedding", json!({"month": 11, "day": 15}));
     let wedding_full = one_anniversary("wedding", json!({"year": 2005, "month": 11, "day": 15}));
 
-    // Death variants.
+    // Death cases.
     let death_bare_year = one_anniversary("death", json!({"year": 2020}));
     let death_full = one_anniversary("death", json!({"year": 2020, "month": 1, "day": 15}));
 
@@ -21281,8 +21675,8 @@ fn anniversary_multi_pass_roundtrip_fixpoint_stability() {
 
 #[test]
 fn vcard_trailing_whitespace_and_nickname_encoding_fixpoint_characterization() {
-    // Unescaped trailing whitespace in inbound NICKNAME survives pass 1 emit, then
-    // calcard trims it on pass 2. Passes 2 and 3 must be byte-identical.
+    // Inbound NICKNAME with trailing whitespace survives pass 1 emit.
+    // calcard trims the trailing whitespace on pass 2. Passes 2 and 3 must match bytes.
     let raw_vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n";
     let parsed1 = vcard_to_card(raw_vcard).expect("first parse of raw vcard");
     assert_eq!(
@@ -21391,11 +21785,11 @@ fn vcard_trailing_whitespace_across_all_property_types_matrix() {
 
 #[test]
 fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
-    // ContactCards with `full: Some("")` and populated name components used to need one
-    // extra round trip: `card_to_vcard` emitted empty `FN:`, then `read_name` treated empty
-    // `FN` as absent and synthesized `full` on the next pass.
-    // The empty-is-absent filter now derives once, so both vCard and ContactCard stabilize
-    // by pass 2.
+    // `full: Some("")` plus name components used to need one extra pass.
+    // `card_to_vcard` emitted `FN:`.
+    // `read_name` treated empty `FN` as absent and derived `full` in the next pass.
+    // The empty-is-absent filter now derives once.
+    // vCard and ContactCard stabilize by pass 2.
     let test_names = vec![
         Name {
             components: Some(vec![NameComponent::new("given", "0")]),
@@ -21448,7 +21842,7 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
         let vcard3 = card_to_vcard(&parsed2);
         let parsed3 = vcard_to_card(&vcard3).expect("parse vcard3");
 
-        // Immediate fixed point at pass 1
+        // Pass 1 reaches a fixed point.
         assert_eq!(
             vcard1, vcard2,
             "vCard output must reach fixed point immediately at pass 1"
@@ -21458,7 +21852,7 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
             "ContactCard model must reach fixed point immediately at pass 1"
         );
 
-        // Fixed point at pass 2/3
+        // Passes 2 and 3 stay equal.
         assert_eq!(vcard2, vcard3);
         assert_eq!(parsed2, parsed3);
     }
@@ -21466,7 +21860,7 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
 
 #[test]
 fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
-    // Composite card with mixed trailing whitespace, escaped spaces, and multi-component fields
+    // Use one card with trailing spaces, escaped spaces, and multi-component fields.
     let raw_vcard = concat!(
         "BEGIN:VCARD\r\n",
         "VERSION:3.0\r\n",
@@ -21498,7 +21892,7 @@ fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
     let card4 = vcard_to_card(&vcard3).expect("pass 4 parse");
     let vcard4 = card_to_vcard(&card4);
 
-    // Multi-pass convergence verification
+    // Verify multi-pass convergence.
     assert_eq!(vcard2, vcard3, "vCard pass 2 == pass 3");
     assert_eq!(vcard3, vcard4, "vCard pass 3 == pass 4");
     assert_eq!(card2, card3, "ContactCard pass 2 == pass 3");
@@ -21507,7 +21901,7 @@ fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
 
 #[test]
 fn empty_org_name_reads_as_absent_inbound_matrix() {
-    // 1. Inbound vCards where ORG has only empty components parse to organizations: None
+    // Inbound ORG values with only empty components read as absent.
     let empty_org_vcards = [
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:\r\nEND:VCARD\r\n",
         "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;\r\nEND:VCARD\r\n",
@@ -21526,7 +21920,7 @@ fn empty_org_name_reads_as_absent_inbound_matrix() {
         );
     }
 
-    // 2. Inbound vCards with empty first component but non-empty units read name as None (absent)
+    // Inbound ORG values with an empty first component keep units and no name.
     let unit_only_vcards = [
         (
             "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;Engineering\r\nEND:VCARD\r\n",
@@ -22120,4 +22514,1231 @@ fn photo_non_image_mediatype_and_data_uri_roundtrip_fixpoint_matrix() {
             );
         }
     }
+}
+
+#[test]
+fn vcardparams_extension_parameters_drop_after_parse_and_emit_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Parameter Probe\r\n",
+        "EMAIL;TYPE=HOME;X-FOO=alpha;PID=1.1:param@example.test\r\n",
+        "TEL;TYPE=WORK,VOICE;X-BAR=beta;INDEX=2:+1-555-0100\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(source).expect("parse extension-parameter profile probe");
+    let emails = card.emails.as_ref().expect("emails map");
+    assert_eq!(emails["e1"].address, "param@example.test");
+    assert_eq!(emails["e1"].pref, None);
+    assert!(
+        emails["e1"].extra.is_empty(),
+        "profile does not retain RFC 9555 vCardParams metadata on EMAIL"
+    );
+
+    let phones = card.phones.as_ref().expect("phones map");
+    assert_eq!(phones["p1"].number, "+1-555-0100");
+    assert_eq!(phones["p1"].pref, None);
+    assert!(
+        phones["p1"].extra.is_empty(),
+        "profile does not retain RFC 9555 vCardParams metadata on TEL"
+    );
+
+    let emitted = card_to_vcard(&card);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=HOME"));
+    assert!(email_line.ends_with(":param@example.test"));
+
+    let tel_line = line(&emitted, "TEL;");
+    assert!(tel_line.contains("X-JMAP-KEY=p1"));
+    assert!(tel_line.contains("TYPE=WORK"));
+    assert!(tel_line.ends_with(":+1-555-0100"));
+    assert!(
+        !emitted.contains("X-FOO=")
+            && !emitted.contains("PID=")
+            && !emitted.contains("X-BAR=")
+            && !emitted.contains("INDEX="),
+        "non-projected parameters must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized profile probe");
+    assert_eq!(card, reparsed, "profile reaches fixed point after one pass");
+}
+
+#[test]
+fn vcardprops_extension_properties_drop_after_parse_and_emit_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Property Probe\r\n",
+        "item1.X-FOO;X-BAR=Hello:World!\r\n",
+        "EMAIL;TYPE=WORK:property@example.test\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(source).expect("parse extension-property profile probe");
+    let emails = card.emails.as_ref().expect("emails map");
+    assert_eq!(emails["e1"].address, "property@example.test");
+    assert!(
+        card.extra.is_empty(),
+        "profile does not retain RFC 9555 vCardProps metadata"
+    );
+
+    let emitted = card_to_vcard(&card);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=WORK"));
+    assert!(email_line.ends_with(":property@example.test"));
+    assert!(
+        !emitted.contains("item1.X-FOO") && !emitted.contains("X-BAR=Hello"),
+        "non-projected extension properties must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized profile probe");
+    assert_eq!(card, reparsed, "profile reaches fixed point after one pass");
+}
+
+#[test]
+fn vcardname_source_property_identity_is_not_retained_in_eds_profile() {
+    let mut online_services = BTreeMap::new();
+    online_services.insert(
+        "s1".to_owned(),
+        OnlineService {
+            service: Some("Jabber".to_owned()),
+            user: Some("alice@jabber.example".to_owned()),
+            extra: [("vCardName".to_owned(), json!("socialprofile"))].into(),
+            ..OnlineService::default()
+        },
+    );
+    let source = ContactCard {
+        online_services: Some(online_services),
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&source);
+    let service_line = line(&emitted, "X-JABBER;");
+    assert!(service_line.contains("X-JMAP-KEY=s1"));
+    assert!(service_line.contains("TYPE=HOME"));
+    assert!(service_line.ends_with(":alice@jabber.example"));
+    assert!(
+        !emitted.contains("IMPP:") && !emitted.contains("SOCIALPROFILE"),
+        "profile does not emit source-property identity as RFC 9555 vCardName metadata"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized profile probe");
+    let services = reparsed
+        .online_services
+        .as_ref()
+        .expect("online services map");
+    assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
+    assert_eq!(services["s1"].user.as_deref(), Some("alice@jabber.example"));
+    assert!(
+        services["s1"].extra.is_empty(),
+        "profile does not retain RFC 9555 vCardName metadata"
+    );
+
+    let re_emitted = card_to_vcard(&reparsed);
+    assert_eq!(
+        emitted, re_emitted,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn grouped_property_identity_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Grouped Property Probe\r\n",
+        "item1.URL:https://example.test/work\r\n",
+        "item2.URL:https://example.test/blog\r\n",
+        "item3.EMAIL:grouped@example.test\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse grouped-property profile probe");
+    let links = parsed.links.as_ref().expect("links map");
+    assert_eq!(links.len(), 2, "both grouped URL lines must remain mapped");
+    assert!(
+        links.values().all(|link| link.extra.is_empty()),
+        "profile does not retain RFC 9555 group metadata on URL"
+    );
+    assert!(
+        links
+            .values()
+            .any(|link| link.uri == "https://example.test/work"),
+        "work URL must survive"
+    );
+    assert!(
+        links
+            .values()
+            .any(|link| link.uri == "https://example.test/blog"),
+        "blog URL must survive"
+    );
+
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 1, "grouped EMAIL line must remain mapped");
+    assert_eq!(emails["e1"].address, "grouped@example.test");
+    assert!(
+        emails["e1"].extra.is_empty(),
+        "profile does not retain RFC 9555 group metadata on EMAIL"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(emitted.contains("URL;X-JMAP-KEY=l1:https://example.test/work"));
+    assert!(emitted.contains("URL;X-JMAP-KEY=l2:https://example.test/blog"));
+    assert!(emitted.contains("EMAIL;X-JMAP-KEY=e1:grouped@example.test"));
+    assert!(
+        !emitted.contains("item1.") && !emitted.contains("item2.") && !emitted.contains("item3."),
+        "grouped property identity must not be emitted"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized grouped-property probe");
+    let re_emitted = card_to_vcard(&reparsed);
+    assert_eq!(
+        emitted, re_emitted,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn sort_as_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Sort As Probe\r\n",
+        "N;SORT-AS=ProbeSort:Probe;Person;;;\r\n",
+        "ORG;SORT-AS=ProbeOrgSort,ProbeUnitSort:Probe Org;Research Unit\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse SORT-AS profile probe");
+    let name = parsed.name.as_ref().expect("name object");
+    assert_eq!(name.full.as_deref(), Some("Sort As Probe"));
+    assert!(
+        !name.extra.contains_key("sortAs"),
+        "profile does not retain RFC 9555 SORT-AS metadata on N"
+    );
+
+    let organizations = parsed.organizations.as_ref().expect("organizations map");
+    let organization = organizations.get("o1").expect("first organization");
+    assert_eq!(organization.name.as_deref(), Some("Probe Org"));
+    assert!(
+        organization.extra.is_empty(),
+        "profile does not retain RFC 9555 SORT-AS metadata on ORG"
+    );
+
+    let units = organization.units.as_ref().expect("org units");
+    assert_eq!(units.len(), 1);
+    assert_eq!(units[0].name, "Research Unit");
+    assert!(
+        units[0].extra.is_empty(),
+        "profile does not retain RFC 9555 SORT-AS metadata on ORG unit"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let org_line = line(&emitted, "ORG;");
+    assert!(org_line.contains("X-JMAP-KEY=o1"));
+    assert!(org_line.ends_with(":Probe Org;Research Unit"));
+    assert!(
+        !emitted.contains("SORT-AS="),
+        "non-projected SORT-AS parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized SORT-AS profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn jscomps_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:JSCOMPS Parameter Probe\r\n",
+        "N;JSCOMPS=\";1;0\":Doe;Jane;;;\r\n",
+        "ADR;JSCOMPS=\"s,\\\\, ;11;s, ;10;3\":;;123 Main St;Exampletown;;12345;Exampleland\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse JSCOMPS profile probe");
+    let name = parsed.name.as_ref().expect("name object");
+    assert_eq!(name.full.as_deref(), Some("JSCOMPS Parameter Probe"));
+    assert!(
+        name.extra.is_empty(),
+        "profile does not retain RFC 9555 JSCOMPS metadata on N"
+    );
+
+    let name_components = name.components.as_ref().expect("name components");
+    assert_eq!(name_components.len(), 2, "N components stay mapped");
+    assert!(
+        name_components
+            .iter()
+            .any(|component| component.value == "Doe")
+    );
+    assert!(
+        name_components
+            .iter()
+            .any(|component| component.value == "Jane")
+    );
+
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    let address = addresses.get("a1").expect("first address entry");
+    assert!(
+        address.extra.is_empty(),
+        "profile does not retain RFC 9555 JSCOMPS metadata on ADR"
+    );
+    let components = address.components.as_ref().expect("address components");
+    assert!(components.len() >= 3, "ADR components stay mapped");
+    assert!(
+        components
+            .iter()
+            .any(|component| component.value == "123 Main St")
+    );
+    assert!(
+        components
+            .iter()
+            .any(|component| component.value == "Exampletown")
+    );
+    assert!(
+        components
+            .iter()
+            .any(|component| component.value == "12345")
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let n_line = line(&emitted, "N");
+    assert_eq!(n_line, "N:Doe;Jane;;;");
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.ends_with(":;;123 Main St;Exampletown;;12345;Exampleland"));
+    assert!(
+        !emitted.contains("JSCOMPS="),
+        "non-projected JSCOMPS parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized JSCOMPS profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn jsptr_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:JSPTR Parameter Probe\r\n",
+        "EMAIL;TYPE=WORK:jsptr@example.test\r\n",
+        "JSPROP;JSPTR=\"/links/l1/uri\":https://example.test/jsptr\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse JSPTR parameter profile probe");
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 1, "one mapped EMAIL line must remain");
+    assert_eq!(emails["e1"].address, "jsptr@example.test");
+    assert!(
+        parsed.extra.is_empty(),
+        "profile does not retain RFC 9555 JSPROP/JSPTR extension metadata"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=WORK"));
+    assert!(email_line.ends_with(":jsptr@example.test"));
+    assert!(
+        !emitted.contains("JSPROP") && !emitted.contains("JSPTR="),
+        "non-projected JSPROP/JSPTR metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized JSPTR parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn note_metadata_parameters_are_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Note Metadata Probe\r\n",
+        "NOTE;ALTID=1;LANGUAGE=en;AUTHOR=\"mailto:author@example.test\";AUTHOR-NAME=\"Author Example\";CREATED=20221123T150132Z:Probe note text\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse NOTE metadata profile probe");
+    let notes = parsed.notes.as_ref().expect("notes map");
+    assert_eq!(notes.len(), 1, "one NOTE line must remain mapped");
+
+    let note = notes.get("n1").expect("first note entry");
+    assert_eq!(note.note, "Probe note text");
+    assert!(
+        note.author.is_none(),
+        "profile does not retain RFC 9555 AUTHOR metadata on NOTE"
+    );
+    assert!(
+        note.created.is_none(),
+        "profile does not retain RFC 9555 CREATED metadata on NOTE"
+    );
+    assert!(
+        note.extra.is_empty(),
+        "profile does not retain RFC 9555 NOTE metadata parameters"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let note_line = line(&emitted, "NOTE;");
+    assert!(note_line.contains("X-JMAP-KEY=n1"));
+    assert!(note_line.ends_with(":Probe note text"));
+    assert!(
+        !emitted.contains("AUTHOR=")
+            && !emitted.contains("AUTHOR-NAME=")
+            && !emitted.contains("CREATED=")
+            && !emitted.contains("ALTID=")
+            && !emitted.contains("LANGUAGE="),
+        "non-projected NOTE metadata parameters must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized NOTE metadata profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn derived_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "N:Probe;Derived;;;\r\n",
+        "FN;DERIVED=TRUE:Probe Derived\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse DERIVED profile probe");
+    let name = parsed.name.as_ref().expect("name object");
+    assert_eq!(name.full.as_deref(), Some("Probe Derived"));
+    assert!(name.components.is_some(), "N components must remain mapped");
+    assert!(
+        !name.extra.contains_key("derived"),
+        "profile does not retain RFC 9555 DERIVED metadata on FN"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(emitted.contains("N:Probe;Derived;;;\r\n"));
+    assert!(emitted.contains("FN:Probe Derived\r\n"));
+    assert!(
+        !emitted.contains("DERIVED="),
+        "non-projected DERIVED parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized DERIVED profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn calscale_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:CALSCALE Profile Probe\r\n",
+        "BDAY;CALSCALE=chinese:20211003\r\n",
+        "ANNIVERSARY;CALSCALE=gregorian:20220708\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse CALSCALE profile probe");
+    let anniversaries = parsed.anniversaries.as_ref().expect("anniversaries map");
+
+    let birth = anniversaries
+        .values()
+        .find(|anniversary| anniversary.kind == "birth")
+        .expect("birth anniversary");
+    assert_eq!(
+        birth.date,
+        Some(json!({"@type": "PartialDate", "year": 2021, "month": 10, "day": 3}))
+    );
+    assert!(
+        birth.extra.is_empty(),
+        "profile does not retain RFC 9555 CALSCALE metadata on BDAY"
+    );
+
+    let wedding = anniversaries
+        .values()
+        .find(|anniversary| anniversary.kind == "wedding")
+        .expect("wedding anniversary");
+    assert_eq!(
+        wedding.date,
+        Some(json!({"@type": "PartialDate", "year": 2022, "month": 7, "day": 8}))
+    );
+    assert!(
+        wedding.extra.is_empty(),
+        "profile does not retain RFC 9555 CALSCALE metadata on ANNIVERSARY"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let bday_line = line(&emitted, "BDAY;");
+    assert!(bday_line.contains("X-JMAP-KEY="));
+    assert!(bday_line.ends_with(":2021-10-03"));
+
+    let anniversary_line = line(&emitted, "ANNIVERSARY;");
+    assert!(anniversary_line.contains("X-JMAP-KEY="));
+    assert!(anniversary_line.ends_with(":2022-07-08"));
+    assert!(
+        emitted.contains("X-EVOLUTION-ANNIVERSARY;"),
+        "wedding anniversaries must keep X-EVOLUTION-ANNIVERSARY compatibility line"
+    );
+    assert!(
+        !emitted.contains("CALSCALE="),
+        "non-projected CALSCALE parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized CALSCALE profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn cc_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:CC Parameter Profile Probe\r\n",
+        "ADR;TYPE=HOME;CC=DE:;;Unter den Linden 1;Berlin;;10117;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse CC profile probe");
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "one ADR line must remain mapped");
+
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.country_code.as_deref(), None);
+    assert!(
+        address.extra.is_empty(),
+        "profile does not retain RFC 9555 CC metadata on ADR"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=HOME"));
+    assert!(adr_line.ends_with(":;;Unter den Linden 1;Berlin;;10117;Germany"));
+    assert!(
+        !emitted.contains("CC="),
+        "non-projected CC parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized CC profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn prop_id_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:PROP-ID Profile Probe\r\n",
+        "TEL;VALUE=uri;TYPE=work;PROP-ID=PHONE-A:tel:+1-202-555-0100\r\n",
+        "TEL;VALUE=uri;TYPE=home;PROP-ID=PHONE-B:tel:+1-202-555-0101\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse PROP-ID profile probe");
+    let phones = parsed.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 2, "both TEL lines must remain mapped");
+
+    for phone in phones.values() {
+        assert!(
+            phone.extra.is_empty(),
+            "profile does not retain RFC 9555 PROP-ID metadata on TEL"
+        );
+    }
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("TEL;X-JMAP-KEY="),
+        "emit must keep keyed TEL lines"
+    );
+    assert!(
+        !emitted.contains("PROP-ID="),
+        "non-projected PROP-ID parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized PROP-ID profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn pid_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:PID Profile Probe\r\n",
+        "EMAIL;TYPE=work;PID=1.1:pid-work@example.test\r\n",
+        "EMAIL;TYPE=home;PID=2.1:pid-home@example.test\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse PID profile probe");
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 2, "both EMAIL lines must remain mapped");
+
+    for email in emails.values() {
+        assert!(
+            email.extra.is_empty(),
+            "profile does not retain RFC 9555 PID metadata on EMAIL"
+        );
+    }
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        emitted.contains("EMAIL;X-JMAP-KEY="),
+        "emit must keep keyed EMAIL lines"
+    );
+    assert!(
+        !emitted.contains("PID="),
+        "non-projected PID parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized PID profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn username_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:USERNAME Profile Probe\r\n",
+        "IMPP;TYPE=work;USERNAME=alice.example:xmpp:alice@example.test\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse USERNAME profile probe");
+    let services = parsed
+        .online_services
+        .as_ref()
+        .expect("online services map");
+    assert_eq!(services.len(), 1, "IMPP line must remain mapped");
+
+    let service = services.get("s1").expect("first online service entry");
+    assert_eq!(service.service.as_deref(), Some("Jabber"));
+    assert_eq!(service.user.as_deref(), Some("alice@example.test"));
+    assert!(
+        service.extra.is_empty(),
+        "profile does not retain RFC 9555 USERNAME metadata on IMPP"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let service_line = line(&emitted, "X-JABBER;");
+    assert!(service_line.contains("X-JMAP-KEY=s1"));
+    assert!(service_line.contains("TYPE="));
+    assert!(service_line.ends_with(":alice@example.test"));
+    assert!(
+        !emitted.contains("USERNAME=") && !emitted.contains("IMPP:"),
+        "non-projected USERNAME metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized USERNAME profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn tz_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:TZ Parameter Probe\r\n",
+        "ADR;TYPE=home;TZ=Europe/Zurich:;;Bahnhofstrasse 1;Zurich;;8001;Switzerland\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse TZ parameter profile probe");
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "one ADR line must remain mapped");
+
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.time_zone.as_deref(), None);
+    assert!(
+        address.extra.is_empty(),
+        "profile does not retain RFC 9555 TZ metadata on ADR"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=HOME"));
+    assert!(adr_line.ends_with(":;;Bahnhofstrasse 1;Zurich;;8001;Switzerland"));
+    assert!(
+        !emitted.contains("TZ="),
+        "non-projected TZ parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized TZ parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn geo_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:GEO Parameter Probe\r\n",
+        "ADR;TYPE=home;GEO=\"geo:47.3769,8.5417\":;;Bahnhofstrasse 1;Zurich;;8001;Switzerland\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse GEO parameter profile probe");
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "one ADR line must remain mapped");
+
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.coordinates, None);
+    assert!(
+        address.extra.is_empty(),
+        "profile does not retain RFC 9555 GEO metadata on ADR"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=HOME"));
+    assert!(adr_line.ends_with(":;;Bahnhofstrasse 1;Zurich;;8001;Switzerland"));
+    assert!(
+        !emitted.contains("GEO="),
+        "non-projected GEO parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse normalized GEO parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn altid_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:ALTID Parameter Probe\r\n",
+        "TITLE;ALTID=1:Directrice\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse ALTID parameter profile probe");
+    let titles = parsed.titles.as_ref().expect("titles map");
+    assert_eq!(titles.len(), 1, "one TITLE line must remain mapped");
+
+    let title = titles.get("t1").expect("first title entry");
+    assert_eq!(title.name, "Directrice");
+    assert_eq!(title.kind, None);
+    assert!(
+        parsed.localizations.is_none(),
+        "profile does not retain RFC 9555 ALTID metadata as localizations"
+    );
+    assert!(
+        title.extra.is_empty(),
+        "profile does not retain RFC 9555 ALTID metadata on TITLE"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let title_line = line(&emitted, "TITLE;");
+    assert!(title_line.contains("X-JMAP-KEY=t1"));
+    assert!(title_line.ends_with(":Directrice"));
+    assert!(
+        !emitted.contains("ALTID="),
+        "non-projected ALTID parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized ALTID parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn language_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:LANGUAGE Parameter Probe\r\n",
+        "TITLE;LANGUAGE=fr:Directrice\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse LANGUAGE parameter profile probe");
+    let titles = parsed.titles.as_ref().expect("titles map");
+    assert_eq!(titles.len(), 1, "one TITLE line must remain mapped");
+
+    let title = titles.get("t1").expect("first title entry");
+    assert_eq!(title.name, "Directrice");
+    assert_eq!(title.kind, None);
+    assert!(
+        parsed.localizations.is_none(),
+        "profile does not retain RFC 9555 LANGUAGE metadata as localizations"
+    );
+    assert!(
+        title.extra.is_empty(),
+        "profile does not retain RFC 9555 LANGUAGE metadata on TITLE"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let title_line = line(&emitted, "TITLE;");
+    assert!(title_line.contains("X-JMAP-KEY=t1"));
+    assert!(title_line.ends_with(":Directrice"));
+    assert!(
+        !emitted.contains("LANGUAGE="),
+        "non-projected LANGUAGE parameter metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized LANGUAGE parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn index_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:INDEX Parameter Probe\r\n",
+        "ORG-DIRECTORY;INDEX=1:https://directory.example.com/people/alice\r\n",
+        "HOBBY;INDEX=2:Trail running\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse INDEX parameter profile probe");
+    assert_eq!(
+        parsed.name.as_ref().and_then(|name| name.full.as_deref()),
+        Some("INDEX Parameter Probe")
+    );
+    assert!(
+        parsed.directories.is_none(),
+        "profile does not retain RFC 9555 INDEX metadata as directories"
+    );
+    assert!(
+        parsed.personal_info.is_none(),
+        "profile does not retain RFC 9555 INDEX metadata as personal_info"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        !emitted.contains("INDEX="),
+        "non-projected INDEX parameter metadata must be dropped on emit in this profile"
+    );
+    assert!(
+        !emitted.contains("ORG-DIRECTORY:") && !emitted.contains("HOBBY:"),
+        "non-projected properties that carry INDEX metadata must stay dropped on emit"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized INDEX parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn level_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:LEVEL Parameter Probe\r\n",
+        "EXPERTISE;LEVEL=high:Chess openings\r\n",
+        "HOBBY;LEVEL=medium:Trail running\r\n",
+        "INTEREST;LEVEL=low:Classical guitar\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse LEVEL parameter profile probe");
+    assert_eq!(
+        parsed.name.as_ref().and_then(|name| name.full.as_deref()),
+        Some("LEVEL Parameter Probe")
+    );
+    assert!(
+        parsed.personal_info.is_none(),
+        "profile does not retain RFC 9555 LEVEL metadata as personal_info"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(
+        !emitted.contains("LEVEL="),
+        "non-projected LEVEL parameter metadata must be dropped on emit in this profile"
+    );
+    assert!(
+        !emitted.contains("EXPERTISE:") && !emitted.contains("EXPERTISE;"),
+        "non-projected properties that carry LEVEL metadata must stay dropped on emit"
+    );
+    assert!(
+        !emitted.contains("HOBBY:") && !emitted.contains("HOBBY;"),
+        "non-projected properties that carry LEVEL metadata must stay dropped on emit"
+    );
+    assert!(
+        !emitted.contains("INTEREST:") && !emitted.contains("INTEREST;"),
+        "non-projected properties that carry LEVEL metadata must stay dropped on emit"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized LEVEL parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn phonetic_and_script_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:PHONETIC Parameter Probe\r\n",
+        "N;PHONETIC=ipa;SCRIPT=Latn:Mueller;Vera;;;\r\n",
+        "ADR;TYPE=home;PHONETIC=ipa;SCRIPT=Latn:;;Hauptstrasse 1;Berlin;;10115;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse PHONETIC parameter profile probe");
+    let name = parsed.name.as_ref().expect("name present");
+    assert_eq!(name.full.as_deref(), Some("PHONETIC Parameter Probe"));
+    assert!(
+        !name.extra.contains_key("phoneticSystem"),
+        "profile does not retain RFC 9555 PHONETIC metadata on name"
+    );
+    assert!(
+        !name.extra.contains_key("phoneticScript"),
+        "profile does not retain RFC 9555 SCRIPT metadata on name"
+    );
+    let name_components = name.components.as_ref().expect("name components present");
+    assert_eq!(name_components.len(), 2);
+    assert!(
+        name_components
+            .iter()
+            .all(|component| !component.extra.contains_key("phonetic")),
+        "profile does not retain RFC 9555 PHONETIC component metadata on N"
+    );
+
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.contexts, Some(json!({"private": true})));
+    assert!(
+        !address.extra.contains_key("phoneticSystem"),
+        "profile does not retain RFC 9555 PHONETIC metadata on ADR"
+    );
+    assert!(
+        !address.extra.contains_key("phoneticScript"),
+        "profile does not retain RFC 9555 SCRIPT metadata on ADR"
+    );
+    let address_components = address
+        .components
+        .as_ref()
+        .expect("address components present");
+    assert!(
+        address_components
+            .iter()
+            .all(|component| !component.extra.contains_key("phonetic")),
+        "profile does not retain RFC 9555 PHONETIC component metadata on ADR"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let n_line = line(&emitted, "N");
+    assert_eq!(n_line, "N:Mueller;Vera;;;");
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=HOME"));
+    assert!(adr_line.ends_with(":;;Hauptstrasse 1;Berlin;;10115;Germany"));
+    assert!(
+        !emitted.contains("PHONETIC="),
+        "non-projected PHONETIC metadata must be dropped on emit in this profile"
+    );
+    assert!(
+        !emitted.contains("SCRIPT="),
+        "non-projected SCRIPT metadata must be dropped on emit in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized PHONETIC parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn service_type_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:SERVICE-TYPE Parameter Probe\r\n",
+        "IMPP;SERVICE-TYPE=skype:skype:alice.example\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse SERVICE-TYPE parameter profile probe");
+    let services = parsed
+        .online_services
+        .as_ref()
+        .expect("online services map");
+    assert_eq!(services.len(), 1, "one IMPP line must remain mapped");
+
+    let service = services.get("s1").expect("first online service entry");
+    assert_eq!(service.service.as_deref(), Some("Skype"));
+    assert_eq!(service.user.as_deref(), Some("alice.example"));
+    assert_eq!(service.uri, None);
+    assert!(
+        service.extra.is_empty(),
+        "profile does not retain RFC 9555 SERVICE-TYPE metadata on IMPP"
+    );
+
+    let emitted = card_to_vcard(&parsed);
+    let service_line = line(&emitted, "X-SKYPE;");
+    assert!(service_line.contains("X-JMAP-KEY=s1"));
+    assert!(service_line.contains("TYPE=HOME"));
+    assert!(service_line.ends_with(":alice.example"));
+    assert!(
+        !emitted.contains("SERVICE-TYPE="),
+        "non-projected SERVICE-TYPE metadata must be dropped on emit in this profile"
+    );
+    assert!(
+        !emitted.contains("IMPP;"),
+        "emission uses EDS service slots rather than IMPP in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized SERVICE-TYPE parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn value_parameter_metadata_is_not_retained_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:VALUE Parameter Probe\r\n",
+        "TEL;VALUE=uri;TYPE=work:tel:+1-202-555-0110\r\n",
+        "PHOTO;VALUE=uri:https://cdn.example.test/value-probe.png\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse VALUE parameter profile probe");
+    let phones = parsed.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 1, "TEL line must remain mapped");
+
+    let phone = phones.get("p1").expect("first phone entry");
+    assert_eq!(phone.number, "tel:+1-202-555-0110");
+    assert_eq!(phone.contexts, Some(json!({"work": true})));
+    assert!(
+        phone.extra.is_empty(),
+        "profile does not retain RFC 9555 VALUE metadata on TEL"
+    );
+
+    let media = parsed.media.as_ref().expect("media map");
+    assert_eq!(media.len(), 1, "PHOTO line must remain mapped");
+
+    let photo = media.get("m1").expect("first media entry");
+    assert_eq!(photo.uri, "https://cdn.example.test/value-probe.png");
+    assert_eq!(photo.media_type, None);
+
+    let emitted = card_to_vcard(&parsed);
+    let tel_line = line(&emitted, "TEL;");
+    assert!(tel_line.contains("X-JMAP-KEY=p1"));
+    assert!(tel_line.contains("TYPE=WORK"));
+    assert!(tel_line.ends_with(":tel:+1-202-555-0110"));
+    assert!(
+        !tel_line.contains("VALUE=uri"),
+        "non-projected VALUE metadata must be dropped on emit for TEL in this profile"
+    );
+
+    let photo_line = line(&emitted, "PHOTO;");
+    assert!(photo_line.contains("X-JMAP-KEY=m1"));
+    assert!(photo_line.contains("VALUE=uri"));
+    assert!(photo_line.ends_with(":https://cdn.example.test/value-probe.png"));
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized VALUE parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn label_parameter_maps_to_address_full_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:LABEL Parameter Probe\r\n",
+        "ADR;LABEL=Apartment 4B;TYPE=home:;;42 Example Street;Berlin;;10115;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse LABEL parameter profile probe");
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "ADR line must remain mapped");
+
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.full.as_deref(), Some("Apartment 4B"));
+    assert_eq!(address.contexts, Some(json!({"private": true})));
+
+    let emitted = card_to_vcard(&parsed);
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=HOME"));
+    assert!(adr_line.ends_with(":;;42 Example Street;Berlin;;10115;Germany"));
+    assert!(
+        !adr_line.contains("LABEL="),
+        "ADR output carries address fields while LABEL moves to a dedicated line"
+    );
+
+    let label_line = line(&emitted, "LABEL;");
+    assert!(label_line.contains("X-JMAP-KEY=a1"));
+    assert!(label_line.contains("TYPE=HOME"));
+    assert!(label_line.ends_with(":Apartment 4B"));
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized LABEL parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn type_parameter_maps_contexts_and_drops_unmapped_tokens_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:TYPE Parameter Probe\r\n",
+        "EMAIL;TYPE=HOME,X-LEGACY:home-type@example.test\r\n",
+        "TEL;TYPE=WORK,CELL,PREF,X-LEGACY:tel:+1-202-555-0123\r\n",
+        "ADR;TYPE=WORK,X-LEGACY:;;500 Example Avenue;Berlin;;10999;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse TYPE parameter profile probe");
+
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 1, "EMAIL line must remain mapped");
+    let email = emails.get("e1").expect("first email entry");
+    assert_eq!(email.address, "home-type@example.test");
+    assert_eq!(email.contexts, Some(json!({"private": true})));
+
+    let phones = parsed.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 1, "TEL line must remain mapped");
+    let phone = phones.get("p1").expect("first phone entry");
+    assert_eq!(phone.number, "tel:+1-202-555-0123");
+    assert_eq!(phone.contexts, Some(json!({"work": true})));
+    assert_eq!(phone.features, Some(json!({"mobile": true})));
+    assert_eq!(phone.pref, Some(1));
+
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "ADR line must remain mapped");
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.contexts, Some(json!({"work": true})));
+
+    let emitted = card_to_vcard(&parsed);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=HOME"));
+    assert!(email_line.ends_with(":home-type@example.test"));
+
+    let tel_line = line(&emitted, "TEL;");
+    assert!(tel_line.contains("X-JMAP-KEY=p1"));
+    assert!(tel_line.contains("TYPE=WORK,CELL,PREF"));
+    assert!(tel_line.ends_with(":tel:+1-202-555-0123"));
+
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=WORK"));
+    assert!(adr_line.ends_with(":;;500 Example Avenue;Berlin;;10999;Germany"));
+
+    assert!(
+        !emitted.contains("X-LEGACY"),
+        "non-projected TYPE tokens must be dropped on emit in this profile"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized TYPE parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
+}
+
+#[test]
+fn pref_parameter_rank_is_normalized_to_flag_in_eds_profile() {
+    let source = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:PREF Parameter Probe\r\n",
+        "EMAIL;PREF=7;TYPE=WORK:primary.rank@example.test\r\n",
+        "TEL;PREF=9;TYPE=HOME,VOICE:tel:+1-202-555-0134\r\n",
+        "ADR;PREF=5;TYPE=WORK:;;700 Preference Way;Berlin;;10117;Germany\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(source).expect("parse PREF parameter profile probe");
+
+    let emails = parsed.emails.as_ref().expect("emails map");
+    assert_eq!(emails.len(), 1, "EMAIL line must remain mapped");
+    let email = emails.get("e1").expect("first email entry");
+    assert_eq!(email.address, "primary.rank@example.test");
+    assert_eq!(email.contexts, Some(json!({"work": true})));
+    assert_eq!(email.pref, Some(1));
+
+    let phones = parsed.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 1, "TEL line must remain mapped");
+    let phone = phones.get("p1").expect("first phone entry");
+    assert_eq!(phone.number, "tel:+1-202-555-0134");
+    assert_eq!(phone.contexts, Some(json!({"private": true})));
+    assert_eq!(phone.features, Some(json!({"voice": true})));
+    assert_eq!(phone.pref, Some(1));
+
+    let addresses = parsed.addresses.as_ref().expect("addresses map");
+    assert_eq!(addresses.len(), 1, "ADR line must remain mapped");
+    let address = addresses.get("a1").expect("first address entry");
+    assert_eq!(address.contexts, Some(json!({"work": true})));
+    assert_eq!(address.extra.get("pref"), Some(&json!(1)));
+
+    let emitted = card_to_vcard(&parsed);
+    let email_line = line(&emitted, "EMAIL;");
+    assert!(email_line.contains("X-JMAP-KEY=e1"));
+    assert!(email_line.contains("TYPE=WORK,PREF"));
+    assert!(email_line.ends_with(":primary.rank@example.test"));
+
+    let tel_line = line(&emitted, "TEL;");
+    assert!(tel_line.contains("X-JMAP-KEY=p1"));
+    assert!(tel_line.contains("TYPE=HOME,VOICE,PREF"));
+    assert!(tel_line.ends_with(":tel:+1-202-555-0134"));
+
+    let adr_line = line(&emitted, "ADR;");
+    assert!(adr_line.contains("X-JMAP-KEY=a1"));
+    assert!(adr_line.contains("TYPE=WORK,PREF"));
+    assert!(adr_line.ends_with(":;;700 Preference Way;Berlin;;10117;Germany"));
+
+    assert!(
+        !emitted.contains("PREF=7") && !emitted.contains("PREF=9") && !emitted.contains("PREF=5"),
+        "profile normalizes PREF ranking to a preferred flag"
+    );
+
+    let reparsed =
+        vcard_to_card(&emitted).expect("reparse normalized PREF parameter profile probe");
+    assert_eq!(
+        parsed, reparsed,
+        "profile reaches fixed point after one pass"
+    );
 }

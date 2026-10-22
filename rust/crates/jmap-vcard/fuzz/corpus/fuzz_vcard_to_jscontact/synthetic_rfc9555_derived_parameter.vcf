@@ -1,0 +1,5 @@
+BEGIN:VCARD
+VERSION:4.0
+N:Seed;Derived;;;
+FN;DERIVED=TRUE:Seed Derived
+END:VCARD

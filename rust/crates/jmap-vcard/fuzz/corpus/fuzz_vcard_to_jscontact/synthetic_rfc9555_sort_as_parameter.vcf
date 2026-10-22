@@ -1,0 +1,6 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:Sort As Seed
+N;SORT-AS=SeedSort:Seed;Person;;;
+ORG;SORT-AS=SeedOrgSort,SeedUnitSort:Seed Org;Research Unit
+END:VCARD

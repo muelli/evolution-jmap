@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `Blob/get`, `Blob/upload`, `Blob/lookup` (RFC 9404), and `Blob/copy`
-//! (RFC 8620 §5.7).
+//! Implement `Blob/get`, `Blob/upload`, and `Blob/lookup` from RFC 9404.
+//! Implement `Blob/copy` from RFC 8620 section 5.7.
 
 use std::collections::BTreeMap;
 
@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256, Sha512};
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::AccountState;
 
-/// Default `Blob/get` properties (RFC 9404 §2.1) when omitted.
+/// Default `Blob/get` properties when the request omits `properties`.
 const DEFAULT_PROPERTIES: &[&str] = &["data:asBase64", "size"];
 
 fn slice_bytes(data: &[u8], offset: Option<u64>, length: Option<u64>) -> &[u8] {
@@ -37,8 +37,8 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// `Blob/get` (RFC 9404 §2.1). `offset` and `length` slice octets first, so
-/// derived size and digest values describe the slice, not the whole blob.
+/// Handle `Blob/get` from RFC 9404 section 2.1.
+/// Apply `offset` and `length` before size and digest calculation.
 pub fn blob_get(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -82,8 +82,8 @@ pub fn blob_get(
     to_result(&BlobGetResponse::new(request.account_id, list).with_not_found(not_found))
 }
 
-/// Resolve one `Blob/upload` creation (RFC 9404 §2.2) into bytes.
-/// Returns the first `SetError` from invalid source data.
+/// Resolve one `Blob/upload` `create` entry into bytes.
+/// Return the first `SetError` for invalid source input.
 fn resolve_data(account: &AccountState, sources: &[DataSource]) -> Result<Vec<u8>, SetError> {
     let mut bytes = Vec::new();
     for source in sources {
@@ -112,8 +112,8 @@ fn resolve_data(account: &AccountState, sources: &[DataSource]) -> Result<Vec<u8
     Ok(bytes)
 }
 
-/// `Blob/upload` (RFC 9404 §2.2). Each `create` entry is independent, so one
-/// failed entry does not stop others.
+/// Handle `Blob/upload` from RFC 9404 section 2.2.
+/// Process each `create` entry independently.
 pub fn blob_upload(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -152,8 +152,8 @@ pub fn blob_upload(
     )
 }
 
-/// `Blob/lookup` (RFC 9404 §2.3). This mock has no reverse reference index, so
-/// `matchedIds` is always empty for known blobs.
+/// Handle `Blob/lookup` from RFC 9404 section 2.3.
+/// This mock has no reverse reference index, so `matchedIds` stays empty.
 pub fn blob_lookup(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -178,9 +178,10 @@ pub fn blob_lookup(
     to_result(&BlobLookupResponse::new(request.account_id, list).with_not_found(not_found))
 }
 
-/// `Blob/copy` (RFC 8620 §5.7). Copying to `accountId` assigns new blob ids.
-/// Unknown source accounts fail the whole call with `fromAccountNotFound`.
-/// Unknown blob ids fail only those entries in `notCopied`.
+/// Handle `Blob/copy` from RFC 8620 section 5.7.
+/// Assign a new blob id in the destination `accountId`.
+/// Return `fromAccountNotFound` for an unknown source account.
+/// Keep unknown blob ids in `notCopied`.
 pub fn blob_copy(
     state: &mut crate::state::ServerState,
     arguments: Value,

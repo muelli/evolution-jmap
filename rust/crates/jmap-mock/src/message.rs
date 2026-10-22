@@ -1,32 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Minimal RFC 5322 reader used by `Email/import`.
+//! Read a minimal RFC 5322 subset for `Email/import`.
 //!
-//! Most of this crate serializes structured `Email` values to message bytes.
-//! `Email/import` is the reverse path, so this module reads a narrow subset
-//! from raw bytes.
+//! Most modules serialize structured `Email` values to message bytes.
+//! `Email/import` reverses that path. This module parses a small raw-byte
+//! subset.
 //!
 //! Scope: unfolded headers, address lists, message IDs, and preview text.
-//! It intentionally skips MIME trees, RFC 2047 encoded words, temporal headers,
-//! and address groups. Tests that need those features should seed messages
-//! directly.
+//! This module skips MIME trees, RFC 2047 encoded words, temporal headers,
+//! and address groups. Tests that need those features seed messages directly.
 
 use jmap_proto::mail::EmailAddress;
 
-/// Preview character limit, matching seeded messages.
+/// Preview character limit. Keep this value aligned with seeded messages.
 const PREVIEW: usize = 64;
 
-/// Parsed message fields consumed by this server.
+/// Parsed message fields that this server uses.
 pub(crate) struct Message {
-    /// Header fields in wire order as lowercase name and unfolded value.
+    /// Header fields in wire order. Use lowercase names and unfolded values.
     fields: Vec<(String, String)>,
     /// Message body after the header block, interpreted as UTF-8 text.
     body: String,
 }
 
 impl Message {
-    /// Parses `source`, returning `None` for invalid UTF-8 or invalid header syntax.
+    /// Parse `source`. Return `None` for invalid UTF-8 or header syntax.
     pub(crate) fn read(source: &[u8]) -> Option<Self> {
         let source = std::str::from_utf8(source).ok()?;
         let (headers, body) = split(source);
@@ -36,7 +35,7 @@ impl Message {
             if line.is_empty() {
                 continue;
             }
-            // Leading whitespace means a folded continuation line.
+            // Treat a leading space or tab as a folded continuation line.
             if line.starts_with([' ', '\t']) {
                 let (_, value) = fields.last_mut()?;
                 value.push(' ');
@@ -59,7 +58,7 @@ impl Message {
         })
     }
 
-    /// Returns the first value of a lowercase header name.
+    /// Return the first value for a lowercase header name.
     fn field(&self, name: &str) -> Option<&str> {
         self.fields
             .iter()
@@ -72,7 +71,7 @@ impl Message {
         self.field("subject").map(str::to_owned)
     }
 
-    /// Parses one address-list header into JMAP addresses.
+    /// Parse one address-list header into JMAP addresses.
     pub(crate) fn addresses(&self, name: &str) -> Option<Vec<EmailAddress>> {
         let addresses: Vec<EmailAddress> = split_addresses(self.field(name)?)
             .into_iter()
@@ -81,7 +80,7 @@ impl Message {
         (!addresses.is_empty()).then_some(addresses)
     }
 
-    /// Parses message-id style headers and strips optional angle brackets.
+    /// Parse message-id style headers. Strip optional angle brackets.
     pub(crate) fn message_ids(&self, name: &str) -> Option<Vec<String>> {
         let ids: Vec<String> = self
             .field(name)?
@@ -95,7 +94,7 @@ impl Message {
         (!ids.is_empty()).then_some(ids)
     }
 
-    /// Builds a one-line preview from the start of the body.
+    /// Build a one-line preview from the body start.
     pub(crate) fn preview(&self) -> Option<String> {
         let preview: String = self
             .body
@@ -109,7 +108,7 @@ impl Message {
     }
 }
 
-/// Splits the message into headers and body at the first blank line.
+/// Split the message into headers and body at the first blank line.
 fn split(source: &str) -> (&str, &str) {
     match source.find("\r\n\r\n") {
         Some(end) => (&source[..end], &source[end + 4..]),
@@ -120,12 +119,12 @@ fn split(source: &str) -> (&str, &str) {
     }
 }
 
-/// Whether `byte` is valid RFC 5322 `ftext` for a field name.
+/// Return true if `byte` is valid RFC 5322 `ftext` for a field name.
 fn is_field_name(byte: u8) -> bool {
     (33..=57).contains(&byte) || (59..=126).contains(&byte)
 }
 
-/// Splits an address list on top-level commas.
+/// Split an address list on top-level commas.
 fn split_addresses(list: &str) -> Vec<&str> {
     let mut addresses = Vec::new();
     let mut quoted = false;
@@ -147,7 +146,7 @@ fn split_addresses(list: &str) -> Vec<&str> {
     addresses
 }
 
-/// Parses one address in `Name <local@domain>` or bare `local@domain` form.
+/// Parse one address in `Name <local@domain>` or bare `local@domain` form.
 fn address(address: &str) -> Option<EmailAddress> {
     let address = address.trim();
     if address.is_empty() {
@@ -196,7 +195,7 @@ mod tests {
 
     #[test]
     fn what_is_not_a_message_is_refused() {
-        // No fields, broken header syntax, or non-UTF-8 bytes.
+        // Reject missing fields, invalid header syntax, and non-UTF-8 bytes.
         assert!(Message::read(b"").is_none());
         assert!(Message::read(b"this was never a message").is_none());
         assert!(Message::read(b"Subject: fine\r\nnot a field\r\n").is_none());

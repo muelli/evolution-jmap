@@ -3,14 +3,13 @@
 
 include_guard(GLOBAL)
 
-# Only add RPM to the generator list cpack builds by default
-# (`cmake --build <dir> --target package`, which is what the release
-# workflow runs) when rpmbuild is actually installed. Appending it
-# unconditionally broke that exact command on the release image, which
-# has no rpmbuild: CPack's RPM generator aborts the whole `cpack` run with
-# "RPM package requires rpmbuild executable" even though nothing asked for
-# an RPM, taking the .deb down with it. `ci/rpm.sh` is the documented way
-# to build the RPM deliberately, in a Fedora container that has rpmbuild.
+# Add RPM to the default CPack generators only when `rpmbuild` exists.
+# Release jobs run `cmake --build <dir> --target package`.
+# Some release images do not ship `rpmbuild`.
+# If CPack adds RPM anyway, `cpack` fails with
+# "RPM package requires rpmbuild executable".
+# This failure also blocks `.deb` output.
+# Run `ci/rpm.sh` to build RPM packages in a Fedora container.
 find_program(RPMBUILD_EXECUTABLE rpmbuild)
 if(RPMBUILD_EXECUTABLE AND NOT "RPM" IN_LIST CPACK_GENERATOR)
 	list(APPEND CPACK_GENERATOR RPM)
@@ -41,6 +40,10 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSES/GPL-3.0-or-later.t
 
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Productivity")
 
+# This RPM payload ships no helper scripts or service files.
+# Keep explicit Requires unset.
+# Let automatic ELF dependency generation provide runtime Requires.
+
 set(CPACK_RPM_USER_FILELIST
 	"%attr(-,root,root) ${EDS_BOOK_BACKEND_DIR}/libebookbackendjmap.so"
 	"%attr(-,root,root) ${EDS_CAL_BACKEND_DIR}/libecalbackendjmap.so"
@@ -48,10 +51,10 @@ set(CPACK_RPM_USER_FILELIST
 	"%attr(-,root,root) ${CAMEL_PROVIDER_DIR}/libcameljmap.urls"
 	"%attr(-,root,root) ${EDS_REGISTRY_MODULE_DIR}/module-jmap-backend.so"
 	"%attr(-,root,root) ${EVOLUTION_MODULE_DIR}/module-jmap-configuration.so"
-	"%attr(-,root,root) /usr/share/doc/${PACKAGE_NAME}/changelog.gz"
-	"%attr(-,root,root) /usr/share/doc/${PACKAGE_NAME}/copyright"
-	"%attr(-,root,root) /usr/share/doc/${PACKAGE_NAME}/third-party-notices"
-	"%attr(-,root,root) /usr/share/lintian/overrides/${PACKAGE_NAME}"
+	"%exclude /usr/share/doc/${PACKAGE_NAME}/changelog.gz"
+	"%license /usr/share/doc/${PACKAGE_NAME}/copyright"
+	"%doc /usr/share/doc/${PACKAGE_NAME}/third-party-notices"
+	"%exclude /usr/share/lintian/overrides/${PACKAGE_NAME}"
 )
 
 if(INSTALLED_CATALOGUES)
@@ -76,7 +79,7 @@ if(RPMBUILD_EXECUTABLE AND RPMLINT_EXECUTABLE)
 			"set -euo pipefail; cmake --build \"$BUILD_DIR\"; rm -f \"$BUILD_DIR\"/*.rpm; cpack --config \"$BUILD_DIR/CPackConfig.cmake\" -G RPM --verbose -B \"$BUILD_DIR\""
 	)
 
-	# --strict: a warning fails too, as any lintian tag fails the .deb gate.
+	# `--strict` treats warnings as failures. This matches the lintian gate.
 	add_test(
 		NAME package-rpm-lint
 		COMMAND ${CMAKE_COMMAND} -E env

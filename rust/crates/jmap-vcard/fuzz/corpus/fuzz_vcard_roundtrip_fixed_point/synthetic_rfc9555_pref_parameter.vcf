@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:PREF Parameter Seed
+EMAIL;PREF=7;TYPE=WORK:primary.rank@example.test
+TEL;PREF=9;TYPE=HOME,VOICE:tel:+1-202-555-0134
+ADR;PREF=5;TYPE=WORK:;;700 Preference Way;Berlin;;10117;Germany
+END:VCARD

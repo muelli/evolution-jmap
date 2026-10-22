@@ -17,16 +17,17 @@ workspace = true
 name = "jmap_vcard"
 
 [dependencies]
-# A photo crosses as base64 on the wire in both formats — a `data:` URI's
-# payload on the JSContact side, an `ENCODING=b` value on the vCard side.
+# Photo bytes use base64 in both formats.
+# JSContact uses a `data:` URI payload.
+# vCard uses an `ENCODING=b` value.
 base64 = { workspace = true }
 calcard = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-# The mapping is also exercised against what the mock server really returns,
-# not only against checked-in fixtures.
+# The tests also use values from the mock server.
+# This check complements checked-in fixtures.
 evolution-jmap-client = { workspace = true }
 evolution-jmap-mock = { workspace = true }
 proptest = "1"

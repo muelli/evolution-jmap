@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Hostile-input tests for server-controlled `ContactCard` data.
+//! Test hostile server input for `ContactCard`.
 
 use std::collections::BTreeMap;
 
-use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone};
+use jmap_proto::contacts::{ContactCard, ContactEmail, ContactPhone, Media};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 
-/// Map keys become parameter text, so line breaks are stripped.
+/// Build a card with one email map entry under `key`.
 fn card_with_email_key(key: &str) -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
@@ -25,7 +25,116 @@ fn card_with_email_key(key: &str) -> ContactCard {
     }
 }
 
-/// CRLF in a map key must not terminate `EMAIL` and inject `FN`.
+/// Build a card with one `photo` media entry under `m1`.
+fn card_with_photo_uri(uri: &str) -> ContactCard {
+    let mut media = BTreeMap::new();
+    media.insert(
+        "m1".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: uri.to_owned(),
+            ..Media::default()
+        },
+    );
+    ContactCard {
+        id: Some("C1".into()),
+        media: Some(media),
+        ..ContactCard::default()
+    }
+}
+
+/// Reject unsupported photo URI schemes on write.
+#[test]
+fn a_file_uri_photo_from_the_server_is_not_written_as_a_photo_line() {
+    for uri in [
+        "file:///home/user/.ssh/id_ed25519",
+        "ftp://files.example.net/avatar.jpg",
+        "smb://server/share/avatar.png",
+        "://empty-scheme.example/avatar.png",
+        "avatar.png",
+    ] {
+        let vcard = card_to_vcard(&card_with_photo_uri(uri));
+        assert!(
+            !vcard.contains("\r\nPHOTO"),
+            "unsupported uri leaked into PHOTO line: {uri} in {vcard}"
+        );
+        assert!(
+            !vcard.contains(uri),
+            "unsupported uri leaked into rendered card: {uri} in {vcard}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse rendered card");
+        assert!(
+            parsed.media.is_none(),
+            "unsupported uri survived parse: {vcard}"
+        );
+    }
+}
+
+/// Drop inbound local or unsupported URI references.
+#[test]
+fn inbound_photo_uri_references_with_unsupported_schemes_are_dropped() {
+    for line in [
+        "PHOTO;VALUE=uri:file:///home/user/.face",
+        "PHOTO;VALUE=uri:ftp://files.example.net/avatar.jpg",
+        "PHOTO;VALUE=uri:smb://server/share/avatar.png",
+        "PHOTO;VALUE=uri:://empty-scheme.example/avatar.png",
+        "PHOTO:file:///home/user/.face",
+        "PHOTO:://empty-scheme.example/avatar.png",
+    ] {
+        let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse card with unsupported photo uri");
+        assert!(
+            parsed.media.is_none(),
+            "unsupported URI reference must not become media: {line}"
+        );
+    }
+}
+
+/// Keep inbound `data:` photo URIs from `VALUE=uri`.
+#[test]
+fn inbound_photo_value_uri_data_payload_stays_mapped() {
+    let line = "PHOTO;VALUE=uri:data:image/png;base64,aGVsbG8=";
+    let vcard = format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n{line}\r\nEND:VCARD\r\n");
+    let parsed = vcard_to_card(&vcard).expect("parse card with VALUE=uri data photo");
+    let media = parsed.media.expect("media map");
+    let photo = media.values().next().expect("photo entry");
+    assert_eq!(photo.kind.as_deref(), Some("photo"));
+    assert_eq!(photo.uri, "data:image/png;base64,aGVsbG8=");
+    assert_eq!(photo.media_type.as_deref(), Some("image/png"));
+}
+
+/// Do not leak local-file photo bytes during save.
+#[test]
+fn inbound_file_uri_photo_does_not_turn_into_outbound_inline_data() {
+    let inbound = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nPHOTO;VALUE=uri:file:///dev/zero\r\nEMAIL:vera@example.com\r\nEND:VCARD\r\n";
+
+    let parsed = vcard_to_card(inbound).expect("parse inbound file URI photo");
+    assert!(
+        parsed.media.is_none(),
+        "local file URI must not become media on read"
+    );
+
+    let saved = card_to_vcard(&parsed);
+    assert!(
+        !saved.contains("\r\nPHOTO"),
+        "save path must not emit PHOTO from a dropped file URI: {saved}"
+    );
+    assert!(
+        !saved.contains("file:///dev/zero"),
+        "save path must not preserve local file URI text: {saved}"
+    );
+    assert!(
+        !saved.contains("data:"),
+        "save path must not emit inline data from a local URI: {saved}"
+    );
+    assert!(
+        saved.contains("EMAIL"),
+        "control field must stay present after save-path roundtrip: {saved}"
+    );
+}
+
+/// Reject CRLF in map keys: `EMAIL` must stay one line.
 #[test]
 fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
     let vcard = card_to_vcard(&card_with_email_key("e1\r\nFN:Mallory\r\nX-TAIL"));
@@ -42,7 +151,7 @@ fn a_crlf_in_a_map_key_cannot_add_a_property_to_the_card() {
     assert_eq!(names, ["BEGIN", "VERSION", "UID", "EMAIL", "END"]);
 }
 
-/// Bare LF or CR must not start a new content line.
+/// Strip bare LF or CR from map keys before write.
 #[test]
 fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
     for key in ["e1\nFN:Mallory", "e1\rFN:Mallory", "e1\n\rFN:Mallory"] {
@@ -59,7 +168,7 @@ fn a_bare_lf_or_cr_in_a_map_key_is_stripped_too() {
     }
 }
 
-/// Embedded quotes in a quoted parameter must not open a second parameter.
+/// Do not let embedded quotes open a second parameter.
 #[test]
 fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     let vcard = card_to_vcard(&card_with_email_key("x\";FN=\"Mallory"));
@@ -75,6 +184,39 @@ fn a_quote_in_a_map_key_cannot_open_a_parameter_of_its_own() {
     assert_eq!(emails.values().next().unwrap().address, "vera@example.com");
 }
 
+/// Parameter text with `"` or `^` must use RFC 6868 caret escapes.
+#[test]
+fn x_jmap_key_parameter_text_uses_rfc_6868_caret_escapes() {
+    let key = "x\"^y";
+    let vcard = card_to_vcard(&card_with_email_key(key));
+    assert!(
+        vcard.contains("X-JMAP-KEY=x^'^^y"),
+        "parameter text must use RFC 6868 caret escapes: {vcard}"
+    );
+    assert!(
+        !vcard.contains("x\\\"^y"),
+        "parameter text must not use backslash-quote escaping: {vcard}"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse emitted card");
+    assert!(
+        parsed.emails.expect("emails").contains_key(key),
+        "decoded map key must match source text"
+    );
+}
+
+/// Decode inbound RFC 6868 caret escapes on read.
+#[test]
+fn x_jmap_key_caret_escapes_decode_on_read() {
+    let vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\nEMAIL;X-JMAP-KEY=\"x^'^^y\":vera@example.com\r\nEND:VCARD\r\n";
+    let parsed = vcard_to_card(vcard).expect("parse card with escaped parameter text");
+    assert!(
+        parsed.emails.expect("emails").contains_key("x\"^y"),
+        "RFC 6868 escapes must decode into the key text"
+    );
+}
+
+/// Reject CRLF in phone map keys.
 #[test]
 fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     let mut phones = BTreeMap::new();
@@ -99,7 +241,7 @@ fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     );
 }
 
-/// Escaped value newlines stay data and do not inject properties.
+/// Keep escaped value newlines as data text.
 #[test]
 fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
     let mut card = ContactCard {
@@ -127,7 +269,7 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
 use jmap_vcard::VCardError;
 use std::time::{Duration, Instant};
 
-/// Truncated inputs return typed errors, without panic or hang.
+/// Return typed errors for truncated cards.
 #[test]
 fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     let not_vcard_cases = ["", "   ", "\r\n", "\n", "\t"];
@@ -169,7 +311,7 @@ fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
     }
 }
 
-/// Unbalanced parameter quoting must not panic, hang, or inject properties.
+/// Reject unbalanced parameter quoting. Do not panic or inject properties.
 #[test]
 fn unbalanced_quoting_in_vcard_parameters_matrix() {
     let hostile_quoted = [
@@ -194,7 +336,7 @@ fn unbalanced_quoting_in_vcard_parameters_matrix() {
     }
 }
 
-/// Extreme folding patterns must not panic or mis-parse root fields.
+/// Parse extreme folding patterns without panic or field drift.
 #[test]
 fn absurd_folding_every_second_octet_matrix() {
     let mut folded = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:\r\n");
@@ -228,6 +370,7 @@ fn absurd_folding_every_second_octet_matrix() {
     );
 }
 
+/// Parse a 10,000-property card within the runtime bound.
 #[test]
 fn card_with_10k_properties_bounded_execution() {
     let mut large_vcard = String::with_capacity(500_000);
@@ -259,7 +402,7 @@ fn card_with_10k_properties_bounded_execution() {
     );
 }
 
-/// Deeply nested AGENT vCards stay bounded.
+/// Keep deeply nested AGENT vCards within the runtime bound.
 #[test]
 fn deeply_nested_agent_robustness() {
     for depth in [10, 50, 100, 500] {
@@ -290,6 +433,7 @@ fn deeply_nested_agent_robustness() {
     }
 }
 
+/// Accept LF and CRLF endings. Reject bare CR endings.
 #[test]
 fn crlf_lf_cr_mixed_line_endings_matrix() {
     let pure_lf = "BEGIN:VCARD\nVERSION:3.0\nFN:Alice Smith\nEMAIL:alice@example.com\nNOTE:Line 1\n Line 2\nEND:VCARD\n";
@@ -325,7 +469,7 @@ fn crlf_lf_cr_mixed_line_endings_matrix() {
     ));
 }
 
-/// Malformed PHOTO payloads never panic or corrupt parsed fields.
+/// Malformed PHOTO payloads must not panic or corrupt parsed fields.
 #[test]
 fn malformed_photo_base64_and_corrupt_data_uri_matrix() {
     let hostile_photos = [
@@ -353,7 +497,7 @@ fn malformed_photo_base64_and_corrupt_data_uri_matrix() {
     }
 }
 
-/// Multibyte UTF-8 in parsed fields does not panic on boundaries.
+/// Parse UTF-8 fields without panic at byte boundaries.
 #[test]
 fn adversarial_multibyte_utf8_slice_boundary_matrix() {
     let multi_byte_chars = [

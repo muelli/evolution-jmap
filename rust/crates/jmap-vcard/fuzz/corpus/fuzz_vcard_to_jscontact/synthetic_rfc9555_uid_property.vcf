@@ -1,0 +1,7 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:UID Section Probe
+uid:server-id-primary
+UID:server-id-secondary
+X-JMAP-UID:urn:uuid:8e96c46a-f5d2-42ea-a43d-492a7a2cf5aa
+END:VCARD

@@ -1,0 +1,5 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:Note Metadata Seed
+NOTE;ALTID=1;LANGUAGE=en;AUTHOR="mailto:seed-author@example.test";AUTHOR-NAME="Seed Author";CREATED=20221123T150132Z:Seed note metadata payload
+END:VCARD

@@ -1,6 +1,6 @@
-//! Raw FFI declarations used by the example module.
+//! Declare raw FFI types for the example module.
 //!
-//! `build.rs` handles all linker flags through `pkg-config`.
+//! `build.rs` resolves linker flags with `pkg-config`.
 
 #![allow(dead_code, non_camel_case_types, non_snake_case)]
 
@@ -8,7 +8,7 @@ use std::os::raw::{c_char, c_int, c_uint, c_ulong, c_void};
 
 pub type GType = usize;
 
-// This module assumes 64-bit `GType`.
+// `GType` uses 64 bits on this target.
 const _: () = assert!(
     std::mem::size_of::<usize>() == 8,
     "GType is assumed to be 8 bytes (64-bit platforms only)"
@@ -42,7 +42,7 @@ pub struct GTypeInstance {
     pub g_class: *mut GTypeClass,
 }
 
-// Must match `struct _GObjectClass` from `<gobject/gobject.h>` on LP64.
+// Match `struct _GObjectClass` from `<gobject/gobject.h>` on LP64.
 
 #[repr(C)]
 pub struct GObjectClass {
@@ -67,7 +67,7 @@ pub struct GObjectClass {
                                            // total: 136
 }
 
-// Matches `struct _EExtensionClass` from `<libebackend/e-extension.h>`.
+// Match `struct _EExtensionClass` from `<libebackend/e-extension.h>`.
 
 #[repr(C)]
 pub struct EExtensionClass {
@@ -76,11 +76,11 @@ pub struct EExtensionClass {
     pub _reserved: [*mut c_void; 16], // 128
 }
 
-// Written during class init and read afterwards.
+// Class init writes this field. Later code reads this field.
 unsafe impl Sync for EExtensionClass {}
 unsafe impl Send for EExtensionClass {}
 
-// Matches `struct _GTypeInfo` from `<gobject/gtype.h>`.
+// Match `struct _GTypeInfo` from `<gobject/gtype.h>`.
 
 #[repr(C)]
 pub struct GTypeInfo {
@@ -96,10 +96,10 @@ pub struct GTypeInfo {
     pub value_table: *const c_void,
 }
 
-// Contains only function pointers and static pointers.
+// This type stores only function pointers and static data pointers.
 unsafe impl Sync for GTypeInfo {}
 
-// Matches `struct _GTypeQuery` from `<gobject/gtype.h>`.
+// Match `struct _GTypeQuery` from `<gobject/gtype.h>`.
 
 #[repr(C)]
 pub struct GTypeQuery {
@@ -109,7 +109,7 @@ pub struct GTypeQuery {
     pub instance_size: c_uint,
 }
 
-// Matches `GtkActionEntry` from `<gtk/gtkactiongroup.h>`.
+// Match `GtkActionEntry` from `<gtk/gtkactiongroup.h>`.
 
 #[repr(C)]
 pub struct GtkActionEntry {
@@ -121,7 +121,7 @@ pub struct GtkActionEntry {
     pub callback: Option<unsafe extern "C" fn(*mut GtkAction, *mut c_void)>,
 }
 
-// Fields are null or static pointers.
+// Fields are null or static data pointers.
 unsafe impl Sync for GtkActionEntry {}
 
 extern "C" {
