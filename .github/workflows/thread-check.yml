@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Weekly run of the pure-Rust crates' tests under ThreadSanitizer. The logic
+# is in ci/thread-check.sh, which runs the same way locally. Not on every
+# push: it needs a nightly toolchain and an instrumented standard library.
+# Dispatch by hand with: gh workflow run thread-check.yml
+
+name: Thread check
+
+on:
+  schedule:
+    - cron: "17 4 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  thread-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: ci/install-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: thread-check
+          workspaces: rust -> ../build/thread-check-target
+      - run: ci/thread-check.sh
