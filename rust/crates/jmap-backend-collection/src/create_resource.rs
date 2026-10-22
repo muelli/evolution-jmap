@@ -109,7 +109,7 @@ use eds_sys::{
     ENamedParameters, ESource, ESourceCredentialsProvider, ESourceRegistryServer,
     e_named_parameters_free, e_server_side_source_set_writable,
     e_server_side_source_set_write_directory, e_source_credentials_provider_lookup_sync,
-    e_source_get_display_name, e_source_get_uid, e_source_registry_server_ref_credentials_provider,
+    e_source_dup_display_name, e_source_get_uid, e_source_registry_server_ref_credentials_provider,
     e_source_set_parent,
 };
 use gio_sys::{
@@ -120,7 +120,7 @@ use glib_sys::{GError, GFALSE, GTRUE, g_error_free};
 use jmap_backend_core::connect::Collection;
 use jmap_backend_core::error::{cstring_lossy, invalid_arg_gerror, to_gerror};
 use jmap_backend_core::i18n::{translate, translate_with};
-use jmap_backend_core::marshal::{password as password_of, read_string};
+use jmap_backend_core::marshal::{password as password_of, read_string, take_string};
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::source::{self, ConnectTarget};
 use jmap_backend_core::trampoline::{log_critical, log_critical_for_account};
@@ -254,8 +254,8 @@ pub unsafe fn requested_of(source: *mut ESource) -> Option<Requested> {
     // SAFETY: the contract of the caller is the contract of `kind_of`.
     let kind = unsafe { kind_of(source) }?;
     // SAFETY: a valid source, because `kind_of` returned `Some` for it. The
-    // getter returns NULL or a string that the source owns.
-    let display_name = unsafe { read_string(e_source_get_display_name(source)) };
+    // `dup_` getter gives a copy that a setter on another thread cannot free.
+    let display_name = unsafe { take_string(e_source_dup_display_name(source)) };
     Some(Requested {
         kind,
         display_name: display_name.unwrap_or_default(),

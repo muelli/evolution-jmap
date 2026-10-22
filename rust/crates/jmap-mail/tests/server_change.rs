@@ -15,11 +15,12 @@ use std::ptr;
 
 use common::Account;
 use eds_sys::{
-    CAMEL_STORE_FOLDER_NONE, CamelFolder, camel_folder_get_folder_summary,
+    CAMEL_MESSAGE_SEEN, CAMEL_STORE_FOLDER_NONE, CamelFolder, camel_folder_get_folder_summary,
     camel_folder_get_message_sync, camel_folder_refresh_info_sync, camel_folder_summary_get,
-    camel_message_info_get_subject, camel_mime_message_get_subject, camel_store_get_folder_sync,
+    camel_message_info_get_folder_flagged, camel_message_info_get_subject,
+    camel_message_info_set_flags, camel_mime_message_get_subject, camel_store_get_folder_sync,
 };
-use glib_sys::{GError, g_error_free};
+use glib_sys::{GError, GFALSE, g_error_free};
 use gobject_sys::g_object_unref;
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::MailSync;
@@ -174,6 +175,98 @@ fn a_body_cached_from_another_server_is_not_served_for_a_new_message() {
         opened_subject(folder, &uid),
         "New",
         "the cached body of the old server opened under the id of the new message"
+    );
+
+    // SAFETY: the reference that `open_inbox` took.
+    unsafe { g_object_unref(folder.cast()) };
+}
+
+/// Marks the row of `uid` as seen, the way the message list does. The change
+/// waits in the row until the folder is synchronised.
+fn mark_seen(folder: *mut CamelFolder, uid: &Id) {
+    let key = CString::new(uid.as_str()).unwrap();
+    // SAFETY: a live folder; the row is a new reference that this function
+    // releases.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(folder);
+        let info = camel_folder_summary_get(summary, key.as_ptr());
+        assert!(!info.is_null(), "the refresh left no row for the message");
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+        g_object_unref(info.cast());
+    }
+}
+
+/// Whether the row of `uid` still holds a change for the server.
+fn holds_a_change(folder: *mut CamelFolder, uid: &Id) -> bool {
+    let key = CString::new(uid.as_str()).unwrap();
+    // SAFETY: as in `mark_seen`.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(folder);
+        let info = camel_folder_summary_get(summary, key.as_ptr());
+        if info.is_null() {
+            return false;
+        }
+        let flagged = camel_message_info_get_folder_flagged(info) != GFALSE;
+        g_object_unref(info.cast());
+        flagged
+    }
+}
+
+/// The files of the message cache under `directory`, without the origin file.
+fn cached_files(directory: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .map(|path| match path.is_dir() {
+            true => cached_files(&path),
+            false => usize::from(!path.ends_with("jmap-origin")),
+        })
+        .sum()
+}
+
+#[test]
+fn a_session_whose_api_url_spelling_changes_keeps_the_rows_and_the_cache() {
+    let (server, uid) = server_with("Kept", "a body that stays cached");
+
+    let account = Account::open();
+    account.connect(sync_against(&server));
+    let folder = open_inbox(&account);
+    refresh(folder);
+    assert_eq!(opened_subject(folder, &uid), "Kept");
+    let cache = std::path::PathBuf::from(account.cache_dir());
+    let cached = cached_files(&cache);
+    assert!(cached > 0, "the opened message was not cached");
+    mark_seen(folder, &uid);
+
+    // The same endpoint under a different spelling: the next session
+    // document gives `HTTP://host:port/jmap` as its `apiUrl`.
+    let upper = server.origin().replacen("http://", "HTTP://", 1);
+    server.state().lock().unwrap().advertise_origin = Some(upper);
+    let sync = sync_against(&server);
+    assert_ne!(
+        sync.client().session().api_url,
+        format!("{}/jmap", server.origin()),
+        "the second session must spell its apiUrl differently"
+    );
+    account.connect(sync);
+    let listed = server.method_calls().len();
+    refresh(folder);
+    let second = server.method_calls().split_off(listed);
+    assert!(
+        !second.iter().any(|call| call == "Email/query"),
+        "a different spelling of the same apiUrl listed the mailbox again: {second:?}"
+    );
+    assert!(
+        holds_a_change(folder, &uid),
+        "a different spelling of the same apiUrl dropped a change not yet sent"
+    );
+    assert_eq!(
+        cached_files(&cache),
+        cached,
+        "a different spelling of the same apiUrl cleared the message cache"
     );
 
     // SAFETY: the reference that `open_inbox` took.

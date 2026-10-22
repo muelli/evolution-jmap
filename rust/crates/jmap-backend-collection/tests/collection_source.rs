@@ -35,7 +35,7 @@ use jmap_collection_sync::{Child, ChildKind, Parts};
 use jmap_proto::Id;
 
 mod common;
-use common::{with_timeout, with_timeout_duration};
+use common::{long_values, read_while_another_thread_writes, with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -507,5 +507,92 @@ fn a_user_key_that_is_present_but_empty_is_no_user_at_all() {
 fn a_blocked_collection_source_test_times_out_and_fails_fast() {
     with_timeout_duration(std::time::Duration::from_millis(50), || {
         std::thread::park();
+    });
+}
+
+/// The race tests write 20,000 values; this is more time than the default.
+const RACE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Sets the `[Authentication]` user of `source`.
+///
+/// # Safety
+///
+/// `source` is a live source and `user` is a NUL-terminated string.
+unsafe fn set_user(source: *mut ESource, user: *const std::ffi::c_char) {
+    // SAFETY: by the contract of this function.
+    unsafe {
+        let auth = e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr());
+        e_source_authentication_set_user(auth.cast(), user);
+    }
+}
+
+/// Sets the `[Authentication]` method of `source`.
+///
+/// # Safety
+///
+/// As [`set_user`].
+unsafe fn set_method(source: *mut ESource, method: *const std::ffi::c_char) {
+    // SAFETY: by the contract of this function.
+    unsafe {
+        let auth = e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr());
+        e_source_authentication_set_method(auth.cast(), method);
+    }
+}
+
+#[test]
+fn user_of_on_another_thread_copies_a_user_the_main_thread_is_replacing() {
+    with_timeout_duration(RACE_TIMEOUT, || {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = account();
+        read_while_another_thread_writes(
+            source.0,
+            long_values("@example.com"),
+            set_user,
+            // SAFETY: a live source.
+            |source| unsafe { user_of(source) },
+            &[Some("vera@example.com".into())],
+        );
+    });
+}
+
+#[test]
+fn server_of_on_another_thread_copies_a_user_the_main_thread_is_replacing() {
+    with_timeout_duration(RACE_TIMEOUT, || {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = account();
+        read_while_another_thread_writes(
+            source.0,
+            long_values("@example.com"),
+            set_user,
+            // SAFETY: a live source.
+            |source| {
+                unsafe { server_of(source) }
+                    .expect("a valid account")
+                    .connection
+                    .user
+            },
+            &[Some("vera@example.com".into())],
+        );
+    });
+}
+
+#[test]
+fn server_of_on_another_thread_copies_a_method_the_main_thread_is_replacing() {
+    with_timeout_duration(RACE_TIMEOUT, || {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = account();
+        read_while_another_thread_writes(
+            source.0,
+            long_values("/password"),
+            set_method,
+            // SAFETY: a live source.
+            |source| {
+                unsafe { server_of(source) }
+                    .expect("a valid account")
+                    .connection
+                    .auth_method
+            },
+            &[Some("plain/password".into())],
+        );
     });
 }

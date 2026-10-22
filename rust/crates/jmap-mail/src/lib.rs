@@ -163,6 +163,7 @@ pub mod message;
 pub mod message_info;
 pub mod module;
 pub mod oauth2;
+pub mod origin;
 pub mod provider;
 pub mod push;
 pub mod quota;

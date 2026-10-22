@@ -284,8 +284,7 @@ pub unsafe fn summary_origin(summary: *mut CamelFolderSummary) -> Option<String>
 /// Makes `origin` the origin of the rows, and removes the rows of a different
 /// origin. Returns the removals for the folder to emit.
 ///
-/// The origin names the server and the account (the API URL and the account
-/// id). An `Email` id is unique only in one account of one server. Two servers
+/// The origin names the server and the account (see [`crate::origin`]). An `Email` id is unique only in one account of one server. Two servers
 /// can give the same id to different messages. A row keeps its immutable
 /// columns at each refresh, so a row from the old server keeps its subject
 /// under the id of a different message. Thus a change of origin removes all
@@ -313,7 +312,7 @@ pub unsafe fn adopt_origin(summary: *mut CamelFolderSummary, origin: &str) -> Ch
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             match recorded.origin.as_deref() {
-                Some(known) if known == origin => None,
+                Some(known) if crate::origin::same(known, origin) => None,
                 known => {
                     let replaced = known.is_some();
                     if replaced {
