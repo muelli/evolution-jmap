@@ -110,12 +110,41 @@ pub fn diff_since(
     current: &CalendarEvent,
     edited: &CalendarEvent,
 ) -> Map<String, Value> {
+    diff_since_except(base, current, edited, &BTreeSet::new())
+}
+
+/// Returns [`diff_since`] without the properties in `kept`, which keep the server's value.
+pub fn diff_since_except(
+    base: &CalendarEvent,
+    current: &CalendarEvent,
+    edited: &CalendarEvent,
+    kept: &BTreeSet<String>,
+) -> Map<String, Value> {
     let touched = diff_mapped(base, edited);
     let mut patch = diff_mapped(current, edited);
-    patch.retain(|path, _| touched.keys().any(|edit| property(edit) == property(path)));
+    patch.retain(|path, _| {
+        let name = property(path);
+        !kept.contains(name) && touched.keys().any(|edit| property(edit) == name)
+    });
     // The definitions follow the zones that stay in the patch.
     diff_time_zones(&mut patch, current, edited);
     patch
+}
+
+/// Returns the properties that the user and a different client both changed
+/// after `base`, to different values.
+pub fn conflicts(
+    base: &CalendarEvent,
+    current: &CalendarEvent,
+    edited: &CalendarEvent,
+) -> BTreeSet<String> {
+    let remote = diff_mapped(current, base);
+    diff_since(base, current, edited)
+        .keys()
+        .map(|path| property(path))
+        .filter(|name| remote.keys().any(|theirs| property(theirs) == *name))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The top-level property that a patch path names.

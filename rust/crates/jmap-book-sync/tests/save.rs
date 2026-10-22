@@ -8,6 +8,7 @@
 mod common;
 
 use common::Fixture;
+use jmap_book_sync::{Base, OnConflict};
 use serde_json::json;
 
 /// The vCard that Evolution gives to `save_contact_sync` for a new contact.
@@ -5560,8 +5561,15 @@ fn an_edit_of_one_property_does_not_revert_a_concurrent_remote_edit_of_another()
     fixture.patch(&id, json!({"name/full": "Vera Kranz"}));
 
     let edited = base.replace("vera@example.com", "vera@example.org");
-    sync.save_contact_since(Some(&base), &edited, Some(id.as_str()))
-        .unwrap();
+    sync.save_contact_since(
+        Some(Base {
+            vcard: &base,
+            on_conflict: OnConflict::KeepLocal,
+        }),
+        &edited,
+        Some(id.as_str()),
+    )
+    .unwrap();
 
     let stored = fixture.card(&id);
     assert_eq!(
@@ -5585,8 +5593,15 @@ fn a_property_that_the_user_edited_takes_the_users_value_over_a_remote_edit() {
     fixture.patch(&id, json!({"emails/e0/address": "vera@example.net"}));
 
     let edited = base.replace("vera@example.com", "vera@example.org");
-    sync.save_contact_since(Some(&base), &edited, Some(id.as_str()))
-        .unwrap();
+    sync.save_contact_since(
+        Some(Base {
+            vcard: &base,
+            on_conflict: OnConflict::KeepLocal,
+        }),
+        &edited,
+        Some(id.as_str()),
+    )
+    .unwrap();
 
     let emails = fixture.card(&id).emails.expect("emails");
     let addresses: Vec<_> = emails.values().map(|e| e.address.as_str()).collect();
@@ -5602,7 +5617,14 @@ fn a_save_with_no_change_since_the_base_writes_nothing() {
     fixture.patch(&id, json!({"name/full": "Vera Kranz"}));
 
     let saved = sync
-        .save_contact_since(Some(&base), &base, Some(id.as_str()))
+        .save_contact_since(
+            Some(Base {
+                vcard: &base,
+                on_conflict: OnConflict::KeepLocal,
+            }),
+            &base,
+            Some(id.as_str()),
+        )
         .unwrap();
 
     assert!(saved.vcard.contains("Vera Kranz"), "{}", saved.vcard);

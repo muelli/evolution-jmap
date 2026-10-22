@@ -28,6 +28,9 @@ pub enum SyncError {
         /// The decoded picture size, equal to the size of the user's image file.
         photo_octets: u64,
     },
+    /// The server and the user changed the same property after the base copy,
+    /// and the caller asked for [`crate::OnConflict::Fail`]. The value is the card id.
+    OutOfSync(String),
 }
 
 impl SyncError {
@@ -71,6 +74,9 @@ impl std::fmt::Display for SyncError {
                 f,
                 "the server refused the contact as too large; its photo is {photo_octets} octets"
             ),
+            Self::OutOfSync(uid) => {
+                write!(f, "contact {uid} changed on the server after this copy")
+            }
         }
     }
 }
@@ -80,7 +86,7 @@ impl std::error::Error for SyncError {
         match self {
             Self::Client(error) => Some(error),
             Self::VCard(error) => Some(error),
-            Self::NotFound(_) | Self::PhotoTooLarge { .. } => None,
+            Self::NotFound(_) | Self::PhotoTooLarge { .. } | Self::OutOfSync(_) => None,
         }
     }
 }

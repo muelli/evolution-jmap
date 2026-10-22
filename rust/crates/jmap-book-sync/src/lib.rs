@@ -25,7 +25,7 @@ use jmap_client::{ChangeSet, Client};
 use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
 use jmap_proto::{Id, State};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 pub use error::SyncError;
 
@@ -38,6 +38,32 @@ pub struct ContactInfo {
     pub uid: String,
     pub revision: String,
     pub vcard: String,
+}
+
+/// The copy of a card that a local edit started from.
+///
+/// EDS keeps the `extra` string of a cached card through an offline edit.
+/// Store [`ContactInfo::vcard`] there, and give it back here on the save.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Base<'a> {
+    /// The vCard of the card as the user saw it before the edit.
+    pub vcard: &'a str,
+    /// What to do with a property that the server and the user both changed.
+    pub on_conflict: OnConflict,
+}
+
+/// What a save does with a property that the user and a different client both
+/// changed after the base copy (`EConflictResolution`). A property that only one
+/// side changed is not a conflict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnConflict {
+    /// Send the user's value (`E_CONFLICT_RESOLUTION_KEEP_LOCAL`).
+    #[default]
+    KeepLocal,
+    /// Keep the server's value, and send the other edits (`E_CONFLICT_RESOLUTION_KEEP_SERVER`).
+    KeepServer,
+    /// Write nothing and fail with [`SyncError::OutOfSync`] (`E_CONFLICT_RESOLUTION_FAIL`).
+    Fail,
 }
 
 /// What changed in the address book since a given state.
@@ -122,9 +148,10 @@ impl BookSync {
     ///
     /// The edit patches only the properties that differ from `base`. Each other
     /// property keeps the value on the server, also when a different client changed it.
+    /// A property that both changed follows [`Base::on_conflict`].
     pub fn save_contact_since(
         &self,
-        base: Option<&str>,
+        base: Option<Base<'_>>,
         vcard: &str,
         existing_uid: Option<&str>,
     ) -> Result<ContactInfo, SyncError> {
@@ -160,7 +187,7 @@ impl BookSync {
 
         let current = self.fetch(uid)?;
         let patch = match base {
-            Some(base) => patch::diff_since(&vcard_to_card(base)?, &current, &card),
+            Some(base) => patch_since(base, &current, &card, uid)?,
             None => patch::diff(&current, &card),
         };
         if patch.is_empty() {
@@ -298,6 +325,35 @@ impl BookSync {
             .into_iter()
             .next()
             .ok_or_else(|| SyncError::NotFound(uid.to_owned()))
+    }
+}
+
+/// The patch of an edit from `base`, with the conflicts resolved as `base` asks.
+fn patch_since(
+    base: Base<'_>,
+    current: &ContactCard,
+    edited: &ContactCard,
+    uid: &str,
+) -> Result<Map<String, Value>, SyncError> {
+    let base_copy = match vcard_to_card(base.vcard) {
+        Ok(copy) => copy,
+        Err(error) => {
+            // A bad base must not block every save of this card.
+            tracing::warn!(uid, %error, "the base copy of the card does not parse");
+            return Ok(patch::diff(current, edited));
+        }
+    };
+    let conflicts = patch::conflicts(&base_copy, current, edited);
+    if conflicts.is_empty() {
+        return Ok(patch::diff_since(&base_copy, current, edited));
+    }
+    tracing::info!(uid, ?conflicts, on_conflict = ?base.on_conflict, "card edit conflict");
+    match base.on_conflict {
+        OnConflict::KeepLocal => Ok(patch::diff_since(&base_copy, current, edited)),
+        OnConflict::KeepServer => Ok(patch::diff_since_except(
+            &base_copy, current, edited, &conflicts,
+        )),
+        OnConflict::Fail => Err(SyncError::OutOfSync(uid.to_owned())),
     }
 }
 

@@ -8,7 +8,7 @@
 mod common;
 
 use common::Fixture;
-use jmap_cal_sync::{Itip, SyncError, Unsendable};
+use jmap_cal_sync::{Base, Itip, OnConflict, SyncError, Unsendable};
 use jmap_proto::calendars::NDay;
 use serde_json::{Value, json};
 
@@ -5839,8 +5839,16 @@ fn an_edit_of_one_property_does_not_revert_a_concurrent_remote_edit_of_another()
 
     let edited = base.replace("DESCRIPTION:old", "DESCRIPTION:new");
     assert_ne!(edited, base);
-    sync.save_component_since(Some(&base), &edited, Some(id.as_str()), Itip::Send)
-        .unwrap();
+    sync.save_component_since(
+        Some(Base {
+            icalendar: &base,
+            on_conflict: OnConflict::KeepLocal,
+        }),
+        &edited,
+        Some(id.as_str()),
+        Itip::Send,
+    )
+    .unwrap();
 
     let stored = fixture.event(&id);
     assert_eq!(stored.description.as_deref(), Some("new"));
@@ -5861,8 +5869,16 @@ fn a_property_that_the_user_edited_takes_the_users_value_over_a_remote_edit() {
     fixture.patch(&id, json!({"title": "Standup (remote)"}));
 
     let edited = base.replace("SUMMARY:Standup", "SUMMARY:Standup (local)");
-    sync.save_component_since(Some(&base), &edited, Some(id.as_str()), Itip::Send)
-        .unwrap();
+    sync.save_component_since(
+        Some(Base {
+            icalendar: &base,
+            on_conflict: OnConflict::KeepLocal,
+        }),
+        &edited,
+        Some(id.as_str()),
+        Itip::Send,
+    )
+    .unwrap();
 
     assert_eq!(fixture.event(&id).title.as_deref(), Some("Standup (local)"));
 }
@@ -5883,8 +5899,16 @@ fn a_new_custom_zone_still_brings_its_definition_when_saved_over_a_base() {
 DTSTART:19700101T000000\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0100\r\n\
 END:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT",
         );
-    sync.save_component_since(Some(&base), &edited, Some(id.as_str()), Itip::Send)
-        .unwrap();
+    sync.save_component_since(
+        Some(Base {
+            icalendar: &base,
+            on_conflict: OnConflict::KeepLocal,
+        }),
+        &edited,
+        Some(id.as_str()),
+        Itip::Send,
+    )
+    .unwrap();
 
     let stored = fixture.event(&id);
     assert_eq!(stored.time_zone.as_deref(), Some("/example.com/Office"));

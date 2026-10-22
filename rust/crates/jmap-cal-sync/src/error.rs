@@ -41,6 +41,9 @@ pub enum SyncError {
     /// A received iTIP message or an import tried to change the guests or the
     /// organizer of a meeting that this account organises, or to delete it.
     OwnMeeting,
+    /// The server and the user changed the same property after the base copy,
+    /// and the caller asked for [`crate::OnConflict::Fail`]. The value is the event id.
+    OutOfSync(String),
 }
 
 /// Why the server did not send the scheduling messages of a change
@@ -184,6 +187,10 @@ impl std::fmt::Display for SyncError {
             Self::OwnMeeting => {
                 f.write_str("received data cannot change a meeting that this account organises")
             }
+            Self::OutOfSync(uid) => write!(
+                f,
+                "calendar event {uid} changed on the server after this copy"
+            ),
         }
     }
 }
@@ -193,9 +200,11 @@ impl std::error::Error for SyncError {
         match self {
             Self::Client(error) => Some(error),
             Self::ICal(error) => Some(error),
-            Self::NotFound(_) | Self::Unsendable(_) | Self::Unscheduled(_) | Self::OwnMeeting => {
-                None
-            }
+            Self::NotFound(_)
+            | Self::Unsendable(_)
+            | Self::Unscheduled(_)
+            | Self::OwnMeeting
+            | Self::OutOfSync(_) => None,
         }
     }
 }
