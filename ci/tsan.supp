@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# ThreadSanitizer suppressions for ci/thread-check-eds.sh.
+#
+# Each entry is a race inside GLib, Camel, EDS or the C library, not in this
+# project's code. Each entry has a one-line reason. Use race_top where you
+# can: it matches only the top frame, so a race in our code below the same
+# function still shows. Never suppress a frame of this project.
+
+# GLib: G_DEFINE_QUARK reads its static quark with no lock. Every thread
+# computes the same value.
+race_top:_error_quark$
+# The same race in a quark that the compiler inlined into these functions:
+# CAMEL_STORE_ERROR and G_KEY_FILE_ERROR.
+race_top:^camel_store_get_folder_sync$
+race_top:^g_key_file_get_value$
+
+# GLib: g_once_impl writes the status with a plain store, and the g_once
+# macro reads it atomically. The mutex in g_once_impl orders the real work.
+race_top:^g_once_impl$
+
+# GLib: a static GRWLock creates its pthread lock lazily with a
+# compare-and-exchange, and the fast path reads the pointer with no barrier.
+race_top:^g_rw_lock_reader_lock$
+
+# GLib: a GClosure keeps its counters in bit fields. Writers change them with
+# compare-and-exchange, readers read them with no barrier.
+race_top:^g_closure_
+race_top:^_g_closure_is_void$
+race_top:^closure_invoke_notifiers$
+
+# GLib: timer_perturb is a lazy static. Every thread computes the same value.
+race_top:^g_timeout_set_expiration$
+
+# Camel: camel_db_release_cache_memory, inlined here, reads a lazy static
+# from the environment. Every thread computes the same value.
+race_top:^camel_db_create_folders_table$
+
+# Camel: the pool pointer is read with no lock before the pool lock. A
+# pooled string to free proves that the pool exists already.
+race_top:^camel_pstring_free$
+
+# Camel: the "loaded" flag has no lock. The tests call this from parallel
+# threads. Evolution and EDS call it once, on one thread.
+race_top:^camel_provider_init$
+
+# EDS: e_get_user_config_dir and e_server_side_source_get_user_dir (inlined
+# here) publish a lazy static string with no lock. The tests make sources on
+# parallel threads. The registry service makes them on its main thread.
+race:^e_get_user_config_dir$
+race:^e_server_side_source_init$
+
+# glibc: mktime changes its time zone state under an internal lock that
+# ThreadSanitizer cannot see.
+race:^camel_mktime_utc$

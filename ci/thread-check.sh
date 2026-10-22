@@ -9,15 +9,18 @@
 # an instrumented build of the standard library.
 #
 # The default packages have no C code that shares state between threads.
-# Do not add an FFI crate: GLib, Camel and EDS are not instrumented, so
-# ThreadSanitizer cannot see their locks and reports every hand-off between
-# threads as a race. ci/Containerfile.tsan builds an instrumented GLib and
-# EDS for the FFI crates.
+# Do not add an FFI crate here: the GLib, Camel and EDS of the host are not
+# instrumented, so ThreadSanitizer cannot see their locks and reports every
+# hand-off between threads as a race. ci/thread-check-eds.sh runs this script
+# for the FFI crates in an image with an instrumented GLib and EDS.
 #
 # This script needs rustup and addr2line (binutils) for symbol names in the
 # reports. It installs the toolchain named by THREAD_TOOLCHAIN and its
 # rust-src component if missing. The default is the dated nightly of
 # ci/leak-check.sh, for the same reasons.
+#
+# THREAD_TSAN_OPTIONS adds options to TSAN_OPTIONS, for example a
+# suppressions file.
 #
 # Usage: ci/thread-check.sh [package...]
 #   With no arguments, the script checks the packages in DEFAULT_PACKAGES.
@@ -63,7 +66,7 @@ done
 # -Zbuild-std, so the script turns any configured wrapper off.
 export RUSTFLAGS="-Zsanitizer=thread -Cforce-frame-pointers=yes"
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$PWD/build/thread-check-target}
-export TSAN_OPTIONS="halt_on_error=0 second_deadlock_stack=1"
+export TSAN_OPTIONS="halt_on_error=0 second_deadlock_stack=1 ${THREAD_TSAN_OPTIONS:-}"
 
 echo "== ThreadSanitizer: ${packages[*]} =="
 cd rust
