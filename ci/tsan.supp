@@ -30,6 +30,10 @@ race_top:^g_closure_
 race_top:^_g_closure_is_void$
 race_top:^closure_invoke_notifiers$
 
+# GLib: get_tmp_file increments a static counter with no lock. The counter
+# only seeds the name, and a name that exists already gives a retry.
+race_top:^get_tmp_file$
+
 # GLib: timer_perturb is a lazy static. Every thread computes the same value.
 race_top:^g_timeout_set_expiration$
 
@@ -50,6 +54,10 @@ race_top:^camel_provider_init$
 # parallel threads. The registry service makes them on its main thread.
 race:^e_get_user_config_dir$
 race:^e_server_side_source_init$
+
+# libical-glib: the library is not instrumented, so ThreadSanitizer does not
+# see the atomic g_once that publishes its type ids to g_object_new.
+race:^i_cal_object_construct$
 
 # glibc: mktime changes its time zone state under an internal lock that
 # ThreadSanitizer cannot see.
