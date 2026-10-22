@@ -4,8 +4,8 @@
 //! Read a minimal RFC 5322 subset for `Email/import`.
 //!
 //! Most modules serialize structured `Email` values to message bytes.
-//! `Email/import` is the reverse path. This module reads a small subset
-//! of raw bytes.
+//! `Email/import` reverses that path. This module parses a small raw-byte
+//! subset.
 //!
 //! Scope: unfolded headers, address lists, message IDs, and preview text.
 //! This module skips MIME trees, RFC 2047 encoded words, temporal headers,
@@ -13,7 +13,7 @@
 
 use jmap_proto::mail::EmailAddress;
 
-/// Preview character limit. Match seeded messages.
+/// Preview character limit. Keep this value aligned with seeded messages.
 const PREVIEW: usize = 64;
 
 /// Parsed message fields that this server uses.
@@ -35,7 +35,7 @@ impl Message {
             if line.is_empty() {
                 continue;
             }
-            // A leading space or tab marks a folded continuation.
+            // Treat a leading space or tab as a folded continuation line.
             if line.starts_with([' ', '\t']) {
                 let (_, value) = fields.last_mut()?;
                 value.push(' ');
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn what_is_not_a_message_is_refused() {
-        // Reject no fields, broken header syntax, or non-UTF-8 bytes.
+        // Reject missing fields, invalid header syntax, and non-UTF-8 bytes.
         assert!(Message::read(b"").is_none());
         assert!(Message::read(b"this was never a message").is_none());
         assert!(Message::read(b"Subject: fine\r\nnot a field\r\n").is_none());
