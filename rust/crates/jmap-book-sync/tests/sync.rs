@@ -8,6 +8,8 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::Fixture;
+use jmap_book_sync::SyncError;
+use jmap_mock::MockServer;
 use serde_json::json;
 
 #[test]
@@ -34,6 +36,46 @@ fn list_existing_on_an_empty_book_still_yields_a_state() {
 
     assert!(contacts.is_empty());
     assert!(!state.as_str().is_empty());
+}
+
+#[test]
+fn a_capped_query_still_lists_every_card() {
+    let fixture = Fixture::start_with(MockServer::builder().query_page_size(2));
+    let mut seeded: Vec<String> = (0..5)
+        .map(|n| {
+            let name = format!("Card {n}");
+            let email = format!("card{n}@example.com");
+            fixture.seed(&fixture.ours, &name, &email).to_string()
+        })
+        .collect();
+    fixture.seed(&fixture.theirs, "Someone Else", "else@example.com");
+
+    let (_, contacts) = fixture.sync().list_existing().unwrap();
+
+    // EDS removes from its cache each card that the list does not have.
+    let mut listed: Vec<String> = contacts.into_iter().map(|contact| contact.uid).collect();
+    listed.sort();
+    seeded.sort();
+    assert_eq!(listed, seeded);
+}
+
+#[test]
+fn a_query_that_drops_cards_without_a_limit_fails_the_list() {
+    let fixture = Fixture::start_with(MockServer::builder().query_page_size(2).query_hides_limit());
+    for n in 0..3 {
+        fixture.seed(
+            &fixture.ours,
+            &format!("Card {n}"),
+            &format!("card{n}@example.com"),
+        );
+    }
+
+    let error = fixture.sync().list_existing().unwrap_err();
+
+    assert!(
+        matches!(&error, SyncError::Client(jmap_client::Error::Protocol(_))),
+        "{error:?}"
+    );
 }
 
 #[test]

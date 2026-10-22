@@ -9,6 +9,8 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::Fixture;
+use jmap_cal_sync::SyncError;
+use jmap_mock::MockServer;
 use serde_json::json;
 
 #[test]
@@ -36,6 +38,45 @@ fn list_existing_on_an_empty_calendar_still_yields_a_state() {
 
     assert!(events.is_empty());
     assert!(!state.as_str().is_empty());
+}
+
+#[test]
+fn a_capped_query_still_lists_every_event() {
+    let fixture = Fixture::start_with(MockServer::builder().query_page_size(2));
+    let mut seeded: Vec<String> = (1..=5)
+        .map(|day| {
+            let start = format!("2026-01-{day:02}T09:00:00");
+            fixture.seed(&fixture.ours, "Standup", &start).to_string()
+        })
+        .collect();
+    fixture.seed(&fixture.theirs, "Their offsite", "2026-01-15T10:00:00");
+
+    let (_, events) = fixture.sync().list_existing().unwrap();
+
+    // EDS removes from its cache each event that the list does not have.
+    let mut listed: Vec<String> = events.into_iter().map(|event| event.uid).collect();
+    listed.sort();
+    seeded.sort();
+    assert_eq!(listed, seeded);
+}
+
+#[test]
+fn a_query_that_drops_events_without_a_limit_fails_the_list() {
+    let fixture = Fixture::start_with(MockServer::builder().query_page_size(2).query_hides_limit());
+    for day in 1..=3 {
+        fixture.seed(
+            &fixture.ours,
+            "Standup",
+            &format!("2026-01-{day:02}T09:00:00"),
+        );
+    }
+
+    let error = fixture.sync().list_existing().unwrap_err();
+
+    assert!(
+        matches!(&error, SyncError::Client(jmap_client::Error::Protocol(_))),
+        "{error:?}"
+    );
 }
 
 #[test]

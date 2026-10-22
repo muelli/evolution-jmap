@@ -241,11 +241,11 @@ impl CalSync {
     /// answers range queries from it, so a range here would hide events and not
     /// decrease work.
     pub fn list_existing(&self) -> Result<(State, Vec<ComponentInfo>), SyncError> {
-        let query = self.client.event_query(
+        let ids = self.client.event_query_every_id(
             &self.account_id,
             CalendarEventQueryFilter::in_calendar(self.calendar_id.clone()),
         )?;
-        let response = self.client.event_get(&self.account_id, &query.ids)?;
+        let response = self.client.event_get(&self.account_id, &ids)?;
         let events = response
             .list
             .iter()

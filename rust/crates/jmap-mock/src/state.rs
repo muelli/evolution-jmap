@@ -40,6 +40,8 @@ pub struct ServerState {
     pub query_page_size: Option<u64>,
     /// Whether `Email/query` keeps returning capped non-empty pages forever.
     pub query_never_terminates: bool,
+    /// Whether a capped `ContactCard/query` or `CalendarEvent/query` page omits `limit`.
+    pub query_hides_limit: bool,
     /// Optional `maxSizeRequest` in bytes; `None` means unlimited.
     pub size_request: Option<u64>,
     /// Optional `maxSizeUpload` in bytes; `None` means unlimited.
@@ -84,6 +86,14 @@ pub struct ServerState {
 }
 
 impl ServerState {
+    /// The paging settings of `ContactCard/query` and `CalendarEvent/query`.
+    pub(crate) fn query_paging(&self) -> QueryPaging {
+        QueryPaging {
+            page_size: self.query_page_size,
+            hides_limit: self.query_hides_limit,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             session_state: 1,
@@ -99,6 +109,7 @@ impl ServerState {
             objects_in_get: None,
             query_page_size: None,
             query_never_terminates: false,
+            query_hides_limit: false,
             size_request: Some(crate::DEFAULT_SIZE_REQUEST),
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
@@ -227,6 +238,31 @@ impl EventSourceHub {
     /// [`crate::MockServer::wait_for_event_source_subscriber`] reads this value.
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.len()
+    }
+}
+
+/// How a contact or event query cuts its matches into one page.
+#[derive(Clone, Copy)]
+pub(crate) struct QueryPaging {
+    page_size: Option<u64>,
+    hides_limit: bool,
+}
+
+impl QueryPaging {
+    /// The page of `matches` at `position`, and the `limit` that the response reports.
+    pub(crate) fn page(
+        self,
+        matches: impl Iterator<Item = Id>,
+        position: i64,
+        asked: Option<u64>,
+    ) -> (Vec<Id>, Option<u64>) {
+        let asked = asked.unwrap_or(u64::MAX);
+        let ids = matches
+            .skip(position.max(0) as usize)
+            .take(asked.min(self.page_size.unwrap_or(u64::MAX)) as usize)
+            .collect();
+        let limit = self.page_size.filter(|&page_size| page_size < asked);
+        (ids, limit.filter(|_| !self.hides_limit))
     }
 }
 

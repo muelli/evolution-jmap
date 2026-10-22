@@ -83,11 +83,11 @@ impl BookSync {
     /// Every card in this address book, with the state of that listing
     /// (`list_existing_sync`).
     pub fn list_existing(&self) -> Result<(State, Vec<ContactInfo>), SyncError> {
-        let query = self.client.contact_query(
+        let ids = self.client.contact_query_every_id(
             &self.account_id,
             ContactCardQueryFilter::in_address_book(self.address_book_id.clone()),
         )?;
-        let response = self.client.contact_get(&self.account_id, &query.ids)?;
+        let response = self.client.contact_get(&self.account_id, &ids)?;
         let contacts = response
             .list
             .iter()

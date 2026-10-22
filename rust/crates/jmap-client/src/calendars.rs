@@ -259,6 +259,15 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
+    /// `CalendarEvent/query`: all matching event ids, on all pages of the server.
+    pub fn event_query_every_id(
+        &self,
+        account_id: &Id,
+        filter: CalendarEventQueryFilter,
+    ) -> Result<Vec<Id>, Error> {
+        self.query_every_id(USING, "CalendarEvent/query", account_id, filter)
+    }
+
     /// Modify calendar events (`CalendarEvent/set`, draft-ietf-jmap-calendars §5.9).
     ///
     /// Supports the `sendSchedulingMessages` parameter for iTIP scheduling.

@@ -49,6 +49,7 @@ re-audit also runs the regression test of every earlier finding again.
 | 2026-10-20 | Changes since 2026-10-17, with meeting guests and shared collections. | F34 to F39 |
 | 2026-10-21 | Logic review with a hostile server or a hostile sender of mail. | L1 to L7 |
 | 2026-10-21 | Changes since 2026-10-20, with the deferred delete of a collection. | F40 to F46 |
+| 2026-10-22 | Security and logic review: server data, logic, threads and data loss. | M1 to M6 |
 
 ## Findings
 
@@ -114,6 +115,12 @@ paths are relative to `rust/crates/`.
 | L5 | The well-known session address can redirect to another origin. The client did not send the credentials there. But when that origin answered with its own session document, the client accepted it and sent the credentials to the endpoints that the document named. | Fixed. The client refuses a session document that comes from an origin other than the configured one. The error names both origins, and the user can set the account's host to the correct server. `jmap-client/tests/redirect_auth.rs`, `a_session_document_from_a_foreign_redirect_target_gets_no_credentials`. |
 | L6 | Each server response has a size limit, but a sync can read many pages. The client kept all ids from all pages of a `/changes` stream or of a mailbox listing. A server could make the calendar, address book or mail process use very much memory. | Fixed. One sync keeps at most one million ids and 64 MiB of id text. A server that sends more causes a protocol error for that sync. `jmap-client/tests/changes.rs`, `a_changes_stream_past_the_id_budget_is_refused` and related tests. `jmap-mail-sync/tests/messages.rs`, `a_query_past_the_id_budget_is_refused`. |
 | L7 | A shared address book or calendar had the name `<collection> (<owner>)`. The owner sets the collection name, so a shared calendar could look like a collection of the user. | Fixed. The name starts with the owner: `<owner>: <collection>`. Control characters, line separators and bidi formatting characters are removed from both parts. `jmap-collection-sync/src/children.rs`, `a_sharer_cannot_make_a_shared_child_read_as_the_users_own`. |
+
+### Security and logic review, 2026-10-22
+
+| ID | Problem | Resolution |
+|---|---|---|
+| M1 | The address book and calendar list sent one `/query` and did not read its `limit` or `total`. A server can cap a query (RFC 8620 section 5.5). EDS then removed from its cache each card or event that the partial list did not have. | Fixed. The list gets all pages of the query. It fails when the ids do not agree with the `total` of the server. `jmap-book-sync/tests/sync.rs`, `a_capped_query_still_lists_every_card` and `a_query_that_drops_cards_without_a_limit_fails_the_list`. `jmap-cal-sync/tests/sync.rs`, `a_capped_query_still_lists_every_event` and `a_query_that_drops_events_without_a_limit_fails_the_list`. |
 
 ### FFI soundness audit, 2026-08-19
 
