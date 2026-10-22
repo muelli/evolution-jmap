@@ -93,7 +93,9 @@ use jmap_proto::Id;
 use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, parent_store};
-use crate::summary::{apply_delta, apply_listing, set_summary_state, summary_rows, summary_state};
+use crate::summary::{
+    adopt_origin, apply_delta, apply_listing, set_summary_state, summary_rows, summary_state,
+};
 
 /// Installs the folder's own vfuncs on a class whose first member is a
 /// `CamelFolderClass`.
@@ -140,6 +142,19 @@ pub(crate) unsafe extern "C" fn refresh_info_sync(
             let Some(store) = parent_store(folder) else {
                 return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
+
+            // Rows and cached bodies from a different server or account have
+            // ids that can name different messages here. Drop them first, so
+            // that the summary has no state and the folder lists in full.
+            if let Some(origin) = store.origin() {
+                if let Some(cache) = JmapFolder::borrow(folder).and_then(JmapFolder::cache) {
+                    cache.adopt_origin(&origin);
+                }
+                let dropped = adopt_origin(summary, &origin);
+                if !dropped.is_empty() {
+                    camel_folder_changed(folder, dropped.as_ptr());
+                }
+            }
 
             // The question this folder is in a position to ask. A summary that
             // remembers a state can ask what changed since it; one that does
