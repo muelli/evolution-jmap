@@ -95,6 +95,14 @@ mod tests {
     }
 
     #[test]
+    fn port_80_is_the_default_port_of_http() {
+        assert!(same(
+            &of("http://mail.example/jmap", "A1"),
+            &of("http://mail.example:80/jmap", "A1")
+        ));
+    }
+
+    #[test]
     fn another_server_or_account_is_another_origin() {
         let origin = of("https://mail.example/jmap", "A1");
         for (url, account_id) in [
