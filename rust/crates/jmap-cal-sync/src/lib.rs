@@ -306,6 +306,20 @@ impl CalSync {
         existing_uid: Option<&str>,
         itip: Itip,
     ) -> Result<ComponentInfo, SyncError> {
+        self.save_component_since(None, icalendar, existing_uid, itip)
+    }
+
+    /// [`CalSync::save_component_with`] for an edit of `base`, the component that the user edited.
+    ///
+    /// The edit patches only the properties that differ from `base`. Each other
+    /// property keeps the value on the server, also when a different client changed it.
+    pub fn save_component_since(
+        &self,
+        base: Option<&str>,
+        icalendar: &str,
+        existing_uid: Option<&str>,
+        itip: Itip,
+    ) -> Result<ComponentInfo, SyncError> {
         let schedule = self.schedules(itip);
         let mut event = ical_to_event(icalendar)?;
         // A create of a meeting that this calendar already holds: the
@@ -437,7 +451,10 @@ impl CalSync {
         };
 
         let current = self.fetch(uid)?;
-        let mut patch = patch::diff(&current, &event);
+        let mut patch = match base {
+            Some(base) => patch::diff_since(&ical_to_event(base)?, &current, &event),
+            None => patch::diff(&current, &event),
+        };
         let schedule = match itip {
             Itip::Received { reply } => {
                 let own = self.own_addresses()?;

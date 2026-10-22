@@ -158,6 +158,27 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
     patch
 }
 
+/// Returns [`diff`] from `current` to `edited`, limited to the properties that
+/// differ between `base` and `edited`.
+///
+/// `base` is the card that the user edited. A property that only another client
+/// changed since then keeps the server's value.
+pub fn diff_since(
+    base: &ContactCard,
+    current: &ContactCard,
+    edited: &ContactCard,
+) -> Map<String, Value> {
+    let touched = diff(base, edited);
+    let mut patch = diff(current, edited);
+    patch.retain(|path, _| touched.keys().any(|edit| property(edit) == property(path)));
+    patch
+}
+
+/// The top-level property that a patch path names.
+fn property(path: &str) -> &str {
+    path.split('/').next().unwrap_or(path)
+}
+
 /// Patches the mapped relations (`spouse`, `manager`, `assistant`). The line
 /// shows the key, so an edit withdraws a relation and adds a relation.
 ///

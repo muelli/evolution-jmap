@@ -5549,3 +5549,65 @@ fn no_op_save_mints_no_patch_across_all_contact_surfaces_matrix() {
         Some(&json!("preserved-value"))
     );
 }
+
+#[test]
+fn an_edit_of_one_property_does_not_revert_a_concurrent_remote_edit_of_another() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+    let base = sync.load_contact(id.as_str()).unwrap().vcard;
+    // A second client renames the contact after this client loaded it.
+    fixture.patch(&id, json!({"name/full": "Vera Kranz"}));
+
+    let edited = base.replace("vera@example.com", "vera@example.org");
+    sync.save_contact_since(Some(&base), &edited, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.name.as_ref().unwrap().full.as_deref(),
+        Some("Vera Kranz"),
+        "the save reverted a name that the user did not edit"
+    );
+    let emails = stored.emails.as_ref().expect("emails");
+    assert!(
+        emails.values().any(|e| e.address == "vera@example.org"),
+        "{emails:?}"
+    );
+}
+
+#[test]
+fn a_property_that_the_user_edited_takes_the_users_value_over_a_remote_edit() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+    let base = sync.load_contact(id.as_str()).unwrap().vcard;
+    fixture.patch(&id, json!({"emails/e0/address": "vera@example.net"}));
+
+    let edited = base.replace("vera@example.com", "vera@example.org");
+    sync.save_contact_since(Some(&base), &edited, Some(id.as_str()))
+        .unwrap();
+
+    let emails = fixture.card(&id).emails.expect("emails");
+    let addresses: Vec<_> = emails.values().map(|e| e.address.as_str()).collect();
+    assert_eq!(addresses, ["vera@example.org"]);
+}
+
+#[test]
+fn a_save_with_no_change_since_the_base_writes_nothing() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+    let base = sync.load_contact(id.as_str()).unwrap().vcard;
+    fixture.patch(&id, json!({"name/full": "Vera Kranz"}));
+
+    let saved = sync
+        .save_contact_since(Some(&base), &base, Some(id.as_str()))
+        .unwrap();
+
+    assert!(saved.vcard.contains("Vera Kranz"), "{}", saved.vcard);
+    assert_eq!(
+        fixture.card(&id).name.unwrap().full.as_deref(),
+        Some("Vera Kranz")
+    );
+}

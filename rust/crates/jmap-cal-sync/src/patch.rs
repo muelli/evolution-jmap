@@ -95,6 +95,36 @@ use serde_json::{Map, Value};
 /// Evolution saved. The patch is empty when the edit changes nothing this mapping
 /// can see.
 pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Value> {
+    let mut patch = diff_mapped(current, edited);
+    diff_time_zones(&mut patch, current, edited);
+    patch
+}
+
+/// Returns [`diff`] from `current` to `edited`, limited to the properties that
+/// differ between `base` and `edited`.
+///
+/// `base` is the event that the user edited. A property that only another client
+/// changed since then keeps the server's value.
+pub fn diff_since(
+    base: &CalendarEvent,
+    current: &CalendarEvent,
+    edited: &CalendarEvent,
+) -> Map<String, Value> {
+    let touched = diff_mapped(base, edited);
+    let mut patch = diff_mapped(current, edited);
+    patch.retain(|path, _| touched.keys().any(|edit| property(edit) == property(path)));
+    // The definitions follow the zones that stay in the patch.
+    diff_time_zones(&mut patch, current, edited);
+    patch
+}
+
+/// The top-level property that a patch path names.
+fn property(path: &str) -> &str {
+    path.split('/').next().unwrap_or(path)
+}
+
+/// [`diff`] without the `timeZones` definitions.
+fn diff_mapped(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Value> {
     let mut patch = Map::new();
 
     // The baseline is what Evolution showed. If the server's event does not parse
@@ -183,8 +213,6 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     diff_recurrence(&mut patch, current, &baseline, edited);
     diff_overrides(&mut patch, current, &baseline, edited);
     diff_participants(&mut patch, current, &baseline, edited);
-    // Run this last, because it reads the patch from the other functions.
-    diff_time_zones(&mut patch, current, edited);
     patch
 }
 

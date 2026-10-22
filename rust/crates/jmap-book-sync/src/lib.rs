@@ -115,6 +115,19 @@ impl BookSync {
         vcard: &str,
         existing_uid: Option<&str>,
     ) -> Result<ContactInfo, SyncError> {
+        self.save_contact_since(None, vcard, existing_uid)
+    }
+
+    /// [`BookSync::save_contact`] for an edit of `base`, the vCard that the user edited.
+    ///
+    /// The edit patches only the properties that differ from `base`. Each other
+    /// property keeps the value on the server, also when a different client changed it.
+    pub fn save_contact_since(
+        &self,
+        base: Option<&str>,
+        vcard: &str,
+        existing_uid: Option<&str>,
+    ) -> Result<ContactInfo, SyncError> {
         let mut card = vcard_to_card(vcard)?;
         let Some(uid) = existing_uid else {
             card.id = None;
@@ -146,7 +159,10 @@ impl BookSync {
         };
 
         let current = self.fetch(uid)?;
-        let patch = patch::diff(&current, &card);
+        let patch = match base {
+            Some(base) => patch::diff_since(&vcard_to_card(base)?, &current, &card),
+            None => patch::diff(&current, &card),
+        };
         if patch.is_empty() {
             return ContactInfo::render(&current);
         }

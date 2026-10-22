@@ -8,7 +8,7 @@
 mod common;
 
 use common::Fixture;
-use jmap_cal_sync::{SyncError, Unsendable};
+use jmap_cal_sync::{Itip, SyncError, Unsendable};
 use jmap_proto::calendars::NDay;
 use serde_json::{Value, json};
 
@@ -5818,5 +5818,81 @@ fn a_new_event_whose_uid_only_another_calendar_holds_is_still_created_here() {
         fixture.event(&theirs).participants,
         None,
         "the other calendar's event is untouched"
+    );
+}
+
+#[test]
+fn an_edit_of_one_property_does_not_revert_a_concurrent_remote_edit_of_another() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(
+        &id,
+        json!({"description": "old", "timeZone": "Europe/Berlin"}),
+    );
+    let sync = fixture.sync();
+    let base = sync.load_component(id.as_str()).unwrap().icalendar;
+    // A second client retitles and moves the event after this client loaded it.
+    fixture.patch(
+        &id,
+        json!({"title": "Standup (moved)", "timeZone": "America/New_York"}),
+    );
+
+    let edited = base.replace("DESCRIPTION:old", "DESCRIPTION:new");
+    assert_ne!(edited, base);
+    sync.save_component_since(Some(&base), &edited, Some(id.as_str()), Itip::Send)
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.description.as_deref(), Some("new"));
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Standup (moved)"),
+        "the save reverted a title that the user did not edit"
+    );
+    assert_eq!(stored.time_zone.as_deref(), Some("America/New_York"));
+}
+
+#[test]
+fn a_property_that_the_user_edited_takes_the_users_value_over_a_remote_edit() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    let sync = fixture.sync();
+    let base = sync.load_component(id.as_str()).unwrap().icalendar;
+    fixture.patch(&id, json!({"title": "Standup (remote)"}));
+
+    let edited = base.replace("SUMMARY:Standup", "SUMMARY:Standup (local)");
+    sync.save_component_since(Some(&base), &edited, Some(id.as_str()), Itip::Send)
+        .unwrap();
+
+    assert_eq!(fixture.event(&id).title.as_deref(), Some("Standup (local)"));
+}
+
+#[test]
+fn a_new_custom_zone_still_brings_its_definition_when_saved_over_a_base() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.patch(&id, json!({"timeZone": "Europe/Berlin"}));
+    let sync = fixture.sync();
+    let base = sync.load_component(id.as_str()).unwrap().icalendar;
+
+    let edited = base
+        .replace("TZID=Europe/Berlin", "TZID=/example.com/Office")
+        .replace(
+            "BEGIN:VEVENT",
+            "BEGIN:VTIMEZONE\r\nTZID:/example.com/Office\r\nBEGIN:STANDARD\r\n\
+DTSTART:19700101T000000\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0100\r\n\
+END:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT",
+        );
+    sync.save_component_since(Some(&base), &edited, Some(id.as_str()), Itip::Send)
+        .unwrap();
+
+    let stored = fixture.event(&id);
+    assert_eq!(stored.time_zone.as_deref(), Some("/example.com/Office"));
+    assert!(
+        stored
+            .time_zones
+            .as_ref()
+            .is_some_and(|zones| zones.contains_key("/example.com/Office")),
+        "{stored:?}"
     );
 }
