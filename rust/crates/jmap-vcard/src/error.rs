@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Describe vCard parse errors.
+//! Define parse errors for vCard input.
 
-/// State why a string is not a valid vCard.
-/// Unknown semantic fields are treated as absent, so partial contacts still load.
+/// Classify why input is not a valid vCard.
+/// Treat unknown semantic fields as absent so partial contacts still load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VCardError {
-    /// The input does not start with `BEGIN:VCARD`.
+    /// Input does not start with `BEGIN:VCARD`.
     NotAVCard,
     /// `BEGIN:VCARD` was never closed by `END:VCARD`.
     Unterminated,
-    /// A content line is missing the `name:value` structure.
+    /// A content line does not use the `name:value` form.
     Malformed(String),
 }
 
