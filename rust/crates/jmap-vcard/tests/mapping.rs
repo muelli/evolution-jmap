@@ -1291,11 +1291,11 @@ fn multiple_addresses_with_different_types_and_labels_pair_accurately() {
     assert!(vcard.contains("ADR;X-JMAP-KEY=a-home;TYPE=HOME:"));
     assert!(vcard.contains("LABEL;X-JMAP-KEY=a-home;TYPE=HOME:"));
 
-    // Roundtrip directly on the emitted vCard
+    // Roundtrip the emitted vCard directly.
     let roundtrip = vcard_to_card(&vcard).expect("parse emitted");
     assert_eq!(roundtrip.addresses, card.addresses);
 
-    // And simulate EDS where LABEL lines have TYPE but no X-JMAP-KEY
+    // Simulate EDS with LABEL lines that keep TYPE but drop X-JMAP-KEY.
     let eds_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "ADR;X-JMAP-KEY=a-work;TYPE=WORK:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
@@ -1556,8 +1556,8 @@ fn maps_notes_onto_note_lines() {
 
 #[test]
 fn a_note_keeps_the_line_breaks_and_separators_it_was_written_with() {
-    // Notes often contain prose.
-    // Escape vCard structural characters because users can type them in note text.
+    // Notes often contain prose text.
+    // Escape vCard separators because users can type them in note text.
     let card = one_note("n1", "met at FOSDEM;\nbuys the next round, apparently");
     let vcard = card_to_vcard(&card);
     assert_eq!(
@@ -3006,7 +3006,7 @@ fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
 #[test]
 fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
     // vCard 3.0 has no `IMPP`, so this mapping uses EDS `X-*` IM lines.
-    // Set `TYPE` so the handle lands in one HOME or WORK editor slot.
+    // Set `TYPE` so the handle lands in one HOME or WORK slot.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(
         line(&vcard, "X-JABBER"),
@@ -3020,13 +3020,13 @@ fn maps_an_online_service_onto_the_x_line_eds_keeps_it_on() {
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
     assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
     assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
-    // EDS stores this value as handle text, not as a URI.
+    // EDS stores this value as handle text, not as a URI value.
     assert_eq!(services["s1"].uri, None);
 }
 
 #[test]
 fn every_service_eds_has_a_field_for_gets_its_own_line() {
-    // Emit one line for each service that has an EDS HOME or WORK slot.
+    // Emit one line for each service with an EDS HOME or WORK slot.
     // Match service names without case or punctuation sensitivity.
     // Keep save output stable across spelling variants.
     for (service, property) in [
