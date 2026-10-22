@@ -277,7 +277,10 @@ impl MessageCache {
     pub fn adopt_origin(&self, origin: &str) {
         let cache = self.lock();
         let known = std::fs::read_to_string(&self.origin_file).ok();
-        if known.as_deref() == Some(origin) {
+        if known
+            .as_deref()
+            .is_some_and(|known| crate::origin::same(known, origin))
+        {
             return;
         }
         if known.is_some() {
