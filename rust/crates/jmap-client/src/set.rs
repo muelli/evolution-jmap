@@ -321,27 +321,56 @@ where
     let mut current_state = request.if_in_state.clone();
 
     for mut chunk in chunks {
-        let in_chunk: HashSet<String> = chunk.create.keys().cloned().collect();
+        let create_refs: HashMap<String, HashSet<String>> = chunk
+            .create
+            .iter()
+            .map(|(cid, obj)| {
+                Ok((
+                    cid.clone(),
+                    find_creation_references(&serde_json::to_value(obj)?, &candidates),
+                ))
+            })
+            .collect::<Result<_, Error>>()?;
+
+        // Propagate failed creations across intra-chunk references before filtering.
+        loop {
+            let mut progressed = false;
+            for cid in chunk.create.keys() {
+                if !failed_creates.contains(cid)
+                    && let Some(refs) = create_refs.get(cid)
+                    && let Some(failed_id) = refs.iter().find(|r| failed_creates.contains(*r))
+                {
+                    let failed_id = failed_id.clone();
+                    failed_creates.insert(cid.clone());
+                    merged.not_created.get_or_insert_with(BTreeMap::new).insert(
+                        cid.clone(),
+                        SetError::new(jmap_proto::error::set::INVALID_PROPERTIES).with_description(
+                            format!("creation reference #{failed_id} failed in earlier chunk"),
+                        ),
+                    );
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+
+        let in_chunk: HashSet<String> = chunk
+            .create
+            .keys()
+            .filter(|cid| !failed_creates.contains(*cid))
+            .cloned()
+            .collect();
         let known =
             |r: &String| created_ids.contains_key(&Id::new(r.as_str())) || in_chunk.contains(r);
 
         let mut ready_create = BTreeMap::new();
         for (cid, obj) in chunk.create {
-            let refs = find_creation_references(&serde_json::to_value(&obj)?, &candidates);
-
-            // A possible reference to a failed create: do not send it (conservative).
-            if let Some(failed_id) = refs.iter().find(|r| failed_creates.contains(*r)) {
-                let failed_id = failed_id.clone();
-                failed_creates.insert(cid.clone());
-                merged.not_created.get_or_insert_with(BTreeMap::new).insert(
-                    cid,
-                    SetError::new(jmap_proto::error::set::INVALID_PROPERTIES).with_description(
-                        format!("creation reference #{failed_id} failed in earlier chunk"),
-                    ),
-                );
+            if failed_creates.contains(&cid) {
                 continue;
             }
-
+            let refs = &create_refs[&cid];
             if let Some(unresolved_id) = refs.iter().find(|r| !known(r)) {
                 return Err(unresolved(unresolved_id));
             }
@@ -616,5 +645,55 @@ mod tests {
             Err(Error::Transport("connection refused".into()))
         });
         assert!(matches!(result, Err(Error::Transport(_))), "{result:?}");
+    }
+
+    #[test]
+    fn a_create_referencing_a_same_chunk_create_whose_prerequisite_failed_is_not_sent() {
+        // Chunk 0 (limit 2) holds "a0" and "b". "b" fails on the server.
+        // Chunk 1 holds "c" (references "#d") and "d" (references "#b").
+        // Because "c" sorts before "d" in the BTreeMap, "c" must still see that "d" failed.
+        let request = SetRequest::new("a")
+            .create("a0", json!({ "name": "root-ok" }))
+            .create("b", json!({ "name": "root-fail" }))
+            .create("d", json!({ "parentId": "#b" }))
+            .create("c", json!({ "parentId": "#d" }));
+
+        let mut sent = Vec::new();
+        let result = execute_set_chunked(&request, Some(2), |chunk, created_ids| {
+            sent.push((chunk.clone(), created_ids.clone()));
+            let mut resp = SetResponse::new(chunk.account_id.clone(), State::new("s"));
+            let mut created = BTreeMap::new();
+            let mut not_created = BTreeMap::new();
+            if let Some(creates) = &chunk.create {
+                for cid in creates.keys() {
+                    if cid == "b" {
+                        not_created.insert(
+                            cid.clone(),
+                            SetError::new(jmap_proto::error::set::INVALID_PROPERTIES),
+                        );
+                    } else {
+                        created.insert(cid.clone(), json!({ "id": format!("id-{cid}") }));
+                    }
+                }
+            }
+            if !created.is_empty() {
+                resp.created = Some(created);
+            }
+            if !not_created.is_empty() {
+                resp.not_created = Some(not_created);
+            }
+            Ok(resp)
+        });
+
+        let response = result.expect("set succeeds with partial not_created");
+        assert_eq!(
+            sent.len(),
+            1,
+            "second chunk must be skipped completely when both 'd' and 'c' fail locally"
+        );
+        let not_created = response.not_created.expect("not_created map");
+        assert!(not_created.contains_key("b"));
+        assert!(not_created.contains_key("d"));
+        assert!(not_created.contains_key("c"));
     }
 }

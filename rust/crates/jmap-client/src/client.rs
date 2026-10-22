@@ -796,6 +796,8 @@ impl Client {
             headers.push(("Authorization".to_owned(), authorization.clone()));
         }
 
+        crate::transport::set_observed_retry_after(None);
+
         let response = self
             .transport
             .execute(HttpRequest {
