@@ -47,6 +47,26 @@ debug-channel write is skipped. Observing the skip needs
 `SOURCE_REGISTRY_DEBUG` and a live EDS debug log, the same live-EDS-only
 territory as `Live`.
 
+## `src/child_added.rs`
+
+`cargo mutants` makes no mutants for this file, because each function is an
+`unsafe fn`. The mutants below were applied by hand. Each one has no effect
+that a reader of the child can see, or is not compiled on this EDS:
+
+- In `follow_collection`, the calls of `e_source_authentication_get_type` and
+  `e_source_security_get_type` removed (lines 128 and 129). EDS's
+  `e_source_class_init` calls `g_type_ensure` on both types. Thus each live
+  `ESource` that this function gets proves that both types are registered.
+- In `BOUND`, `secure` replaced with `method` (line 92). `set_method` notifies
+  both properties, and `secure` is `method != "none"`. Thus the child gets the
+  same `secure` value. Only the spelling of its `method` changes, and no JMAP
+  backend reads that spelling.
+- The `credential-store-id` value of `CREDENTIAL_PROPERTY` replaced with
+  `credential-name` (line 100). This line is compiled only on an EDS with
+  `credential-store-id` (3.52 does not have it). There,
+  `the_credential_name_follows_too` writes `credential-store-id` and kills the
+  mutant. The other arm (line 102) is killed on 3.52 by the same test.
+
 ## `src/populate.rs`
 
 `cargo mutants` skips the body of every `unsafe fn` by default (mutating
