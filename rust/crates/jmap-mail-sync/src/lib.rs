@@ -565,6 +565,39 @@ impl MailSync {
             })
     }
 
+    /// Removes one message from a mailbox and keeps it in `trash` if no other
+    /// mailbox holds it (a delete outside the trash).
+    ///
+    /// IMAPX with a real trash folder does the same: a deleted message moves to
+    /// the trash, and only an expunge of the trash destroys it. The read and
+    /// the race window are the same as in [`MailSync::expunge_message`]. A
+    /// message that is not in `mailbox` is left as it is.
+    pub fn trash_message(&self, uid: &Id, mailbox: &Id, trash: &Id) -> Result<(), SyncError> {
+        let account_id = self.account_id().to_string();
+        let message_uid = uid.to_string();
+        let mailbox_id = mailbox.to_string();
+        let result = self.message_mailboxes(uid).and_then(|filed_in| {
+            if !filed_in.contains(mailbox) {
+                return Ok(());
+            }
+            tracing::debug!(
+                account_id,
+                uid = message_uid,
+                mailbox_id,
+                "trashing message"
+            );
+            let patch = if filed_in.len() > 1 {
+                mailboxes::out_of(mailbox)
+            } else {
+                Filing::moved(mailbox.clone(), trash.clone()).patch()
+            };
+            self.update_email(uid, patch)
+        });
+        result.inspect_err(|error| {
+            tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message trash failed");
+        })
+    }
+
     /// The mailboxes that hold one message.
     ///
     /// The request names one property. The default property set of `Email/get`

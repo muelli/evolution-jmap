@@ -255,3 +255,80 @@ fn a_false_valued_mailbox_entry_is_refused_rather_than_guessed_at() {
         "a refused expunge must leave the message untouched"
     );
 }
+
+#[test]
+fn a_message_trashed_from_its_last_mailbox_moves_into_the_trash() {
+    // A delete outside the trash keeps the message. The trash is the place
+    // where the user and every other client look for it.
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let trash = fixture.seed_mailbox("Trash");
+    let uid = fixture.seed_message(&inbox);
+
+    fixture
+        .sync()
+        .trash_message(&uid, &inbox, &trash)
+        .expect("the message to be trashed");
+
+    assert_eq!(
+        fixture.mailboxes_on_server(&uid).keys().collect::<Vec<_>>(),
+        vec![&trash],
+        "the message should be in the trash and nowhere else"
+    );
+}
+
+#[test]
+fn a_message_trashed_from_one_of_two_mailboxes_only_leaves_that_mailbox() {
+    // The copy in the other mailbox stays. The trash does not get it, because
+    // the message is not deleted: only one of its places is gone.
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let archive = fixture.seed_mailbox("Archive");
+    let trash = fixture.seed_mailbox("Trash");
+    let uid = fixture.seed_message(&inbox);
+    let sync = fixture.sync();
+    sync.file_message(&uid, &Filing::copied_into(archive.clone()))
+        .expect("the copy to be filed");
+
+    sync.trash_message(&uid, &inbox, &trash)
+        .expect("the message to be trashed");
+
+    assert_eq!(
+        fixture.mailboxes_on_server(&uid).keys().collect::<Vec<_>>(),
+        vec![&archive],
+    );
+}
+
+#[test]
+fn a_message_trashed_from_a_mailbox_it_is_not_in_is_left_as_it_is() {
+    // A different client moved the message after the last listing. A move
+    // based on the old row would take it from where the user put it.
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let archive = fixture.seed_mailbox("Archive");
+    let trash = fixture.seed_mailbox("Trash");
+    let uid = fixture.seed_message(&archive);
+
+    fixture
+        .sync()
+        .trash_message(&uid, &inbox, &trash)
+        .expect("nothing to do is not a failure");
+
+    assert_eq!(
+        fixture.mailboxes_on_server(&uid).keys().collect::<Vec<_>>(),
+        vec![&archive],
+    );
+}
+
+#[test]
+fn a_message_trashed_that_the_account_does_not_hold_is_no_such_message() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let trash = fixture.seed_mailbox("Trash");
+
+    let outcome = fixture
+        .sync()
+        .trash_message(&Id::new("nosuchmessage"), &inbox, &trash);
+
+    assert!(matches!(outcome, Err(SyncError::NoSuchMessage(_))));
+}
