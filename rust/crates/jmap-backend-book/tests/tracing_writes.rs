@@ -10,10 +10,11 @@ use std::ffi::{CString, c_void};
 use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_AUTHENTICATION_ACCEPTED, E_SOURCE_AUTHENTICATION_REJECTED,
-    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_SECURITY, ESource,
-    e_contact_new_from_vcard, e_source_authentication_set_host, e_source_authentication_set_port,
-    e_source_get_extension, e_source_new_with_uid, e_source_security_set_secure,
+    E_CONFLICT_RESOLUTION_KEEP_LOCAL, E_SOURCE_AUTHENTICATION_ACCEPTED,
+    E_SOURCE_AUTHENTICATION_REJECTED, E_SOURCE_EXTENSION_AUTHENTICATION,
+    E_SOURCE_EXTENSION_SECURITY, ESource, e_contact_new_from_vcard,
+    e_source_authentication_set_host, e_source_authentication_set_port, e_source_get_extension,
+    e_source_new_with_uid, e_source_security_set_secure,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, g_free, g_slist_free_full, gchar};
 use gobject_sys::g_object_unref;
@@ -279,7 +280,16 @@ fn save_load_and_remove_contact_trace_structured_fields() {
 
     let (_, captured_save) = capture(|| {
         let result = unsafe {
-            ops::save_contact(&sync, GFALSE, contact, &mut new_uid, &mut extra, &mut error)
+            ops::save_contact(
+                &sync,
+                GFALSE,
+                E_CONFLICT_RESOLUTION_KEEP_LOCAL,
+                contact,
+                ptr::null(),
+                &mut new_uid,
+                &mut extra,
+                &mut error,
+            )
         };
         assert_eq!(result, GTRUE);
     });

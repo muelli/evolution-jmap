@@ -422,10 +422,9 @@ unsafe extern "C" fn load_contact_sync(
 unsafe extern "C" fn save_contact_sync(
     meta_backend: *mut EBookMetaBackend,
     overwrite_existing: gboolean,
-    // ContactCard/set lacks conditional writes, resolving conflicts as last-writer-wins.
-    _conflict_resolution: EConflictResolution,
+    conflict_resolution: EConflictResolution,
     contact: *mut EContact,
-    _extra: *const gchar,
+    extra: *const gchar,
     _opflags: guint32,
     out_new_uid: *mut *mut gchar,
     out_new_extra: *mut *mut gchar,
@@ -443,7 +442,9 @@ unsafe extern "C" fn save_contact_sync(
                 ops::save_contact(
                     sync,
                     overwrite_existing,
+                    conflict_resolution,
                     contact,
+                    extra,
                     out_new_uid,
                     out_new_extra,
                     error,

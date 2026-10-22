@@ -4,14 +4,17 @@
 //! Implementation bodies for `EBookMetaBackend` vfuncs operating over [`BookSync`].
 //! Out-parameters are written and transferred to EDS on success; errors are set on failure.
 
-use eds_sys::{E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, EContact, e_book_client_error_create};
+use eds_sys::{
+    E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, E_CONFLICT_RESOLUTION_FAIL,
+    E_CONFLICT_RESOLUTION_KEEP_SERVER, EConflictResolution, EContact, e_book_client_error_create,
+};
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
     cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, out_of_sync_gerror, set_raw_gerror,
 };
 use jmap_backend_core::i18n::translate_with;
 use jmap_backend_core::marshal::{dup_string, read_string, set_out_string};
-use jmap_book_sync::{BookSync, SyncError};
+use jmap_book_sync::{Base, BookSync, OnConflict, SyncError};
 use jmap_proto::State;
 
 use crate::marshal;
@@ -190,7 +193,7 @@ pub unsafe fn load_contact(
     sync: &BookSync,
     uid: *const gchar,
     out_contact: *mut *mut EContact,
-    _out_extra: *mut *mut gchar,
+    out_extra: *mut *mut gchar,
     error: *mut *mut GError,
 ) -> gboolean {
     let account_id = sync.account_id().as_str();
@@ -260,6 +263,8 @@ pub unsafe fn load_contact(
         } else {
             *out_contact = contact;
         }
+        // EDS stores the extra with the contact and gives it back as the base of an edit.
+        set_out_string(out_extra, &info.vcard);
     }
     GTRUE
 }
@@ -268,13 +273,22 @@ pub unsafe fn load_contact(
 ///
 /// # Safety
 ///
-/// As [`list_existing`], and `contact` must be NULL or a valid `EContact`.
+/// An edit with `extra` (the vCard that [`load_contact`] stored) patches only the
+/// properties that the user changed, and resolves a conflict as `conflict_resolution` asks.
+///
+/// # Safety
+///
+/// As [`list_existing`], `contact` must be NULL or a valid `EContact`, and `extra`
+/// must be NULL or a valid NUL-terminated string.
+#[allow(clippy::too_many_arguments)] // Matches the EDS vfunc signature.
 pub unsafe fn save_contact(
     sync: &BookSync,
     overwrite_existing: gboolean,
+    conflict_resolution: EConflictResolution,
     contact: *mut EContact,
+    extra: *const gchar,
     out_new_uid: *mut *mut gchar,
-    _out_new_extra: *mut *mut gchar,
+    out_new_extra: *mut *mut gchar,
     error: *mut *mut GError,
 ) -> gboolean {
     let account_id = sync.account_id().as_str();
@@ -314,15 +328,27 @@ pub unsafe fn save_contact(
         }
     };
 
+    // A create has no base.
+    let base_vcard = match existing_uid {
+        // SAFETY: the caller guarantees a valid string or NULL.
+        Some(_) => unsafe { read_string(extra) },
+        None => None,
+    };
+    let base = base_vcard.as_deref().map(|vcard| Base {
+        vcard,
+        on_conflict: on_conflict(conflict_resolution),
+    });
+
     tracing::debug!(
         account_id,
         address_book_id,
         overwrite_existing = is_overwrite,
         existing_uid = existing_uid.as_deref(),
+        has_base = base.is_some(),
         "saving contact"
     );
 
-    let info = match sync.save_contact(&vcard, existing_uid.as_deref()) {
+    let info = match sync.save_contact_since(base, &vcard, existing_uid.as_deref()) {
         Ok(info) => info,
         // SAFETY: as above.
         Err(failure) => {
@@ -346,10 +372,23 @@ pub unsafe fn save_contact(
         "saved contact"
     );
 
-    // SAFETY: `out_new_uid` satisfies the contract by this function's own, and
-    // ownership of the duplicate passes through it.
-    unsafe { set_out_string(out_new_uid, &info.uid) };
+    // SAFETY: the out-parameters satisfy the contract by this function's own, and
+    // ownership of the duplicates passes through them.
+    unsafe {
+        set_out_string(out_new_uid, &info.uid);
+        set_out_string(out_new_extra, &info.vcard);
+    }
     GTRUE
+}
+
+/// The [`OnConflict`] for an `EConflictResolution`. The local save is the newer
+/// edit, so `USE_NEWER`, `WRITE_COPY` and an unknown value keep the local value.
+pub fn on_conflict(resolution: EConflictResolution) -> OnConflict {
+    match resolution {
+        E_CONFLICT_RESOLUTION_KEEP_SERVER => OnConflict::KeepServer,
+        E_CONFLICT_RESOLUTION_FAIL => OnConflict::Fail,
+        _ => OnConflict::KeepLocal,
+    }
 }
 
 /// Destroys a contact for `remove_contact_sync`.

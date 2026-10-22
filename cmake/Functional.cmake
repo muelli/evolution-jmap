@@ -466,6 +466,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
+	# Three connects on one cache: list, edit offline, replay. EDS gives the
+	# extra of the cached contact back on the replay as the base of the edit.
+	# See `tests/book-offline-edit.rs`.
+	add_test(
+		NAME functional-book-offline-edit
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test book-offline-edit
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-offline-edit PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
 	# The same `functional-book-client` binary and module, against a real
 	# Stalwart instead of the in-process mock. The Rust source marks it
 	# `#[ignore]`: it needs `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/

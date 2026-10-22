@@ -18,7 +18,8 @@ use jmap_backend_core::error::cstring_lossy;
 
 use jmap_book_sync::ContactInfo;
 
-/// Wraps `infos` as an allocated `GSList` of `EBookMetaBackendInfo`.
+/// Wraps `infos` as an allocated `GSList` of `EBookMetaBackendInfo`. The extra of
+/// each node is its vCard: EDS stores it with the contact as the base of an edit.
 pub fn info_list(infos: &[ContactInfo]) -> *mut GSList {
     let mut list = ptr::null_mut();
     // Prepending is O(1); iterate in reverse order to preserve input sequence.
@@ -26,13 +27,13 @@ pub fn info_list(infos: &[ContactInfo]) -> *mut GSList {
         let uid = cstring_lossy(&info.uid);
         let revision = cstring_lossy(&info.revision);
         let object = cstring_lossy(&info.vcard);
-        // SAFETY: Pointers are valid for the call, which copies them; NULL extra is allowed.
+        // SAFETY: Pointers are valid for the call, which copies them.
         let node = unsafe {
             e_book_meta_backend_info_new(
                 uid.as_ptr(),
                 revision.as_ptr(),
                 object.as_ptr(),
-                ptr::null(),
+                object.as_ptr(),
             )
         };
         // SAFETY: `list` is a valid GSList and `node` is a fresh allocation.
