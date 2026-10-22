@@ -563,7 +563,7 @@ pub fn states_online_service(service: &OnlineService) -> bool {
     drawn_service(service).is_some()
 }
 
-/// Returns mapped property and handle for an emit-ready service entry.
+/// Return mapped property and handle for a service entry ready to emit.
 fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     let property = service_property(service.service.as_deref()?)?;
     let handle = online_service_handle(service)?;
@@ -571,7 +571,7 @@ fn drawn_service(service: &OnlineService) -> Option<(&'static str, &str)> {
     drawable.then_some((property, handle))
 }
 
-/// Emits `user` when present, else extracts a plain handle from `uri`.
+/// Return `user` when present. Else parse a plain handle from `uri`.
 pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
     match service.user.as_deref() {
         Some(user) => Some(user),
@@ -579,7 +579,7 @@ pub fn online_service_handle(service: &OnlineService) -> Option<&str> {
     }
 }
 
-/// The handle part of a service URI that states one handle only.
+/// Return the handle from a service URI that names one plain handle.
 fn handle_in_uri<'a>(service: &str, uri: &'a str) -> Option<&'a str> {
     let wanted = normalised_service(service);
     let (stated, handle) = uri.split_once(':')?;
@@ -609,7 +609,7 @@ fn plain_handle(handle: &str) -> bool {
             .any(|character| character.is_whitespace() || character.is_control())
 }
 
-/// The URI scheme handles at this service are stated under.
+/// Return the URI scheme for handles at this service.
 fn service_scheme(service: &str) -> Option<&'static str> {
     let wanted = normalised_service(service);
     SERVICE_SCHEMES
@@ -618,7 +618,7 @@ fn service_scheme(service: &str) -> Option<&'static str> {
         .map(|(_, scheme)| *scheme)
 }
 
-/// The vCard property handles at this service are stated on.
+/// Return the vCard property used for handles at this service.
 fn service_property(service: &str) -> Option<&'static str> {
     let wanted = normalised_service(service);
     ONLINE_SERVICES
@@ -636,7 +636,7 @@ fn service_of(property: &str) -> Option<&'static str> {
 }
 
 /// Whether two service names are equivalent for mapping lookups.
-/// Compare case-insensitively and ignore punctuation and spacing aliases.
+/// Compare case-insensitively. Ignore punctuation and spacing aliases.
 pub fn same_service(one: Option<&str>, other: Option<&str>) -> bool {
     match (one, other) {
         (Some(one), Some(other)) => normalised_service(one) == normalised_service(other),
@@ -645,8 +645,8 @@ pub fn same_service(one: Option<&str>, other: Option<&str>) -> bool {
     }
 }
 
-/// Service name normalized for lookups.
-/// Remove non-alphanumeric characters and lower-case the rest.
+/// Service name normalised for lookups.
+/// Remove non-alphanumeric characters and lowercase the rest.
 fn normalised_service(name: &str) -> String {
     name.chars()
         .filter(|character| character.is_alphanumeric())
@@ -654,7 +654,7 @@ fn normalised_service(name: &str) -> String {
         .collect()
 }
 
-/// The EDS IM slot for this handle.
+/// Return the EDS IM slot for this service entry.
 /// Read JSContact `contexts` first. Use [`DEFAULT_SLOT`] for ambiguous or unsupported contexts.
 fn service_slot(service: &OnlineService) -> &'static str {
     let context = |name: &str| {
