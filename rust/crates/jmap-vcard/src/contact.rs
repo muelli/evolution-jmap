@@ -2685,7 +2685,7 @@ fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
 mod tests {
     use super::{
         MAX_LINE_OCTETS, VCardEntry, VCardProperty, entry_key, fold_overlong_lines,
-        normalize_vcard_dates, service_of, split_vcard_property_line,
+        normalize_vcard_dates, service_of, split_vcard_property_line, states_unsupported_photo_uri,
     };
     use calcard::common::CalendarScale;
     use calcard::vcard::{
@@ -2718,6 +2718,18 @@ mod tests {
     fn service_of_rejects_unknown_properties() {
         assert_eq!(service_of("X-UNKNOWN-SERVICE"), None);
         assert_eq!(service_of("FN"), None);
+    }
+
+    #[test]
+    fn states_unsupported_photo_uri_keeps_data_scheme() {
+        assert!(!states_unsupported_photo_uri(
+            "data:image/png;base64,QUJDRA=="
+        ));
+        assert!(!states_unsupported_photo_uri(
+            "DATA:image/png;base64,QUJDRA=="
+        ));
+        assert!(states_unsupported_photo_uri("file:///home/user/photo.png"));
+        assert!(states_unsupported_photo_uri("ftp://example.test/photo.png"));
     }
 
     #[test]
