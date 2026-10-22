@@ -11,7 +11,8 @@
 # The default packages have no C code that shares state between threads.
 # Do not add an FFI crate: GLib, Camel and EDS are not instrumented, so
 # ThreadSanitizer cannot see their locks and reports every hand-off between
-# threads as a race.
+# threads as a race. ci/Containerfile.tsan builds an instrumented GLib and
+# EDS for the FFI crates.
 #
 # This script needs rustup and addr2line (binutils) for symbol names in the
 # reports. It installs the toolchain named by THREAD_TOOLCHAIN and its

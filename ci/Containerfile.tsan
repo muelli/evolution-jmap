@@ -1,0 +1,195 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This image gives a GLib and an evolution-data-server (with Camel) that are
+# built with ThreadSanitizer. With it, ThreadSanitizer sees the locks of GLib,
+# Camel and EDS, and the FFI crates can run their tests under it.
+#
+# The versions are the ones that Ubuntu 24.04 ships. The build installs them
+# over the Ubuntu files, so every library that links GLib or EDS uses them.
+# clang compiles them, because rustc links the ThreadSanitizer runtime of
+# LLVM. A shared library that clang instruments contains no runtime. The test
+# executable gives the runtime. gcc would load a second runtime.
+#
+# Build (rootless podman, from the top of the repository):
+#   podman build --security-opt seccomp=unconfined \
+#       -f ci/Containerfile.tsan -t evolution-jmap-tsan ci
+# The build ends with a smoke test of the GLib locks (ci/tsan/smoke.c).
+# Build the image once and keep it. A build takes about 15 minutes.
+#
+# Give "--security-opt seccomp=unconfined" to "podman run" too. The runtime of
+# clang 18 restarts the program with address randomization off. It calls
+# personality(ADDR_NO_RANDOMIZE), and the default seccomp profile blocks it.
+
+ARG UBUNTU=docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+
+FROM ${UBUNTU} AS build
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CC=clang \
+    CXX=clang++
+
+RUN apt-get update -q && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        cmake \
+        curl \
+        flex \
+        bison \
+        gettext \
+        gperf \
+        libclang-rt-18-dev \
+        meson \
+        ninja-build \
+        pkg-config \
+        python3 \
+        python3-packaging \
+        xz-utils \
+        libffi-dev \
+        libglib2.0-dev \
+        libical-dev \
+        libicu-dev \
+        libjson-glib-dev \
+        libmount-dev \
+        libnspr4-dev \
+        libnss3-dev \
+        libpcre2-dev \
+        libsecret-1-dev \
+        libsoup-3.0-dev \
+        libsqlite3-dev \
+        libxml2-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# The source tarballs, pinned by the SHA-256 that GNOME publishes.
+ARG GLIB_VERSION=2.80.0
+ARG GLIB_SHA256=8228a92f92a412160b139ae68b6345bd28f24434a7b5af150ebe21ff587a561d
+ARG EDS_VERSION=3.52.3
+ARG EDS_SHA256=e9f6c80c142033b1801bccaa6221c453de34ead4ea089b2086b19086f9a9c2e4
+
+WORKDIR /src
+RUN curl -sSfLO "https://download.gnome.org/sources/glib/${GLIB_VERSION%.*}/glib-${GLIB_VERSION}.tar.xz" \
+    && curl -sSfLO "https://download.gnome.org/sources/evolution-data-server/${EDS_VERSION%.*}/evolution-data-server-${EDS_VERSION}.tar.xz" \
+    && printf '%s  %s\n' \
+        "${GLIB_SHA256}" "glib-${GLIB_VERSION}.tar.xz" \
+        "${EDS_SHA256}" "evolution-data-server-${EDS_VERSION}.tar.xz" \
+        | sha256sum -c - \
+    && tar xf "glib-${GLIB_VERSION}.tar.xz" \
+    && tar xf "evolution-data-server-${EDS_VERSION}.tar.xz" \
+    && rm ./*.tar.xz
+
+# b_lundef=false: an instrumented shared library leaves the runtime symbols
+# undefined.
+RUN meson setup glib-build "glib-${GLIB_VERSION}" \
+        --prefix=/usr \
+        --libdir=lib/x86_64-linux-gnu \
+        --buildtype=debugoptimized \
+        -Db_sanitize=thread \
+        -Db_lundef=false \
+        -Dmultiarch=true \
+        -Dtests=false \
+        -Dintrospection=disabled \
+        -Dman=false \
+        -Ddocumentation=false \
+        -Dselinux=disabled \
+        -Dlibelf=disabled \
+        -Dsysprof=disabled \
+    && meson compile -C glib-build \
+    && DESTDIR=/stage meson install -C glib-build --no-rebuild \
+    && rm -rf glib-build "glib-${GLIB_VERSION}"
+
+# EDS compiles against the Ubuntu GLib headers. They are the same version.
+# EDS adds -Wl,--no-undefined, and -z undefs after it cancels it for the
+# same reason as b_lundef above. The options turn off the parts that need
+# GTK, WebKit, GNOME Online Accounts, LDAP or Kerberos. The crates use none
+# of them.
+RUN cmake -G Ninja -S "evolution-data-server-${EDS_VERSION}" -B eds-build \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DLIB_INSTALL_DIR=/usr/lib/x86_64-linux-gnu \
+        -DLIBEXEC_INSTALL_DIR=/usr/libexec \
+        -DSYSCONF_INSTALL_DIR=/etc \
+        -DCMAKE_C_FLAGS=-fsanitize=thread \
+        -DCMAKE_CXX_FLAGS=-fsanitize=thread \
+        -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread \
+        -DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,undefs \
+        -DCMAKE_MODULE_LINKER_FLAGS=-Wl,-z,undefs \
+        -DENABLE_GTK=OFF \
+        -DENABLE_GTK4=OFF \
+        -DENABLE_OAUTH2_WEBKITGTK=OFF \
+        -DENABLE_OAUTH2_WEBKITGTK4=OFF \
+        -DENABLE_GOA=OFF \
+        -DENABLE_EXAMPLES=OFF \
+        -DENABLE_TESTS=OFF \
+        -DENABLE_WEATHER=OFF \
+        -DENABLE_CANBERRA=OFF \
+        -DENABLE_INTROSPECTION=OFF \
+        -DENABLE_VALA_BINDINGS=OFF \
+        -DENABLE_SCHEMAS_COMPILE=OFF \
+        -DWITH_LIBDB=OFF \
+        -DWITH_KRB5=OFF \
+        -DWITH_OPENLDAP=OFF \
+        -DWITH_SYSTEMDUSERUNITDIR=no \
+    && cmake --build eds-build \
+    && DESTDIR=/stage cmake --install eds-build \
+    && rm -rf eds-build "evolution-data-server-${EDS_VERSION}"
+
+FROM ${UBUNTU}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    PATH=/opt/cargo/bin:/usr/local/bin:/usr/bin:/bin
+
+# The same development packages as Containerfile.ci. The instrumented files
+# go over them in the next step.
+RUN apt-get update -q && apt-get install -y --no-install-recommends \
+        binutils \
+        build-essential \
+        ca-certificates \
+        clang \
+        curl \
+        git \
+        libclang-dev \
+        libclang-rt-18-dev \
+        pkg-config \
+        libglib2.0-dev \
+        libgtk-3-dev \
+        libcamel1.2-dev \
+        libedataserver1.2-dev \
+        libebackend1.2-dev \
+        libebook1.2-dev \
+        libedata-book1.2-dev \
+        libecal2.0-dev \
+        libedata-cal2.0-dev \
+        evolution-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /stage/ /
+
+# The nightly toolchain of ci/thread-check.sh, with the source of the
+# standard library for -Zbuild-std.
+ARG RUST_TOOLCHAIN=nightly-2026-10-18
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
+          --component rust-src \
+    && rustc --version
+
+# Each library must contain ThreadSanitizer calls. Then the smoke test must
+# find no race with a GMutex or a GAsyncQueue, and must find the race that
+# has no lock. Exit code 66 means a report.
+COPY tsan/smoke.c /tmp/smoke.c
+RUN set -e; \
+    for lib in libglib-2.0.so.0 libgobject-2.0.so.0 libgio-2.0.so.0 \
+               libcamel-1.2.so libedataserver-1.2.so libebackend-1.2.so \
+               libedata-book-1.2.so libedata-cal-2.0.so; do \
+        nm -D "/usr/lib/x86_64-linux-gnu/${lib}" | grep -q ' U __tsan_func_entry' \
+            || { echo "${lib} has no ThreadSanitizer calls" >&2; exit 1; }; \
+    done; \
+    clang -fsanitize=thread -g /tmp/smoke.c -o /tmp/smoke $(pkg-config --cflags --libs glib-2.0); \
+    export TSAN_OPTIONS=exitcode=66; \
+    /tmp/smoke locked; \
+    /tmp/smoke queue; \
+    status=0; /tmp/smoke unlocked 2>/dev/null || status=$?; \
+    [ "${status}" -eq 66 ] || { echo "the race with no lock gave exit ${status}, not 66" >&2; exit 1; }; \
+    rm /tmp/smoke /tmp/smoke.c
