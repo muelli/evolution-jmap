@@ -1417,12 +1417,12 @@ pub fn email_submission_set(
 
     let mut created: BTreeMap<String, EmailSubmission> = BTreeMap::new();
     let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
-    // Map creation ids to submission ids for `onSuccessUpdateEmail` `#` keys.
+    // Map creation IDs to submission IDs for `onSuccessUpdateEmail` `#` keys.
     let mut created_here: BTreeMap<String, Id> = BTreeMap::new();
 
     let mut to_create: Vec<(Id, EmailSubmission)> = Vec::new();
     for (creation_id, mut submission) in request.set.create.clone().unwrap_or_default() {
-        // Resolve each `#creationId` from an earlier `Email/set` create.
+        // Resolve each `#creationId` against earlier `Email/set` creates.
         if let Some(reference) = submission.email_id.as_str().strip_prefix('#') {
             match request_created_ids.get(reference) {
                 Some(id) => submission.email_id = id.clone(),
@@ -1465,7 +1465,7 @@ pub fn email_submission_set(
             continue;
         }
 
-        // Apply SMTP FUTURERELEASE (RFC 4865), bounded by `maxDelayedSend`.
+        // Apply SMTP FUTURERELEASE (RFC 4865). Enforce `maxDelayedSend`.
         let hold = match hold_seconds(submission.envelope.as_ref()) {
             Ok(hold) => hold,
             Err(description) => {
@@ -1497,7 +1497,7 @@ pub fn email_submission_set(
             }
         }
 
-        // Derive the SMTP envelope from the message when it is absent (RFC 8621 §7).
+        // When absent, derive the SMTP envelope from the message (RFC 8621 §7).
         let envelope = submission.envelope.clone().unwrap_or_else(|| Envelope {
             mail_from: EnvelopeAddress::new(
                 email
@@ -1520,7 +1520,7 @@ pub fn email_submission_set(
         submission.thread_id = email.thread_id.clone();
         submission.envelope = Some(envelope.clone());
 
-        // Positive holds stay pending until `sendAt`; otherwise send now.
+        // Positive holds keep `pending` until `sendAt`. Others send now.
         match hold {
             Some(seconds) if seconds > 0 => {
                 let now = crate::time::parse_utc(MOCK_NOW).expect("MOCK_NOW parses");
@@ -1576,7 +1576,7 @@ pub fn email_submission_set(
         }
     });
 
-    // RFC 8621 §7.5: Apply `onSuccessUpdateEmail` patches after successful sends.
+    // RFC 8621 §7.5: apply `onSuccessUpdateEmail` patches after successful sends.
     let mut email_patches: Vec<(Id, serde_json::Map<String, Value>)> = Vec::new();
     for (key, patch) in request.on_success_update_email.clone().unwrap_or_default() {
         let submission_id = match key.strip_prefix('#') {
