@@ -50,14 +50,18 @@ use std::ptr;
 
 use common::Account;
 use common::signals::{Context, emissions, watch};
+use eds_sys::compat::{summary_dup_uids, summary_free_uids};
 use eds_sys::{
-    CAMEL_MESSAGE_DELETED, CamelFolder, camel_folder_expunge_sync, camel_folder_get_folder_summary,
-    camel_folder_get_message_count, camel_folder_refresh_info_sync, camel_folder_summary_get,
-    camel_folder_synchronize_sync, camel_message_info_set_flags,
+    CAMEL_MESSAGE_DELETED, CamelFolder, CamelFolderClass, camel_folder_expunge_sync,
+    camel_folder_get_folder_summary, camel_folder_get_message_count,
+    camel_folder_refresh_info_sync, camel_folder_summary_get, camel_folder_synchronize_sync,
+    camel_message_info_set_flags,
 };
+use gio_sys::{G_IO_ERROR_CANCELLED, g_cancellable_cancel, g_cancellable_new, g_io_error_quark};
 use glib_sys::{GError, GFALSE};
-use gobject_sys::g_object_unref;
+use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
+use jmap_mail::folder::folder_type;
 use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
@@ -273,6 +277,41 @@ impl Fixture {
         account
             .emails
             .transaction(|transaction| transaction.update(uid, email));
+    }
+
+    /// Gives the message a `false` `mailboxIds` value, which RFC 8621 §4.1.1
+    /// forbids. The write for this one message then fails.
+    fn break_message(&self, uid: &Id) {
+        let account_id = self.server.account_id();
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let mut email = account.emails.get(uid).expect("the seeded message").clone();
+        let mut mailboxes = email.mailbox_ids.take().unwrap_or_default();
+        mailboxes.insert(self.archive_id.clone(), false);
+        email.mailbox_ids = Some(mailboxes);
+        account
+            .emails
+            .transaction(|transaction| transaction.update(uid, email));
+    }
+
+    /// Installs a new connection. The store then forgets its folder listing,
+    /// and the next walk lists the mailboxes again.
+    fn reconnect(&self) {
+        let client = Client::connect(self.server.origin(), Credentials::none()).expect("connected");
+        self._account
+            .connect(MailSync::new(client, self.server.account_id()));
+    }
+
+    /// Adds a mailbox without a name. A listing of the account then fails.
+    fn break_listing(&self) {
+        let account_id = self.server.account_id();
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_mailbox("", None);
     }
 }
 
@@ -752,4 +791,130 @@ fn closing_the_trash_without_expunge_destroys_nothing() {
 
     assert!(fixture.holds(&marked));
     assert_eq!(rows_of(trash.0), 1);
+}
+
+#[test]
+fn a_failed_listing_destroys_nothing() {
+    // The walk needs the listing to find the trash. A failed listing is an
+    // error, not "no trash": a destroy in its place loses the message.
+    let fixture = Fixture::with_trash();
+    fixture.mark_deleted(fixture.uid());
+    fixture.reconnect();
+    fixture.break_listing();
+
+    let answered = fixture.expunge();
+
+    assert!(!answered.ok, "an expunge without a listing claimed success");
+    assert!(!answered.error.is_null(), "a failure with no error set");
+    assert!(fixture.holds(fixture.uid()), "the message was destroyed");
+    assert_eq!(fixture.rows(), 2, "the marked row stays for the next try");
+}
+
+#[test]
+fn one_failed_message_does_not_stop_the_others() {
+    // The walk tries each marked row and reports the failure at the end. Run
+    // once with each message as the failing one, so the order of the rows in
+    // the summary does not matter.
+    for broken in 0..2 {
+        let fixture = Fixture::start();
+        let (bad, good) = (&fixture.uids[broken], &fixture.uids[1 - broken]);
+        fixture.mark_deleted(bad);
+        fixture.mark_deleted(good);
+        fixture.break_message(bad);
+
+        let answered = fixture.expunge();
+
+        assert!(!answered.ok, "a failed message was reported as expunged");
+        assert!(!answered.error.is_null(), "a failure with no error set");
+        assert!(!fixture.holds(good), "the walk stopped at the failure");
+        assert!(fixture.holds(bad));
+        assert_eq!(fixture.rows(), 1, "only the row of the failure stays");
+    }
+}
+
+#[test]
+fn of_two_failures_the_first_is_reported() {
+    // Both messages fail. The error names the row that the walk reached first,
+    // which is the first uid of the summary.
+    let fixture = Fixture::start();
+    for uid in &fixture.uids {
+        fixture.mark_deleted(uid);
+        fixture.break_message(uid);
+    }
+    // SAFETY: a live summary of a listed folder. The array is freed below
+    // with the matching function.
+    let first = unsafe {
+        let rows = summary_dup_uids(camel_folder_get_folder_summary(fixture.inbox));
+        let uid = std::ffi::CStr::from_ptr((*rows).pdata.read().cast())
+            .to_string_lossy()
+            .into_owned();
+        summary_free_uids(rows);
+        uid
+    };
+    let last = fixture
+        .uids
+        .iter()
+        .find(|uid| uid.as_str() != first)
+        .expect("two messages");
+
+    let answered = fixture.expunge();
+
+    assert!(!answered.ok);
+    let message = answered.message();
+    assert!(message.contains(&first), "not the first failure: {message}");
+    assert!(
+        !message.contains(last.as_str()),
+        "the last failure: {message}"
+    );
+}
+
+#[test]
+fn a_synchronisation_with_nothing_deleted_makes_no_request() {
+    // Evolution synchronises every folder it closes. With no listing held,
+    // a walk that went on would list the account each time.
+    let fixture = Fixture::with_trash();
+    fixture.reconnect();
+    let before = fixture.server.api_requests();
+
+    fixture.synchronize(false).expect_ok();
+    fixture.synchronize(true).expect_ok();
+
+    assert_eq!(fixture.server.api_requests(), before);
+}
+
+#[test]
+fn an_expunge_the_user_stopped_destroys_nothing() {
+    // The vfunc itself, not Camel's wrapper: the wrapper tests the cancellable
+    // before the vfunc runs, so it would hide a vfunc that ignores the stop.
+    let fixture = Fixture::start();
+    fixture.mark_deleted(fixture.uid());
+    let mut error: *mut GError = ptr::null_mut();
+
+    // SAFETY: referencing the class runs `class_init`, which installs the
+    // vfunc. The folder is an instance of that class. The cancellable is live
+    // until the unref below, and `error` is writable and currently NULL.
+    let ok = unsafe {
+        let stopped = g_cancellable_new();
+        g_cancellable_cancel(stopped);
+        let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
+        let vfunc = (*class).expunge_sync.expect("an expunge vfunc");
+        let ok = vfunc(fixture.inbox, stopped, &mut error);
+        g_type_class_unref(class.cast());
+        g_object_unref(stopped.cast());
+        ok
+    };
+    let answered = Expunged::new(ok, error);
+
+    assert!(!answered.ok, "a stopped expunge claimed success");
+    // SAFETY: a failure sets a live GError, checked non-NULL first.
+    unsafe {
+        assert!(!answered.error.is_null(), "a failure with no error set");
+        assert_eq!((*answered.error).domain, g_io_error_quark());
+        assert_eq!((*answered.error).code, G_IO_ERROR_CANCELLED);
+    }
+    assert!(
+        fixture.holds(fixture.uid()),
+        "a stopped expunge destroyed mail"
+    );
+    assert_eq!(fixture.rows(), 2);
 }
