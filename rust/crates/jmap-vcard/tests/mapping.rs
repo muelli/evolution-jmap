@@ -1852,7 +1852,7 @@ fn one_nickname(key: &str, name: &str) -> ContactCard {
 
 #[test]
 fn maps_nicknames_onto_nickname_lines() {
-    // NICKNAME is plain text, so the JSContact key rides in X-JMAP-KEY and survives EDS rewrites.
+    // NICKNAME is plain text. Keep the JSContact key in X-JMAP-KEY so EDS rewrites keep the link.
     let vcard = card_to_vcard(&fixture_card());
     assert_eq!(line(&vcard, "NICKNAME"), "NICKNAME;X-JMAP-KEY=k1:Vee");
 
@@ -6568,8 +6568,8 @@ fn jscontact_server_localizations_and_preferred_languages_characterization() {
 
 #[test]
 fn email_pref_ordering_primary_selection_and_tie_breaking() {
-    // 1. Multiple emails with distinct pref values: lowest pref must be emitted first
-    // so it lands in EDS's E_CONTACT_EMAIL_1 (primary email), followed by higher ranks and None.
+    // 1. Multiple emails with distinct pref values: emit lowest pref first.
+    // EDS maps the first email to E_CONTACT_EMAIL_1, then higher ranks and None.
     let card = ContactCard {
         emails: Some(
             [
@@ -7041,8 +7041,8 @@ fn adr_all_seven_structured_components_roundtrip() {
 
 #[test]
 fn adr_label_parameter_parsing_and_emission_fidelity() {
-    // vCard 4.0 / RFC 6350 §6.3.1 allows a `LABEL` parameter directly on the `ADR` property line:
-    // `ADR;TYPE=WORK;LABEL="...":PO Box 123;...`
+    // RFC 6350 §6.3.1 allows a LABEL parameter directly on ADR.
+    // Example: `ADR;TYPE=WORK;LABEL="...":PO Box 123;...`
     let raw_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Alice Developer\r\n",
@@ -7073,7 +7073,7 @@ fn adr_label_parameter_parsing_and_emission_fidelity() {
         ]
     );
 
-    // Emitting via card_to_vcard produces both standard vCard 3.0 ADR and standalone LABEL lines
+    // Emission keeps both vCard 3.0 ADR and standalone LABEL lines.
     let vcard = card_to_vcard(&card);
     let unfolded_vcard = unfolded(&vcard);
     assert!(unfolded_vcard.contains(
@@ -7081,11 +7081,11 @@ fn adr_label_parameter_parsing_and_emission_fidelity() {
     ));
     assert!(unfolded_vcard.contains("LABEL;X-JMAP-KEY=a1;TYPE=WORK:Alice Dev\\n100 Tech Blvd\\nSuite 200\\nAustin\\, TX 78701\\nUSA"));
 
-    // Parsing back round-trips with identical Address components and label
+    // Parsing back keeps identical Address components and label.
     let back = vcard_to_card(&vcard).expect("parse back");
     assert_eq!(back.addresses, card.addresses);
 
-    // Test ADR with empty structured components but non-empty LABEL parameter
+    // Test ADR with empty structured components and a non-empty LABEL parameter.
     let empty_components_with_label_param = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Bob Builder\r\n",
@@ -7712,9 +7712,9 @@ fn supported_evolution_and_im_x_properties_complete_roundtrip() {
 
 #[test]
 fn properties_with_custom_and_unknown_x_parameters_characterization() {
-    // Tests standard properties carrying unknown X- parameters from external clients:
-    // Parser must extract property value + known parameters without failing on unknown X- params;
-    // Emitter outputs standard parameters + X-JMAP-KEY, omitting unknown X- parameters.
+    // Standard properties can carry unknown X- parameters from external clients.
+    // Parser keeps values and known parameters when unknown X- parameters appear.
+    // Emitter writes standard parameters plus X-JMAP-KEY, and drops unknown X- parameters.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Custom Params User\r\n",
@@ -9518,11 +9518,11 @@ fn nickname_empty_absent_and_predicate_fidelity() {
 
 #[test]
 fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
-    // Characterizes URL properties into EDS fields:
-    // 1. Single URL (kind: None): maps to EDS E_CONTACT_HOMEPAGE_URL.
-    // 2. Multiple URLs (kind: None): emitted as multiple URL;X-JMAP-KEY=... lines.
-    //    EDS 3.52 maps the first URL line to E_CONTACT_HOMEPAGE_URL and preserves subsequent lines.
-    // 3. Roundtrips preserve all keys and URIs without data loss.
+    // Characterize URL properties in EDS fields.
+    // 1. One URL with kind None maps to E_CONTACT_HOMEPAGE_URL.
+    // 2. Multiple URLs with kind None emit multiple URL;X-JMAP-KEY=... lines.
+    // EDS 3.52 maps the first URL line to E_CONTACT_HOMEPAGE_URL and keeps later lines.
+    // 3. Roundtrips keep all keys and URIs.
 
     let mut links = BTreeMap::new();
     links.insert(
@@ -10984,10 +10984,10 @@ fn photo_uri_variant_and_lossy_media_type_characterization() {
         );
     }
 
-    // 3. Lossy-by-design characterization: media_type on remote URI
-    // In JSContact, a remote URI may specify media_type: Some("image/jpeg").
-    // But RFC 2426 §3.1.4 states no TYPE on URI references, and EDS reads no TYPE off URI lines.
-    // Therefore, card_to_vcard omits TYPE by design, which reads back as media_type: None.
+    // 3. Lossy by design: media_type on a remote URI.
+    // JSContact can set media_type to Some("image/jpeg") on a remote URI.
+    // RFC 2426 §3.1.4 allows no TYPE on URI references, and EDS reads no TYPE there.
+    // card_to_vcard omits TYPE by design, so reads return media_type as None.
     let card_with_media_type = one_photo("https://example.org/photo.jpg", Some("image/jpeg"));
     let vcard_lossy = card_to_vcard(&card_with_media_type);
     assert_eq!(
