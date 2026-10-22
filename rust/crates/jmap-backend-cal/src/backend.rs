@@ -415,10 +415,9 @@ unsafe extern "C" fn load_component_sync(
 unsafe extern "C" fn save_component_sync(
     meta_backend: *mut ECalMetaBackend,
     overwrite_existing: gboolean,
-    // Conflicts resolve using last-write-wins.
-    _conflict_resolution: EConflictResolution,
+    conflict_resolution: EConflictResolution,
     instances: *const GSList,
-    _extra: *const gchar,
+    extra: *const gchar,
     // Operation flags indicate whether user suppressed iTIP dispatch.
     opflags: ECalOperationFlags,
     out_new_uid: *mut *mut gchar,
@@ -438,7 +437,9 @@ unsafe extern "C" fn save_component_sync(
                 ops::save_component(
                     sync,
                     overwrite_existing,
+                    conflict_resolution,
                     instances,
+                    extra,
                     meta_backend.cast(),
                     scheduling::itip(opflags),
                     out_new_uid,

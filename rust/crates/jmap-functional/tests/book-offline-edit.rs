@@ -14,13 +14,11 @@
 //! A real factory is necessary: only EDS stores the extra in its cache and
 //! gives it back on the replay.
 
-use std::io::copy;
-use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use jmap_client::{Client, Credentials};
-use jmap_functional::{Session, required_path};
+use jmap_functional::{Session, required_path, spawn_switchable_proxy};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::contacts::ContactCard;
@@ -47,35 +45,6 @@ fn keyfile(port: u16) -> String {
          [Security]\n\
          Method=none\n"
     )
-}
-
-/// A loopback port that relays to `target` while `up` is true. While `up` is
-/// false, it closes each new connection at once, as a server out of reach does.
-fn switchable_proxy(target: String, up: Arc<AtomicBool>) -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback proxy port");
-    let port = listener.local_addr().expect("a bound port").port();
-    std::thread::spawn(move || {
-        for incoming in listener.incoming() {
-            let Ok(mut incoming) = incoming else { continue };
-            if !up.load(Ordering::SeqCst) {
-                continue;
-            }
-            let target = target.clone();
-            std::thread::spawn(move || {
-                let Ok(mut outgoing) = TcpStream::connect(&target) else {
-                    return;
-                };
-                let (Ok(mut reader), Ok(mut writer)) = (incoming.try_clone(), outgoing.try_clone())
-                else {
-                    return;
-                };
-                let upstream = std::thread::spawn(move || copy(&mut reader, &mut writer));
-                let _ = copy(&mut outgoing, &mut incoming);
-                let _ = upstream.join();
-            });
-        }
-    });
-    port
 }
 
 /// One mock with one seeded contact, a session on a switchable proxy to it,
@@ -113,7 +82,7 @@ impl Setup {
             .expect("the mock serves plain http")
             .to_owned();
         let up = Arc::new(AtomicBool::new(true));
-        let port = switchable_proxy(authority, up.clone());
+        let port = spawn_switchable_proxy(authority, up.clone());
         let mut session = Session::new(format!("{}/{name}", env!("CARGO_TARGET_TMPDIR")));
         session.write_source("jmap-functional", &keyfile(port));
         session.stage_address_book_backend(&module);

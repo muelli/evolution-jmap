@@ -9,11 +9,12 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_AUTHENTICATION_ACCEPTED, E_SOURCE_AUTHENTICATION_REJECTED,
-    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_SECURITY, ECalComponent, ESource,
-    e_cal_component_new_from_string, e_cal_meta_backend_info_free,
-    e_source_authentication_set_host, e_source_authentication_set_port, e_source_get_extension,
-    e_source_new_with_uid, e_source_security_set_secure,
+    E_CONFLICT_RESOLUTION_KEEP_LOCAL, E_SOURCE_AUTHENTICATION_ACCEPTED,
+    E_SOURCE_AUTHENTICATION_REJECTED, E_SOURCE_EXTENSION_AUTHENTICATION,
+    E_SOURCE_EXTENSION_SECURITY, ECalComponent, ESource, e_cal_component_new_from_string,
+    e_cal_meta_backend_info_free, e_source_authentication_set_host,
+    e_source_authentication_set_port, e_source_get_extension, e_source_new_with_uid,
+    e_source_security_set_secure,
 };
 use glib_sys::{
     GError, GFALSE, GSList, GTRUE, g_free, g_slist_free, g_slist_free_full, g_slist_prepend, gchar,
@@ -311,7 +312,9 @@ fn save_load_and_remove_component_trace_structured_fields() {
             ops::save_component(
                 &sync,
                 GFALSE,
+                E_CONFLICT_RESOLUTION_KEEP_LOCAL,
                 list,
+                ptr::null(),
                 ptr::null_mut(),
                 Itip::Send,
                 &mut new_uid,

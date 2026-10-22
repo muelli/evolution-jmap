@@ -45,6 +45,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// A scratch EDS installation: XDG directories, a sources directory, and a
@@ -559,6 +561,27 @@ pub fn spawn_loopback_proxy(target: String) -> u16 {
     std::thread::spawn(move || {
         for incoming in listener.incoming() {
             let Ok(incoming) = incoming else { continue };
+            let target = target.clone();
+            std::thread::spawn(move || relay(incoming, &target));
+        }
+    });
+    port
+}
+
+/// [`spawn_loopback_proxy`] that relays only while `up` is true. While `up` is
+/// false, it closes each new connection at once, as a server out of reach does.
+pub fn spawn_switchable_proxy(target: String, up: Arc<AtomicBool>) -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback proxy port");
+    let port = listener
+        .local_addr()
+        .expect("the bound address has a port")
+        .port();
+    std::thread::spawn(move || {
+        for incoming in listener.incoming() {
+            let Ok(incoming) = incoming else { continue };
+            if !up.load(Ordering::SeqCst) {
+                continue;
+            }
             let target = target.clone();
             std::thread::spawn(move || relay(incoming, &target));
         }

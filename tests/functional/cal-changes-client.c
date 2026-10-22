@@ -13,7 +13,11 @@
  * with no phases, thus this separate client connects, lists all events and
  * prints the sorted summaries, as `list_phase` in `book-client.c` does.
  *
- *   usage: functional-cal-changes-client <source-uid>
+ * With an event UID and a summary, it then sets the summary of that event
+ * and saves it. `rust/crates/jmap-functional/tests/calendar-offline-edit.rs`
+ * uses this edit while the server is out of reach.
+ *
+ *   usage: functional-cal-changes-client <source-uid> [<event-uid> <summary>]
  */
 
 #include <libecal/libecal.h>
@@ -44,8 +48,8 @@ main (int argc,
 	guint index = 0;
 	const gchar *source_uid;
 
-	if (argc != 2) {
-		g_printerr ("usage: %s <source-uid>\n", argv[0]);
+	if (argc != 2 && argc != 4) {
+		g_printerr ("usage: %s <source-uid> [<event-uid> <summary>]\n", argv[0]);
 		return 2;
 	}
 
@@ -112,6 +116,22 @@ main (int argc,
 
 	g_list_free_full (summaries, g_free);
 	g_slist_free_full (components, g_object_unref);
+
+	if (argc == 4) {
+		ICalComponent *event = NULL;
+
+		if (!e_cal_client_get_object_sync (cal, argv[2], NULL, &event, NULL, &error))
+			return fail ("get", error);
+
+		i_cal_component_set_summary (event, argv[3]);
+		if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
+						      E_CAL_OPERATION_FLAG_NONE, NULL, &error)) {
+			g_object_unref (event);
+			return fail ("modify", error);
+		}
+		g_object_unref (event);
+	}
+
 	g_object_unref (client);
 	g_object_unref (source);
 	g_object_unref (registry);
