@@ -354,7 +354,7 @@ impl PkceVerifier {
 /// A successful token response (RFC 6749 §5.1): the fields an
 /// `EOAuth2Service` needs to hand back to EDS's credential store, and no
 /// others.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TokenResponse {
     /// RFC 6749 §5.1's one required field.
     pub access_token: String,
@@ -370,9 +370,23 @@ pub struct TokenResponse {
     pub scope: Option<String>,
 }
 
+/// Shows no token. For the refresh token, it shows only if one is present.
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("access_token", &format_args!("<redacted>"))
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("has_refresh_token", &self.refresh_token.is_some())
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
+
 /// The success document as it arrives, before it has been checked for the
-/// fields this client cannot proceed without.
-#[derive(Debug, Deserialize)]
+/// fields this client cannot proceed without. It has no `Debug`, because it
+/// holds the tokens.
+#[derive(Deserialize)]
 struct TokenDocument {
     access_token: Option<String>,
     token_type: Option<String>,

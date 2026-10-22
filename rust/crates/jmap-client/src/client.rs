@@ -24,11 +24,29 @@ use crate::transport::{
 };
 
 /// How the client authenticates (RFC 8620 leaves the scheme to HTTP).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Credentials {
     None,
     Basic { user: String, password: String },
     Bearer(String),
+}
+
+/// Shows the user name but never the password or the token.
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Credentials::None => f.write_str("None"),
+            Credentials::Basic { user, .. } => f
+                .debug_struct("Basic")
+                .field("user", user)
+                .field("password", &format_args!("<redacted>"))
+                .finish(),
+            Credentials::Bearer(_) => f
+                .debug_tuple("Bearer")
+                .field(&format_args!("<redacted>"))
+                .finish(),
+        }
+    }
 }
 
 impl Credentials {

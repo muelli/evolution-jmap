@@ -742,3 +742,26 @@ fn a_blocked_authenticate_test_times_out_and_fails_fast() {
         std::thread::park();
     });
 }
+
+#[test]
+fn login_debug_does_not_show_the_password() {
+    let login = Login {
+        server: jmap_backend_collection::collection_source::Server {
+            target: jmap_backend_core::source::ConnectTarget::Origin(
+                "https://jmap.example.com".to_owned(),
+            ),
+            connection: jmap_collection_sync::child_source::Connection {
+                host: "jmap.example.com".to_owned(),
+                port: None,
+                user: Some("vera@example.com".to_owned()),
+                auth_method: Some("plain/password".to_owned()),
+                secure: true,
+            },
+            rebase_urls: false,
+        },
+        parts: Parts::ALL,
+        credentials: Credentials::basic("vera@example.com", "pw-41d0c2b7-secret"),
+    };
+    let shown = format!("{login:?}");
+    assert!(!shown.contains("pw-41d0c2b7-secret"), "{shown}");
+}
