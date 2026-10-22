@@ -1761,7 +1761,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 };
                 media.insert(entry_key(entry, "m", &media), photo);
             }
-            // Keep each related-name line EDS exposes, or save can drop it.
+            // Keep each related-name line that EDS exposes, or save can drop data.
             // This path keys by line text and ignores `X-JMAP-KEY`.
             X_EVOLUTION_SPOUSE
             | X_EVOLUTION_MANAGER
@@ -1914,8 +1914,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 }
             }
             // EDS stores IM handles on these `X-` lines.
-            // Ignore services this mapping does not state.
-            // Do not read `TYPE`: this slot name selects the service.
+            // Skip services this mapping does not state.
+            // Do not read `TYPE`: the slot name selects the service.
             name => {
                 let Some(service) = service_of(name) else {
                     continue;
@@ -2459,9 +2459,9 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
     let full = find("FN").map(entry_text).filter(|f| !f.is_empty());
     let fields = find("N").map(entry_components).unwrap_or_default();
 
-    // Read only the kind and value each `N` field states.
+    // Read only the kind and value that each `N` field states.
     // RFC 9553 §2.2.1 `phonetic` data has no vCard 3.0 slot here.
-    // The save path restores it on the right component.
+    // The save path restores it on the matching component.
     let mut components = Vec::new();
     for (kind, index) in NAME_COMPONENTS {
         let Some(value) = fields.get(index).filter(|value| !value.is_empty()) else {
@@ -2481,8 +2481,8 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
     }
 
     // No FN, no usable N, and no fileAs means the card names nobody.
-    // Do not split FN to guess N fields.
-    // A wrong guess can be saved on the next write.
+    // Do not split FN to guess `N` fields.
+    // A wrong guess could be saved on the next write.
     if full.is_none() && components.is_empty() && extra.is_empty() {
         return None;
     }
@@ -2596,8 +2596,8 @@ fn value_text(value: &VCardValue) -> Option<String> {
         VCardValue::Component(items) => Some(items.join(",")),
         VCardValue::PartialDateTime(date) => {
             let day = date.day.or_else(|| {
-                // calcard can parse the second `-` into `tz_hour`; clamp that
-                // fallback to day-range values.
+                // calcard can parse the second `-` into `tz_hour`.
+                // Use it as fallback day only in the valid day range.
                 date.tz_hour.filter(|d| (1..=31).contains(d))
             });
             if let (Some(y), Some(m), Some(d)) = (date.year, date.month, day) {
