@@ -85,7 +85,7 @@ use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_MAIL_ACCOUNT,
     E_SOURCE_EXTENSION_MAIL_TRANSPORT, E_SOURCE_EXTENSION_SECURITY, ESource, ESourceBackend,
     ESourceSecurity, e_binding_bind_property, e_binding_bind_property_full,
-    e_source_authentication_get_type, e_source_backend_get_backend_name, e_source_get_extension,
+    e_source_authentication_get_type, e_source_backend_dup_backend_name, e_source_get_extension,
     e_source_mail_account_get_type, e_source_mail_transport_get_type, e_source_security_get_type,
     e_source_security_set_method,
 };
@@ -93,7 +93,7 @@ use glib_sys::{GFALSE, GTRUE, gboolean, gpointer};
 use gobject_sys::{
     G_BINDING_SYNC_CREATE, GBinding, GValue, g_value_get_boolean, g_value_set_static_string,
 };
-use jmap_backend_core::marshal::extension_if_present;
+use jmap_backend_core::marshal::{extension_if_present, take_string};
 use jmap_backend_core::trampoline::guard;
 
 use crate::prepare_mail::MAIL_BACKEND_NAME;
@@ -171,11 +171,10 @@ pub unsafe fn mail_service_of(child: *mut ESource) -> Option<&'static CStr> {
         else {
             return false;
         };
-        // SAFETY: a live extension; the getter returns NULL or a
-        // NUL-terminated string that the extension owns.
-        let name = unsafe { e_source_backend_get_backend_name(backend) };
-        // SAFETY: as above, and the string is only read from within this scope.
-        !name.is_null() && unsafe { CStr::from_ptr(name) } == MAIL_BACKEND_NAME
+        // SAFETY: a live extension. The `dup_` getter gives a copy that a
+        // setter on another thread cannot free.
+        let name = unsafe { take_string(e_source_backend_dup_backend_name(backend)) };
+        name.as_deref() == MAIL_BACKEND_NAME.to_str().ok()
     })
 }
 

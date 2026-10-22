@@ -63,15 +63,15 @@
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceAuthentication, ESourceCollection, ESourceSecurity,
-    e_source_authentication_get_host, e_source_authentication_get_method,
-    e_source_authentication_get_port, e_source_authentication_get_type,
-    e_source_authentication_get_user, e_source_collection_get_calendar_enabled,
+    e_source_authentication_dup_host, e_source_authentication_dup_method,
+    e_source_authentication_dup_user, e_source_authentication_get_port,
+    e_source_authentication_get_type, e_source_collection_get_calendar_enabled,
     e_source_collection_get_contacts_enabled, e_source_collection_get_mail_enabled,
     e_source_collection_get_type, e_source_get_enabled, e_source_security_get_secure,
     e_source_security_get_type,
 };
 use glib_sys::GFALSE;
-use jmap_backend_core::marshal::{extension_if_present, read_string};
+use jmap_backend_core::marshal::{extension_if_present, take_string};
 use jmap_backend_core::source::{ConnectTarget, SourceError, connect_target};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
@@ -146,7 +146,7 @@ pub unsafe fn parts_of(source: *mut ESource) -> Parts {
 /// empty `User=` key. The second is important.
 /// [`jmap_backend_core::connect::credentials`] decides what the account
 /// authenticates *as*, and reads an empty user as anonymous through the same
-/// [`read_string`]. If `populate` disagreed, it would ask EDS for a password
+/// [`take_string`]. If `populate` disagreed, it would ask EDS for a password
 /// that `credentials` then discards.
 ///
 /// # Safety
@@ -162,8 +162,9 @@ pub unsafe fn user_of(source: *mut ESource) -> Option<String> {
     let auth = unsafe {
         extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
     }?;
-    // SAFETY: a live extension; the getter returns NULL or a string it owns.
-    unsafe { read_string(e_source_authentication_get_user(auth)) }
+    // SAFETY: a live extension. The `dup_` getter gives a copy that a setter
+    // on another thread cannot free.
+    unsafe { take_string(e_source_authentication_dup_user(auth)) }
 }
 
 /// The server that this account names, or why it names none.
@@ -200,13 +201,13 @@ pub unsafe fn server_of(source: *mut ESource) -> Result<Server, SourceError> {
     }) else {
         return Err(SourceError::MissingHost);
     };
-    // SAFETY: a live extension; each getter returns NULL or a NUL-terminated
-    // string owned by it.
+    // SAFETY: a live extension. Each `dup_` getter gives NULL or a copy that
+    // the caller frees, so a setter on another thread cannot free it.
     let (host, user, auth_method, port) = unsafe {
         (
-            read_string(e_source_authentication_get_host(auth)),
-            read_string(e_source_authentication_get_user(auth)),
-            read_string(e_source_authentication_get_method(auth)),
+            take_string(e_source_authentication_dup_host(auth)),
+            take_string(e_source_authentication_dup_user(auth)),
+            take_string(e_source_authentication_dup_method(auth)),
             e_source_authentication_get_port(auth),
         )
     };

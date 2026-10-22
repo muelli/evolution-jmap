@@ -132,7 +132,7 @@ paths are relative to `rust/crates/`.
 
 | ID | Problem | Resolution |
 |---|---|---|
-| N1 | Code on a worker thread read the strings of an `ESource` through the borrowed getters of EDS. On an account edit, the main loop can free such a string during the copy. This is the defect of F36 in other crates. | Partly fixed. `jmap-backend-core` reads copies through the `dup_` getters. `jmap-backend-core/tests/source.rs`, `from_source_on_another_thread_copies_a_user_the_main_thread_is_replacing` and related tests. Open: `jmap-backend-collection` and `jmap-ui`. |
+| N1 | Code on a worker thread read the strings of an `ESource` through the borrowed getters of EDS. On an account edit, the main loop can free such a string during the copy. This is the defect of F36 in other crates. | Partly fixed. `jmap-backend-core` and `jmap-backend-collection` read copies through the `dup_` getters. `jmap-backend-core/tests/source.rs`, `from_source_on_another_thread_copies_a_user_the_main_thread_is_replacing` and related tests. `jmap-backend-collection/tests/collection_source.rs`, `server_of_on_another_thread_copies_a_method_the_main_thread_is_replacing` and related tests. Open: `jmap-ui`. |
 
 ### FFI soundness audit, 2026-08-19
 

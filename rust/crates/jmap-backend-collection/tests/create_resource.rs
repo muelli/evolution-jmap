@@ -44,7 +44,7 @@ use jmap_collection_sync::{Child, ChildKind, Requested};
 use jmap_mock::MockServer;
 
 mod common;
-use common::{with_timeout, with_timeout_duration};
+use common::{long_values, read_while_another_thread_writes, with_timeout, with_timeout_duration};
 
 /// A different file name for each source. EDS derives the `ESource` uid from
 /// the file name, so two sources in one test process never share a uid.
@@ -430,5 +430,31 @@ fn stored_password_of_a_gone_registry_server_names_the_account_in_a_structured_f
 fn a_blocked_create_resource_test_times_out_and_fails_fast() {
     with_timeout_duration(std::time::Duration::from_millis(50), || {
         std::thread::park();
+    });
+}
+
+/// Sets the display name of `source`.
+///
+/// # Safety
+///
+/// `source` is a live source and `name` is a NUL-terminated string.
+unsafe fn set_display_name(source: *mut ESource, name: *const std::ffi::c_char) {
+    // SAFETY: by the contract of this function.
+    unsafe { e_source_set_display_name(source, name) };
+}
+
+#[test]
+fn requested_of_on_another_thread_copies_a_display_name_the_main_thread_is_replacing() {
+    with_timeout_duration(std::time::Duration::from_secs(60), || {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+        read_while_another_thread_writes(
+            scratch.source,
+            long_values("Work"),
+            set_display_name,
+            // SAFETY: a live source this test holds a reference to.
+            |source| unsafe { requested_of(source) }.map(|requested| requested.display_name),
+            &[Some("Work".into())],
+        );
     });
 }

@@ -57,3 +57,50 @@ pub fn with_timeout_duration<R: Send + 'static>(
         }
     }
 }
+
+/// A source that two threads share, as a worker thread and the main loop share
+/// it in EDS.
+struct Shared(*mut eds_sys::ESource);
+// SAFETY: an `ESource` and its extensions guard their state with a lock.
+unsafe impl Send for Shared {}
+unsafe impl Sync for Shared {}
+
+/// Two long values that a setter writes in turn. Each one ends in `stem`.
+pub fn long_values(stem: &str) -> [String; 2] {
+    ["a".repeat(4000) + stem, "b".repeat(9000) + stem]
+}
+
+/// Runs `read` on this thread while another thread calls `write` 20,000 times
+/// with the two `values` in turn. Each `read` must give one of `allowed` or one
+/// of `values`. A borrowed getter copies freed memory and gives a torn value.
+pub fn read_while_another_thread_writes(
+    source: *mut eds_sys::ESource,
+    values: [String; 2],
+    write: unsafe fn(*mut eds_sys::ESource, *const std::ffi::c_char),
+    read: impl Fn(*mut eds_sys::ESource) -> Option<String>,
+    allowed: &[Option<String>],
+) {
+    let shared = std::sync::Arc::new(Shared(source));
+    let names: Vec<std::ffi::CString> = values
+        .iter()
+        .map(|value| std::ffi::CString::new(value.as_str()).expect("no NUL"))
+        .collect();
+    let writer = {
+        let shared = std::sync::Arc::clone(&shared);
+        thread::spawn(move || {
+            for round in 0..20_000 {
+                // SAFETY: a live source and a NUL-terminated value.
+                unsafe { write(shared.0, names[round % 2].as_ptr()) };
+            }
+        })
+    };
+    while !writer.is_finished() {
+        let value = read(shared.0);
+        assert!(
+            allowed.contains(&value) || values.iter().any(|v| value.as_deref() == Some(v)),
+            "a torn value of {:?} bytes",
+            value.map(|v| v.len())
+        );
+    }
+    writer.join().expect("writer");
+}
