@@ -53,7 +53,7 @@ pub fn sieve_script_get(state: &mut ServerState, arguments: Value) -> Result<Val
 }
 
 /// `SieveScript/set` (RFC 9661 §2.4).
-/// Keep `id` and `isActive` as server-managed fields.
+/// Treat `id` and `isActive` as server-managed fields.
 /// Reject duplicate names with `alreadyExists`.
 /// Reject destruction of the active script with `sieveIsActive`.
 pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
@@ -239,7 +239,7 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
 }
 
 /// `SieveScript/query` (RFC 9661 §2.5).
-/// Filter by `name` substring, by `isActive`, or by both.
+/// Filter by `name` substring, by `isActive`, or both.
 pub fn sieve_script_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<SieveScriptQueryFilter> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -286,7 +286,7 @@ fn sieve_script_matches(script: &SieveScript, filter: &SieveScriptQueryFilter) -
 }
 
 /// `SieveScript/validate` (RFC 9661 §2.6).
-/// Check only that `blobId` resolves.
+/// Check only if `blobId` resolves.
 /// This mock does not parse Sieve source.
 /// It never emits `invalidSieve`.
 pub fn sieve_script_validate(
@@ -306,7 +306,7 @@ pub fn sieve_script_validate(
     ))
 }
 
-/// Activate only `target` (RFC 9661 §2.4 `onSuccessActivateScript`).
+/// Activate only `target` per RFC 9661 §2.4 `onSuccessActivateScript`.
 /// `None` deactivates all scripts.
 fn activate(account: &mut AccountState, target: Option<&Id>) {
     let ids: Vec<Id> = account
