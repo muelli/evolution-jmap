@@ -138,9 +138,11 @@ impl JmapFolder {
 ///
 /// `folder` must point at a live `CamelFolder`.
 pub(crate) unsafe fn parent_store<'a>(folder: *mut CamelFolder) -> Option<&'a JmapStore> {
-    // SAFETY: the accessor borrows the store that the folder holds a reference
-    // to. The contract above makes the type check legal, and the type check
-    // makes the cast inside sound.
+    // SAFETY: the folder holds only a weak pointer to its store, which can be
+    // NULL. `checked_borrow` returns `None` for NULL. The caller's own store
+    // reference keeps the store alive, so do not keep the result past the vfunc.
+    // The contract above makes the type check legal, and the type check makes
+    // the cast inside sound.
     unsafe {
         let store = camel_folder_get_parent_store(folder);
         checked_borrow(store, store_type())

@@ -146,8 +146,10 @@ const HEADER_VERSION_STATE_ONLY: i64 = 1;
 
 /// What the summary records about its rows: the state and the origin of the
 /// listing that gave them.
+///
+/// It is public only so that `tests/hostile.rs` can name it. Its fields stay private.
 #[derive(Default)]
-struct Recorded {
+pub struct Recorded {
     state: Option<State>,
     /// The server and account that gave the rows (see [`adopt_origin`]).
     origin: Option<String>,

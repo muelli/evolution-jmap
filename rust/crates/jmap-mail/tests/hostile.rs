@@ -18,6 +18,7 @@ use jmap_backend_core::instance::Slot;
 use jmap_backend_core::push::PushRefresh;
 use jmap_mail::cache::MessageCache;
 use jmap_mail::push::FolderRefresh;
+use jmap_mail::summary::Recorded;
 use jmap_mail_sync::{FolderTree, Keywords, MailSync};
 use jmap_proto::{Id, State};
 
@@ -56,8 +57,8 @@ fn everything_an_instance_holds_is_shareable_across_threads() {
     // cache that this folder owns for the account.
     assert_send_sync::<Slot<Id>>();
     assert_send_sync::<Slot<MessageCache>>();
-    // `crate::summary`: the `Email` state that the rows reflect.
-    assert_send_sync::<Slot<Mutex<Option<State>>>>();
+    // `crate::summary`: the `Email` state and the origin of the rows.
+    assert_send_sync::<Slot<Mutex<Recorded>>>();
     // `crate::message_info`: the keywords the last listing found, and the
     // thread id the server assigned the row.
     assert_send_sync::<Slot<Mutex<Keywords>>>();
