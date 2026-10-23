@@ -692,4 +692,59 @@ mod tests {
         let (status, _response) = super::handle_api(&mut state, &body, None);
         assert_eq!(status, 200);
     }
+
+    #[test]
+    fn email_submission_set_resolves_email_creation_id_from_prior_set_call() {
+        let mut state = ServerState::new();
+        let account = state.add_account("A1", "test");
+        let identity_id = account.seed_identity("Sender", "sender@example.test");
+        let inbox_id = account.seed_mailbox("Inbox", Some("inbox"));
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "Email/set",
+                &json!({
+                    "accountId": "A1",
+                    "create": {
+                        "draft": {
+                            "mailboxIds": {
+                                (inbox_id.to_string()): true
+                            }
+                        }
+                    }
+                }),
+                "c1",
+            )
+            .expect("build request")
+            .call(
+                "EmailSubmission/set",
+                &json!({
+                    "accountId": "A1",
+                    "create": {
+                        "submit1": {
+                            "identityId": identity_id,
+                            "emailId": "#draft"
+                        }
+                    }
+                }),
+                "c2",
+            )
+            .expect("append request call");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+
+        let created_email_id = response["methodResponses"][0][1]["created"]["draft"]["id"]
+            .as_str()
+            .expect("Email/set create returns an id")
+            .to_owned();
+        let submission = &response["methodResponses"][1];
+        assert_eq!(submission[0], json!("EmailSubmission/set"));
+        assert!(submission[1].get("notCreated").is_none());
+        assert_eq!(
+            submission[1]["created"]["submit1"]["emailId"],
+            json!(created_email_id)
+        );
+    }
 }
