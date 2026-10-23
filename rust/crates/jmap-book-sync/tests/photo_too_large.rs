@@ -94,6 +94,25 @@ fn a_photo_added_in_an_edit_that_is_too_large_says_so_with_its_size() {
 }
 
 #[test]
+fn a_photo_uri_with_an_upper_case_scheme_that_is_too_large_says_so_with_its_size() {
+    let fixture = Fixture::start_with(MockServer::builder().size_request(64 * 1024));
+    let sync = fixture.sync();
+    let photo = base64::engine::general_purpose::STANDARD.encode(vec![0x5a_u8; 100_000]);
+    let vcard = format!(
+        "BEGIN:VCARD\r\n\
+         VERSION:4.0\r\n\
+         UID:pas-id-68A2F1C400000003\r\n\
+         FN:Vera Oldenburg\r\n\
+         PHOTO:DATA:image/jpeg;BASE64,{photo}\r\n\
+         END:VCARD\r\n"
+    );
+
+    let failure = sync.save_contact(&vcard, None).unwrap_err();
+
+    assert_eq!(photo_octets(failure), 100_000);
+}
+
+#[test]
 fn a_small_photo_on_a_card_too_large_for_another_reason_is_not_blamed() {
     let fixture = Fixture::start_with(MockServer::builder().size_request(64 * 1024));
     let sync = fixture.sync();
