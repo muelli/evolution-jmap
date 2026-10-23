@@ -606,4 +606,19 @@ mod tests {
         );
         assert_eq!(response.get("limit"), Some(&json!("maxSizeRequest")));
     }
+
+    #[test]
+    fn requests_at_max_size_are_accepted() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c1")
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+        state.size_request = Some(body.len() as u64);
+
+        let (status, _response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+    }
 }
