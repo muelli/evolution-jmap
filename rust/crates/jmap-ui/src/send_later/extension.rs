@@ -44,8 +44,8 @@ use eds_sys::{
     camel_address_length, camel_internet_address_get, camel_medium_dup_headers,
     camel_medium_remove_header, camel_mime_message_get_from, camel_mime_message_get_recipients,
     camel_name_value_array_free, camel_name_value_array_get, camel_name_value_array_get_length,
-    e_extension_get_extensible, e_extension_get_type, e_source_backend_get_backend_name,
-    e_source_get_parent, e_source_mail_submission_get_transport_uid, e_source_registry_ref_source,
+    e_extension_get_extensible, e_extension_get_type, e_source_backend_dup_backend_name,
+    e_source_dup_parent, e_source_mail_submission_dup_transport_uid, e_source_registry_ref_source,
 };
 use evo_sys::{
     E_COMPOSER_HEADER_FROM, EHTMLEditor, EMsgComposer, GTK_BUTTONS_CLOSE,
@@ -81,7 +81,7 @@ use gobject_sys::{
 };
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
-use jmap_backend_core::marshal::{extension_if_present, read_string};
+use jmap_backend_core::marshal::{extension_if_present, read_string, take_string};
 use jmap_backend_core::mime::write_message;
 use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
@@ -678,7 +678,7 @@ unsafe fn jmap_connect_source(composer: *mut GObject) -> Option<*mut ESource> {
 
         let is_jmap =
             extension_if_present::<ESourceBackend>(transport, E_SOURCE_EXTENSION_MAIL_TRANSPORT)
-                .and_then(|backend| read_string(e_source_backend_get_backend_name(backend)))
+                .and_then(|backend| take_string(e_source_backend_dup_backend_name(backend)))
                 .as_deref()
                 == BACKEND_NAME.to_str().ok();
         if !is_jmap {
@@ -688,7 +688,7 @@ unsafe fn jmap_connect_source(composer: *mut GObject) -> Option<*mut ESource> {
         }
 
         // The connection configuration is on the collection, if one exists.
-        let parent = read_string(e_source_get_parent(transport))
+        let parent = take_string(e_source_dup_parent(transport))
             .and_then(|uid| CString::new(uid).ok())
             .map(|uid| e_source_registry_ref_source(registry, uid.as_ptr()))
             .filter(|source| !source.is_null());
@@ -716,12 +716,12 @@ unsafe fn transport_of(
     if identity.is_null() {
         return None;
     }
-    // SAFETY: the identity source is live; the extension and its string
-    // belong to it.
+    // SAFETY: the identity source is live, and the extension belongs to it.
+    // The copy of the string belongs to this function.
     let transport_uid = unsafe {
         extension_if_present::<ESourceMailSubmission>(identity, E_SOURCE_EXTENSION_MAIL_SUBMISSION)
             .and_then(|submission| {
-                read_string(e_source_mail_submission_get_transport_uid(submission))
+                take_string(e_source_mail_submission_dup_transport_uid(submission))
             })
     }?;
     let transport_uid = CString::new(transport_uid).ok()?;

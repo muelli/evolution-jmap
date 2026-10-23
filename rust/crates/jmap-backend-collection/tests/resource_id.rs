@@ -31,7 +31,7 @@ use jmap_collection_sync::{Child, ChildKind};
 use jmap_proto::Id;
 
 mod common;
-use common::{with_timeout, with_timeout_duration};
+use common::{long_values, read_while_another_thread_writes, with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -354,5 +354,44 @@ fn a_source_with_both_kinds_is_read_as_an_address_book() {
 fn a_blocked_resource_id_test_times_out_and_fails_fast() {
     with_timeout_duration(std::time::Duration::from_millis(50), || {
         std::thread::park();
+    });
+}
+
+/// Sets the `[Resource] Identity` of `source`.
+///
+/// # Safety
+///
+/// `source` is a live source and `identity` is a NUL-terminated string.
+unsafe fn set_identity(source: *mut ESource, identity: *const std::ffi::c_char) {
+    // SAFETY: by the contract of this function.
+    unsafe {
+        let resource = e_source_get_extension(source, E_SOURCE_EXTENSION_RESOURCE.as_ptr());
+        e_source_resource_set_identity(resource.cast(), identity);
+    }
+}
+
+// The deferred delete thread reads the resource id while the main loop can
+// replace the identity.
+#[test]
+fn resource_id_of_on_another_thread_copies_an_identity_the_main_thread_is_replacing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    with_timeout_duration(std::time::Duration::from_secs(60), || {
+        let source = TestSource::new()
+            .with_extension(EXTENSION_CALENDAR)
+            .with_identity("CAL1");
+        let values = long_values("CAL1");
+        let allowed: Vec<Option<String>> = values
+            .iter()
+            .map(|value| Some(format!("calendar:{value}")))
+            .chain([Some("calendar:CAL1".to_owned())])
+            .collect();
+        read_while_another_thread_writes(
+            source.0,
+            values,
+            set_identity,
+            // SAFETY: a live source.
+            |source| unsafe { resource_id_of(source) },
+            &allowed,
+        );
     });
 }
