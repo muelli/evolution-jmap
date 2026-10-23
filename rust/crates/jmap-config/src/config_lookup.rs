@@ -90,9 +90,8 @@ use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
-    EExtension, EExtensionClass, ENamedParameters, ESource, ESourceCollection,
-    e_extension_get_extensible, e_extension_get_type, e_named_parameters_get,
-    e_source_backend_dup_backend_name, e_source_collection_get_type,
+    EExtension, ENamedParameters, ESource, ESourceCollection, e_extension_get_extensible,
+    e_named_parameters_get, e_source_backend_dup_backend_name, e_source_collection_get_type,
 };
 use evo_sys::{
     E_CONFIG_LOOKUP_PARAM_EMAIL_ADDRESS, E_CONFIG_LOOKUP_PARAM_SERVERS,
@@ -106,13 +105,14 @@ use evo_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GTRUE, GType, gchar, gint};
-use gobject_sys::{GObject, GObjectClass, g_object_ref, g_object_unref};
+use gobject_sys::{g_object_ref, g_object_unref};
 use jmap_backend_core::cancel::CancelBridge;
 use jmap_backend_core::error::cstring_lossy;
+use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::i18n::{self, N_, translate_with};
 use jmap_backend_core::marshal::{extension_if_present, take_string};
 use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
-use jmap_backend_core::subclass::{self, InterfaceDecl, InterfaceImpl, ObjectSubclass};
+use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl};
 use jmap_backend_core::trampoline::guard;
 use jmap_client::transport::UreqTransport;
 
@@ -351,82 +351,49 @@ unsafe fn prior_server_of_held(source: *mut ESource, email: &str) -> Option<Stri
     prior_server(email, backend_name.as_deref(), &account)
 }
 
-/// The instance struct: only the state of [`EExtension`]. All else that this
-/// worker needs is `'static` or comes through the arguments of `run()`.
-#[repr(C)]
-pub struct JmapConfigLookup {
-    parent: EExtension,
-}
+/// The account lookup worker. It has no state: all else that it needs is
+/// `'static` or comes through the arguments of `run()`.
+pub struct ConfigLookup;
 
-/// The class struct: only the state of [`EExtensionClass`].
-#[repr(C)]
-pub struct JmapConfigLookupClass {
-    parent_class: EExtensionClass,
-}
+/// The registered `JmapConfigLookup` type.
+pub type JmapConfigLookup = ExtensionObject<ConfigLookup>;
 
-// SAFETY: both structs are #[repr(C)] and start with the instance/class
-// structs of EExtension. EExtension derives from GObject (eds-sys/tests/
-// oauth2.rs checks its size against `g_type_query`).
-unsafe impl ObjectSubclass for JmapConfigLookup {
-    const NAME: &'static CStr = c"JmapConfigLookup";
-    type Instance = JmapConfigLookup;
-    type Class = JmapConfigLookupClass;
+impl Extension for ConfigLookup {
+    const TYPE_NAME: &'static CStr = c"JmapConfigLookup";
+    // `e_webdav_config_lookup_class_init` sets the same `extensible_type`.
+    const EXTENSIBLE_NAME: &'static CStr = c"EConfigLookup";
 
-    fn parent_type() -> GType {
+    fn extensible_type() -> GType {
         // SAFETY: no arguments, and the type initializes itself.
-        unsafe { e_extension_get_type() }
+        unsafe { e_config_lookup_get_type() }
     }
 
     fn interfaces() -> Vec<InterfaceDecl> {
         vec![InterfaceDecl::filled_by::<Vtable>()]
     }
 
-    fn class_init_types() -> Vec<GType> {
-        // SAFETY: no arguments, and the type initializes itself. The call is
-        // here, before registration, because `class_init` can only look it up.
-        vec![unsafe { e_config_lookup_get_type() }]
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` starts with `EExtensionClass`.
-        // `e_extensible_load_extensions` matches against its `extensible_type`
-        // field. This is the same assignment as in
-        // `e_webdav_config_lookup_class_init`.
-        unsafe {
-            (*class).parent_class.extensible_type = subclass::registered_type(c"EConfigLookup")
-        };
-
-        // SAFETY: `JmapConfigLookupClass` starts with `EExtensionClass`, which
-        // starts with `GObjectClass`. The `class_init` of
-        // `jmap_config::oauth2::Extension` uses the same transitive cast.
-        let object_class = class.cast::<GObjectClass>();
-        unsafe { (*object_class).constructed = Some(constructed) };
+    unsafe fn constructed(extension: *mut EExtension) {
+        // SAFETY: the contract of this method.
+        unsafe { constructed(extension) }
     }
 }
 
-/// Chains up (as `e_webdav_config_lookup_constructed` does), then registers
-/// this instance with the `EConfigLookup` that it extends.
+/// Registers this instance with the `EConfigLookup` that it extends, as
+/// `e_webdav_config_lookup_constructed` does after its chain-up.
 ///
 /// The registration occurs when each `EConfigLookup` is constructed, not at
 /// module load. Different from [`crate::backend::JmapConfigServiceBackend`],
 /// this type needs a live instance of the extended type to register *against*.
-unsafe extern "C" fn constructed(object: *mut GObject) {
-    guard("JmapConfigLookup::constructed", (), || unsafe {
-        // SAFETY: the parent class of the class of a live instance is
-        // initialized and stays alive while an instance is alive.
-        let parent = subclass::parent_class::<GObjectClass>(JmapConfigLookup::parent_type());
-        if let Some(chained) = parent.and_then(|class| class.constructed) {
-            chained(object);
-        }
-
-        // SAFETY: GObject passes a live instance of this type. An `EExtensible`
+unsafe fn constructed(extension: *mut EExtension) {
+    unsafe {
+        // SAFETY: `extension` is live. An `EExtensible`
         // interface pointer has the same address as its instance (GObject
         // interfaces have no adjusted `this`). Thus this cast is the Rust
         // equivalent of the C `E_CONFIG_LOOKUP()` macro on the return value
         // of `e_extension_get_extensible`.
-        let config_lookup = e_extension_get_extensible(object.cast::<EExtension>()).cast();
-        e_config_lookup_register_worker(config_lookup, object.cast::<EConfigLookupWorker>());
-    });
+        let config_lookup = e_extension_get_extensible(extension).cast();
+        e_config_lookup_register_worker(config_lookup, extension.cast::<EConfigLookupWorker>());
+    }
 }
 
 /// Fills the copy of `EConfigLookupWorkerInterface` for [`JmapConfigLookup`].
