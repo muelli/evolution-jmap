@@ -2733,6 +2733,38 @@ mod tests {
     }
 
     #[test]
+    fn param_value_text_encodes_line_feed_with_rfc6868_escape() {
+        assert_eq!(
+            super::param_value_text("one\ntwo"),
+            VCardParameterValue::Text("one^ntwo".to_owned())
+        );
+    }
+
+    #[test]
+    fn param_value_text_encodes_carriage_return_sequences_as_line_feed() {
+        assert_eq!(
+            super::param_value_text("one\r\ntwo"),
+            VCardParameterValue::Text("one^ntwo".to_owned())
+        );
+        assert_eq!(
+            super::param_value_text("one\rtwo"),
+            VCardParameterValue::Text("one^ntwo".to_owned())
+        );
+    }
+
+    #[test]
+    fn param_text_decodes_rfc6868_line_feed_escape_sequences() {
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Text("one^ntwo".to_owned())),
+            "one\ntwo".to_owned()
+        );
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Text("one^Ntwo".to_owned())),
+            "one\ntwo".to_owned()
+        );
+    }
+
+    #[test]
     fn fold_overlong_lines_wraps_when_all_logical_lines_are_overlong() {
         let first = "A".repeat(MAX_LINE_OCTETS + 1);
         let second = "B".repeat(MAX_LINE_OCTETS + 5);
