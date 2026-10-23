@@ -83,8 +83,8 @@ fn date_prefix(date: Option<&UtcDate>) -> String {
 }
 
 /// Converts a date value to the patch value. Empty becomes `null` (no
-/// limit). Other text must have the shape `YYYY-MM-DD`, then it gets the
-/// time midnight UTC.
+/// limit). Other text must be a calendar date `YYYY-MM-DD`, then it gets
+/// the time midnight UTC.
 fn date_value(entry: &str) -> Result<Value, &'static CStr> {
     let entry = entry.trim();
     if entry.is_empty() {
@@ -98,10 +98,27 @@ fn date_value(entry: &str) -> Result<Value, &'static CStr> {
                 c.is_ascii_digit()
             }
         });
-    if !shaped {
+    if !shaped || !is_calendar_date(entry) {
         return Err(BAD_DATE);
     }
     Ok(Value::String(format!("{entry}T00:00:00Z")))
+}
+
+/// Whether a `YYYY-MM-DD` text names a day that the Gregorian calendar has.
+fn is_calendar_date(entry: &str) -> bool {
+    let number = |range: std::ops::Range<usize>| entry[range].parse::<u32>().ok();
+    let (Some(year), Some(month), Some(day)) = (number(0..4), number(5..7), number(8..10)) else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let last = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=last).contains(&day)
 }
 
 fn nullable(text: &str) -> Value {
@@ -192,6 +209,34 @@ mod tests {
                 ..VacationForm::default()
             };
             assert_eq!(form.patch(), Err(BAD_DATE), "{bad} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_date_that_no_calendar_has_is_refused() {
+        for bad in [
+            "2026-02-31",
+            "2026-13-45",
+            "2026-00-10",
+            "2026-04-00",
+            "2025-02-29",
+        ] {
+            let form = VacationForm {
+                to_date: bad.to_owned(),
+                ..VacationForm::default()
+            };
+            assert_eq!(form.patch(), Err(BAD_DATE), "{bad} must be refused");
+        }
+    }
+
+    #[test]
+    fn the_leap_day_of_a_leap_year_is_a_date() {
+        for good in ["2028-02-29", "2000-02-29", "2026-12-31"] {
+            let form = VacationForm {
+                from_date: good.to_owned(),
+                ..VacationForm::default()
+            };
+            assert!(form.patch().is_ok(), "{good} must be accepted");
         }
     }
 }
