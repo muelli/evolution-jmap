@@ -450,9 +450,9 @@ pub(crate) fn project_properties(
 
 #[cfg(test)]
 mod tests {
-    use super::eval_pointer;
+    use super::{eval_pointer, resolve_references};
     use crate::state::ServerState;
-    use jmap_proto::request::Request;
+    use jmap_proto::request::{Invocation, Request};
     use serde_json::json;
 
     #[test]
@@ -462,6 +462,40 @@ mod tests {
         assert_eq!(eval_pointer("/ids/1", &value), Some(json!("b")));
         assert_eq!(eval_pointer("/list/*/id", &value), Some(json!(["x", "y"])));
         assert_eq!(eval_pointer("/missing", &value), None);
+    }
+
+    #[test]
+    fn result_references_require_matching_call_id_and_method_name() {
+        let call = Invocation {
+            name: "Email/get".to_owned(),
+            arguments: json!({
+                "#ids": {
+                    "resultOf": "c1",
+                    "name": "Email/get",
+                    "path": "/list"
+                }
+            }),
+            call_id: "c2".to_owned(),
+        };
+        let responses = vec![
+            Invocation {
+                name: "Mailbox/get".to_owned(),
+                arguments: json!({"list": ["mailbox-id"]}),
+                call_id: "c1".to_owned(),
+            },
+            Invocation {
+                name: "Email/get".to_owned(),
+                arguments: json!({"list": ["wrong-call-id"]}),
+                call_id: "c9".to_owned(),
+            },
+        ];
+
+        let error = resolve_references(&call, &responses)
+            .expect_err("partial response matches must not resolve a result reference");
+        assert_eq!(
+            error.error_type,
+            jmap_proto::error::method::INVALID_RESULT_REFERENCE
+        );
     }
 
     #[test]
