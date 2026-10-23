@@ -19,6 +19,7 @@ name = "jmap_cal_sync"
 [dependencies]
 evolution-jmap-client = { workspace = true }
 evolution-jmap-ical = { workspace = true }
+evolution-jmap-object-sync = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

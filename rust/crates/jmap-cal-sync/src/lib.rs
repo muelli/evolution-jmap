@@ -25,13 +25,14 @@ pub mod error;
 pub mod freebusy;
 pub mod patch;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_client::{ChangeSet, Client};
 use jmap_ical::{
     event_to_ical, ical_to_event, maps_recurrence_rule, maps_time_zone, prune_time_zones,
     unstateable_until,
 };
+use jmap_object_sync::{ObjectKind, revision_of};
 use jmap_proto::calendars::{
     CalendarEvent, CalendarEventQueryFilter, RecurrenceRule, calendar_event_set_error,
 };
@@ -40,6 +41,7 @@ use serde_json::{Map, Value};
 
 pub use error::{SyncError, Unscheduled, Unsendable};
 pub use freebusy::FreeBusy;
+pub use jmap_object_sync::OnConflict;
 
 /// One event in the form that the meta backend uses: an identifier, a change
 /// token and the object.
@@ -66,30 +68,47 @@ pub struct Base<'a> {
     pub on_conflict: OnConflict,
 }
 
-/// What a save does with a property that the user and a different client both
-/// changed after the base copy (`EConflictResolution`). A property that only one
-/// side changed is not a conflict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OnConflict {
-    /// Send the user's value (`E_CONFLICT_RESOLUTION_KEEP_LOCAL`).
-    #[default]
-    KeepLocal,
-    /// Keep the server's value, and send the other edits (`E_CONFLICT_RESOLUTION_KEEP_SERVER`).
-    KeepServer,
-    /// Write nothing and fail with [`SyncError::OutOfSync`] (`E_CONFLICT_RESOLUTION_FAIL`).
-    Fail,
-}
-
 /// What changed in the calendar since a given state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Changes {
-    /// The state to pass to the next [`CalSync::get_changes`].
-    pub new_state: State,
-    /// Events that were created or modified, already rendered.
-    pub changed: Vec<ComponentInfo>,
-    /// Identifiers of events that are no longer in *this* calendar: destroyed
-    /// events and events moved to a different calendar.
-    pub removed: Vec<String>,
+pub type Changes = jmap_object_sync::Changes<ComponentInfo>;
+
+/// `CalendarEvent` for the shared synchronisation steps.
+enum Events {}
+
+impl ObjectKind for Events {
+    type Object = CalendarEvent;
+    const TYPE: &'static str = "CalendarEvent";
+    const NOUN: &'static str = "event";
+    const A_NOUN: &'static str = "an event";
+    const MEMBERSHIP: &'static str = "calendarIds";
+
+    fn id(event: &CalendarEvent) -> Option<&Id> {
+        event.id.as_ref()
+    }
+
+    fn membership(event: &CalendarEvent) -> Option<&BTreeMap<Id, bool>> {
+        event.calendar_ids.as_ref()
+    }
+
+    fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Value> {
+        patch::diff(current, edited)
+    }
+
+    fn diff_since_except(
+        base: &CalendarEvent,
+        current: &CalendarEvent,
+        edited: &CalendarEvent,
+        kept: &BTreeSet<String>,
+    ) -> Map<String, Value> {
+        patch::diff_since_except(base, current, edited, kept)
+    }
+
+    fn conflicts(
+        base: &CalendarEvent,
+        current: &CalendarEvent,
+        edited: &CalendarEvent,
+    ) -> BTreeSet<String> {
+        patch::conflicts(base, current, edited)
+    }
 }
 
 /// Whether one change can tell the meeting guests about the change.
@@ -115,35 +134,6 @@ pub enum Itip {
         /// False when EDS set `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`.
         reply: bool,
     },
-}
-
-/// The patch of an edit from `base`, with the conflicts resolved as `base` asks.
-fn patch_since(
-    base: Base<'_>,
-    current: &CalendarEvent,
-    edited: &CalendarEvent,
-    uid: &str,
-) -> Result<Map<String, Value>, SyncError> {
-    let base_copy = match ical_to_event(base.icalendar) {
-        Ok(copy) => copy,
-        Err(error) => {
-            // A bad base must not block every save of this event.
-            tracing::warn!(uid, %error, "the base copy of the event does not parse");
-            return Ok(patch::diff(current, edited));
-        }
-    };
-    let conflicts = patch::conflicts(&base_copy, current, edited);
-    if conflicts.is_empty() {
-        return Ok(patch::diff_since(&base_copy, current, edited));
-    }
-    tracing::info!(uid, ?conflicts, on_conflict = ?base.on_conflict, "event edit conflict");
-    match base.on_conflict {
-        OnConflict::KeepLocal => Ok(patch::diff_since(&base_copy, current, edited)),
-        OnConflict::KeepServer => Ok(patch::diff_since_except(
-            &base_copy, current, edited, &conflicts,
-        )),
-        OnConflict::Fail => Err(SyncError::OutOfSync(uid.to_owned())),
-    }
 }
 
 /// Returns `error` from a create, edit or delete as an [`Unscheduled`] refusal
@@ -508,7 +498,14 @@ impl CalSync {
 
         let current = self.fetch(uid)?;
         let mut patch = match base {
-            Some(base) => patch_since(base, &current, &event, uid)?,
+            Some(base) => jmap_object_sync::patch_since::<Events>(
+                ical_to_event(base.icalendar),
+                base.on_conflict,
+                &current,
+                &event,
+                uid,
+            )
+            .map_err(|_| SyncError::OutOfSync(uid.to_owned()))?,
             None => patch::diff(&current, &event),
         };
         let schedule = match itip {
@@ -640,84 +637,14 @@ impl CalSync {
     }
 
     /// Converts a raw `/changes` delta into the two lists that the meta backend
-    /// uses.
-    ///
-    /// `CalendarEvent/changes` covers the full account, so the main work is to
-    /// decide what an event that is *not* in this calendar means. The
-    /// difference between created and updated makes this possible without the
-    /// local cache. An **updated** event that is not in this calendar possibly
-    /// moved out. It must be reported as removed, or Evolution continues to
-    /// show an appointment that the calendar does not contain. A **created**
-    /// event that is not in this calendar was never in it, so this calendar
-    /// ignores it.
-    ///
-    /// The delta is already normalised: [`jmap_client::Client::all_changes`]
-    /// decides the status of an id that several pages name. Thus no event is
-    /// both a candidate and a removal.
+    /// uses (see [`jmap_object_sync::classify`]).
     fn classify(&self, delta: ChangeSet) -> Result<Changes, SyncError> {
-        let mut removed: Vec<String> = delta.destroyed.iter().map(Id::to_string).collect();
-        let candidates: Vec<Id> = delta.created.union(&delta.updated).cloned().collect();
-        let mut changed = Vec::new();
-
-        if !candidates.is_empty() {
-            let response = self.client.event_get(&self.account_id, &candidates)?;
-            for event in &response.list {
-                let Some(id) = &event.id else {
-                    return Err(SyncError::protocol(
-                        "CalendarEvent/get returned an event without an id",
-                    ));
-                };
-                if self.holds(event)? {
-                    changed.push(ComponentInfo::render(event)?);
-                } else if delta.updated.contains(id) {
-                    removed.push(id.to_string());
-                }
-            }
-            // Removed between the /changes call and the /get. This is important
-            // only for an event that existed before.
-            removed.extend(
-                response
-                    .not_found
-                    .iter()
-                    .filter(|id| delta.updated.contains(*id))
-                    .map(Id::to_string),
-            );
-        }
-
-        Ok(Changes {
-            new_state: delta.new_state,
-            changed,
-            removed,
-        })
-    }
-
-    /// Whether `event` is filed in the calendar that this instance
-    /// synchronises.
-    ///
-    /// `calendarIds` is a set (RFC 8620 §1.5), so each member that is present
-    /// is `true`. A server that writes non-membership as a `false` entry, and
-    /// does not omit the key, violates this. `messages_since` in
-    /// `jmap-mail-sync` refuses the same `mailboxIds` violation and does not
-    /// guess its meaning. No safe interpretation exists, so this function also
-    /// refuses it and does not count it as absence.
-    fn holds(&self, event: &CalendarEvent) -> Result<bool, SyncError> {
-        match event
-            .calendar_ids
-            .as_ref()
-            .and_then(|calendars| calendars.get(&self.calendar_id).copied())
-        {
-            Some(false) => Err(SyncError::protocol(format!(
-                "CalendarEvent/get returned {} with a false-valued calendarIds entry for {}",
-                event
-                    .id
-                    .as_ref()
-                    .map(Id::to_string)
-                    .unwrap_or_else(|| "<no id>".to_string()),
-                self.calendar_id
-            ))),
-            Some(true) => Ok(true),
-            None => Ok(false),
-        }
+        jmap_object_sync::classify::<Events, _, _>(
+            delta,
+            &self.calendar_id,
+            |ids| self.client.event_get(&self.account_id, ids),
+            ComponentInfo::render,
+        )
     }
 
     fn fetch(&self, uid: &str) -> Result<CalendarEvent, SyncError> {
@@ -764,13 +691,7 @@ fn unsendable_recurrence(rule: &RecurrenceRule, time_zone: Option<&str>) -> Unse
 impl ComponentInfo {
     /// Renders an event and calculates its revision from the result.
     fn render(event: &CalendarEvent) -> Result<Self, SyncError> {
-        let uid = event
-            .id
-            .as_ref()
-            .ok_or_else(|| {
-                SyncError::protocol("CalendarEvent/get returned an event without an id")
-            })?
-            .to_string();
+        let uid = jmap_object_sync::id_of::<Events>(event)?.to_string();
         let icalendar = event_to_ical(event);
         Ok(Self {
             revision: revision_of(&icalendar),
@@ -778,28 +699,6 @@ impl ComponentInfo {
             icalendar,
         })
     }
-}
-
-/// The change token for a rendered event.
-///
-/// The JSCalendar `updated` timestamp is the obvious candidate, but it is
-/// wrong. RFC 8984 makes it optional, so if a server omits it, every event
-/// looks unchanged permanently. A digest of the component is always available,
-/// and it is a *better* token than a timestamp. It changes exactly when a
-/// change that EDS can see occurs. Thus a server-side edit to a property that
-/// this mapping drops does not invalidate the cache of each client.
-///
-/// This uses FNV-1a, not `DefaultHasher`, and has its own copy, not one shared
-/// with `jmap-book-sync`. The EDS cache keeps revisions and compares them
-/// across restarts, and the output of `DefaultHasher` can change between Rust
-/// releases.
-fn revision_of(icalendar: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in icalendar.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
 }
 
 #[cfg(test)]
@@ -848,16 +747,6 @@ mod tests {
             "title",
             &Value::String("participants".to_owned())
         ));
-    }
-
-    /// The EDS cache keeps revisions after the process stops, so this test pins
-    /// the digest to the published FNV-1a 64-bit test vectors. A change would
-    /// make each cached event look changed after an upgrade.
-    #[test]
-    fn revision_of_is_fnv1a_64() {
-        assert_eq!(revision_of(""), "cbf29ce484222325");
-        assert_eq!(revision_of("a"), "af63dc4c8601ec8c");
-        assert_eq!(revision_of("foobar"), "85944171f73967e8");
     }
 
     #[test]

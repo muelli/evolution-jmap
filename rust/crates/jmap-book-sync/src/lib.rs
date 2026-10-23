@@ -19,15 +19,17 @@
 pub mod error;
 pub mod patch;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_client::{ChangeSet, Client};
+use jmap_object_sync::{ObjectKind, revision_of};
 use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
 use jmap_proto::{Id, State};
 use jmap_vcard::{card_to_vcard, vcard_to_card};
 use serde_json::{Map, Value};
 
 pub use error::SyncError;
+pub use jmap_object_sync::OnConflict;
 
 /// One contact for the meta backend: an identifier, a change token and the vCard.
 ///
@@ -52,30 +54,47 @@ pub struct Base<'a> {
     pub on_conflict: OnConflict,
 }
 
-/// What a save does with a property that the user and a different client both
-/// changed after the base copy (`EConflictResolution`). A property that only one
-/// side changed is not a conflict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OnConflict {
-    /// Send the user's value (`E_CONFLICT_RESOLUTION_KEEP_LOCAL`).
-    #[default]
-    KeepLocal,
-    /// Keep the server's value, and send the other edits (`E_CONFLICT_RESOLUTION_KEEP_SERVER`).
-    KeepServer,
-    /// Write nothing and fail with [`SyncError::OutOfSync`] (`E_CONFLICT_RESOLUTION_FAIL`).
-    Fail,
-}
-
 /// What changed in the address book since a given state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Changes {
-    /// The state to pass to the next [`BookSync::get_changes`].
-    pub new_state: State,
-    /// Cards that were created or modified, already rendered.
-    pub changed: Vec<ContactInfo>,
-    /// Identifiers that are no longer in *this* address book, because the
-    /// server destroyed them or moved them to a different book.
-    pub removed: Vec<String>,
+pub type Changes = jmap_object_sync::Changes<ContactInfo>;
+
+/// `ContactCard` for the shared synchronisation steps.
+enum Cards {}
+
+impl ObjectKind for Cards {
+    type Object = ContactCard;
+    const TYPE: &'static str = "ContactCard";
+    const NOUN: &'static str = "card";
+    const A_NOUN: &'static str = "a card";
+    const MEMBERSHIP: &'static str = "addressBookIds";
+
+    fn id(card: &ContactCard) -> Option<&Id> {
+        card.id.as_ref()
+    }
+
+    fn membership(card: &ContactCard) -> Option<&BTreeMap<Id, bool>> {
+        card.address_book_ids.as_ref()
+    }
+
+    fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
+        patch::diff(current, edited)
+    }
+
+    fn diff_since_except(
+        base: &ContactCard,
+        current: &ContactCard,
+        edited: &ContactCard,
+        kept: &BTreeSet<String>,
+    ) -> Map<String, Value> {
+        patch::diff_since_except(base, current, edited, kept)
+    }
+
+    fn conflicts(
+        base: &ContactCard,
+        current: &ContactCard,
+        edited: &ContactCard,
+    ) -> BTreeSet<String> {
+        patch::conflicts(base, current, edited)
+    }
 }
 
 /// Synchronises one JMAP address book.
@@ -187,7 +206,14 @@ impl BookSync {
 
         let current = self.fetch(uid)?;
         let patch = match base {
-            Some(base) => patch_since(base, &current, &card, uid)?,
+            Some(base) => jmap_object_sync::patch_since::<Cards>(
+                vcard_to_card(base.vcard),
+                base.on_conflict,
+                &current,
+                &card,
+                uid,
+            )
+            .map_err(|_| SyncError::OutOfSync(uid.to_owned()))?,
             None => patch::diff(&current, &card),
         };
         if patch.is_empty() {
@@ -244,75 +270,15 @@ impl BookSync {
         )
     }
 
-    /// Turn a raw `/changes` delta into the two lists that the meta backend uses.
-    ///
-    /// `ContactCard/changes` is account-wide, so a card can be outside this book.
-    /// The created/updated distinction decides such a card without the local cache.
-    /// An **updated** card that is not in this book can have moved out, so it is
-    /// reported as removed. Otherwise, Evolution continues to show it.
-    /// A **created** card that is not in this book was never in it, so it is ignored.
-    ///
-    /// [`jmap_client::Client::all_changes`] normalises the delta across pages,
-    /// so no card is both a candidate and a removal.
+    /// Turn a raw `/changes` delta into the two lists that the meta backend uses
+    /// (see [`jmap_object_sync::classify`]).
     fn classify(&self, delta: ChangeSet) -> Result<Changes, SyncError> {
-        let mut removed: Vec<String> = delta.destroyed.iter().map(Id::to_string).collect();
-        let candidates: Vec<Id> = delta.created.union(&delta.updated).cloned().collect();
-        let mut changed = Vec::new();
-
-        if !candidates.is_empty() {
-            let response = self.client.contact_get(&self.account_id, &candidates)?;
-            for card in &response.list {
-                let Some(id) = &card.id else {
-                    return Err(SyncError::protocol(
-                        "ContactCard/get returned a card without an id",
-                    ));
-                };
-                if self.holds(card)? {
-                    changed.push(ContactInfo::render(card)?);
-                } else if delta.updated.contains(id) {
-                    removed.push(id.to_string());
-                }
-            }
-            // Destroyed between /changes and /get: report only a card that existed before.
-            removed.extend(
-                response
-                    .not_found
-                    .iter()
-                    .filter(|id| delta.updated.contains(*id))
-                    .map(Id::to_string),
-            );
-        }
-
-        Ok(Changes {
-            new_state: delta.new_state,
-            changed,
-            removed,
-        })
-    }
-
-    /// Whether `card` is filed in the address book this instance syncs.
-    ///
-    /// RFC 9610's `addressBookIds` is a set (RFC 8620 §1.5), so a present
-    /// member is always `true`. A `false` entry violates this.
-    /// This refuses that entry, as `jmap-mail-sync`'s `messages_since` refuses
-    /// the same `mailboxIds` violation. No reading of it is safe.
-    fn holds(&self, card: &ContactCard) -> Result<bool, SyncError> {
-        match card
-            .address_book_ids
-            .as_ref()
-            .and_then(|books| books.get(&self.address_book_id).copied())
-        {
-            Some(false) => Err(SyncError::protocol(format!(
-                "ContactCard/get returned {} with a false-valued addressBookIds entry for {}",
-                card.id
-                    .as_ref()
-                    .map(Id::to_string)
-                    .unwrap_or_else(|| "<no id>".to_string()),
-                self.address_book_id
-            ))),
-            Some(true) => Ok(true),
-            None => Ok(false),
-        }
+        jmap_object_sync::classify::<Cards, _, _>(
+            delta,
+            &self.address_book_id,
+            |ids| self.client.contact_get(&self.account_id, ids),
+            ContactInfo::render,
+        )
     }
 
     fn fetch(&self, uid: &str) -> Result<ContactCard, SyncError> {
@@ -328,43 +294,10 @@ impl BookSync {
     }
 }
 
-/// The patch of an edit from `base`, with the conflicts resolved as `base` asks.
-fn patch_since(
-    base: Base<'_>,
-    current: &ContactCard,
-    edited: &ContactCard,
-    uid: &str,
-) -> Result<Map<String, Value>, SyncError> {
-    let base_copy = match vcard_to_card(base.vcard) {
-        Ok(copy) => copy,
-        Err(error) => {
-            // A bad base must not block every save of this card.
-            tracing::warn!(uid, %error, "the base copy of the card does not parse");
-            return Ok(patch::diff(current, edited));
-        }
-    };
-    let conflicts = patch::conflicts(&base_copy, current, edited);
-    if conflicts.is_empty() {
-        return Ok(patch::diff_since(&base_copy, current, edited));
-    }
-    tracing::info!(uid, ?conflicts, on_conflict = ?base.on_conflict, "card edit conflict");
-    match base.on_conflict {
-        OnConflict::KeepLocal => Ok(patch::diff_since(&base_copy, current, edited)),
-        OnConflict::KeepServer => Ok(patch::diff_since_except(
-            &base_copy, current, edited, &conflicts,
-        )),
-        OnConflict::Fail => Err(SyncError::OutOfSync(uid.to_owned())),
-    }
-}
-
 impl ContactInfo {
     /// Render a card, deriving its revision from the result.
     fn render(card: &ContactCard) -> Result<Self, SyncError> {
-        let uid = card
-            .id
-            .as_ref()
-            .ok_or_else(|| SyncError::protocol("ContactCard/get returned a card without an id"))?
-            .to_string();
+        let uid = jmap_object_sync::id_of::<Cards>(card)?.to_string();
         let vcard = card_to_vcard(card);
         Ok(Self {
             revision: revision_of(&vcard),
@@ -372,24 +305,6 @@ impl ContactInfo {
             vcard,
         })
     }
-}
-
-/// The change token for a rendered card.
-///
-/// JSContact's `updated` timestamp is optional (RFC 9553). Without it, every
-/// card looks unchanged forever. A digest of the vCard is always available.
-/// The digest changes only when content that EDS can see changes. Thus, an
-/// edit to a property that the mapping drops does not cause a cache reload.
-///
-/// The EDS cache persists revisions across restarts. `DefaultHasher` output can
-/// change between Rust releases, so this uses FNV-1a.
-fn revision_of(vcard: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in vcard.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
 }
 
 /// What to report for a save of `card` that the server refused with `error`.
@@ -478,15 +393,6 @@ mod tests {
     use super::*;
     use jmap_proto::error::{RequestError, SetError, set};
     use serde_json::json;
-
-    /// The EDS cache keeps revisions across restarts, so the published FNV-1a
-    /// 64-bit test vectors pin the digest. A drift makes every cached card look changed.
-    #[test]
-    fn revision_of_is_fnv1a_64() {
-        assert_eq!(revision_of(""), "cbf29ce484222325");
-        assert_eq!(revision_of("a"), "af63dc4c8601ec8c");
-        assert_eq!(revision_of("foobar"), "85944171f73967e8");
-    }
 
     #[test]
     fn real_stalwarts_contact_size_refusal_is_one_for_size() {

@@ -18,6 +18,7 @@ name = "jmap_book_sync"
 
 [dependencies]
 evolution-jmap-client = { workspace = true }
+evolution-jmap-object-sync = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 evolution-jmap-vcard = { workspace = true }
 serde = { workspace = true }

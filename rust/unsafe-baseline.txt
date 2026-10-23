@@ -27,6 +27,7 @@ jmap-ical 0
 jmap-mail 540
 jmap-mail-sync 0
 jmap-mock 0
+jmap-object-sync 0
 jmap-proto 0
 jmap-tracing-capture 0
 jmap-ui 371
