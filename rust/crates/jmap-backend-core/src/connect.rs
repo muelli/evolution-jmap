@@ -305,6 +305,59 @@ pub fn bearer_credentials(password: Option<&str>) -> Result<Credentials, Connect
     }
 }
 
+/// How an account authenticates, from `[Authentication] Method`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthScheme {
+    /// A token from EDS's `EOAuth2Service`, sent as Bearer.
+    OAuth2,
+    /// The stored secret, sent as Bearer without a user name.
+    ApiToken,
+    /// The user name and the stored secret, sent as Basic.
+    Password,
+}
+
+impl AuthScheme {
+    /// The scheme of `source`. Every connection to the account uses this one rule.
+    ///
+    /// # Safety
+    ///
+    /// `source` must be a valid `ESource`. This function only reads it.
+    pub unsafe fn of(source: *mut ESource) -> Self {
+        // SAFETY: a valid source, by this function's contract.
+        if unsafe { source_uses_oauth2(source) } {
+            Self::OAuth2
+        } else if unsafe { source_uses_api_token(source) } {
+            Self::ApiToken
+        } else {
+            Self::Password
+        }
+    }
+}
+
+/// The credentials of `scheme` for `source`.
+///
+/// `password` gives the stored secret. Only the API-token and password schemes
+/// call it, so an OAuth 2.0 account never reads libsecret for a password.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`, and `cancellable` must be NULL or a
+/// valid `GCancellable`, as [`access_token`] requires.
+pub unsafe fn resolve_credentials(
+    source: *mut ESource,
+    scheme: AuthScheme,
+    user: Option<&str>,
+    password: impl FnOnce() -> Option<String>,
+    cancellable: *mut GCancellable,
+) -> Result<Credentials, ConnectError> {
+    match scheme {
+        // SAFETY: the contract of this function is the contract of `access_token`.
+        AuthScheme::OAuth2 => unsafe { access_token(source, cancellable) }.map(Credentials::bearer),
+        AuthScheme::ApiToken => bearer_credentials(password().as_deref()),
+        AuthScheme::Password => credentials(user, password().as_deref()),
+    }
+}
+
 /// Which of the server's collections this source stands for.
 ///
 /// `candidates` is `(id, is_default)` for each collection of the account, in
@@ -436,34 +489,37 @@ where
     // The value is kept: a failure of `open` also needs it, to tell a 401 on
     // the token that this call fetched from a 401 on a usual password.
     // SAFETY: `source` is a valid ESource, checked non-NULL above.
-    let uses_oauth2 = unsafe { source_uses_oauth2(source) };
-    let uses_api_token = unsafe { source_uses_api_token(source) };
+    let scheme = unsafe { AuthScheme::of(source) };
+    let uses_oauth2 = scheme == AuthScheme::OAuth2;
+    let uses_api_token = scheme == AuthScheme::ApiToken;
+    match scheme {
+        AuthScheme::OAuth2 => tracing::debug!(
+            collection = %kind,
+            ?account_id,
+            "authenticating with OAuth 2.0"
+        ),
+        AuthScheme::ApiToken => tracing::debug!(
+            collection = %kind,
+            ?account_id,
+            "authenticating with an API token"
+        ),
+        AuthScheme::Password => tracing::debug!(
+            collection = %kind,
+            ?account_id,
+            "authenticating with a password"
+        ),
+    }
     // SAFETY: `source` is a valid ESource, checked non-NULL above.
     // `cancellable` satisfies the contract of `access_token` through the
     // contract of this function.
     let resolved = unsafe {
-        if uses_oauth2 {
-            tracing::debug!(
-                collection = %kind,
-                ?account_id,
-                "authenticating with OAuth 2.0"
-            );
-            access_token(source, cancellable).map(Credentials::bearer)
-        } else if uses_api_token {
-            tracing::debug!(
-                collection = %kind,
-                ?account_id,
-                "authenticating with an API token"
-            );
-            bearer_credentials(password.as_deref())
-        } else {
-            tracing::debug!(
-                collection = %kind,
-                ?account_id,
-                "authenticating with a password"
-            );
-            self::credentials(config.user.as_deref(), password.as_deref())
-        }
+        resolve_credentials(
+            source,
+            scheme,
+            config.user.as_deref(),
+            || password,
+            cancellable,
+        )
     };
     let resolved = match resolved {
         Ok(resolved) => resolved,
