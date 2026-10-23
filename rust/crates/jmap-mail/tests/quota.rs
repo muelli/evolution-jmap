@@ -16,6 +16,7 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use common::Account;
+use common::sync_against;
 use eds_sys::{
     CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE, CamelFolder,
     camel_folder_get_quota_info_sync, camel_service_error_quark, camel_store_get_folder_sync,
@@ -23,18 +24,11 @@ use eds_sys::{
 use gio_sys::{G_IO_ERROR_NOT_SUPPORTED, g_io_error_quark};
 use glib_sys::GError;
 use gobject_sys::g_object_unref;
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::MailSync;
 use jmap_mock::{MockServer, MockServerBuilder};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 use jmap_proto::quota::{Quota, quota_data_type, quota_resource_type, quota_scope};
 use jmap_proto::session::CAPABILITY_QUOTA;
-
-fn sync_against(server: &MockServer) -> MailSync {
-    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    MailSync::new(client, server.account_id())
-}
 
 /// A connected account with one mailbox, opened the way Camel opens it.
 /// Every fresh mock account already carries the one Mail/octets/account

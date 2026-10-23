@@ -45,10 +45,12 @@ use eds_sys::{
 use gio_sys::g_initable_new;
 use glib_sys::{GError, gchar};
 use gobject_sys::{GObject, g_object_new, g_object_unref};
+use jmap_client::{Client, Credentials};
 use jmap_mail::provider::register;
 use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail::transport::{JmapTransport, transport_type};
 use jmap_mail_sync::MailSync;
+use jmap_mock::MockServer;
 
 /// A session and the store that hangs off it.
 ///
@@ -240,4 +242,10 @@ impl Drop for Account {
         // is not improved by a panic during its teardown.
         let _ = std::fs::remove_dir_all(&self.directory);
     }
+}
+
+/// A connection to the mock server's one account, with no credentials.
+pub fn sync_against(server: &MockServer) -> MailSync {
+    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
+    MailSync::new(client, server.account_id())
 }

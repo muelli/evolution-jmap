@@ -32,6 +32,7 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use common::Account;
+use common::sync_against;
 use eds_sys::compat::{folder_dup_uids, folder_free_uids, search_hash_message_id};
 use eds_sys::{
     CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE,
@@ -48,10 +49,8 @@ use gio_sys::{
 };
 use glib_sys::{GError, GPtrArray, g_free};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
-use jmap_client::{Client, Credentials};
 use jmap_mail::cache::MessageCache;
 use jmap_mail::folder::folder_type;
-use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::mail::role;
 
@@ -60,11 +59,6 @@ use jmap_proto::mail::role;
 const SUBJECT: &str = "The only message";
 const BODY: &str = "Two lines, so the body is more than a header value.\nAnd the second one.";
 const SENDER: &str = "bob@example.com";
-
-fn sync_against(server: &MockServer) -> MailSync {
-    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    MailSync::new(client, server.account_id())
-}
 
 /// A connected account whose inbox holds exactly one message, and that inbox
 /// opened the way Camel opens it.

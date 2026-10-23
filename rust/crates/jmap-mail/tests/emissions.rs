@@ -44,21 +44,15 @@ use std::ptr;
 
 use common::Account;
 use common::signals::{Context, FolderEvent, events, watch_store};
+use common::sync_against;
 use eds_sys::{
     CAMEL_FOLDER_SUBSCRIBED, CamelFolderInfoFlags, CamelSubscribable, camel_folder_info_free,
     camel_store_create_folder_sync, camel_store_delete_folder_sync, camel_store_rename_folder_sync,
     camel_subscribable_subscribe_folder_sync, camel_subscribable_unsubscribe_folder_sync,
 };
 use glib_sys::{GError, GFALSE};
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::MailSync;
 use jmap_mock::MockServer;
 use jmap_proto::mail::role;
-
-fn sync_against(server: &MockServer) -> MailSync {
-    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    MailSync::new(client, server.account_id())
-}
 
 /// An account with an inbox, a folder beside it, and a folder under that. The
 /// third folder gives a rename descendants to carry, the one thing that makes
