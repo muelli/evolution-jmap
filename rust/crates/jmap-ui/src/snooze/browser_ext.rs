@@ -16,7 +16,7 @@
 
 use std::ffi::CStr;
 
-use eds_sys::{EExtension, EExtensionClass, e_extension_get_extensible, e_extension_get_type};
+use eds_sys::{EExtension, e_extension_get_extensible};
 #[cfg(evolution_eui_manager)]
 use evo_sys::e_mail_reader_get_ui_manager;
 #[cfg(not(evolution_eui_manager))]
@@ -26,71 +26,43 @@ use evo_sys::{
 };
 use evo_sys::{EMailBrowser, e_mail_browser_get_type};
 use glib_sys::{GType, gpointer, guint};
-use gobject_sys::{GObject, GObjectClass, g_signal_connect_data};
+use gobject_sys::{GObject, g_signal_connect_data};
 use jmap_backend_core::callback::gcallback;
-use jmap_backend_core::subclass::{self, ObjectSubclass};
+use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::trampoline::guard;
 
 use crate::snooze::action;
 
-/// The instance: only the state of `EExtension`.
-#[repr(C)]
-pub struct JmapSnoozeBrowserExtension {
-    parent: EExtension,
-}
+/// The snooze submenu of the detached message window.
+pub struct SnoozeBrowser;
 
-/// The class: only the state of `EExtensionClass`.
-#[repr(C)]
-pub struct JmapSnoozeBrowserExtensionClass {
-    parent_class: EExtensionClass,
-}
+/// The registered `JmapSnoozeBrowserExtension` type.
+pub type JmapSnoozeBrowserExtension = ExtensionObject<SnoozeBrowser>;
 
-// SAFETY: both structs are #[repr(C)] and start with the structs of EExtension.
-// EExtension derives from GObject.
-unsafe impl ObjectSubclass for JmapSnoozeBrowserExtension {
-    const NAME: &'static CStr = c"JmapSnoozeBrowserExtension";
-    type Instance = JmapSnoozeBrowserExtension;
-    type Class = JmapSnoozeBrowserExtensionClass;
+impl Extension for SnoozeBrowser {
+    const TYPE_NAME: &'static CStr = c"JmapSnoozeBrowserExtension";
+    const EXTENSIBLE_NAME: &'static CStr = c"EMailBrowser";
 
-    fn parent_type() -> GType {
+    fn extensible_type() -> GType {
         // SAFETY: no arguments, and the type initialises itself.
-        unsafe { e_extension_get_type() }
+        unsafe { e_mail_browser_get_type() }
     }
 
-    fn class_init_types() -> Vec<GType> {
-        // SAFETY: no arguments, and the type initialises itself.
-        // The call is here, before registration, because `class_init` can only look the type up.
-        vec![unsafe { e_mail_browser_get_type() }]
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` starts with `EExtensionClass`.
-        unsafe {
-            (*class).parent_class.extensible_type = subclass::registered_type(c"EMailBrowser")
-        };
-        let object_class = class.cast::<GObjectClass>();
-        // SAFETY: through its parents, `class` starts with GObjectClass.
-        unsafe { (*object_class).constructed = Some(constructed) };
+    unsafe fn constructed(extension: *mut EExtension) {
+        // SAFETY: the contract of this method.
+        unsafe { constructed(extension) }
     }
 }
 
-/// Calls the parent `constructed` and installs the submenu immediately.
+/// Installs the submenu immediately.
 /// When a browser constructs its extensions, it is a complete reader and has
 /// its UI manager.
-unsafe extern "C" fn constructed(object: *mut GObject) {
-    guard("JmapSnoozeBrowserExtension::constructed", (), || unsafe {
-        // SAFETY: the parent class of a live instance is initialised and alive.
-        let parent =
-            subclass::parent_class::<GObjectClass>(JmapSnoozeBrowserExtension::parent_type());
-        if let Some(chained) = parent.and_then(|class| class.constructed) {
-            chained(object);
-        }
-
-        // SAFETY: GObject gives a live instance. The extensible is the browser,
+unsafe fn constructed(extension: *mut EExtension) {
+    unsafe {
+        // SAFETY: `extension` is live. The extensible is the browser,
         // which implements EMailReader (an interface pointer is the instance
         // pointer).
-        let browser: *mut EMailBrowser =
-            e_extension_get_extensible(object.cast::<EExtension>()).cast();
+        let browser: *mut EMailBrowser = e_extension_get_extensible(extension).cast();
         #[cfg(not(evolution_eui_manager))]
         action::install(
             browser.cast(),
@@ -116,7 +88,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             0,
         );
         action::update_sensitivity(browser.cast());
-    });
+    }
 }
 
 /// This handler has three arguments. The handler in `snooze::shell_ext` has two.

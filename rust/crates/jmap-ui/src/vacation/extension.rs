@@ -18,8 +18,8 @@
 use std::ffi::CStr;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_MAIL_ACCOUNT, EExtension, EExtensionClass, ESourceBackend,
-    e_extension_get_extensible, e_extension_get_type, e_source_backend_get_backend_name,
+    E_SOURCE_EXTENSION_MAIL_ACCOUNT, EExtension, ESourceBackend, e_extension_get_extensible,
+    e_source_backend_get_backend_name,
 };
 use evo_sys::{
     EMailConfigNotebook, e_mail_config_notebook_add_page,
@@ -27,10 +27,8 @@ use evo_sys::{
     e_mail_config_notebook_get_type,
 };
 use glib_sys::GType;
-use gobject_sys::{GObject, GObjectClass};
+use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::marshal::{extension_if_present, read_string};
-use jmap_backend_core::subclass::{self, ObjectSubclass};
-use jmap_backend_core::trampoline::guard;
 
 use crate::vacation::page;
 
@@ -41,67 +39,35 @@ use crate::vacation::page;
 /// literal.
 const BACKEND_NAME: &CStr = c"jmap";
 
-/// The instance: only the state of `EExtension`.
-#[repr(C)]
-pub struct JmapVacationExtension {
-    parent: EExtension,
-}
+/// The vacation page of the account editor.
+pub struct Vacation;
 
-/// The class: only the state of `EExtensionClass`.
-#[repr(C)]
-pub struct JmapVacationExtensionClass {
-    parent_class: EExtensionClass,
-}
+/// The registered `JmapVacationExtension` type.
+pub type JmapVacationExtension = ExtensionObject<Vacation>;
 
-// SAFETY: both structs are #[repr(C)] and start with the EExtension structs.
-// EExtension derives from GObject. The eds-sys layout tests compare its size
-// with g_type_query.
-unsafe impl ObjectSubclass for JmapVacationExtension {
-    const NAME: &'static CStr = c"JmapVacationExtension";
-    type Instance = JmapVacationExtension;
-    type Class = JmapVacationExtensionClass;
+impl Extension for Vacation {
+    const TYPE_NAME: &'static CStr = c"JmapVacationExtension";
+    const EXTENSIBLE_NAME: &'static CStr = c"EMailConfigNotebook";
 
-    fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initializes itself.
-        unsafe { e_extension_get_type() }
+    fn extensible_type() -> GType {
+        // SAFETY: no arguments, and the type initialises itself.
+        unsafe { e_mail_config_notebook_get_type() }
     }
 
-    fn class_init_types() -> Vec<GType> {
-        // SAFETY: no arguments, and the type initializes itself. This call
-        // registers the type before `class_init`, which can only look it up.
-        vec![unsafe { e_mail_config_notebook_get_type() }]
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` starts with `EExtensionClass`.
-        // `e_extensible_load_extensions` compares its `extensible_type`.
-        unsafe {
-            (*class).parent_class.extensible_type =
-                subclass::registered_type(c"EMailConfigNotebook")
-        };
-
-        // SAFETY: the class starts with GObjectClass indirectly, as in JmapConfigLookup.
-        let object_class = class.cast::<GObjectClass>();
-        unsafe { (*object_class).constructed = Some(constructed) };
+    unsafe fn constructed(extension: *mut EExtension) {
+        // SAFETY: the contract of this method.
+        unsafe { constructed(extension) }
     }
 }
 
-/// Chains up, then checks the account and adds the page. When the notebook
+/// Checks the account and adds the page. When the notebook
 /// constructs its extensions, it already knows its sources.
-unsafe extern "C" fn constructed(object: *mut GObject) {
-    guard("JmapVacationExtension::constructed", (), || unsafe {
-        // SAFETY: the parent class of a live instance is initialized and
-        // alive. The vfunc contract requires the chain-up.
-        let parent = subclass::parent_class::<GObjectClass>(JmapVacationExtension::parent_type());
-        if let Some(chained) = parent.and_then(|class| class.constructed) {
-            chained(object);
-        }
-
-        // SAFETY: GObject passes a live instance of this type. The extensible
+unsafe fn constructed(extension: *mut EExtension) {
+    unsafe {
+        // SAFETY: `extension` is live. The extensible
         // is the notebook of this extension, and it stays alive during this
         // call. The cast is the same as E_MAIL_CONFIG_NOTEBOOK() in C.
-        let notebook: *mut EMailConfigNotebook =
-            e_extension_get_extensible(object.cast::<EExtension>()).cast();
+        let notebook: *mut EMailConfigNotebook = e_extension_get_extensible(extension).cast();
         let account_source = e_mail_config_notebook_get_account_source(notebook);
         if account_source.is_null() {
             return;
@@ -134,5 +100,5 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
         if !page.is_null() {
             e_mail_config_notebook_add_page(notebook, page);
         }
-    });
+    }
 }
