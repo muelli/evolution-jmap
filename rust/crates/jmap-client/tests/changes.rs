@@ -301,7 +301,11 @@ fn a_card_from_before_the_window_edited_inside_it_classifies_as_updated() {
 /// A server that answers `/changes` in pages of one id, the state before three
 /// new cards, and the ids of these cards.
 fn three_new_cards() -> (MockServer, Id, State, Vec<Id>) {
-    let server = MockServer::builder().changes_page_size(1).start();
+    three_new_cards_on(MockServer::builder().changes_page_size(1).start())
+}
+
+/// The account, the state before three new cards, and their ids on `server`.
+fn three_new_cards_on(server: MockServer) -> (MockServer, Id, State, Vec<Id>) {
     let account_id = server.account_id();
     let book = {
         let state = server.state();
@@ -385,6 +389,33 @@ fn a_changes_stream_past_the_id_byte_budget_is_refused() {
         IdBudget::new(usize::MAX, bytes),
     );
     assert_eq!(exact.unwrap().created.len(), 3);
+}
+
+/// A server that says "more changes" on every page but never moves `newState`
+/// gets a protocol error after one page, not an endless loop.
+#[test]
+fn a_changes_stream_that_never_advances_is_refused() {
+    let (server, account_id, since, _) = three_new_cards_on(
+        MockServer::builder()
+            .changes_page_size(1)
+            .changes_never_terminates()
+            .start(),
+    );
+    let calls_before = server.method_calls().len();
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    match client.all_changes(&account_id, "ContactCard", &since) {
+        Err(Error::Protocol(message)) => assert!(
+            message.contains("ContactCard/changes") && message.contains("without advancing"),
+            "{message}"
+        ),
+        other => panic!("a stream that never advances was accepted: {other:?}"),
+    }
+    let changes_calls = server.method_calls()[calls_before..]
+        .iter()
+        .filter(|name| name.as_str() == "ContactCard/changes")
+        .count();
+    assert_eq!(changes_calls, 1);
 }
 
 /// The budget counts each id once, so a server that repeats one id on many
