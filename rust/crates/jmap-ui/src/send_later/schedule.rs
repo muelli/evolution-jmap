@@ -265,6 +265,8 @@ unsafe fn day_number(moment: *mut GDateTime) -> i64 {
 /// Now plus `seconds`, as the RFC 8620 `UTCDate` string that a JMAP property
 /// takes. Snooze writes this value into `snoozed.until`.
 pub fn utc_in(seconds: u64) -> Option<String> {
+    // Convert before `now` exists, so that no early return leaks it.
+    let seconds = i64::try_from(seconds).ok()?;
     // SAFETY: plain GLib calendar calls; the code releases each object and
     // string.
     unsafe {
@@ -273,7 +275,7 @@ pub fn utc_in(seconds: u64) -> Option<String> {
             return None;
         }
         let target = glib_sys::g_date_time_new_from_unix_utc(
-            g_date_time_to_unix(now) + i64::try_from(seconds).ok()?,
+            g_date_time_to_unix(now).saturating_add(seconds),
         );
         g_date_time_unref(now);
         if target.is_null() {
@@ -396,6 +398,13 @@ mod tests {
         let now = utc_in(0).unwrap();
         let later = utc_in(600).unwrap();
         assert!(later > now, "{later} is not after {now}");
+    }
+
+    /// A delay past any date that GLib can hold gives no date, and no panic.
+    #[test]
+    fn utc_in_gives_nothing_for_a_delay_past_every_date() {
+        assert_eq!(utc_in(u64::MAX), None);
+        assert_eq!(utc_in(i64::MAX as u64), None);
     }
 
     /// The string for `snoozed.until`: an RFC 8620 `UTCDate` ends in `Z`.
