@@ -28,37 +28,10 @@
 //! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
 //! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
-use std::env;
-
 use jmap_cal_sync::CalSync;
-use jmap_client::{Client, Credentials};
 use jmap_proto::calendars::Calendar;
 use jmap_proto::session::CAPABILITY_CALENDARS;
-
-/// Returns a value unique to this process, so a leftover calendar from a
-/// different run cannot match.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Same as `jmap-cal-sync/tests/live_server_save.rs::connect_for_write`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
+use jmap_test_support::{connect_for_write, unique_suffix};
 
 /// Creates a temporary calendar and sets a colour with `CalSync::set_color`.
 /// Clears the colour (`None`), and confirms each change with a new `Calendar/get`.

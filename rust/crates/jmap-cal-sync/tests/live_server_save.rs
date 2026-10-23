@@ -35,36 +35,9 @@
 //! The tests skip when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
 //! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
-use std::env;
-
 use jmap_cal_sync::CalSync;
-use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CALENDARS;
-
-/// Returns a value unique to this process, so a leftover event from a different
-/// run cannot match.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Same as `jmap_test_support::connect_for_write`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
+use jmap_test_support::{connect_for_write, unique_suffix};
 
 /// Saves a new iCalendar VEVENT with `CalSync::save_component` and confirms it
 /// with `list_existing`. Changes the summary, as the appointment editor of

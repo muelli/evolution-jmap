@@ -37,46 +37,14 @@
 //! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
 //! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
-use std::env;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use jmap_client::{Client, Credentials, Error as ClientError};
+use jmap_client::{Client, Error as ClientError};
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::session::CAPABILITY_CALENDARS;
-
-/// Same as `live_server_429_commit_repro.rs::connect_for_write`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
-
-/// Returns a value unique to this process, so leftover events from a different
-/// run cannot match.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn batch_size() -> usize {
-    env::var("JMAP_429_REPRO_EVENTS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(550)
-}
+use jmap_test_support::{LiveAccount, env_count, unique_suffix};
 
 /// Returns whether a new `CalendarEvent/query` on the server shows `uid`. A 429
 /// gives `false`.
@@ -162,19 +130,8 @@ fn create_with_429_diagnostics(
 
 /// Runs one importer: connects independently, then creates `n` events in the
 /// `importer_tag` UID namespace.
-fn run_importer(
-    origin: String,
-    user: String,
-    password: String,
-    importer_tag: &str,
-    n: usize,
-) -> Stats {
-    let client = Client::builder()
-        .rebase_urls_to_origin(
-            env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0"),
-        )
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
+fn run_importer(account: &LiveAccount, importer_tag: &str, n: usize) -> Stats {
+    let client = account.connect();
 
     let account_id = client
         .primary_account(CAPABILITY_CALENDARS)
@@ -208,27 +165,23 @@ fn run_importer(
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_429_under_two_concurrent_importers_on_the_same_account_is_checked_for_an_early_commit() {
-    let Some(probe) = connect_for_write() else {
+    let Some(account) = LiveAccount::write() else {
         eprintln!(
             "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the concurrent 429 repro"
         );
         return;
     };
-    drop(probe);
-
-    let origin = env::var("JMAP_LIVE_SERVER_URL").unwrap();
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap();
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD").unwrap();
-    let n = batch_size();
+    let n = env_count("JMAP_429_REPRO_EVENTS", 900);
 
     let import_start = Instant::now();
-    let (origin_a, user_a, password_a) = (origin.clone(), user.clone(), password.clone());
-    let importer_a = std::thread::spawn(move || run_importer(origin_a, user_a, password_a, "a", n));
-    let (origin_b, user_b, password_b) = (origin, user, password);
-    let importer_b = std::thread::spawn(move || run_importer(origin_b, user_b, password_b, "b", n));
-
-    let stats_a = importer_a.join().expect("importer a panicked");
-    let stats_b = importer_b.join().expect("importer b panicked");
+    let (stats_a, stats_b) = std::thread::scope(|scope| {
+        let importer_a = scope.spawn(|| run_importer(&account, "a", n));
+        let importer_b = scope.spawn(|| run_importer(&account, "b", n));
+        (
+            importer_a.join().expect("importer a panicked"),
+            importer_b.join().expect("importer b panicked"),
+        )
+    });
 
     let total_rate_limited = stats_a.rate_limited + stats_b.rate_limited;
     let total_early_landings = stats_a.early_landings + stats_b.early_landings;
