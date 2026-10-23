@@ -28,8 +28,8 @@ use eds_sys::{
     e_source_authentication_set_port, e_source_authentication_set_user,
     e_source_collection_get_type, e_source_collection_set_calendar_enabled,
     e_source_collection_set_contacts_enabled, e_source_collection_set_mail_enabled,
-    e_source_get_extension, e_source_new_with_uid, e_source_security_get_type,
-    e_source_security_set_secure, e_source_set_enabled,
+    e_source_get_extension, e_source_security_get_type, e_source_security_set_secure,
+    e_source_set_enabled,
 };
 use gio_sys::{
     G_IO_ERROR_CANCELLED, GCancellable, g_cancellable_cancel, g_cancellable_new, g_io_error_quark,
@@ -38,6 +38,7 @@ use glib_sys::{GError, GFALSE, GQuark, GTRUE, g_error_free};
 use gobject_sys::g_object_unref;
 use jmap_backend_collection::authenticate::{Login, LoginError, authenticate_with};
 use jmap_backend_core::connect::ConnectError;
+use jmap_backend_core::source::OwnedSource;
 use jmap_client::{Credentials, Error};
 use jmap_collection_sync::Parts;
 
@@ -48,7 +49,7 @@ static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The account that the backend receives: an `ESource` without a registry, as in
 /// `tests/collection_source.rs`.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
@@ -62,14 +63,9 @@ impl TestSource {
             e_source_security_get_type();
         }
 
-        let uid = CString::new("jmap-collection").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
+        let source = OwnedSource::new("jmap-collection");
         // SAFETY: a live source.
-        unsafe { e_source_set_enabled(source, GTRUE) };
+        unsafe { e_source_set_enabled(source.as_ptr(), GTRUE) };
         Self(source)
     }
 
@@ -78,7 +74,8 @@ impl TestSource {
         // extension when necessary and owns it.
         unsafe {
             let collection: *mut ESourceCollection =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_COLLECTION.as_ptr())
+                    .cast();
             let flag = |on: bool| if on { GTRUE } else { GFALSE };
             e_source_collection_set_mail_enabled(collection, flag(parts.mail));
             e_source_collection_set_contacts_enabled(collection, flag(parts.contacts));
@@ -93,7 +90,8 @@ impl TestSource {
         // SAFETY: as above. Each setter copies the string that it receives.
         unsafe {
             let auth: *mut ESourceAuthentication =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                    .cast();
             e_source_authentication_set_host(auth, host.as_ptr());
             e_source_authentication_set_port(auth, port);
             if let Some(user) = &user {
@@ -107,7 +105,8 @@ impl TestSource {
         // SAFETY: as above.
         unsafe {
             let security: *mut ESourceSecurity =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_SECURITY.as_ptr())
+                    .cast();
             e_source_security_set_secure(security, if secure { GTRUE } else { GFALSE });
         }
         self
@@ -120,7 +119,8 @@ impl TestSource {
         // SAFETY: as above.
         unsafe {
             let auth: *mut ESourceAuthentication =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                    .cast();
             e_source_authentication_set_method(auth, method.as_ptr());
         }
         self
@@ -134,18 +134,11 @@ impl TestSource {
         // SAFETY: as above.
         unsafe {
             let auth: *mut ESourceAuthentication =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                    .cast();
             e_source_authentication_set_method(auth, method.as_ptr());
         }
         self
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this releases the reference from `e_source_new_with_uid`
-        // exactly once.
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
@@ -270,7 +263,7 @@ fn an_account_with_nothing_switched_on_is_accepted_without_being_contacted() {
         // REJECTED would discard a password that the backend did not try.
         let source = account().parts(Parts::NONE);
 
-        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0.as_ptr(), ptr::null(), ptr::null_mut(), never);
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
         assert!(error.is_none(), "a switched-off account reported an error");
@@ -285,7 +278,7 @@ fn a_switched_off_account_is_not_refused_for_a_server_it_never_needed() {
         // parts disabled needs no host, so a missing host is not an error here.
         let source = TestSource::new().parts(Parts::NONE);
 
-        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0.as_ptr(), ptr::null(), ptr::null_mut(), never);
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
         assert!(error.is_none());
@@ -300,7 +293,7 @@ fn an_account_that_names_no_server_is_an_error_and_never_a_prompt() {
         // again after each answer.
         let source = TestSource::new().parts(Parts::ALL);
 
-        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0.as_ptr(), ptr::null(), ptr::null_mut(), never);
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
         let error = error.expect("a missing host has to say so");
@@ -319,7 +312,7 @@ fn a_plain_http_account_is_refused_before_a_password_is_sent() {
         // credentials.
         let source = account().secure(false);
 
-        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0.as_ptr(), ptr::null(), ptr::null_mut(), never);
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
         let error = error.expect("a plaintext account has to say why");
@@ -336,7 +329,7 @@ fn an_account_with_a_user_and_no_stored_password_asks_for_one() {
         // complete the account.
         let source = account();
 
-        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0.as_ptr(), ptr::null(), ptr::null_mut(), never);
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
         let error = error.expect("the prompt is worth a reason");
@@ -355,7 +348,7 @@ fn an_empty_stored_password_is_tried_rather_than_prompted_for() {
         let stored = StoredPassword::new("");
         let seen = RefCell::new(None);
 
-        let (result, _) = run(source.0, stored.0, ptr::null_mut(), |login| {
+        let (result, _) = run(source.0.as_ptr(), stored.0, ptr::null_mut(), |login| {
             *seen.borrow_mut() = Some(login.credentials);
             Ok(())
         });
@@ -385,7 +378,7 @@ fn an_oauth2_account_is_never_treated_as_anonymous() {
             .secure(true)
             .oauth2();
 
-        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0.as_ptr(), ptr::null(), ptr::null_mut(), never);
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
         let error = error.expect("an OAuth 2.0 account with no token has to say so");
@@ -432,7 +425,7 @@ fn an_api_token_account_is_sent_as_bearer_not_basic() {
         let stored = StoredPassword::new("t0k3n");
         let seen = RefCell::new(None);
 
-        let (result, error) = run(source.0, stored.0, ptr::null_mut(), |login| {
+        let (result, error) = run(source.0.as_ptr(), stored.0, ptr::null_mut(), |login| {
             *seen.borrow_mut() = Some(login.credentials);
             Ok(())
         });
@@ -455,7 +448,7 @@ fn an_api_token_account_with_no_stored_token_asks_for_one() {
         // fan out with an empty Bearer token.
         let source = account().api_token();
 
-        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0.as_ptr(), ptr::null(), ptr::null_mut(), never);
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
         let error = error.expect("the prompt is worth a reason");
@@ -476,7 +469,7 @@ fn an_account_with_no_user_is_authenticated_anonymously() {
             .secure(false);
         let seen = RefCell::new(None);
 
-        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), |login| {
+        let (result, error) = run(source.0.as_ptr(), ptr::null(), ptr::null_mut(), |login| {
             *seen.borrow_mut() = Some(login.credentials);
             Ok(())
         });
@@ -501,7 +494,7 @@ fn the_fan_out_is_given_the_server_the_account_names_and_the_parts_it_left_on() 
         let stored = StoredPassword::new("hunter2");
         let seen = RefCell::new(None);
 
-        let (result, _) = run(source.0, stored.0, ptr::null_mut(), |login| {
+        let (result, _) = run(source.0.as_ptr(), stored.0, ptr::null_mut(), |login| {
             *seen.borrow_mut() = Some(login);
             Ok(())
         });
@@ -545,7 +538,7 @@ fn only_a_401_makes_evolution_ask_for_the_password_again() {
         let source = account();
         let stored = StoredPassword::new("hunter2");
 
-        let rejected = run(source.0, stored.0, ptr::null_mut(), |_| {
+        let rejected = run(source.0.as_ptr(), stored.0, ptr::null_mut(), |_| {
             Err(Error::Http {
                 status: 401,
                 problem: None,
@@ -561,7 +554,9 @@ fn only_a_401_makes_evolution_ask_for_the_password_again() {
             },
             Error::Transport("connection refused".to_owned()),
         ] {
-            let (result, error) = run(source.0, stored.0, ptr::null_mut(), |_| Err(failure));
+            let (result, error) = run(source.0.as_ptr(), stored.0, ptr::null_mut(), |_| {
+                Err(failure)
+            });
             assert_eq!(
                 result, E_SOURCE_AUTHENTICATION_ERROR,
                 "the password was discarded for a failure it could not have caused"
@@ -580,7 +575,7 @@ fn a_fan_out_that_worked_sets_no_error() {
         let source = account();
         let stored = StoredPassword::new("hunter2");
 
-        let (result, error) = run(source.0, stored.0, ptr::null_mut(), |_| Ok(()));
+        let (result, error) = run(source.0.as_ptr(), stored.0, ptr::null_mut(), |_| Ok(()));
 
         assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
         assert!(error.is_none(), "a successful authenticate set an error");
@@ -600,7 +595,7 @@ fn a_successful_fan_out_pushes_the_same_credentials_to_already_running_children(
         let pushed = RefCell::new(Vec::new());
 
         let (result, error) = run_full(
-            source.0,
+            source.0.as_ptr(),
             stored.0,
             ptr::null_mut(),
             |_| Ok(()),
@@ -628,7 +623,7 @@ fn a_fan_out_that_fails_pushes_no_credentials_to_children() {
         let pushed = RefCell::new(Vec::new());
 
         let (result, error) = run_full(
-            source.0,
+            source.0.as_ptr(),
             stored.0,
             ptr::null_mut(),
             |_| {
@@ -660,7 +655,7 @@ fn an_account_with_nothing_switched_on_pushes_no_credentials_to_children() {
         let pushed = RefCell::new(Vec::new());
 
         let (result, error) = run_full(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             never,
@@ -707,7 +702,7 @@ fn the_fan_out_is_stopped_by_the_cancellable_and_nothing_after_it_is() {
         // SAFETY: a live cancellable.
         unsafe { g_cancellable_cancel(cancellable) };
 
-        let (result, error) = run(source.0, stored.0, cancellable, |_| {
+        let (result, error) = run(source.0.as_ptr(), stored.0, cancellable, |_| {
             let observed =
                 jmap_client::transport::observed().expect("the fan-out observed no cancellation");
             assert!(

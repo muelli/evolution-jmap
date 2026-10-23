@@ -7,27 +7,21 @@ use std::ffi::{CString, c_char};
 use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, ESource, e_source_authentication_get_type,
-    e_source_authentication_set_method, e_source_get_extension, e_source_new_with_uid,
+    E_SOURCE_EXTENSION_AUTHENTICATION, e_source_authentication_get_type,
+    e_source_authentication_set_method, e_source_get_extension,
 };
-use gobject_sys::g_object_unref;
 use jmap_backend_core::api_token::API_TOKEN_METHOD;
 use jmap_backend_core::connect::{AuthScheme, ConnectError, resolve_credentials};
+use jmap_backend_core::source::OwnedSource;
 use jmap_client::Credentials;
 use jmap_tracing_capture::capture;
 
 /// A live `ESource` with only a uid, as in `tests/oauth2.rs`.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new(uid: &str) -> Self {
-        let uid = CString::new(uid).expect("no NUL in a test uid");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new(uid))
     }
 
     fn with_method(self, method: &str) -> Self {
@@ -38,7 +32,8 @@ impl TestSource {
         unsafe {
             e_source_authentication_get_type();
             let auth =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                    .cast();
             e_source_authentication_set_method(auth, method.as_ptr() as *const c_char);
         }
         self
@@ -46,7 +41,7 @@ impl TestSource {
 
     fn scheme(&self) -> AuthScheme {
         // SAFETY: a live source.
-        unsafe { AuthScheme::of(self.0) }
+        unsafe { AuthScheme::of(self.0.as_ptr()) }
     }
 
     fn resolve(
@@ -55,14 +50,15 @@ impl TestSource {
         password: impl FnOnce() -> Option<String>,
     ) -> Result<Credentials, ConnectError> {
         // SAFETY: a live source and a NULL cancellable.
-        unsafe { resolve_credentials(self.0, self.scheme(), user, password, ptr::null_mut()) }
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this owns the only reference `e_source_new_with_uid` returned.
-        unsafe { g_object_unref(self.0.cast()) };
+        unsafe {
+            resolve_credentials(
+                self.0.as_ptr(),
+                self.scheme(),
+                user,
+                password,
+                ptr::null_mut(),
+            )
+        }
     }
 }
 

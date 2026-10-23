@@ -8,52 +8,49 @@
 // use a real `ESource` made with the EDS setters, not a hand-made struct.
 
 use std::ffi::CString;
-use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_RESOURCE, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceAuthentication, ESourceResource, ESourceSecurity,
     e_source_authentication_set_host, e_source_authentication_set_method,
     e_source_authentication_set_port, e_source_authentication_set_user, e_source_get_extension,
-    e_source_has_extension, e_source_new_with_uid, e_source_resource_set_identity,
-    e_source_security_set_secure,
+    e_source_has_extension, e_source_resource_set_identity, e_source_security_set_secure,
 };
 use glib_sys::GFALSE;
-use gobject_sys::g_object_unref;
 use jmap_backend_core::source::{
-    AuthFields, ConnectTarget, SourceConfig, SourceError, destination_address, read_auth,
+    AuthFields, ConnectTarget, OwnedSource, SourceConfig, SourceError, destination_address,
+    read_auth,
 };
 
 /// An `ESource` that is not backed by the registry. EDS itself uses
 /// `e_source_new_with_uid` with a NULL D-Bus object for a source read from a
 /// keyfile. Thus the extensions behave as they do in a backend.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
-        let uid = CString::new("jmap-test-source").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: the documented arguments are a NUL-terminated uid, a NULL
-        // D-Bus object and a GError out-parameter.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new("jmap-test-source"))
     }
 
     fn authentication(&self) -> *mut ESourceAuthentication {
         // SAFETY: the source is live and the name is a header constant. The
         // source creates the extension on demand and owns it.
-        unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }.cast()
+        unsafe {
+            e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+        }
+        .cast()
     }
 
     fn security(&self) -> *mut ESourceSecurity {
         // SAFETY: as above.
-        unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()) }.cast()
+        unsafe { e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_SECURITY.as_ptr()) }
+            .cast()
     }
 
     fn resource(&self) -> *mut ESourceResource {
         // SAFETY: as above.
-        unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_RESOURCE.as_ptr()) }.cast()
+        unsafe { e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_RESOURCE.as_ptr()) }
+            .cast()
     }
 
     fn host(self, host: &str) -> Self {
@@ -99,19 +96,12 @@ impl TestSource {
 
     fn config(&self) -> Result<SourceConfig, SourceError> {
         // SAFETY: the source is alive for the duration of the call.
-        unsafe { SourceConfig::from_source(self.0) }
+        unsafe { SourceConfig::from_source(self.0.as_ptr()) }
     }
 
     fn has_extension(&self, name: &std::ffi::CStr) -> bool {
         // SAFETY: a live source and a NUL-terminated name.
-        unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this struct holds the only reference.
-        unsafe { g_object_unref(self.0.cast()) };
+        unsafe { e_source_has_extension(self.0.as_ptr(), name.as_ptr()) != GFALSE }
     }
 }
 
@@ -369,7 +359,7 @@ fn destination_address_reads_the_explicit_host_and_port() {
     let source = TestSource::new().host("jmap.example.com").port(8443);
 
     // SAFETY: a live source, only read from.
-    let address = unsafe { destination_address(source.0) };
+    let address = unsafe { destination_address(source.0.as_ptr()) };
 
     assert_eq!(address, Some(("jmap.example.com".into(), 8443)));
 }
@@ -382,7 +372,7 @@ fn destination_address_defaults_an_unset_port_to_443() {
     let source = TestSource::new().host("jmap.example.com");
 
     // SAFETY: as above.
-    let address = unsafe { destination_address(source.0) };
+    let address = unsafe { destination_address(source.0.as_ptr()) };
 
     assert_eq!(address, Some(("jmap.example.com".into(), 443)));
 }
@@ -392,7 +382,7 @@ fn destination_address_is_none_without_a_host() {
     let source = TestSource::new().user("vera@example.com");
 
     // SAFETY: as above.
-    let address = unsafe { destination_address(source.0) };
+    let address = unsafe { destination_address(source.0.as_ptr()) };
 
     assert_eq!(address, None);
 }
@@ -402,7 +392,7 @@ fn destination_address_does_not_create_an_authentication_group_it_lacks() {
     let source = TestSource::new();
 
     // SAFETY: as above.
-    let address = unsafe { destination_address(source.0) };
+    let address = unsafe { destination_address(source.0.as_ptr()) };
 
     assert_eq!(address, None);
     assert!(
@@ -482,7 +472,7 @@ fn read_while_another_thread_writes(
     read: impl Fn(*mut ESource) -> Option<String>,
     allowed: &[Option<String>],
 ) {
-    let shared = std::sync::Arc::new(Shared(source.0));
+    let shared = std::sync::Arc::new(Shared(source.0.as_ptr()));
     let names: Vec<CString> = values
         .iter()
         .map(|value| CString::new(value.as_str()).expect("no NUL"))
@@ -586,7 +576,7 @@ fn read_auth_of_a_source_without_the_groups_gives_the_defaults_and_creates_nothi
     let source = TestSource::new();
 
     // SAFETY: a live source.
-    let fields = unsafe { read_auth(source.0) };
+    let fields = unsafe { read_auth(source.0.as_ptr()) };
 
     assert_eq!(
         fields,
@@ -612,7 +602,7 @@ fn read_auth_reads_every_field_of_both_groups() {
         .secure(false);
 
     // SAFETY: a live source.
-    let fields = unsafe { read_auth(source.0) };
+    let fields = unsafe { read_auth(source.0.as_ptr()) };
 
     assert_eq!(
         fields,

@@ -13,19 +13,17 @@
 // properties that the two readers look for. If not, EDS deletes the cache file
 // of the child at the next start, or the child has no server.
 
-use std::ffi::{CStr, CString};
-use std::ptr;
+use std::ffi::CStr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_SECURITY,
-    ESource, ESourceSecurity, ESourceSelectable, e_source_get_display_name, e_source_get_extension,
-    e_source_has_extension, e_source_new_with_uid, e_source_security_get_secure,
-    e_source_selectable_get_color,
+    ESourceSecurity, ESourceSelectable, e_source_get_display_name, e_source_get_extension,
+    e_source_has_extension, e_source_security_get_secure, e_source_selectable_get_color,
 };
 use glib_sys::GFALSE;
-use gobject_sys::g_object_unref;
 use jmap_backend_collection::child_source::{EXTENSIONS, UnwritableSetting, apply};
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::source::OwnedSource;
 use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 use jmap_collection_sync::child_source::{
     Connection, EXTENSION_AUTHENTICATION, EXTENSION_DATA_SOURCE,
@@ -45,35 +43,30 @@ static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// This type registers no extension GType. `apply` must do it, because in a
 /// backend, `populate` calls `apply` before other code uses `[Resource]` or
 /// `[Security]`.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
-        let uid = CString::new("jmap-collection-child").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new("jmap-collection-child"))
     }
 
     /// Writes a new child as `populate` does: all settings of the child, in
     /// their order.
     fn written(self, child: &Child, connection: &Connection) -> Self {
         // SAFETY: a live source.
-        unsafe { apply(self.0, &child.settings(connection)) }.expect("a child this backend wrote");
+        unsafe { apply(self.0.as_ptr(), &child.settings(connection)) }
+            .expect("a child this backend wrote");
         self
     }
 
     fn display_name(&self) -> Option<String> {
         // SAFETY: a live source. The source owns the string that it returns.
-        unsafe { read_string(e_source_get_display_name(self.0)) }
+        unsafe { read_string(e_source_get_display_name(self.0.as_ptr())) }
     }
 
     fn has_extension(&self, name: &CStr) -> bool {
         // SAFETY: a live source and a NUL-terminated name.
-        unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
+        unsafe { e_source_has_extension(self.0.as_ptr(), name.as_ptr()) != GFALSE }
     }
 
     /// `ESourceSecurity:secure` as the JMAP backends read it, not the written
@@ -88,7 +81,8 @@ impl TestSource {
         // the source owns.
         unsafe {
             let security: *mut ESourceSecurity =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_SECURITY.as_ptr())
+                    .cast();
             e_source_security_get_secure(security) != GFALSE
         }
     }
@@ -100,7 +94,8 @@ impl TestSource {
         // necessary and owns it. The returned string is borrowed from it.
         unsafe {
             let selectable: *mut ESourceSelectable =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_CALENDAR.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_CALENDAR.as_ptr())
+                    .cast();
             read_string(e_source_selectable_get_color(selectable))
         }
     }
@@ -109,19 +104,13 @@ impl TestSource {
     /// source.
     fn config(&self) -> SourceConfig {
         // SAFETY: a live source.
-        unsafe { SourceConfig::from_source(self.0) }.expect("a child names its account's server")
+        unsafe { SourceConfig::from_source(self.0.as_ptr()) }
+            .expect("a child names its account's server")
     }
 
     fn resource_id(&self) -> Option<String> {
         // SAFETY: a live source.
-        unsafe { jmap_backend_collection::resource_id::resource_id_of(self.0) }
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this is the only reference.
-        unsafe { g_object_unref(self.0.cast()) };
+        unsafe { jmap_backend_collection::resource_id::resource_id_of(self.0.as_ptr()) }
     }
 }
 
@@ -248,7 +237,7 @@ fn every_setting_a_child_can_be_described_by_is_one_this_writes() {
                 let source = TestSource::new();
 
                 // SAFETY: a live source.
-                let written = unsafe { apply(source.0, &child.settings(&connection)) };
+                let written = unsafe { apply(source.0.as_ptr(), &child.settings(&connection)) };
 
                 assert_eq!(
                     written,
@@ -310,7 +299,10 @@ fn a_setting_this_backend_cannot_write_is_refused_rather_than_dropped() {
             ),
         ] {
             // SAFETY: a live source.
-            assert_eq!(unsafe { apply(source.0, &[setting]) }, Err(expected));
+            assert_eq!(
+                unsafe { apply(source.0.as_ptr(), &[setting]) },
+                Err(expected)
+            );
         }
     });
 }

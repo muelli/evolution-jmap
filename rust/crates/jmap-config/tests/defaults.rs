@@ -11,45 +11,28 @@
 // location that the address did not name. These tests use the same two
 // readers as the other tests of the crate.
 
-use std::ffi::CString;
-use std::ptr;
-
-use eds_sys::{ESource, e_source_new_with_uid};
-use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::server_of;
-use jmap_backend_core::source::{ConnectTarget, SourceError};
+use jmap_backend_core::source::{ConnectTarget, OwnedSource, SourceError};
 use jmap_collection_sync::Parts;
 use jmap_config::account::{Account, apply};
 use jmap_config::complete::{Incomplete, check};
 use jmap_config::defaults::from_identity;
 
 /// An `ESource` in the state that a setup commits, as in `tests/account.rs`.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn written(account: &Account) -> Self {
-        let uid = CString::new("jmap-account").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
+        let source = OwnedSource::new("jmap-account");
         // SAFETY: a live source.
-        unsafe { apply(source, account) };
+        unsafe { apply(source.as_ptr(), account) };
         Self(source)
     }
 
     /// The server, as the collection backend reads it back.
     fn server(&self) -> Result<ConnectTarget, SourceError> {
         // SAFETY: a live source.
-        unsafe { server_of(self.0) }.map(|server| server.target)
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this owns the reference that `e_source_new_with_uid` returned.
-        unsafe { g_object_unref(self.0.cast()) };
+        unsafe { server_of(self.0.as_ptr()) }.map(|server| server.target)
     }
 }
 

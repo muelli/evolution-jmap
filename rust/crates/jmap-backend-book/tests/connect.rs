@@ -13,18 +13,17 @@ use eds_sys::{
     E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_AUTHENTICATION_REJECTED,
     E_SOURCE_AUTHENTICATION_REQUIRED, E_SOURCE_CREDENTIAL_PASSWORD,
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_RESOURCE, E_SOURCE_EXTENSION_SECURITY,
-    ESource, ESourceAuthentication, ESourceAuthenticationResult, e_client_error_quark,
+    ESourceAuthentication, ESourceAuthenticationResult, e_client_error_quark,
     e_named_parameters_free, e_named_parameters_new, e_named_parameters_set,
     e_source_authentication_set_host, e_source_authentication_set_method,
     e_source_authentication_set_port, e_source_authentication_set_user, e_source_get_extension,
-    e_source_new_with_uid, e_source_resource_set_identity, e_source_security_set_secure,
+    e_source_resource_set_identity, e_source_security_set_secure,
 };
 use glib_sys::GError;
-use gobject_sys::g_object_unref;
 use jmap_backend_book::connect;
 use jmap_backend_core::api_token::API_TOKEN_METHOD;
 use jmap_backend_core::connect::{Collection, ConnectError, credentials};
-use jmap_backend_core::source::{ConnectTarget, SourceConfig};
+use jmap_backend_core::source::{ConnectTarget, OwnedSource, SourceConfig};
 use jmap_client::Credentials;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -305,23 +304,20 @@ fn each_failure_carries_the_client_error_code_evolution_routes_on() {
 // not do itself.
 
 /// Creates an `ESource` backed by a mock configuration without D-Bus registry.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
-        let uid = CString::new("jmap-connect-test").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a NULL
-        // GError out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new("jmap-connect-test"))
     }
 
     fn authentication(&self) -> *mut ESourceAuthentication {
         // SAFETY: the source is alive and the name is a header constant; the
         // extension is created on demand and owned by the source.
-        unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }.cast()
+        unsafe {
+            e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+        }
+        .cast()
     }
 
     /// Configures source host and port for loopback testing without TLS.
@@ -337,7 +333,8 @@ impl TestSource {
             e_source_authentication_set_host(self.authentication(), host.as_ptr());
             e_source_authentication_set_port(self.authentication(), port.parse().expect("a port"));
             e_source_security_set_secure(
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast(),
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_SECURITY.as_ptr())
+                    .cast(),
                 0,
             );
         }
@@ -350,7 +347,8 @@ impl TestSource {
         // SAFETY: as `at`.
         unsafe {
             e_source_resource_set_identity(
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_RESOURCE.as_ptr()).cast(),
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_RESOURCE.as_ptr())
+                    .cast(),
                 id.as_ptr(),
             )
         };
@@ -372,15 +370,8 @@ impl TestSource {
     }
 
     fn account_id(self, account_id: &str) -> Self {
-        unsafe { connect::set_source_account_id(self.0, account_id) };
+        unsafe { connect::set_source_account_id(self.0.as_ptr(), account_id) };
         self
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: the reference from e_source_new_with_uid is given back once.
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
@@ -421,7 +412,7 @@ fn connecting_from_a_source_opens_the_default_address_book_and_reports_accepted(
     // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -447,7 +438,7 @@ fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
     // SAFETY: as above.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -485,7 +476,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
     // SAFETY: live ESource, prompted credentials, no cancellable, and writable out-parameters.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             credentials,
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -515,7 +506,7 @@ fn an_api_token_source_with_no_stored_secret_asks_for_one_before_connecting() {
     // SAFETY: as above.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -539,7 +530,7 @@ fn an_oauth2_source_with_no_token_asks_for_consent_before_connecting() {
     // SAFETY: as above.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -563,7 +554,7 @@ fn a_source_that_names_no_server_is_an_error_rather_than_a_prompt() {
     // SAFETY: as above.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -657,7 +648,7 @@ fn connecting_from_a_source_reports_read_only_when_address_book_lacks_write_righ
     // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -710,7 +701,7 @@ fn connecting_from_a_source_with_account_id_opens_that_account() {
     // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -744,7 +735,7 @@ fn connecting_from_a_source_whose_identity_names_an_account_opens_that_accounts_
     // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -780,7 +771,7 @@ fn connecting_from_a_source_with_unknown_account_id_fails() {
     // SAFETY: live ESource, no credentials, no cancellable, and writable out-parameters.
     let sync = unsafe {
         connect::connect(
-            source.0,
+            source.0.as_ptr(),
             ptr::null(),
             ptr::null_mut(),
             &mut outs.auth_result,
@@ -798,28 +789,28 @@ fn source_account_id_reads_account_without_creating_missing_extension() {
     let source = TestSource::new();
     unsafe {
         // Without an account configured, source_account_id is None
-        assert_eq!(connect::source_account_id(source.0), None);
+        assert_eq!(connect::source_account_id(source.0.as_ptr()), None);
         // extension_if_present guarantees that JMAP Account extension is not created if absent
         assert_eq!(
-            eds_sys::e_source_has_extension(source.0, c"JMAP Account".as_ptr()),
+            eds_sys::e_source_has_extension(source.0.as_ptr(), c"JMAP Account".as_ptr()),
             glib_sys::GFALSE
         );
 
         // When set on the source via set_source_account_id, it resolves
-        connect::set_source_account_id(source.0, "ext-acc-5678");
+        connect::set_source_account_id(source.0.as_ptr(), "ext-acc-5678");
         assert_eq!(
-            connect::source_account_id(source.0),
+            connect::source_account_id(source.0.as_ptr()),
             Some("ext-acc-5678".to_string())
         );
         assert_eq!(
-            eds_sys::e_source_has_extension(source.0, c"JMAP Account".as_ptr()),
+            eds_sys::e_source_has_extension(source.0.as_ptr(), c"JMAP Account".as_ptr()),
             glib_sys::GFALSE
         );
 
         // When set on the Resource extension, it resolves without creating JMAP Account
         let source2 = TestSource::new();
         let resource = eds_sys::e_source_get_extension(
-            source2.0,
+            source2.0.as_ptr(),
             eds_sys::E_SOURCE_EXTENSION_RESOURCE.as_ptr(),
         );
         let val = CString::new("resource-acc-1234").unwrap();
@@ -830,11 +821,11 @@ fn source_account_id_reads_account_without_creating_missing_extension() {
             Some(glib_sys::g_free),
         );
         assert_eq!(
-            connect::source_account_id(source2.0),
+            connect::source_account_id(source2.0.as_ptr()),
             Some("resource-acc-1234".to_string())
         );
         assert_eq!(
-            eds_sys::e_source_has_extension(source2.0, c"JMAP Account".as_ptr()),
+            eds_sys::e_source_has_extension(source2.0.as_ptr(), c"JMAP Account".as_ptr()),
             glib_sys::GFALSE
         );
     }

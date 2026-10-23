@@ -17,15 +17,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_RESOURCE,
     ESource, ESourceResource, e_source_address_book_get_type, e_source_calendar_get_type,
-    e_source_get_extension, e_source_has_extension, e_source_new_with_uid,
-    e_source_resource_set_identity,
+    e_source_get_extension, e_source_has_extension, e_source_resource_set_identity,
 };
 use glib_sys::{
     G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, GFALSE, GLogLevelFlags, g_log_remove_handler,
     g_log_set_handler, gchar,
 };
-use gobject_sys::g_object_unref;
 use jmap_backend_collection::resource_id::{KIND_EXTENSIONS, kind_of, resource_id_of};
+use jmap_backend_core::source::OwnedSource;
 use jmap_collection_sync::child_source::{Connection, EXTENSION_ADDRESS_BOOK, EXTENSION_CALENDAR};
 use jmap_collection_sync::{Child, ChildKind};
 use jmap_proto::Id;
@@ -37,7 +36,7 @@ static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// An `ESource` without the registry, made with `e_source_new_with_uid`. The
 /// extension functions operate on it as they do in a backend.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
@@ -53,13 +52,7 @@ impl TestSource {
             e_source_calendar_get_type();
         }
 
-        let uid = CString::new("jmap-collection-child").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: the documented arguments are a NUL-terminated uid, the default
-        // main context and a GError out-parameter.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new("jmap-collection-child"))
     }
 
     /// Gives the source the extension named by `group`. The extension makes the
@@ -69,7 +62,7 @@ impl TestSource {
         let group = CString::new(group).expect("no NUL in an extension name");
         // SAFETY: a live source and a NUL-terminated name. The source creates
         // the extension on demand and owns it.
-        let extension = unsafe { e_source_get_extension(self.0, group.as_ptr()) };
+        let extension = unsafe { e_source_get_extension(self.0.as_ptr(), group.as_ptr()) };
         assert!(!extension.is_null(), "EDS knows no such extension");
         self
     }
@@ -79,7 +72,8 @@ impl TestSource {
         // SAFETY: as above, and the setter copies the string.
         unsafe {
             let resource: *mut ESourceResource =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_RESOURCE.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_RESOURCE.as_ptr())
+                    .cast();
             e_source_resource_set_identity(resource, identity.as_ptr());
         }
         self
@@ -87,20 +81,12 @@ impl TestSource {
 
     fn has_extension(&self, name: &std::ffi::CStr) -> bool {
         // SAFETY: a live source and a NUL-terminated name.
-        unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
+        unsafe { e_source_has_extension(self.0.as_ptr(), name.as_ptr()) != GFALSE }
     }
 
     fn resource_id(&self) -> Option<String> {
         // SAFETY: a live source.
-        unsafe { resource_id_of(self.0) }
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this releases the reference from `e_source_new_with_uid`
-        // exactly once.
-        unsafe { g_object_unref(self.0.cast()) };
+        unsafe { resource_id_of(self.0.as_ptr()) }
     }
 }
 
@@ -345,7 +331,10 @@ fn a_source_with_both_kinds_is_read_as_an_address_book() {
 
         assert_eq!(source.resource_id().as_deref(), Some("addressbook:X1"));
         // SAFETY: a live source.
-        assert_eq!(unsafe { kind_of(source.0) }, Some(ChildKind::AddressBook));
+        assert_eq!(
+            unsafe { kind_of(source.0.as_ptr()) },
+            Some(ChildKind::AddressBook)
+        );
     });
 }
 
@@ -386,7 +375,7 @@ fn resource_id_of_on_another_thread_copies_an_identity_the_main_thread_is_replac
             .chain([Some("calendar:CAL1".to_owned())])
             .collect();
         read_while_another_thread_writes(
-            source.0,
+            source.0.as_ptr(),
             values,
             set_identity,
             // SAFETY: a live source.

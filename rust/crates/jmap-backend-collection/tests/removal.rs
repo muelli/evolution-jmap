@@ -23,8 +23,8 @@ use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
-    ESource, ESourceRegistryServer, e_server_side_source_new, e_source_new_with_uid,
-    e_source_registry_server_new, g_file_new_for_path,
+    ESource, ESourceRegistryServer, e_server_side_source_new, e_source_registry_server_new,
+    g_file_new_for_path,
 };
 use glib_sys::{
     G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, GLogLevelFlags, g_log_remove_handler,
@@ -33,6 +33,7 @@ use glib_sys::{
 use gobject_sys::{GObject, g_object_unref};
 use jmap_backend_collection::child_source::apply;
 use jmap_backend_collection::removal::{obsolete, remove_obsolete};
+use jmap_backend_core::source::OwnedSource;
 use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{
     Child, ChildKind, CollectionLayout, Fanout, Parts, Resource, ServiceAccount,
@@ -47,21 +48,15 @@ static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// A child source in the state after a populate. EDS creates it under a
 /// resource id, then [`apply`] writes it. `e_source_new_with_uid` makes it
 /// without the registry.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn child(kind: ChildKind, collection: &str) -> Self {
         let child = child(kind, collection);
-        let uid =
-            CString::new(format!("jmap-{}", child.resource_id)).expect("no NUL in a test uid");
-        let mut error = ptr::null_mut();
-        // SAFETY: the documented arguments are a NUL-terminated uid, the default
-        // main context and a GError out-parameter.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
+        let source = OwnedSource::new(&format!("jmap-{}", child.resource_id));
 
         // SAFETY: a live source that this process owns.
-        unsafe { apply(source, &child.settings(&connection())) }
+        unsafe { apply(source.as_ptr(), &child.settings(&connection())) }
             .expect("a child this backend wrote");
         Self(source)
     }
@@ -70,19 +65,7 @@ impl TestSource {
     /// *different* collection backend has this appearance. EDS gives sources of
     /// this type to `dup_resource_id` for files in the cache.
     fn foreign() -> Self {
-        let uid = CString::new("not-ours").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: as above.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this struct holds the only reference.
-        unsafe { g_object_unref(self.0.cast()) };
+        Self(OwnedSource::new("not-ours"))
     }
 }
 
@@ -159,7 +142,7 @@ fn fanout(parts: Parts, address_books: &[&str], calendars: &[&str]) -> Fanout {
 /// returns pointers, but a failed assertion that shows two addresses gives no
 /// useful data.
 fn picked(fanout: &Fanout, children: &[&TestSource]) -> Vec<String> {
-    let pointers: Vec<*mut ESource> = children.iter().map(|child| child.0).collect();
+    let pointers: Vec<*mut ESource> = children.iter().map(|child| child.0.as_ptr()).collect();
     // SAFETY: every source is alive for the call.
     let obsolete = unsafe { obsolete(fanout, &pointers) };
     obsolete
@@ -177,7 +160,7 @@ fn removals(
     fanout: &Fanout,
     children: &[&TestSource],
 ) -> Vec<jmap_backend_collection::removal::NotRemoved> {
-    let pointers: Vec<*mut ESource> = children.iter().map(|child| child.0).collect();
+    let pointers: Vec<*mut ESource> = children.iter().map(|child| child.0.as_ptr()).collect();
     // SAFETY: every source is alive for the call.
     unsafe { remove_obsolete(fanout, &pointers) }
 }

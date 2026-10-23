@@ -12,13 +12,8 @@
 // each operation fails. The user then sees an error dialog from a process that
 // they did not start, not a message at the entry where they typed the mistake.
 
-use std::ffi::CString;
-use std::ptr;
-
-use eds_sys::{ESource, e_source_new_with_uid};
-use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::server_of;
-use jmap_backend_core::source::{ConnectTarget, SourceError};
+use jmap_backend_core::source::{ConnectTarget, OwnedSource, SourceError};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, apply};
@@ -46,32 +41,20 @@ fn account() -> Account {
 }
 
 /// An `ESource` in the state a setup commits into, as in `tests/account.rs`.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn written(account: &Account) -> Self {
-        let uid = CString::new("jmap-account").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
+        let source = OwnedSource::new("jmap-account");
         // SAFETY: a live source.
-        unsafe { apply(source, account) };
+        unsafe { apply(source.as_ptr(), account) };
         Self(source)
     }
 
     /// The server as the collection backend reads it back.
     fn server(&self) -> Result<ConnectTarget, SourceError> {
         // SAFETY: a live source.
-        unsafe { server_of(self.0) }.map(|server| server.target)
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this owns the reference `e_source_new_with_uid` returned.
-        unsafe { g_object_unref(self.0.cast()) };
+        unsafe { server_of(self.0.as_ptr()) }.map(|server| server.target)
     }
 }
 

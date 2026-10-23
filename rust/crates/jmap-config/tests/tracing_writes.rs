@@ -165,14 +165,13 @@ fn probe_host_traces_domain_and_srv_record() {
 /// cover the account in that case.
 #[cfg(not(eds_oauth2_dynamic))]
 mod own_oauth2_service {
-    use std::ffi::CString;
-    use std::ptr;
+
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use eds_sys::{
         EOAuth2Services, e_oauth2_service_prepare_authentication_uri_query,
         e_oauth2_service_prepare_get_token_form, e_oauth2_service_prepare_refresh_token_form,
-        e_oauth2_services_new, e_source_new_with_uid,
+        e_oauth2_services_new,
     };
     use glib_sys::{g_free, g_hash_table_destroy, g_hash_table_new_full, g_str_equal, g_str_hash};
     use gobject_sys::{
@@ -185,8 +184,9 @@ mod own_oauth2_service {
     use tracing::Level;
 
     use super::{REDIRECT_URI, capture, has};
+    use jmap_backend_core::source::OwnedSource;
 
-    struct TestSource(*mut eds_sys::ESource);
+    struct TestSource(OwnedSource);
 
     impl TestSource {
         fn new() -> Self {
@@ -195,23 +195,12 @@ mod own_oauth2_service {
                 "jmap-tracing-writes-test-{}",
                 NEXT.fetch_add(1, Ordering::Relaxed)
             );
-            let uid = CString::new(uid).expect("no NUL in a generated uid");
-            let mut error = ptr::null_mut();
-            let source =
-                unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-            assert!(!source.is_null(), "e_source_new_with_uid failed");
-            Self(source)
+            Self(OwnedSource::new(&uid))
         }
 
         fn written(self, config: &Config) -> Self {
-            unsafe { oauth2::apply(self.0, config) };
+            unsafe { oauth2::apply(self.0.as_ptr(), config) };
             self
-        }
-    }
-
-    impl Drop for TestSource {
-        fn drop(&mut self) {
-            unsafe { gobject_sys::g_object_unref(self.0.cast()) };
         }
     }
 
@@ -259,7 +248,11 @@ mod own_oauth2_service {
             );
 
             let (_, captured_query) = capture(|| {
-                e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+                e_oauth2_service_prepare_authentication_uri_query(
+                    service,
+                    source.0.as_ptr(),
+                    query,
+                );
             });
 
             assert!(
@@ -287,7 +280,7 @@ mod own_oauth2_service {
             let (_, captured_form) = capture(|| {
                 e_oauth2_service_prepare_get_token_form(
                     service,
-                    source.0,
+                    source.0.as_ptr(),
                     c"auth-code".as_ptr(),
                     form,
                 );
@@ -308,7 +301,7 @@ mod own_oauth2_service {
             let (_, captured_refresh) = capture(|| {
                 e_oauth2_service_prepare_refresh_token_form(
                     service,
-                    source.0,
+                    source.0.as_ptr(),
                     c"refresh-token".as_ptr(),
                     refresh_form,
                 );

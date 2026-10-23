@@ -34,19 +34,18 @@
 // registry finds the upstream service for these accounts.
 #![cfg(not(eds_oauth2_dynamic))]
 
-use std::ffi::{CStr, CString, c_char};
-use std::ptr;
+use std::ffi::{CStr, c_char};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Service, EOAuth2ServiceInterface, EOAuth2Services,
-    ESource, e_oauth2_service_can_process, e_oauth2_service_get_authentication_uri,
+    e_oauth2_service_can_process, e_oauth2_service_get_authentication_uri,
     e_oauth2_service_get_client_id, e_oauth2_service_get_client_secret,
     e_oauth2_service_get_display_name, e_oauth2_service_get_name,
     e_oauth2_service_get_redirect_uri, e_oauth2_service_get_refresh_uri, e_oauth2_service_get_type,
     e_oauth2_service_prepare_authentication_uri_query, e_oauth2_service_prepare_get_token_form,
     e_oauth2_services_find, e_oauth2_services_new, e_source_authentication_set_method,
-    e_source_get_extension, e_source_new_with_uid,
+    e_source_get_extension,
 };
 use glib_sys::{
     GFALSE, GHashTable, g_free, g_hash_table_destroy, g_hash_table_lookup, g_hash_table_new_full,
@@ -56,6 +55,7 @@ use gobject_sys::{
     G_TYPE_OBJECT, GValue, g_object_new_with_properties, g_object_unref, g_type_class_ref,
     g_type_interface_peek, g_value_init, g_value_set_object, g_value_unset,
 };
+use jmap_backend_core::source::OwnedSource;
 use jmap_backend_core::subclass::register_static;
 use jmap_config::oauth2::{self, Config};
 use jmap_config::oauth2_service::{NAME, Service};
@@ -72,7 +72,7 @@ fn capture_levels(body: impl FnOnce()) -> Vec<Level> {
         .collect()
 }
 
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     /// A source with a unique uid.
@@ -99,18 +99,12 @@ impl TestSource {
             "jmap-oauth2-service-test-{}",
             NEXT.fetch_add(1, Ordering::Relaxed)
         );
-        let uid = CString::new(uid).expect("no NUL in a generated uid");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new(&uid))
     }
 
     fn written(self, config: &Config) -> Self {
         // SAFETY: a live source.
-        unsafe { oauth2::apply(self.0, config) };
+        unsafe { oauth2::apply(self.0.as_ptr(), config) };
         self
     }
 
@@ -121,17 +115,11 @@ impl TestSource {
         // extension name of EDS, and EDS can always create it.
         unsafe {
             let auth =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                    .cast();
             e_source_authentication_set_method(auth, method.as_ptr());
         }
         self
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this holds the only reference.
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
@@ -212,23 +200,35 @@ fn every_borrowed_field_reads_back_what_was_applied() {
     // call.
     unsafe {
         assert_eq!(
-            borrowed(e_oauth2_service_get_client_id(service, source.0)).as_deref(),
+            borrowed(e_oauth2_service_get_client_id(service, source.0.as_ptr())).as_deref(),
             Some("client-abc123")
         );
         assert_eq!(
-            borrowed(e_oauth2_service_get_client_secret(service, source.0)).as_deref(),
+            borrowed(e_oauth2_service_get_client_secret(
+                service,
+                source.0.as_ptr()
+            ))
+            .as_deref(),
             Some("s3cret")
         );
         assert_eq!(
-            borrowed(e_oauth2_service_get_authentication_uri(service, source.0)).as_deref(),
+            borrowed(e_oauth2_service_get_authentication_uri(
+                service,
+                source.0.as_ptr()
+            ))
+            .as_deref(),
             Some("https://jmap.example.com/authorize")
         );
         assert_eq!(
-            borrowed(e_oauth2_service_get_refresh_uri(service, source.0)).as_deref(),
+            borrowed(e_oauth2_service_get_refresh_uri(service, source.0.as_ptr())).as_deref(),
             Some("https://jmap.example.com/token")
         );
         assert_eq!(
-            borrowed(e_oauth2_service_get_redirect_uri(service, source.0)).as_deref(),
+            borrowed(e_oauth2_service_get_redirect_uri(
+                service,
+                source.0.as_ptr()
+            ))
+            .as_deref(),
             Some("https://client.example.org/callback")
         );
     }
@@ -259,7 +259,7 @@ fn prepare_authentication_uri_query_names_the_registered_scope() {
     };
     // SAFETY: a live implementer, a live source, and a live table.
     unsafe {
-        e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+        e_oauth2_service_prepare_authentication_uri_query(service, source.0.as_ptr(), query);
 
         let scope = g_hash_table_lookup(query, c"scope".as_ptr().cast());
         assert!(!scope.is_null(), "the query carries no scope");
@@ -323,7 +323,7 @@ fn the_token_form_redeems_the_verifier_behind_the_authorization_challenge() {
             Some(g_free),
             Some(g_free),
         );
-        e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+        e_oauth2_service_prepare_authentication_uri_query(service, source.0.as_ptr(), query);
         let challenge = CStr::from_ptr(
             g_hash_table_lookup(query, c"code_challenge".as_ptr().cast()).cast::<c_char>(),
         )
@@ -337,7 +337,12 @@ fn the_token_form_redeems_the_verifier_behind_the_authorization_challenge() {
             Some(g_free),
             Some(g_free),
         );
-        e_oauth2_service_prepare_get_token_form(service, source.0, c"an-auth-code".as_ptr(), form);
+        e_oauth2_service_prepare_get_token_form(
+            service,
+            source.0.as_ptr(),
+            c"an-auth-code".as_ptr(),
+            form,
+        );
         let verifier = g_hash_table_lookup(form, c"code_verifier".as_ptr().cast());
         assert!(
             !verifier.is_null(),
@@ -357,7 +362,12 @@ fn the_token_form_redeems_the_verifier_behind_the_authorization_challenge() {
             Some(g_free),
             Some(g_free),
         );
-        e_oauth2_service_prepare_get_token_form(service, source.0, c"an-auth-code".as_ptr(), form2);
+        e_oauth2_service_prepare_get_token_form(
+            service,
+            source.0.as_ptr(),
+            c"an-auth-code".as_ptr(),
+            form2,
+        );
         assert!(
             g_hash_table_lookup(form2, c"code_verifier".as_ptr().cast()).is_null(),
             "a PKCE verifier must be single-use"
@@ -391,7 +401,7 @@ fn prepare_authentication_uri_query_adds_nothing_without_a_stored_scope() {
     };
     // SAFETY: the same as above.
     unsafe {
-        e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+        e_oauth2_service_prepare_authentication_uri_query(service, source.0.as_ptr(), query);
         assert!(
             g_hash_table_lookup(query, c"scope".as_ptr().cast()).is_null(),
             "no stored scope must mean no scope parameter at all"
@@ -422,7 +432,7 @@ fn prepare_authentication_uri_query_treats_an_empty_stored_scope_as_absent() {
     };
     // SAFETY: the same as above.
     unsafe {
-        e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+        e_oauth2_service_prepare_authentication_uri_query(service, source.0.as_ptr(), query);
         assert!(
             g_hash_table_lookup(query, c"scope".as_ptr().cast()).is_null(),
             "an empty stored scope must mean no scope parameter at all"
@@ -447,7 +457,7 @@ fn prepare_authentication_uri_query_treats_an_empty_stored_resource_as_absent() 
         .expect("this crate fills the slot");
     // SAFETY: the signature of the slot, a live implementer, a live source and
     // a live table that owns the two halves of each entry.
-    unsafe { slot(service, source.0, query) };
+    unsafe { slot(service, source.0.as_ptr(), query) };
 
     assert!(
         !has_key(query, c"resource"),
@@ -466,11 +476,11 @@ fn an_unconfigured_source_answers_null_for_every_borrowed_field_rather_than_crea
 
     // SAFETY: the same as `every_borrowed_field_reads_back_what_was_applied`.
     unsafe {
-        assert!(e_oauth2_service_get_client_id(service, source.0).is_null());
-        assert!(e_oauth2_service_get_client_secret(service, source.0).is_null());
-        assert!(e_oauth2_service_get_authentication_uri(service, source.0).is_null());
-        assert!(e_oauth2_service_get_refresh_uri(service, source.0).is_null());
-        assert!(e_oauth2_service_get_redirect_uri(service, source.0).is_null());
+        assert!(e_oauth2_service_get_client_id(service, source.0.as_ptr()).is_null());
+        assert!(e_oauth2_service_get_client_secret(service, source.0.as_ptr()).is_null());
+        assert!(e_oauth2_service_get_authentication_uri(service, source.0.as_ptr()).is_null());
+        assert!(e_oauth2_service_get_refresh_uri(service, source.0.as_ptr()).is_null());
+        assert!(e_oauth2_service_get_redirect_uri(service, source.0.as_ptr()).is_null());
     }
 }
 
@@ -484,17 +494,17 @@ fn can_process_says_yes_only_when_the_authentication_method_is_this_services_nam
     // SAFETY: a live implementer and live sources.
     unsafe {
         assert_ne!(
-            e_oauth2_service_can_process(service, matching.0),
+            e_oauth2_service_can_process(service, matching.0.as_ptr()),
             GFALSE,
             "a source authenticating by this service's own name should match"
         );
         assert_eq!(
-            e_oauth2_service_can_process(service, other.0),
+            e_oauth2_service_can_process(service, other.0.as_ptr()),
             GFALSE,
             "a source authenticating by a different method should not match"
         );
         assert_eq!(
-            e_oauth2_service_can_process(service, unset.0),
+            e_oauth2_service_can_process(service, unset.0.as_ptr()),
             GFALSE,
             "a source with no Authentication extension should not match"
         );
@@ -525,7 +535,7 @@ fn the_registry_finds_this_service_for_a_matching_source_and_nothing_for_another
     // SAFETY: a live registry with `_service` registered in it, and live
     // sources. A non-NULL result is a new ref that this test releases.
     unsafe {
-        let found = e_oauth2_services_find(registry, matching.0);
+        let found = e_oauth2_services_find(registry, matching.0.as_ptr());
         assert!(
             !found.is_null(),
             "a source authenticating by this service's own name should be found"
@@ -533,7 +543,7 @@ fn the_registry_finds_this_service_for_a_matching_source_and_nothing_for_another
         g_object_unref(found.cast());
 
         assert!(
-            e_oauth2_services_find(registry, other.0).is_null(),
+            e_oauth2_services_find(registry, other.0.as_ptr()).is_null(),
             "a source authenticating by a different method should not be found"
         );
     }
@@ -606,7 +616,7 @@ fn the_authentication_query_slot_adds_only_this_services_own_keys() {
         .expect("this crate fills the slot");
     // SAFETY: the signature of the slot, a live implementer, a live source and
     // a live table that owns the two halves of each entry.
-    unsafe { slot(service, source.0, query) };
+    unsafe { slot(service, source.0.as_ptr(), query) };
 
     assert!(has_key(query, c"scope"), "the slot must add the scope");
     assert!(
@@ -645,7 +655,7 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
         .prepare_authentication_uri_query
         .expect("this crate fills the slot");
     // SAFETY: the same as in the test above.
-    unsafe { authorize(service, source.0, query) };
+    unsafe { authorize(service, source.0.as_ptr(), query) };
 
     let form = empty_table();
     let slot = vtable()
@@ -653,7 +663,7 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
         .expect("this crate fills the slot");
     // SAFETY: the same as above. `authorization_code` is a NUL-terminated
     // literal.
-    unsafe { slot(service, source.0, c"an-auth-code".as_ptr(), form) };
+    unsafe { slot(service, source.0.as_ptr(), c"an-auth-code".as_ptr(), form) };
 
     assert!(has_key(form, c"resource"), "the slot must add the resource");
     assert!(
@@ -673,7 +683,14 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
         .prepare_refresh_token_form
         .expect("this crate fills the slot");
     // SAFETY: the same as above.
-    unsafe { slot(service, source.0, c"a-refresh-token".as_ptr(), refresh) };
+    unsafe {
+        slot(
+            service,
+            source.0.as_ptr(),
+            c"a-refresh-token".as_ptr(),
+            refresh,
+        )
+    };
 
     assert!(
         has_key(refresh, c"resource"),
@@ -721,8 +738,8 @@ fn a_missing_pkce_verifier_at_redemption_is_logged_at_warn_level() {
     let first_levels = capture_levels(|| {
         // SAFETY: live objects and tables in all calls.
         unsafe {
-            authorize(service, source.0, query);
-            slot(service, source.0, c"an-auth-code".as_ptr(), form);
+            authorize(service, source.0.as_ptr(), query);
+            slot(service, source.0.as_ptr(), c"an-auth-code".as_ptr(), form);
         }
     });
     assert!(
@@ -732,7 +749,7 @@ fn a_missing_pkce_verifier_at_redemption_is_logged_at_warn_level() {
 
     let second_levels = capture_levels(|| {
         // SAFETY: the same as above. The verifier is already redeemed one time.
-        unsafe { slot(service, source.0, c"an-auth-code".as_ptr(), form2) };
+        unsafe { slot(service, source.0.as_ptr(), c"an-auth-code".as_ptr(), form2) };
     });
     assert!(
         second_levels.contains(&Level::WARN),

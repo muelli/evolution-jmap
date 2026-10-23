@@ -16,30 +16,23 @@ use std::ffi::{CString, c_char};
 use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_AUTHENTICATION_REQUIRED, E_SOURCE_EXTENSION_AUTHENTICATION, ESource,
+    E_SOURCE_AUTHENTICATION_REQUIRED, E_SOURCE_EXTENSION_AUTHENTICATION,
     e_source_authentication_get_type, e_source_authentication_set_method, e_source_get_extension,
-    e_source_new_with_uid,
 };
-use gobject_sys::g_object_unref;
 use jmap_backend_core::connect::ConnectError;
 use jmap_backend_core::oauth2::{access_token, method_is_oauth2, source_uses_oauth2};
+use jmap_backend_core::source::OwnedSource;
 use jmap_tracing_capture::capture;
 
 /// A live `ESource` with only a uid, plus the values that a test writes on it.
 /// `jmap-config/tests/oauth2_service.rs` uses the same shape for the same
 /// reason: you can construct an `ESource` without a registry, so the tests
 /// call the real extension readers, not mocks.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new(uid: &str) -> Self {
-        let uid = CString::new(uid).expect("no NUL in a test uid");
-        let mut error = ptr::null_mut();
-        // SAFETY: the documented arguments are a NUL-terminated uid, no D-Bus
-        // object and a GError out-parameter.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new(uid))
     }
 
     /// Sets `[Authentication] Method`. EDS has no unset state for this
@@ -54,17 +47,11 @@ impl TestSource {
         unsafe {
             e_source_authentication_get_type();
             let auth =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                    .cast();
             e_source_authentication_set_method(auth, method.as_ptr() as *const c_char);
         }
         self
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this owns the only reference `e_source_new_with_uid` returned.
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
@@ -106,15 +93,15 @@ fn an_unregistered_service_name_is_not_oauth2() {
 fn the_method_is_read_off_the_source() {
     let absent = TestSource::new("jmap-oauth2-absent");
     // SAFETY: a live source.
-    assert!(!unsafe { source_uses_oauth2(absent.0) });
+    assert!(!unsafe { source_uses_oauth2(absent.0.as_ptr()) });
 
     let password = TestSource::new("jmap-oauth2-password").with_method("none");
     // SAFETY: a live source.
-    assert!(!unsafe { source_uses_oauth2(password.0) });
+    assert!(!unsafe { source_uses_oauth2(password.0.as_ptr()) });
 
     let oauth2 = TestSource::new("jmap-oauth2-yes").with_method("OAuth2");
     // SAFETY: a live source.
-    assert!(unsafe { source_uses_oauth2(oauth2.0) });
+    assert!(unsafe { source_uses_oauth2(oauth2.0.as_ptr()) });
 }
 
 /// A source without a registry has no token to give. Every source that a test
@@ -130,7 +117,7 @@ fn a_source_with_no_token_is_a_required_not_a_rejected() {
 
     // SAFETY: a live source and a NULL cancellable. An EDS vfunc can get a
     // NULL cancellable.
-    let (result, _) = capture(|| unsafe { access_token(source.0, ptr::null_mut()) });
+    let (result, _) = capture(|| unsafe { access_token(source.0.as_ptr(), ptr::null_mut()) });
     let error = result.expect_err("no token exists");
 
     assert!(matches!(error, ConnectError::OAuth2(_)));
@@ -173,7 +160,7 @@ fn access_token_traces_account_id_on_attempt() {
     let source = TestSource::new("jmap-oauth2-trace-uid").with_method("OAuth2");
 
     // SAFETY: a live source and NULL cancellable.
-    let (_, captured) = capture(|| unsafe { access_token(source.0, ptr::null_mut()) });
+    let (_, captured) = capture(|| unsafe { access_token(source.0.as_ptr(), ptr::null_mut()) });
     assert!(
         captured
             .iter()
@@ -188,7 +175,8 @@ fn access_token_failure_traces_structured_fields_and_consent_escalation() {
     let source = TestSource::new("jmap-oauth2-trace-failure").with_method("OAuth2");
 
     // SAFETY: a live source and NULL cancellable.
-    let (result, captured) = capture(|| unsafe { access_token(source.0, ptr::null_mut()) });
+    let (result, captured) =
+        capture(|| unsafe { access_token(source.0.as_ptr(), ptr::null_mut()) });
     assert!(result.is_err());
     assert!(
         captured.iter().any(|(_, name, value)| name == "account_id"
