@@ -31,7 +31,7 @@
 
 use std::ffi::CStr;
 
-use eds_sys::{EExtension, EExtensionClass, e_extension_get_extensible, e_extension_get_type};
+use eds_sys::{EExtension, e_extension_get_extensible};
 #[cfg(evolution_eui_manager)]
 use evo_sys::e_shell_view_get_ui_manager;
 use evo_sys::{
@@ -42,68 +42,42 @@ use evo_sys::{
     e_shell_view_get_shell_window, e_shell_window_get_action_group, e_shell_window_get_ui_manager,
 };
 use glib_sys::{GType, gpointer};
-use gobject_sys::{GObject, GObjectClass, g_signal_connect_data};
+use gobject_sys::{GObject, g_signal_connect_data};
 use jmap_backend_core::callback::gcallback;
+use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
 
 use crate::snooze::action;
 
-/// The instance: only the state of `EExtension`.
-#[repr(C)]
-pub struct JmapSnoozeShellExtension {
-    parent: EExtension,
-}
+/// The snooze submenu of the mail view.
+pub struct SnoozeShell;
 
-/// The class: only the state of `EExtensionClass`.
-#[repr(C)]
-pub struct JmapSnoozeShellExtensionClass {
-    parent_class: EExtensionClass,
-}
+/// The registered `JmapSnoozeShellExtension` type.
+pub type JmapSnoozeShellExtension = ExtensionObject<SnoozeShell>;
 
-// SAFETY: both structs are #[repr(C)] and start with the structs of EExtension.
-// EExtension derives from GObject.
-unsafe impl ObjectSubclass for JmapSnoozeShellExtension {
-    const NAME: &'static CStr = c"JmapSnoozeShellExtension";
-    type Instance = JmapSnoozeShellExtension;
-    type Class = JmapSnoozeShellExtensionClass;
+impl Extension for SnoozeShell {
+    const TYPE_NAME: &'static CStr = c"JmapSnoozeShellExtension";
+    const EXTENSIBLE_NAME: &'static CStr = c"EShellView";
 
-    fn parent_type() -> GType {
+    fn extensible_type() -> GType {
         // SAFETY: no arguments, and the type initialises itself.
-        unsafe { e_extension_get_type() }
+        unsafe { e_shell_view_get_type() }
     }
 
-    fn class_init_types() -> Vec<GType> {
-        // SAFETY: no arguments, and the type initialises itself.
-        // The call is here, before registration, because `class_init` can only look the type up.
-        vec![unsafe { e_shell_view_get_type() }]
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` starts with `EExtensionClass`.
-        unsafe { (*class).parent_class.extensible_type = subclass::registered_type(c"EShellView") };
-        let object_class = class.cast::<GObjectClass>();
-        // SAFETY: through its parents, `class` starts with GObjectClass.
-        unsafe { (*object_class).constructed = Some(constructed) };
+    unsafe fn constructed(extension: *mut EExtension) {
+        // SAFETY: the contract of this method.
+        unsafe { constructed(extension) }
     }
 }
 
-/// Calls the parent `constructed`. On the mail view, it connects the signals
-/// that this menu layer needs. The signal handlers do the remaining work.
+/// On the mail view, connects the signals that this menu layer needs. The signal handlers do the remaining work.
 #[cfg(not(evolution_eui_manager))]
-unsafe extern "C" fn constructed(object: *mut GObject) {
-    guard("JmapSnoozeShellExtension::constructed", (), || unsafe {
-        // SAFETY: the parent class of a live instance is initialised and alive.
-        let parent =
-            subclass::parent_class::<GObjectClass>(JmapSnoozeShellExtension::parent_type());
-        if let Some(chained) = parent.and_then(|class| class.constructed) {
-            chained(object);
-        }
-
-        // SAFETY: GObject gives a live instance. The extensible is the shell
+unsafe fn constructed(extension: *mut EExtension) {
+    unsafe {
+        // SAFETY: `extension` is live. The extensible is the shell
         // view of this extension.
-        let view: *mut EShellView = e_extension_get_extensible(object.cast::<EExtension>()).cast();
+        let view: *mut EShellView = e_extension_get_extensible(extension).cast();
         if read_string(e_shell_view_get_name(view)).as_deref() != Some("mail") {
             return;
         }
@@ -124,25 +98,16 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
                 0,
             );
         }
-    });
+    }
 }
 
-/// # Safety
-///
-/// GObject gives a live instance that is in construction.
+/// On the mail view, installs the submenu and connects `update-actions`.
 #[cfg(evolution_eui_manager)]
-unsafe extern "C" fn constructed(object: *mut GObject) {
-    guard("JmapSnoozeShellExtension::constructed", (), || unsafe {
-        // SAFETY: the parent class of a live instance is initialised and alive.
-        let parent =
-            subclass::parent_class::<GObjectClass>(JmapSnoozeShellExtension::parent_type());
-        if let Some(chained) = parent.and_then(|class| class.constructed) {
-            chained(object);
-        }
-
-        // SAFETY: GObject gives a live instance. The extensible is the shell
+unsafe fn constructed(extension: *mut EExtension) {
+    unsafe {
+        // SAFETY: `extension` is live. The extensible is the shell
         // view of this extension.
-        let view: *mut EShellView = e_extension_get_extensible(object.cast::<EExtension>()).cast();
+        let view: *mut EShellView = e_extension_get_extensible(extension).cast();
         if read_string(e_shell_view_get_name(view)).as_deref() != Some("mail") {
             return;
         }
@@ -157,7 +122,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             None,
             0,
         );
-    });
+    }
 }
 
 /// Gets the manager and the reader from `view` and merges the submenu.

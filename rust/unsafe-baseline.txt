@@ -15,12 +15,12 @@ jmap-backend-cal 164
 jmap-backend-cal-module 4
 jmap-backend-collection 275
 jmap-backend-collection-module 4
-jmap-backend-core 456
+jmap-backend-core 464
 jmap-book-sync 0
 jmap-cal-sync 0
 jmap-client 0
 jmap-collection-sync 0
-jmap-config 240
+jmap-config 237
 jmap-config-module 4
 jmap-functional 1
 jmap-ical 0
@@ -31,6 +31,6 @@ jmap-object-sync 0
 jmap-proto 0
 jmap-test-support 0
 jmap-tracing-capture 0
-jmap-ui 371
+jmap-ui 348
 jmap-vcard 0
 po-compile 0

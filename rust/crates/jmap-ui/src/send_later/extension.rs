@@ -39,13 +39,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use eds_sys::{
     CamelAddress, CamelInternetAddress, CamelMedium, CamelMimeMessage,
-    E_SOURCE_EXTENSION_MAIL_SUBMISSION, E_SOURCE_EXTENSION_MAIL_TRANSPORT, EExtension,
-    EExtensionClass, ESource, ESourceBackend, ESourceMailSubmission, ESourceRegistry,
-    camel_address_length, camel_internet_address_get, camel_medium_dup_headers,
-    camel_medium_remove_header, camel_mime_message_get_from, camel_mime_message_get_recipients,
-    camel_name_value_array_free, camel_name_value_array_get, camel_name_value_array_get_length,
-    e_extension_get_extensible, e_extension_get_type, e_source_backend_dup_backend_name,
-    e_source_dup_parent, e_source_mail_submission_dup_transport_uid, e_source_registry_ref_source,
+    E_SOURCE_EXTENSION_MAIL_SUBMISSION, E_SOURCE_EXTENSION_MAIL_TRANSPORT, EExtension, ESource,
+    ESourceBackend, ESourceMailSubmission, ESourceRegistry, camel_address_length,
+    camel_internet_address_get, camel_medium_dup_headers, camel_medium_remove_header,
+    camel_mime_message_get_from, camel_mime_message_get_recipients, camel_name_value_array_free,
+    camel_name_value_array_get, camel_name_value_array_get_length, e_extension_get_extensible,
+    e_source_backend_dup_backend_name, e_source_dup_parent,
+    e_source_mail_submission_dup_transport_uid, e_source_registry_ref_source,
 };
 use evo_sys::{
     E_COMPOSER_HEADER_FROM, EHTMLEditor, EMsgComposer, GTK_BUTTONS_CLOSE,
@@ -76,14 +76,14 @@ use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, g_free, gpointer};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::g_object_set;
 use gobject_sys::{
-    GObject, GObjectClass, GParamSpec, g_object_get_data, g_object_set_data_full, g_object_unref,
+    GObject, GParamSpec, g_object_get_data, g_object_set_data_full, g_object_unref,
     g_signal_connect_data,
 };
 use jmap_backend_core::callback::gcallback;
+use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::{extension_if_present, read_string, take_string};
 use jmap_backend_core::mime::write_message;
-use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 
@@ -163,46 +163,24 @@ unsafe extern "C" fn drop_state(data: gpointer) {
     drop(unsafe { Box::from_raw(data.cast::<RefCell<SendState>>()) });
 }
 
-/// The instance: only the state of `EExtension`.
-#[repr(C)]
-pub struct JmapSendLaterExtension {
-    parent: EExtension,
-}
+/// The Send Later menu of the composer.
+pub struct SendLater;
 
-/// The class: only the state of `EExtensionClass`.
-#[repr(C)]
-pub struct JmapSendLaterExtensionClass {
-    parent_class: EExtensionClass,
-}
+/// The registered `JmapSendLaterExtension` type.
+pub type JmapSendLaterExtension = ExtensionObject<SendLater>;
 
-// SAFETY: both structs are #[repr(C)], and their first fields are the
-// EExtension structs. EExtension derives from GObject.
-unsafe impl ObjectSubclass for JmapSendLaterExtension {
-    const NAME: &'static CStr = c"JmapSendLaterExtension";
-    type Instance = JmapSendLaterExtension;
-    type Class = JmapSendLaterExtensionClass;
+impl Extension for SendLater {
+    const TYPE_NAME: &'static CStr = c"JmapSendLaterExtension";
+    const EXTENSIBLE_NAME: &'static CStr = c"EMsgComposer";
 
-    fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initializes itself.
-        unsafe { e_extension_get_type() }
+    fn extensible_type() -> GType {
+        // SAFETY: no arguments, and the type initialises itself.
+        unsafe { e_msg_composer_get_type() }
     }
 
-    fn class_init_types() -> Vec<GType> {
-        // SAFETY: no arguments, and the type initializes itself. The call
-        // occurs here, before registration, because `class_init` can only
-        // look up the type.
-        vec![unsafe { e_msg_composer_get_type() }]
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: the first field of `class` is `EExtensionClass`.
-        unsafe {
-            (*class).parent_class.extensible_type = subclass::registered_type(c"EMsgComposer")
-        };
-        let object_class = class.cast::<GObjectClass>();
-        // SAFETY: through the chain of first fields, `class` starts with
-        // GObjectClass.
-        unsafe { (*object_class).constructed = Some(constructed) };
+    unsafe fn constructed(extension: *mut EExtension) {
+        // SAFETY: the contract of this method.
+        unsafe { constructed(extension) }
     }
 }
 
@@ -450,20 +428,12 @@ unsafe fn build_menu(
     Some((menu_action, action_group))
 }
 
-/// Calls the parent `constructed`, adds the menu (insensitive), and starts
-/// the gate.
-unsafe extern "C" fn constructed(object: *mut GObject) {
-    guard("JmapSendLaterExtension::constructed", (), || unsafe {
-        // SAFETY: the parent class of a live instance is initialized and alive.
-        let parent = subclass::parent_class::<GObjectClass>(JmapSendLaterExtension::parent_type());
-        if let Some(chained) = parent.and_then(|class| class.constructed) {
-            chained(object);
-        }
-
-        // SAFETY: GObject gives a live instance. The extensible is the
+/// Adds the menu (insensitive) and starts the gate.
+unsafe fn constructed(extension: *mut EExtension) {
+    unsafe {
+        // SAFETY: `extension` is live. The extensible is the
         // composer for which GObject made this extension.
-        let composer: *mut EMsgComposer =
-            e_extension_get_extensible(object.cast::<EExtension>()).cast();
+        let composer: *mut EMsgComposer = e_extension_get_extensible(extension).cast();
         let editor = e_msg_composer_get_editor(composer);
         let Some((menu_action, action_group)) = build_menu(composer, editor) else {
             return;
@@ -502,7 +472,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             0,
         );
         gate(composer.cast());
-    });
+    }
 }
 
 /// # Safety
