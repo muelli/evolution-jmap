@@ -32,6 +32,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::race::Gate;
+use common::race::StorePtr;
 use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError};
 use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
@@ -79,30 +80,6 @@ fn session_body() -> Vec<u8> {
     .unwrap()
 }
 
-/// `JmapStore::detached()` is not a GObject, so it cannot be shared across a
-/// real thread boundary the way Rust's `Sync` would want proof of — exactly
-/// the situation Camel's own vfunc dispatch is already in, reaching the same
-/// instance from several of its own threads through a raw pointer rather than
-/// a typed `&JmapStore`. This test's two background threads never outlive the
-/// `Box<JmapStore>` they point into, which is what makes that sound here too.
-#[derive(Clone, Copy)]
-struct StorePtr(*const JmapStore);
-// SAFETY: every use below dereferences this only while the
-// `Box<JmapStore>` it came from is still alive on the test's main thread.
-// The test joins both threads before the box drops.
-unsafe impl Send for StorePtr {}
-
-impl StorePtr {
-    /// Takes `self` by value instead of reading `.0` at the call site. A
-    /// closure that captures this value captures the whole `Send`
-    /// wrapper. Otherwise, Rust's disjoint-capture rules would capture
-    /// the bare pointer field alone, which is not `Send`.
-    fn borrow<'a>(self) -> &'a JmapStore {
-        // SAFETY: see the type's own doc comment.
-        unsafe { &*self.0 }
-    }
-}
-
 #[test]
 fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight() {
     let gate = Arc::new(Gate::default());
@@ -118,7 +95,8 @@ fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight() {
 
     let store = JmapStore::detached();
     store.store_connection(sync);
-    let store_ptr = StorePtr(&*store as *const JmapStore);
+    // SAFETY: the test joins both threads before `store` drops.
+    let store_ptr = unsafe { StorePtr::new(&store) };
 
     let mailbox = Id::new("mailbox-1");
     let listing = thread::spawn(move || store_ptr.borrow().messages(&mailbox));

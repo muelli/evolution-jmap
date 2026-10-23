@@ -37,6 +37,7 @@ use std::thread;
 
 use common::race::DelayedDeliveryTransport;
 use common::race::Gate;
+use common::race::StorePtr;
 use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
@@ -47,24 +48,6 @@ fn unique_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
-}
-
-/// `JmapStore::detached()` is not a GObject, so it cannot be shared across a
-/// real thread boundary the way Rust's `Sync` would want proof of; see
-/// `folder_listing_race.rs`'s copy of the same wrapper for why that is
-/// sound here too.
-#[derive(Clone, Copy)]
-struct StorePtr(*const JmapStore);
-// SAFETY: every use below dereferences this only while the
-// `Box<JmapStore>` it came from is still alive on the test's main thread.
-// The test joins the background thread before the box drops.
-unsafe impl Send for StorePtr {}
-
-impl StorePtr {
-    fn borrow<'a>(self) -> &'a JmapStore {
-        // SAFETY: see the type's own doc comment.
-        unsafe { &*self.0 }
-    }
 }
 
 /// Mirrors `live_server_folder.rs::connect_for_write`, but installs the
@@ -111,7 +94,8 @@ fn a_folder_created_while_a_refresh_is_in_flight_is_not_lost_to_a_stale_answer_o
     // plain; the gate holds only `Mailbox/changes` requests.
     store.folders(0).expect("initial listing failed");
 
-    let store_ptr = StorePtr(&*store as *const JmapStore);
+    // SAFETY: the test joins the background thread before `store` drops.
+    let store_ptr = unsafe { StorePtr::new(&store) };
     let refresh = thread::spawn(move || {
         store_ptr
             .borrow()

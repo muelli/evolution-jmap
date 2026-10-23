@@ -39,6 +39,7 @@ use std::time::{Duration, Instant};
 
 use common::race::DelayedDeliveryTransport;
 use common::race::Gate;
+use common::race::StorePtr;
 use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
@@ -49,24 +50,6 @@ fn unique_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
-}
-
-/// `JmapStore::detached()` is not a GObject, so it cannot be shared across a
-/// real thread boundary the way Rust's `Sync` would want proof of; see
-/// `disconnect_window.rs`'s copy of the same wrapper for why this is sound
-/// here too.
-#[derive(Clone, Copy)]
-struct StorePtr(*const JmapStore);
-// SAFETY: every use below dereferences this only while the `Box<JmapStore>`
-// it came from is still alive on the test's main thread. The test joins
-// both threads before that box drops.
-unsafe impl Send for StorePtr {}
-
-impl StorePtr {
-    fn borrow<'a>(self) -> &'a JmapStore {
-        // SAFETY: see the type's own doc comment.
-        unsafe { &*self.0 }
-    }
 }
 
 /// Mirrors `live_server_folder_listing_race.rs`'s `connect_for_write_with_gate`.
@@ -114,7 +97,8 @@ fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight_on_the_
         .create_folder(None, &name)
         .expect("create_folder should succeed against the real server");
 
-    let store_ptr = StorePtr(&*store as *const JmapStore);
+    // SAFETY: the test joins both threads before `store` drops.
+    let store_ptr = unsafe { StorePtr::new(&store) };
     let mailbox = created.id.clone();
     let listing = thread::spawn(move || store_ptr.borrow().messages(&mailbox));
 

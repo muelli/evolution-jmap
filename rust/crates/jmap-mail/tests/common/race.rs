@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The parts that the race tests share: a gate that parks one response, and
-//! a transport that parks it.
+//! The parts that the race tests share: a gate that parks one response, a
+//! transport that parks it, and a store pointer for the racing threads.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
+use jmap_mail::store::JmapStore;
 
 /// The longest time a `Gate` wait blocks. A missed signal fails the test and does not hang it.
 pub const GATE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -97,5 +98,36 @@ impl Transport for DelayedDeliveryTransport {
             self.gate.wait_for_release();
         }
         Ok(response)
+    }
+}
+
+/// A raw pointer to a store, for the threads of a race test.
+///
+/// `JmapStore::detached()` is not a GObject, so no `Sync` proof lets the threads
+/// share a `&JmapStore`. Camel's own vfunc dispatch is in the same situation: it
+/// reaches one instance from several threads through a raw pointer.
+#[derive(Clone, Copy)]
+pub struct StorePtr(*const JmapStore);
+
+// SAFETY: `StorePtr::new` makes its caller keep the store alive until the test
+// joins every thread that holds the pointer.
+unsafe impl Send for StorePtr {}
+
+impl StorePtr {
+    /// # Safety
+    ///
+    /// `store` must stay alive until the test joins every thread that holds the
+    /// returned pointer.
+    pub unsafe fn new(store: &JmapStore) -> Self {
+        Self(store)
+    }
+
+    /// Takes `self` by value instead of reading `.0` at the call site. A
+    /// closure that captures this value captures the whole `Send`
+    /// wrapper. Otherwise, Rust's disjoint-capture rules would capture
+    /// the bare pointer field alone, which is not `Send`.
+    pub fn borrow<'a>(self) -> &'a JmapStore {
+        // SAFETY: the contract of `new` keeps the store alive for every use.
+        unsafe { &*self.0 }
     }
 }
