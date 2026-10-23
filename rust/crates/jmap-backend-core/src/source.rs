@@ -83,10 +83,10 @@ use eds_sys::{
     E_CLIENT_ERROR_INVALID_ARG, E_CLIENT_ERROR_TLS_NOT_AVAILABLE,
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_RESOURCE, E_SOURCE_EXTENSION_SECURITY,
     EClientError, ESource, ESourceAuthentication, ESourceResource, ESourceSecurity,
-    e_client_error_create, e_source_authentication_dup_host, e_source_authentication_dup_user,
-    e_source_authentication_get_port, e_source_authentication_get_type,
-    e_source_resource_dup_identity, e_source_resource_get_type, e_source_security_get_secure,
-    e_source_security_get_type,
+    e_client_error_create, e_source_authentication_dup_host, e_source_authentication_dup_method,
+    e_source_authentication_dup_user, e_source_authentication_get_port,
+    e_source_authentication_get_type, e_source_resource_dup_identity, e_source_resource_get_type,
+    e_source_security_get_secure, e_source_security_get_type,
 };
 use eds_sys::{EBackend, e_backend_get_source, e_backend_get_type};
 use glib_sys::GError;
@@ -94,6 +94,84 @@ use glib_sys::GError;
 use crate::error::cstring_lossy;
 use crate::i18n::{translate, translate_with};
 use crate::marshal::{extension_if_present, take_string};
+
+/// The `[Authentication]` and `[Security]` fields of an account.
+///
+/// An absent group gives the defaults of a new, empty extension, except for
+/// `secure`. See [`read_auth`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthFields {
+    pub host: Option<String>,
+    /// 0 means "not set", as in the keyfile.
+    pub port: u16,
+    pub user: Option<String>,
+    pub method: Option<String>,
+    pub secure: bool,
+}
+
+/// Reads the `[Authentication]` and `[Security]` fields of `source`.
+///
+/// This function adds no group to the source. `e_source_get_extension`
+/// creates a group that it cannot find, and a reader that the source owner
+/// does not expect must not change the account file. An empty string is
+/// `None`, as [`take_string`] gives.
+///
+/// An absent `[Security]` group means TLS. `ESourceSecurity:secure` defaults
+/// to FALSE, so a read of a new extension cannot tell "the keyfile has no
+/// `[Security]` group" from "the user disabled TLS". Plain HTTP for the first
+/// case would silently downgrade each hand-written account.
+///
+/// This can run on a worker thread while the main loop frees an old string
+/// in a setter. Thus each string read uses a `dup_` getter.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` that stays alive for the call. This
+/// function only reads it.
+pub unsafe fn read_auth(source: *mut ESource) -> AuthFields {
+    // `e_source_has_extension` finds an extension through the registered
+    // children of `E_TYPE_SOURCE_EXTENSION`. A reference to the GType
+    // registers a type that nothing in this process used yet.
+    // SAFETY: no arguments, and the type system initializes itself.
+    unsafe {
+        e_source_authentication_get_type();
+        e_source_security_get_type();
+    }
+
+    // SAFETY: the source is valid by this function's contract, and the name
+    // is a header constant.
+    let secure = match unsafe {
+        extension_if_present::<ESourceSecurity>(source, E_SOURCE_EXTENSION_SECURITY)
+    } {
+        None => true,
+        // SAFETY: a live extension, by `extension_if_present`'s contract.
+        Some(security) => unsafe { e_source_security_get_secure(security) != 0 },
+    };
+
+    // SAFETY: as above.
+    let Some(auth) = (unsafe {
+        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
+    }) else {
+        return AuthFields {
+            host: None,
+            port: 0,
+            user: None,
+            method: None,
+            secure,
+        };
+    };
+    // SAFETY: a live extension. Each `dup_` getter gives NULL or a copy that
+    // `take_string` frees.
+    unsafe {
+        AuthFields {
+            host: take_string(e_source_authentication_dup_host(auth)),
+            port: e_source_authentication_get_port(auth),
+            user: take_string(e_source_authentication_dup_user(auth)),
+            method: take_string(e_source_authentication_dup_method(auth)),
+            secure,
+        }
+    }
+}
 
 /// What a backend needs from its `ESource` in order to build a client.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,73 +305,29 @@ impl SourceConfig {
     /// `source` must be a valid `ESource`, i.e. the one EDS gave the backend.
     /// This function only reads it, and nothing outlives the call.
     pub unsafe fn from_source(source: *mut ESource) -> Result<Self, SourceError> {
-        // `e_source_get_extension` finds an extension through the registered
-        // children of `E_TYPE_SOURCE_EXTENSION`, so it cannot find a type
-        // that nothing has referenced yet. In a backend, the EDS factory
-        // already registered these types. But in a test binary (or any
-        // process that links libedataserver without using it), the first
-        // lookup would return NULL. A reference to the GType registers it.
-        unsafe {
-            e_source_authentication_get_type();
-            e_source_security_get_type();
-            e_source_resource_get_type();
-        }
+        // SAFETY: the source is valid for the whole call, by this function's
+        // own contract.
+        let auth = unsafe { read_auth(source) };
 
-        // Ask before any `e_source_get_extension`, which *creates* the
-        // extension if it cannot find it. `ESourceSecurity:secure` defaults
-        // to FALSE, so an unconditional read cannot tell "the keyfile has no
-        // [Security] group" from "the user disabled TLS". Plain HTTP for the
-        // first case would silently downgrade each hand-written account.
-        // Absent means secure; present means what it says.
+        // `e_source_has_extension` cannot find an extension type that nothing
+        // has referenced yet. A reference to the GType registers it.
+        // SAFETY: no arguments, and the type system initializes itself.
+        unsafe { e_source_resource_get_type() };
+        // Use the same `extension_if_present` guard as `read_auth`. A source
+        // read for diagnostics or validation must not get an empty
+        // `[Resource]` group only because something read it.
         // SAFETY: the source is valid for the whole call and the name is a
         // header constant.
-        let secure = match unsafe {
-            extension_if_present::<ESourceSecurity>(source, E_SOURCE_EXTENSION_SECURITY)
-        } {
-            None => true,
-            // SAFETY: a live extension, by `extension_if_present`'s contract.
-            Some(security) => unsafe { e_source_security_get_secure(security) != 0 },
-        };
-
-        // Use the same `extension_if_present` guard as for `SECURITY` above,
-        // not `e_source_get_extension` directly. A source read for
-        // diagnostics or validation, which the caller does not own, must not
-        // get an empty `[Authentication]`/`[Resource]` group only because
-        // something read it.
-        // SAFETY: the source is valid for the whole call and the names are
-        // header constants.
-        let auth = unsafe {
-            extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
-        };
-        // SAFETY: as above.
         let resource =
             unsafe { extension_if_present::<ESourceResource>(source, E_SOURCE_EXTENSION_RESOURCE) };
-
-        // An absent extension gives the same defaults that a new, empty
-        // extension would give (NULL host/user/identity, port 0). Thus no
-        // read result changes; only the side effect (a new group) goes away.
-        // This runs on a worker thread, and the main loop can free the old
-        // string in a setter. Thus each read uses a `dup_` getter.
-        // SAFETY: each `Some` pointer is a live extension of the type
-        // `extension_if_present` selected.
-        let host = match auth {
-            Some(auth) => unsafe { take_string(e_source_authentication_dup_host(auth)) },
-            None => None,
-        };
-        let user = match auth {
-            Some(auth) => unsafe { take_string(e_source_authentication_dup_user(auth)) },
-            None => None,
-        };
-        let port = match auth {
-            Some(auth) => unsafe { e_source_authentication_get_port(auth) },
-            None => 0,
-        };
+        // This runs on a worker thread, thus the `dup_` getter.
+        // SAFETY: a live extension, by `extension_if_present`'s contract.
         let resource_id = match resource {
             Some(resource) => unsafe { take_string(e_source_resource_dup_identity(resource)) },
             None => None,
         };
 
-        let target = connect_target(host.as_deref(), port, secure)?;
+        let target = connect_target(auth.host.as_deref(), auth.port, auth.secure)?;
 
         // SAFETY: `source` is valid for the whole call, by this function's
         // own contract.
@@ -301,7 +335,7 @@ impl SourceConfig {
 
         Ok(Self {
             target,
-            user,
+            user: auth.user,
             resource_id,
             rebase_urls,
         })
@@ -455,26 +489,14 @@ pub fn connect_target(
 /// `source` must be a valid `ESource` that stays alive for the call. This
 /// function only reads it.
 pub unsafe fn destination_address(source: *mut ESource) -> Option<(String, u16)> {
-    // SAFETY: registers the extension type, as `SourceConfig::from_source`
-    // does, so a process that has not looked it up yet can find it.
-    unsafe { e_source_authentication_get_type() };
-
-    // `extension_if_present`, not `e_source_get_extension`: a source read for
-    // reachability monitoring, which the caller does not own, must not get
-    // an empty `[Authentication]` group only because something read it.
-    // SAFETY: the source is valid for the whole call and the name is a
-    // header constant.
-    let auth = unsafe {
-        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
-    }?;
-    // SAFETY: a live extension, by `extension_if_present`'s contract. The
-    // `dup_` getter gives a copy that a setter on another thread cannot free.
-    let host = unsafe { take_string(e_source_authentication_dup_host(auth)) }?;
+    // `read_auth` adds no group: a source read for reachability monitoring,
+    // which the caller does not own, must keep its account file.
+    // SAFETY: a valid source, by this function's contract.
+    let AuthFields { host, port, .. } = unsafe { read_auth(source) };
+    let host = host?;
     if host.is_empty() {
         return None;
     }
-    // SAFETY: as above.
-    let port = unsafe { e_source_authentication_get_port(auth) };
     Some((host, if port == 0 { 443 } else { port }))
 }
 
