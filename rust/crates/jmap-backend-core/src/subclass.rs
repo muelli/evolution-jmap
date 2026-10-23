@@ -414,6 +414,77 @@ macro_rules! initialise_parents_before_main {
     };
 }
 
+/// The paths that [`test_module!`](crate::test_module) expands to.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub mod __test_module {
+    pub use glib_sys::{GTRUE, GType, gboolean};
+    pub use gobject_sys::{GTypeModule, GTypeModuleClass, g_type_module_get_type};
+}
+
+/// Defines `$name`, a `GTypeModule` stand-in for the `EModule` that EDS loads.
+///
+/// Its `load` vfunc calls `load` and returns `TRUE`. Its `unload` vfunc calls
+/// `unload`. Without `unload`, the slot stays empty. Each function takes the
+/// `*mut GTypeModule` that GLib passes, and can be safe or `unsafe`.
+#[cfg(feature = "testing")]
+#[macro_export]
+macro_rules! test_module {
+    ($name:ident, $type_name:expr, load = $load:path $(, unload = $unload:path)? $(,)?) => {
+        #[repr(C)]
+        struct $name {
+            parent: $crate::subclass::__test_module::GTypeModule,
+        }
+
+        const _: () = {
+            use $crate::subclass::__test_module::{
+                GTRUE, GType, GTypeModule, GTypeModuleClass, g_type_module_get_type, gboolean,
+            };
+
+            #[repr(C)]
+            struct Class {
+                parent_class: GTypeModuleClass,
+            }
+
+            // SAFETY: both structs are #[repr(C)] and start with the GTypeModule
+            // instance and class structs, and GTypeModule derives from GObject.
+            unsafe impl $crate::subclass::ObjectSubclass for $name {
+                const NAME: &'static ::std::ffi::CStr = $type_name;
+                type Instance = $name;
+                type Class = Class;
+
+                fn parent_type() -> GType {
+                    // SAFETY: no arguments, and the type initialises itself.
+                    unsafe { g_type_module_get_type() }
+                }
+
+                unsafe fn class_init(class: *mut Self::Class) {
+                    #[allow(unused_unsafe)]
+                    unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
+                        // SAFETY: GLib passes the module that it loads.
+                        unsafe { $load(module) };
+                        GTRUE
+                    }
+
+                    // SAFETY: `class` points to an allocated class struct that
+                    // starts with GTypeModuleClass.
+                    let vfuncs = unsafe { &mut (*class).parent_class };
+                    vfuncs.load = Some(module_load);
+                    $(
+                        #[allow(unused_unsafe)]
+                        unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
+                            // SAFETY: GLib passes the module that it unloads.
+                            unsafe { $unload(module) };
+                        }
+
+                        vfuncs.unload = Some(module_unload);
+                    )?
+                }
+            }
+        };
+    };
+}
+
 /// Registers `T` as a static type, or returns the existing `GType` if it is
 /// already registered.
 ///

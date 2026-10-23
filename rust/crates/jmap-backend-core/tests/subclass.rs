@@ -9,16 +9,17 @@
 use jmap_backend_core::subclass::{
     InterfaceDecl, InterfaceImpl, ObjectSubclass, register_dynamic, register_static,
 };
+use jmap_backend_core::test_module;
 use std::ffi::CStr;
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use glib_sys::{GFALSE, GTRUE, gboolean};
+use glib_sys::GFALSE;
 use gobject_sys::{
     GObject, GObjectClass, GTypeInstance, GTypeModule, GTypeModuleClass, GTypePlugin,
     GTypePluginClass, g_object_new, g_object_unref, g_type_class_ref, g_type_class_unref,
-    g_type_interface_peek, g_type_module_get_type, g_type_module_unuse, g_type_module_use,
-    g_type_plugin_get_type, g_type_plugin_use,
+    g_type_interface_peek, g_type_module_unuse, g_type_module_use, g_type_plugin_get_type,
+    g_type_plugin_use,
 };
 
 /// Counts the runs of each trampoline. Thus the test can see the difference
@@ -126,46 +127,81 @@ unsafe impl ObjectSubclass for Dynamic {
     }
 }
 
-/// A `GTypeModule` that registers [`Dynamic`] each time GLib loads it. An EDS
-/// backend module does the same. It is the only way to test the dynamic path
-/// without a shared object to dlopen.
-#[repr(C)]
-struct TestModule {
-    parent: GTypeModule,
-}
-
-#[repr(C)]
-struct TestModuleClass {
-    parent_class: GTypeModuleClass,
-}
-
-// SAFETY: both structs are #[repr(C)] and start with the GTypeModule instance
-// and class structs, and GTypeModule derives from GObject.
-unsafe impl ObjectSubclass for TestModule {
-    const NAME: &'static CStr = c"JmapBackendCoreTestModule";
-    type Instance = TestModule;
-    type Class = TestModuleClass;
-
-    fn parent_type() -> glib_sys::GType {
-        // SAFETY: no arguments, and the type initialises itself.
-        unsafe { g_type_module_get_type() }
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` starts with GTypeModuleClass, which has both slots.
-        let vfuncs = unsafe { &mut (*class).parent_class };
-        vfuncs.load = Some(module_load);
-        vfuncs.unload = Some(module_unload);
-    }
-}
-
-unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib passes the module it is loading.
+/// Registers [`Dynamic`] on `module`, as an EDS backend module's entry point does.
+///
+/// # Safety
+///
+/// `module` must be a valid `GTypeModule`.
+unsafe fn load_dynamic(module: *mut GTypeModule) {
+    // SAFETY: the caller gives a valid module.
     unsafe { register_dynamic::<Dynamic>(module) };
-    GTRUE
 }
 
-unsafe extern "C" fn module_unload(_module: *mut GTypeModule) {}
+fn unload_nothing(_module: *mut GTypeModule) {}
+
+// A `GTypeModule` that registers [`Dynamic`] each time GLib loads it. It is the
+// only way to test the dynamic path without a shared object to dlopen.
+test_module!(
+    TestModule,
+    c"JmapBackendCoreTestModule",
+    load = load_dynamic,
+    unload = unload_nothing,
+);
+
+static LOADS: AtomicU32 = AtomicU32::new(0);
+static UNLOADS: AtomicU32 = AtomicU32::new(0);
+
+fn count_load(_module: *mut GTypeModule) {
+    LOADS.fetch_add(1, Ordering::SeqCst);
+}
+
+fn count_unload(_module: *mut GTypeModule) {
+    UNLOADS.fetch_add(1, Ordering::SeqCst);
+}
+
+test_module!(
+    CountingModule,
+    c"JmapBackendCoreCountingTestModule",
+    load = count_load,
+    unload = count_unload,
+);
+
+test_module!(
+    LoadOnlyModule,
+    c"JmapBackendCoreLoadOnlyTestModule",
+    load = count_load
+);
+
+/// `test_module!` connects `load` and `unload` to the given functions.
+#[test]
+fn a_test_module_calls_its_load_and_unload_functions() {
+    let gtype = register_static::<CountingModule>();
+    // SAFETY: the type is registered, and GTypeModule has no construct properties.
+    let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
+    assert!(!module.is_null(), "g_object_new returned NULL");
+
+    // SAFETY: `module` is a GTypeModule, and the use has a matching unuse.
+    unsafe {
+        assert_ne!(g_type_module_use(module), GFALSE, "the module did not load");
+        assert_eq!(LOADS.load(Ordering::SeqCst), 1);
+        assert_eq!(UNLOADS.load(Ordering::SeqCst), 0);
+        g_type_module_unuse(module);
+    }
+    assert_eq!(UNLOADS.load(Ordering::SeqCst), 1);
+}
+
+/// Without `unload`, `test_module!` leaves the `unload` slot empty.
+#[test]
+fn a_test_module_without_unload_leaves_the_slot_empty() {
+    let gtype = register_static::<LoadOnlyModule>();
+    // SAFETY: the type is registered. The class starts with GTypeModuleClass.
+    unsafe {
+        let class = g_type_class_ref(gtype).cast::<GTypeModuleClass>();
+        assert!((*class).load.is_some(), "the load slot is empty");
+        assert!((*class).unload.is_none(), "the unload slot is set");
+        g_type_class_unref(class.cast());
+    }
+}
 
 /// The reason why [`register_dynamic`] cannot use the "already registered,
 /// nothing to do" shortcut that [`register_static`] must use.
