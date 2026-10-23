@@ -39,7 +39,7 @@ static void
 observe (const gchar *key,
          const gchar *value)
 {
-	g_print ("%s=%s\n", key, value);
+	g_print ("%s=%s\n", key, value ? value : "(null)");
 }
 
 static void
