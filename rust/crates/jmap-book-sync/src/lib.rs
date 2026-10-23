@@ -405,7 +405,7 @@ fn refused(card: &ContactCard, error: jmap_client::Error) -> SyncError {
         .flat_map(|media| media.values())
         .filter(|media| media.kind.as_deref() == Some("photo"))
         .map(|media| media.uri.as_str())
-        .filter(|uri| uri.starts_with("data:"))
+        .filter(|uri| is_data_uri(uri))
         .collect();
     let inline_octets: usize = photos.iter().map(|uri| uri.len()).sum();
     let card_octets = serde_json::to_vec(card).map_or(0, |json| json.len());
@@ -447,6 +447,15 @@ fn is_refused_for_size(error: &jmap_client::Error) -> bool {
     }
 }
 
+/// The `data:` URI marker for base64 content (RFC 2397). It has no case.
+const BASE64_MARKER: &str = ";base64";
+
+/// Whether `uri` is a `data:` URI (RFC 2397). A URI scheme has no case (RFC 3986 section 3.1).
+fn is_data_uri(uri: &str) -> bool {
+    uri.get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+}
+
 /// The size of the content in a `data:` URI (RFC 2397), decoded from base64
 /// when the URI declares base64. Other encodings give an approximate size.
 /// Every inline `PHOTO` uses base64.
@@ -454,7 +463,10 @@ fn decoded_octets(uri: &str) -> u64 {
     let Some((header, payload)) = uri.split_once(',') else {
         return 0;
     };
-    if !header.ends_with(";base64") {
+    let declares_base64 = header.len() >= BASE64_MARKER.len()
+        && header.as_bytes()[header.len() - BASE64_MARKER.len()..]
+            .eq_ignore_ascii_case(BASE64_MARKER.as_bytes());
+    if !declares_base64 {
         return payload.len() as u64;
     }
     let payload = payload.trim_end_matches('=');
@@ -523,5 +535,33 @@ mod tests {
         assert_eq!(decoded_octets("data:image/jpeg;base64,aGVsbG8="), 5);
         assert_eq!(decoded_octets("data:,hello"), 5);
         assert_eq!(decoded_octets("data:nothing"), 0);
+    }
+
+    #[test]
+    fn a_too_large_photo_with_an_upper_case_scheme_is_blamed() {
+        let photo = "aGVsbG8t".repeat(1000);
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Vera\r\nPHOTO:data:image/jpeg;base64,{photo}\r\nEND:VCARD\r\n"
+        );
+        let mut card = vcard_to_card(&vcard).unwrap();
+        for media in card.media.iter_mut().flat_map(BTreeMap::values_mut) {
+            media.uri = media
+                .uri
+                .replacen("data:", "DATA:", 1)
+                .replacen(";base64", ";BASE64", 1);
+        }
+        let error = jmap_client::Error::Set(SetError::new(set::TOO_LARGE));
+        assert!(matches!(
+            refused(&card, error),
+            SyncError::PhotoTooLarge {
+                photo_octets: 6_000
+            }
+        ));
+    }
+
+    #[test]
+    fn a_data_uri_in_upper_case_measures_its_decoded_content() {
+        assert_eq!(decoded_octets("DATA:image/jpeg;BASE64,aGVsbG8="), 5);
+        assert_eq!(decoded_octets("Data:image/jpeg;Base64,aGVsbG8="), 5);
     }
 }
