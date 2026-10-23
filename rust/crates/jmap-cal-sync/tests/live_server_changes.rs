@@ -46,7 +46,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Same as `jmap-book-sync/tests/live_server_changes.rs::connect_for_write`.
+/// Same as `jmap_test_support::connect_for_write`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
@@ -62,7 +62,7 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// Same as `jmap-book-sync/tests/live_server_changes.rs::connect_recipient`.
+/// Same as `jmap_test_support::connect_recipient`.
 fn connect_recipient() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(

@@ -83,7 +83,7 @@ fn connect_recipient() -> Option<(Client, String)> {
     Some((client, user))
 }
 
-/// Same as `jmap-book-sync/tests/live_server_shared_book.rs::is_forbidden`.
+/// Same as `is_forbidden` in `jmap-book-sync/tests/live_server_shared_book.rs`.
 /// Without a grant, the server refuses the full method, or accepts the method
 /// but rejects the record.
 fn is_forbidden(error: &SyncError) -> bool {

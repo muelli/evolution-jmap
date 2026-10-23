@@ -34,69 +34,19 @@
 //! The test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` or
 //! `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset.
 
-use std::env;
-
 use jmap_book_sync::{BookSync, SyncError};
-use jmap_client::{Client, Credentials, Error as ClientError};
 use jmap_proto::contacts::AddressBook;
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::session::{CAPABILITY_CONTACTS, CAPABILITY_PRINCIPALS};
+use jmap_test_support::{connect_owner, connect_recipient_with_user, unique_suffix};
 use serde_json::json;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Mirrors `jmap-cal-sync/tests/live_server_shared_freebusy.rs::connect_owner`.
-fn connect_owner() -> Option<(Client, String)> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user.clone(), password))
-        .expect("could not fetch the session document for the write-test account");
-    Some((client, user))
-}
-
-/// Mirrors `jmap-cal-sync/tests/live_server_shared_freebusy.rs::connect_recipient`.
-fn connect_recipient() -> Option<(Client, String)> {
-    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
-    );
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user.clone(), password))
-        .expect("could not fetch the session document for the recipient account");
-    Some((client, user))
-}
 
 /// A missing grant shows in one of two ways. The server refuses the whole
 /// method (no query or get rights, RFC 8620 §3.6.2). Or the method runs, but
 /// the server rejects the record (query and get rights, but no write right, RFC
 /// 8620 §5.3). The create of `save_contact` gets the second error.
 fn is_forbidden(error: &SyncError) -> bool {
-    matches!(
-        error,
-        SyncError::Client(ClientError::Method(method_error))
-            if method_error.error_type == "forbidden"
-    ) || matches!(
-        error,
-        SyncError::Client(ClientError::Set(set_error))
-            if set_error.error_type == "forbidden"
-    )
+    matches!(error, SyncError::Client(error) if jmap_test_support::is_forbidden(error))
 }
 
 /// Asserts that the recipient cannot see the contact of the owner through
@@ -147,7 +97,7 @@ fn a_shared_address_books_contacts_are_readable_then_writable_as_the_grant_widen
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the shared book test");
         return;
     };
-    let Some((recipient, recipient_address)) = connect_recipient() else {
+    let Some((recipient, recipient_address)) = connect_recipient_with_user() else {
         eprintln!(
             "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the shared book test"
         );

@@ -37,13 +37,13 @@
 //!
 //! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
-use std::env;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use jmap_book_sync::{BookSync, SyncError};
-use jmap_client::{Client, Credentials, Error as ClientError};
+use jmap_client::Error as ClientError;
 use jmap_proto::session::CAPABILITY_CONTACTS;
+use jmap_test_support::{connect_for_write, env_count, unique_suffix};
 
 /// Retries `attempt` on a 429 (`Http.rateLimitAuthenticated`) up to 19 times,
 /// with a 5-second sleep before each retry. Thus a scale run does not fail when
@@ -61,37 +61,8 @@ fn retrying<T>(mut attempt: impl FnMut() -> Result<T, SyncError>) -> Result<T, S
     unreachable!("the loop above always returns on its last iteration (remaining == 0)")
 }
 
-/// Returns a value unique to this process run, so a leftover contact from
-/// another run never matches this run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Mirrors `jmap-cal-sync/tests/live_server.rs::connect_for_write`, but returns
-/// only the client.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
-
 fn batch_size() -> usize {
-    env::var("JMAP_SCALE_TEST_CARDS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(500)
+    env_count("JMAP_SCALE_TEST_CARDS", 500)
 }
 
 /// Returns the peak resident set size of this process, read from `/proc`. Linux
