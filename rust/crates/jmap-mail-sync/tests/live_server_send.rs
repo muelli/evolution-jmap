@@ -50,54 +50,10 @@
 use std::env;
 use std::time::Duration;
 
-use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{FolderRole, MailSync, Outgoing};
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 use jmap_proto::session::CAPABILITY_MAIL;
-
-/// Returns a value unique to this run, so that a message from a different run
-/// cannot match.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Same as `connect_for_write` in `jmap-client/tests/live_server.rs`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    Some(
-        Client::builder()
-            .rebase_urls_to_origin(rebase)
-            .connect(&origin, Credentials::basic(user, password))
-            .expect("could not fetch the session document for the write-test account"),
-    )
-}
-
-/// Same as `connect_recipient` in `jmap-client/tests/live_server.rs`.
-fn connect_recipient() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
-    );
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    Some(
-        Client::builder()
-            .rebase_urls_to_origin(rebase)
-            .connect(&origin, Credentials::basic(user, password))
-            .expect("could not fetch the session document for the recipient account"),
-    )
-}
+use jmap_test_support::{connect_for_write, connect_recipient, unique_suffix};
 
 /// Sends a message from the write-test account to the recipient account and
 /// polls `MailSync::messages` of the recipient until the message arrives.

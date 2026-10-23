@@ -58,55 +58,12 @@
 //! variables is set but its `_PASSWORD` variable or `JMAP_LIVE_SERVER_URL` is
 //! unset.
 
-use std::env;
-
-use jmap_client::{Client, Credentials, Error as ClientError};
 use jmap_mail_sync::{Filing, Keywords, MailSync, SyncError};
 use jmap_proto::mail::Mailbox;
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::session::{CAPABILITY_MAIL, CAPABILITY_PRINCIPALS};
+use jmap_test_support::{connect_owner, connect_recipient_with_user, unique_suffix};
 use serde_json::json;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Same as `connect_owner` in `jmap-book-sync/tests/live_server_shared_book.rs`.
-fn connect_owner() -> Option<(Client, String)> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user.clone(), password))
-        .expect("could not fetch the session document for the write-test account");
-    Some((client, user))
-}
-
-/// Same as `connect_recipient` in
-/// `jmap-book-sync/tests/live_server_shared_book.rs`.
-fn connect_recipient() -> Option<(Client, String)> {
-    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
-    );
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user.clone(), password))
-        .expect("could not fetch the session document for the recipient account");
-    Some((client, user))
-}
 
 /// Returns `true` for a `forbidden` method error or a `forbidden` set error.
 ///
@@ -115,15 +72,7 @@ fn connect_recipient() -> Option<(Client, String)> {
 /// (RFC 8620 §5.3). The `mailboxIds` patch of `file_message` gets the second
 /// error.
 fn is_forbidden(error: &SyncError) -> bool {
-    matches!(
-        error,
-        SyncError::Client(ClientError::Method(method_error))
-            if method_error.error_type == "forbidden"
-    ) || matches!(
-        error,
-        SyncError::Client(ClientError::Set(set_error))
-            if set_error.error_type == "forbidden"
-    )
+    matches!(error, SyncError::Client(error) if jmap_test_support::is_forbidden(error))
 }
 
 /// Asserts that `recipient_sync` cannot see the message of the owner in a
@@ -183,7 +132,7 @@ fn a_shared_mailboxs_messages_are_readable_then_writable_as_the_grant_widens() {
         );
         return;
     };
-    let Some((recipient, recipient_address)) = connect_recipient() else {
+    let Some((recipient, recipient_address)) = connect_recipient_with_user() else {
         eprintln!(
             "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the shared mailbox test"
         );
