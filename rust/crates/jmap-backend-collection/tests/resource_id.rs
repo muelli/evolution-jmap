@@ -130,8 +130,8 @@ fn child(kind: ChildKind, collection: &str) -> Child {
 
 #[test]
 fn the_extension_names_are_the_ones_eds_defines() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `jmap-collection-sync` has the names as string literals, because it
         // must build without the EDS headers. Each name is the argument to
         // `e_source_get_extension` and a group of a `.source` file. A spelling
@@ -161,8 +161,8 @@ fn the_extension_names_are_the_ones_eds_defines() {
 
 #[test]
 fn an_address_book_child_is_read_back_as_the_resource_id_it_was_created_under() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = TestSource::new()
             .with_extension(EXTENSION_ADDRESS_BOOK)
             .with_identity("AB1");
@@ -173,8 +173,8 @@ fn an_address_book_child_is_read_back_as_the_resource_id_it_was_created_under() 
 
 #[test]
 fn a_calendar_child_is_read_back_as_a_calendar() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = TestSource::new()
             .with_extension(EXTENSION_CALENDAR)
             .with_identity("Cal1");
@@ -185,8 +185,8 @@ fn a_calendar_child_is_read_back_as_a_calendar() {
 
 #[test]
 fn the_two_kinds_of_child_of_one_jmap_id_do_not_share_a_resource_id() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This is why this backend overrides the vfunc. The EDS implementation
         // returns `[Resource] Identity` without change. A JMAP account can give
         // the same id to an address book and a calendar. RFC 8620 ids are unique
@@ -208,8 +208,8 @@ fn the_two_kinds_of_child_of_one_jmap_id_do_not_share_a_resource_id() {
 
 #[test]
 fn every_child_this_backend_describes_reads_back_as_itself() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This round trip must be correct for each child that `populate`
         // creates. This function must read what `Child::settings` writes.
         // Otherwise, the next start deletes the child from the cache.
@@ -237,8 +237,8 @@ fn every_child_this_backend_describes_reads_back_as_itself() {
 
 #[test]
 fn a_source_of_no_kind_this_backend_creates_is_not_claimed() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // EDS calls `dup_resource_id` for each `.source` in the cache directory
         // of the backend. A claim on a source that is not ours puts it in the
         // unclaimed-resources table of EDS. A real child can have the same name.
@@ -253,8 +253,8 @@ fn a_source_of_no_kind_this_backend_creates_is_not_claimed() {
 
 #[test]
 fn a_child_with_no_identity_is_not_claimed_and_is_not_given_one() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This test examines two things. The second is less clear:
         // `e_source_get_extension` *creates* the extension that it gets. A read of
         // the identity with it adds an empty `[Resource]` group to each source
@@ -272,8 +272,8 @@ fn a_child_with_no_identity_is_not_claimed_and_is_not_given_one() {
 
 #[test]
 fn an_empty_identity_is_no_identity() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A `.source` with `Identity=` gives the empty string. An empty JMAP id
         // is not an id. All such children would share the answer
         // `"addressbook:"`.
@@ -298,8 +298,8 @@ unsafe extern "C" fn count_message(
 
 #[test]
 fn a_null_source_is_not_claimed_rather_than_dereferenced() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // EDS does not pass NULL. The vfunc is a C entry point, and a NULL check
         // is the easiest protection against an incorrect caller. Without the
         // check, `e_source_has_extension` also refuses NULL, but it logs an
@@ -333,8 +333,8 @@ fn a_null_source_is_not_claimed_rather_than_dereferenced() {
 
 #[test]
 fn a_source_with_both_kinds_is_read_as_an_address_book() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This backend never writes such a source, but a user can edit one. The
         // order of `KIND_EXTENSIONS` decides its resource id. A change of the
         // order changes the id of an existing cache file, and EDS then deletes it.

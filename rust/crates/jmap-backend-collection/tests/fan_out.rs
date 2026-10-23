@@ -344,8 +344,8 @@ fn display_name(source: *mut ESource) -> Option<String> {
 
 #[test]
 fn every_collection_the_login_holds_becomes_a_child_of_the_collection() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The full fan-out: after one login, each address book and calendar from
         // the server is a child source with the server of the account.
         let server = MockServer::builder().start();
@@ -380,8 +380,8 @@ fn every_collection_the_login_holds_becomes_a_child_of_the_collection() {
 
 #[test]
 fn every_child_reads_back_under_the_resource_id_it_was_created_under() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // EDS needs this pairing. For each child, `dup_resource_id` must return
         // the string that the fan-out gave to `e_collection_backend_new_child`.
         // If not, EDS deletes the cache of the child.
@@ -410,8 +410,8 @@ fn every_child_reads_back_under_the_resource_id_it_was_created_under() {
 
 #[test]
 fn each_child_is_written_with_the_server_the_account_names() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The children get the connection from the collection `ESource`, not
         // from the discovery URL. The origin comes from the same read. Otherwise
         // a child could get contacts from a server that the account does not name.
@@ -457,8 +457,8 @@ fn fanout_of(resources: Vec<Resource>) -> Fanout {
 
 #[test]
 fn a_childs_may_delete_reaches_set_remote_deletable_and_absence_stays_deletable() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `myRights.mayDelete` goes to the EDS `remote-deletable` through
         // `Resource::deletable` -> `Child::remote_deletable` ->
         // `Collection::set_remote_deletable`. An absent `myRights` is the usual
@@ -491,8 +491,8 @@ fn a_childs_may_delete_reaches_set_remote_deletable_and_absence_stays_deletable(
 
 #[test]
 fn a_rediscovery_with_changed_rights_updates_remote_deletable_on_the_existing_child() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `offer_deletion` in `child_added` runs only once, when a child is
         // first exported. Thus `adopt`, which runs on each fan-out, must apply a
         // change of rights to an existing child.
@@ -523,8 +523,8 @@ fn a_rediscovery_with_changed_rights_updates_remote_deletable_on_the_existing_ch
 
 #[test]
 fn a_child_created_now_is_exported_and_one_drawn_from_the_cache_is_not() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_collection_backend_new_child` can return a child from the cache of
         // previous sessions. The `populate` that claimed that child exported it.
         // Like the EDS collection backend, this backend exports only new sources.
@@ -562,8 +562,8 @@ fn a_child_created_now_is_exported_and_one_drawn_from_the_cache_is_not() {
 
 #[test]
 fn nothing_is_exported_before_all_of_it_is_written() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The rule of `child_source`: if a setting cannot be written, the child
         // can be without a necessary property. Without `[Resource] Identity`, EDS
         // deletes the cache. Without `[Authentication] Host`, the child has no
@@ -598,8 +598,8 @@ fn nothing_is_exported_before_all_of_it_is_written() {
 
 #[test]
 fn adopt_releases_exactly_the_reference_new_child_handed_over() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_collection_backend_new_child` is `(transfer full)`. If `adopt`
         // keeps the reference after it returns, the source leaks. If it releases
         // the reference twice, it frees a source that a different owner holds.
@@ -650,8 +650,8 @@ fn adopt_releases_exactly_the_reference_new_child_handed_over() {
 
 #[test]
 fn a_resource_id_eds_refuses_costs_that_child_and_no_other() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_collection_backend_new_child` warns and returns NULL when it cannot
         // claim a resource. Then only that child is missing from the sidebar. The
         // fan-out must not stop at the first NULL.
@@ -680,8 +680,8 @@ fn a_resource_id_eds_refuses_costs_that_child_and_no_other() {
 
 #[test]
 fn the_children_the_login_no_longer_warrants_are_removed() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The removal part of a populate. These sources have no D-Bus object, so
         // EDS refuses the removal. The test checks which children the fan-out
         // tried to remove, as the report shows.
@@ -717,8 +717,8 @@ fn the_children_the_login_no_longer_warrants_are_removed() {
 
 #[test]
 fn the_children_a_collection_has_are_listed_before_any_new_one_is_created() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The removal is correct only with this order. A list made after the
         // creation would contain the new children of this fan-out. Only the
         // answer of `Fanout::is_obsolete` would then prevent their removal.
@@ -744,8 +744,8 @@ fn the_children_a_collection_has_are_listed_before_any_new_one_is_created() {
 
 #[test]
 fn a_part_the_user_switched_off_creates_no_child_and_removes_none() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The dormant case. With contacts disabled, the fan-out does not list
         // address books, so it creates none. It keeps the children of that part,
         // so that the same source with its cache and uid comes back later.
@@ -774,8 +774,8 @@ fn a_part_the_user_switched_off_creates_no_child_and_removes_none() {
 
 #[test]
 fn a_login_that_cannot_be_reached_touches_no_child() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The connection error occurs before the fan-out lists, creates or removes
         // children. Thus a server that is down does not empty the sidebar.
         let collection = Collection {

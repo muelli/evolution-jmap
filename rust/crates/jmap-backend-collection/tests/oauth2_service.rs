@@ -116,8 +116,8 @@ fn source_naming_this_service() -> *mut ESource {
 /// that nothing instantiates also passes it.
 #[test]
 fn the_registry_finds_the_jmap_service_once_the_module_has_loaded() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let gtype = register_static::<TestModule>();
         assert_ne!(gtype, 0, "the stand-in module type did not register");
 

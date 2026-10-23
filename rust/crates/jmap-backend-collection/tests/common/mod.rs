@@ -28,6 +28,9 @@ pub const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// If `f` completes in time, this function returns its result. If `f` panics,
 /// this function also panics. If `f` takes too long, this function panics
 /// immediately with a timeout failure.
+///
+/// Lock a test lock before you call this function. The time limit must not
+/// include the wait for the lock.
 pub fn with_timeout<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
     with_timeout_duration(TEST_TIMEOUT, f)
 }

@@ -213,8 +213,8 @@ impl Drop for ServerSide {
 
 #[test]
 fn an_address_book_child_names_the_address_book_it_stands_for() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = Source::child_of(ChildKind::AddressBook, "AB1");
 
         assert_eq!(
@@ -229,8 +229,8 @@ fn an_address_book_child_names_the_address_book_it_stands_for() {
 
 #[test]
 fn a_calendar_child_names_the_calendar_it_stands_for() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The result is the pair, not only the id. An address book and a
         // calendar can have the same id (RFC 8620 §1.2). The kind selects the
         // `/set` call that destroys the collection.
@@ -248,8 +248,8 @@ fn a_calendar_child_names_the_calendar_it_stands_for() {
 
 #[test]
 fn a_source_that_is_not_a_child_of_this_backend_names_nothing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The feature depends on this rule. `delete_resource_sync` gets the
         // source that the user clicked "Delete" on. A source without our
         // `[Resource] Identity` has no collection to destroy. Examples are a mail
@@ -264,8 +264,8 @@ fn a_source_that_is_not_a_child_of_this_backend_names_nothing() {
 
 #[test]
 fn a_child_that_names_a_kind_and_no_identity_names_nothing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A half-written source is not ours. The address book extension
         // identifies the `/set` call, but not the object.
         let source = Source::new("jmap-half-written");
@@ -284,8 +284,8 @@ fn a_child_that_names_a_kind_and_no_identity_names_nothing() {
 
 #[test]
 fn reading_the_doomed_collection_does_not_give_the_source_an_extension_it_lacked() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_source_get_extension` *creates* an extension that it cannot find.
         // This vfunc gets sources that other parts of Evolution own. A read of
         // `[Resource]` would write a group into each of them.
@@ -300,8 +300,8 @@ fn reading_the_doomed_collection_does_not_give_the_source_an_extension_it_lacked
 
 #[test]
 fn a_child_of_this_backend_is_offered_for_deletion() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This flag makes Evolution show "Delete" on a JMAP address book.
         // `server_side_source_remote_delete_sync()` refuses unless the child has
         // `remote-deletable` set. Without the flag, the vfunc is unreachable.
@@ -321,8 +321,8 @@ fn a_child_of_this_backend_is_offered_for_deletion() {
 
 #[test]
 fn a_source_this_backend_did_not_write_is_not_offered_for_deletion() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `child_added` fires for each source under this collection, mail
         // sources included. This backend cannot delete those sources, so it must
         // not show "Delete" for them. Otherwise, `delete_resource_sync` gets a
@@ -339,8 +339,8 @@ fn a_source_this_backend_did_not_write_is_not_offered_for_deletion() {
 
 #[test]
 fn a_shared_child_is_left_to_its_rights_rather_than_offered_for_deletion() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The deletion of a shared collection deletes the collection of the
         // owner for all users. A cached shared child gets to `child_added` before
         // contact with the server. Thus the permissive default of
@@ -370,8 +370,8 @@ fn a_shared_child_is_left_to_its_rights_rather_than_offered_for_deletion() {
 
 #[test]
 fn deleting_a_child_takes_its_collection_off_the_server() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The full vfunc without the instance. The test creates a collection on
         // a real mock and writes a child source for it as a fan-out does. Then
         // it deletes the collection from the data in that source.

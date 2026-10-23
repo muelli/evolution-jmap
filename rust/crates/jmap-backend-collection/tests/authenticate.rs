@@ -263,8 +263,8 @@ fn never(_: Login) -> Result<(), Error> {
 
 #[test]
 fn an_account_with_nothing_switched_on_is_accepted_without_being_contacted() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The user disabled all parts, so there is nothing to discover. ERROR
         // would show a dialog for an account that the user disabled on purpose.
         // REJECTED would discard a password that the backend did not try.
@@ -279,8 +279,8 @@ fn an_account_with_nothing_switched_on_is_accepted_without_being_contacted() {
 
 #[test]
 fn a_switched_off_account_is_not_refused_for_a_server_it_never_needed() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The backend reads the parts before the server. An account with all
         // parts disabled needs no host, so a missing host is not an error here.
         let source = TestSource::new().parts(Parts::NONE);
@@ -294,8 +294,8 @@ fn a_switched_off_account_is_not_refused_for_a_server_it_never_needed() {
 
 #[test]
 fn an_account_that_names_no_server_is_an_error_and_never_a_prompt() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A prompt cannot supply a host. REQUIRED here would show the dialog
         // again after each answer.
         let source = TestSource::new().parts(Parts::ALL);
@@ -312,8 +312,8 @@ fn an_account_that_names_no_server_is_an_error_and_never_a_prompt() {
 
 #[test]
 fn a_plain_http_account_is_refused_before_a_password_is_sent() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The rule comes from `jmap_backend_core::source::origin`. This backend
         // contacts the server first, and its first request would send the
         // credentials.
@@ -329,8 +329,8 @@ fn a_plain_http_account_is_refused_before_a_password_is_sent() {
 
 #[test]
 fn an_account_with_a_user_and_no_stored_password_asks_for_one() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // EDS passes NULL before it asks libsecret. The account names a user, so
         // it is not anonymous. Only REQUIRED causes the prompt that lets the user
         // complete the account.
@@ -346,8 +346,8 @@ fn an_account_with_a_user_and_no_stored_password_asks_for_one() {
 
 #[test]
 fn an_empty_stored_password_is_tried_rather_than_prompted_for() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The rule of `marshal::password`: an empty stored password is present,
         // not absent. If it were absent, an empty answer to the prompt would
         // cause a new prompt forever. A rejection from the server ends the loop.
@@ -373,8 +373,8 @@ fn an_empty_stored_password_is_tried_rather_than_prompted_for() {
 
 #[test]
 fn an_oauth2_account_is_never_treated_as_anonymous() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The setup UI of this project can write an OAuth 2.0 account with no
         // `[Authentication] User`. The identity comes from the consent, not from
         // a typed field. If the backend read a missing user as anonymous, it would
@@ -399,8 +399,8 @@ fn an_oauth2_account_is_never_treated_as_anonymous() {
 
 #[test]
 fn a_secret_store_failure_reports_error_and_dbus_error_code() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let failure = LoginError::Credentials(ConnectError::SecretStore(
             "the login keyring is locked".to_owned(),
         ));
@@ -421,8 +421,8 @@ fn a_secret_store_failure_reports_error_and_dbus_error_code() {
 
 #[test]
 fn an_api_token_account_is_sent_as_bearer_not_basic() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The "API Token" method: the stored secret must reach the fan-out as
         // `Credentials::Bearer`, as `connect_with` sends it for the address
         // book, calendar and mail backends. A Bearer-only JMAP endpoint answers
@@ -448,8 +448,8 @@ fn an_api_token_account_is_sent_as_bearer_not_basic() {
 
 #[test]
 fn an_api_token_account_with_no_stored_token_asks_for_one() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // As in `an_account_with_a_user_and_no_stored_password_asks_for_one`: an
         // API-token account with no secret in libsecret must prompt. It must not
         // fan out with an empty Bearer token.
@@ -465,8 +465,8 @@ fn an_api_token_account_with_no_stored_token_asks_for_one() {
 
 #[test]
 fn an_account_with_no_user_is_authenticated_anonymously() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `jmap-mockd` and a development Stalwart accept anonymous access. A real
         // server answers with a 401, which causes a prompt. A refusal here would
         // only break the anonymous case.
@@ -489,8 +489,8 @@ fn an_account_with_no_user_is_authenticated_anonymously() {
 
 #[test]
 fn the_fan_out_is_given_the_server_the_account_names_and_the_parts_it_left_on() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The fan-out gets all its data from one read of the account. Thus the
         // discovery server and the server written into the children are the same.
         let source = account().parts(Parts {
@@ -536,8 +536,8 @@ fn the_fan_out_is_given_the_server_the_account_names_and_the_parts_it_left_on() 
 
 #[test]
 fn only_a_401_makes_evolution_ask_for_the_password_again() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The rule of `jmap_backend_core::connect` for the book and calendar
         // backends also applies to this vfunc. REJECTED makes Evolution discard
         // the stored password. A 403 or a server that is down must not give
@@ -573,8 +573,8 @@ fn only_a_401_makes_evolution_ask_for_the_password_again() {
 
 #[test]
 fn a_fan_out_that_worked_sets_no_error() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This is the GLib convention. EDS reads the out-parameter for each
         // result, so a stale `GError` would report a good account as broken.
         let source = account();
@@ -589,8 +589,8 @@ fn a_fan_out_that_worked_sets_no_error() {
 
 #[test]
 fn a_successful_fan_out_pushes_the_same_credentials_to_already_running_children() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The same as `e_collection_backend_authenticate_children()` in EWS. The
         // collection gives the credentials to its running address-book and
         // calendar children immediately. Otherwise each child gets the same
@@ -619,8 +619,8 @@ fn a_successful_fan_out_pushes_the_same_credentials_to_already_running_children(
 
 #[test]
 fn a_fan_out_that_fails_pushes_no_credentials_to_children() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This login did not authenticate, so there are no credentials to give
         // to the children.
         let source = account();
@@ -651,8 +651,8 @@ fn a_fan_out_that_fails_pushes_no_credentials_to_children() {
 
 #[test]
 fn an_account_with_nothing_switched_on_pushes_no_credentials_to_children() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The fan-out does not run for this account (see
         // `an_account_with_nothing_switched_on_is_accepted_without_being_contacted`),
         // so there are no credentials to push.
@@ -675,8 +675,8 @@ fn an_account_with_nothing_switched_on_pushes_no_credentials_to_children() {
 
 #[test]
 fn a_backend_with_no_account_is_an_error_rather_than_a_crash() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // EDS constructs the backend from a source, so this is not expected. But a
         // NULL dereference in `evolution-source-registry` stops all accounts in
         // the session.
@@ -695,8 +695,8 @@ fn a_backend_with_no_account_is_an_error_rather_than_a_crash() {
 
 #[test]
 fn the_fan_out_is_stopped_by_the_cancellable_and_nothing_after_it_is() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The Stop button must reach a discovery through a client that this
         // function does not see. The cancellation must also end with the call,
         // because it belongs to this operation, not to the account.

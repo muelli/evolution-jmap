@@ -158,8 +158,8 @@ impl Prepared {
 /// because it calls `camel_provider_get` for the empty protocol.
 #[test]
 fn the_mail_account_is_served_by_the_jmap_camel_provider() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prepared = Prepared::new();
 
         assert!(
@@ -184,8 +184,8 @@ fn the_mail_account_is_served_by_the_jmap_camel_provider() {
 /// for IMAP accounts.
 #[test]
 fn the_transport_is_the_same_provider_and_not_a_second_one() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prepared = Prepared::new();
 
         assert!(
@@ -214,8 +214,8 @@ fn the_transport_is_the_same_provider_and_not_a_second_one() {
 /// that the file gets to the directory that Camel scans.
 #[test]
 fn the_name_written_is_the_protocol_camel_dlopens_the_provider_for() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let urls = include_str!("../../jmap-mail/libcameljmap.urls");
         let protocols: Vec<&str> = urls.lines().collect();
 
@@ -237,8 +237,8 @@ fn the_name_written_is_the_protocol_camel_dlopens_the_provider_for() {
 /// both with the uids of the sources that they must name.
 #[test]
 fn chaining_up_left_the_three_sources_pointing_at_each_other() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prepared = Prepared::new();
 
         // SAFETY: the extension is present (`has_extension` asserts it first), so
@@ -304,8 +304,8 @@ fn chaining_up_left_the_three_sources_pointing_at_each_other() {
 /// empty receiving account. Evolution would show it, with no server.
 #[test]
 fn the_identity_is_not_turned_into_a_service_of_its_own() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prepared = Prepared::new();
 
         for extension in [
@@ -331,8 +331,8 @@ fn the_identity_is_not_turned_into_a_service_of_its_own() {
 /// with the account as parent, and the setup UI manages them.
 #[test]
 fn no_prepared_mail_source_is_read_as_a_child_of_this_collection() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prepared = Prepared::new();
 
         for (what, source) in [
@@ -361,8 +361,8 @@ fn no_prepared_mail_source_is_read_as_a_child_of_this_collection() {
 /// `backend_type` zero, with no retry.
 #[test]
 fn the_backend_type_is_valid_when_the_factory_is_registered_alone() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let gtype = register_static::<JmapCollectionFactory>();
         assert_ne!(gtype, 0, "the factory type is not registered");
 

@@ -286,8 +286,8 @@ unsafe impl Populating for MockPopulating {
 
 #[test]
 fn authenticate_with_traces_structured_fields() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = TestSource::new("acc-test-auth")
             .parts(Parts {
                 mail: false,
@@ -329,8 +329,8 @@ fn authenticate_with_traces_structured_fields() {
 
 #[test]
 fn authenticate_with_no_parts_traces_fast_path() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = TestSource::new("acc-empty-parts").parts(Parts::NONE);
 
         let mut error = ptr::null_mut();
@@ -357,8 +357,8 @@ fn authenticate_with_no_parts_traces_fast_path() {
 
 #[test]
 fn create_on_server_traces_structured_fields() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let server = MockServer::builder().start();
         let account_id = server.account_id().to_string();
         let target = ConnectTarget::Origin(server.origin().to_owned());
@@ -393,8 +393,8 @@ fn create_on_server_traces_structured_fields() {
 
 #[test]
 fn delete_on_server_traces_structured_fields() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let server = MockServer::builder().start();
         let account_id = server.account_id().to_string();
         let target = ConnectTarget::Origin(server.origin().to_owned());
@@ -438,8 +438,8 @@ fn delete_on_server_traces_structured_fields() {
 
 #[test]
 fn fan_out_traces_structured_fields() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let server = MockServer::builder().start();
         let login = Login {
             server: Server {
@@ -470,8 +470,8 @@ fn fan_out_traces_structured_fields() {
 
 #[test]
 fn adopt_created_traces_structured_fields() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let scratch = Scratch::new();
         let child = Child {
             resource_id: "addressbook-1".to_owned(),
@@ -507,8 +507,8 @@ fn adopt_created_traces_structured_fields() {
 
 #[test]
 fn offer_deletion_traces_remote_deletable() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = Source::new("regular-source");
 
         let (_, captured) = capture(|| {
@@ -525,8 +525,8 @@ fn offer_deletion_traces_remote_deletable() {
 
 #[test]
 fn stored_password_of_traces_structured_fields() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = Source::new("account-uid-xyz");
 
         let (_, captured) = capture(|| {
@@ -553,8 +553,8 @@ fn stored_password_of_traces_structured_fields() {
 
 #[test]
 fn populate_traces_structured_fields() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let populating = MockPopulating::default();
 
         let (_, captured) = capture(|| {
@@ -588,8 +588,8 @@ fn populate_traces_structured_fields() {
 
 #[test]
 fn remove_obsolete_traces_obsolete_count() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let fanout = Fanout {
             shared: Vec::new(),
             parts: Parts::ALL,

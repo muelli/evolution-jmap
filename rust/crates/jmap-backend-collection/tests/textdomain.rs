@@ -99,8 +99,8 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
 /// `GTypeModuleClass.load` vfunc, as from `EModule`.
 #[test]
 fn the_entry_point_binds_the_domain() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let decoy = c"/nonexistent/jmap-collection-decoy-locale";
         assert_eq!(
             bind_to(decoy).as_c_str(),

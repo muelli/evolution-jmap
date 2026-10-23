@@ -255,8 +255,8 @@ impl Drop for RegistrySource {
 
 #[test]
 fn the_recipes_keyfile_describes_the_mock_server() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = RegistrySource::load(&keyfile());
         // SAFETY: a source that is alive during each call, which is the only
         // requirement of the `collection_source` functions.
@@ -285,8 +285,8 @@ fn the_recipes_keyfile_describes_the_mock_server() {
 /// parts is on.
 #[test]
 fn the_recipes_keyfile_switches_on_the_parts_the_backend_fans_out_to() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = RegistrySource::load(&keyfile());
         // SAFETY: as above.
         let parts = unsafe { parts_of(source.source) };
@@ -309,8 +309,8 @@ fn the_recipes_keyfile_switches_on_the_parts_the_backend_fans_out_to() {
 
 #[test]
 fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The registry files each collection factory under
         // `"<factory_name>:Collection"` and looks up the key built from this string.
         // A mismatch is silent: `e_source_registry_server_ref_backend_factory`
@@ -324,8 +324,8 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
 
 #[test]
 fn the_recipe_quotes_every_keyfile_verbatim() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The reader copies the files but reads the document, so the two must
         // agree. Each `ini` block in the document is a full keyfile, quoted
         // exactly. The fragment that shows the groups a mail source gets has no
@@ -351,8 +351,8 @@ fn the_recipe_quotes_every_keyfile_verbatim() {
 
 #[test]
 fn the_mail_runs_account_switches_on_every_part() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The important difference of the second account is `MailEnabled=true`.
         // `collection_backend_bind_child_enabled()` binds the `enabled` of each mail
         // source to the `mail-enabled` of the account. Under an account with mail
@@ -388,8 +388,8 @@ fn the_mail_runs_account_switches_on_every_part() {
 
 #[test]
 fn the_documented_mail_sources_hang_off_the_documented_account() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `child_added` sees these files only because of `Parent=`. EDS emits
         // `child-added` on the collection whose uid a source names. Here, a uid is
         // a file name. With a typo, Evolution shows the account without the three
@@ -411,8 +411,8 @@ fn the_documented_mail_sources_hang_off_the_documented_account() {
 
 #[test]
 fn the_documented_mail_sources_point_at_each_other() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // When the user sends, Evolution follows the chain that `prepare_mail`
         // describes. The receiving account names the identity, and the identity
         // names its transport. The files contain these uids as hand-written text,
@@ -448,8 +448,8 @@ fn the_documented_mail_sources_point_at_each_other() {
 
 #[test]
 fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `mail_service_of`, which the registry callback calls, decides which of
         // the three sources `child_added` writes a server on. Thus two files need
         // `BackendName=jmap`, and the identity intentionally has none.
@@ -474,8 +474,8 @@ fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
 
 #[test]
 fn the_documented_transport_reaches_the_mock_server() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The transport that the reader writes has a provider and no server. After
         // the registry reads it, its Camel settings must name the mock server. The
         // test reads them with the `jmap-mail` reader that `connect_sync` calls.
