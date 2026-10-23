@@ -29,6 +29,7 @@ jmap-mail-sync 0
 jmap-mock 0
 jmap-object-sync 0
 jmap-proto 0
+jmap-test-support 0
 jmap-tracing-capture 0
 jmap-ui 371
 jmap-vcard 0

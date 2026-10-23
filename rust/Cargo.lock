@@ -423,6 +423,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "evolution-jmap-test-support"
+version = "0.5.0"
+dependencies = [
+ "evolution-jmap-client",
+ "evolution-jmap-mock",
+]
+
+[[package]]
 name = "evolution-jmap-tracing-capture"
 version = "0.5.0"
 dependencies = [
