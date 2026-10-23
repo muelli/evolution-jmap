@@ -50,7 +50,16 @@ impl Client {
             .as_ref()
             .and_then(|created| created.get("new"))
         {
-            return Ok(created.clone());
+            let mut merged = created.clone();
+            // Fall back to caller-supplied properties when the server omits
+            // unchanged fields in `created` (RFC 8620 Section 5.3).
+            if merged.name.is_empty() {
+                merged.name = script.name.clone();
+            }
+            if merged.blob_id.is_empty() {
+                merged.blob_id = script.blob_id.clone();
+            }
+            return Ok(merged);
         }
         Err(set_failure(
             response.not_created.as_ref().and_then(|map| map.get("new")),
@@ -166,10 +175,35 @@ impl Client {
             let mut chunk_req = SieveScriptSetRequest::new(chunk_set.clone());
             chunk_req.on_success_activate_script = request.on_success_activate_script.clone();
             chunk_req.on_success_deactivate_script = request.on_success_deactivate_script;
+            let mut wire_req = serde_json::to_value(&chunk_req)?;
+            // RFC 9661 Section 2.1 defines `isActive` as server-set (`false` on create).
+            // Strip `"isActive": false` from `create` entries so strict servers (e.g. Cyrus)
+            // do not reject the request with `invalidProperties: ["isActive"]`.
+            if let Some(creates) = chunk_set.create.as_ref()
+                && let Some(wire_creates) =
+                    wire_req.get_mut("create").and_then(Value::as_object_mut)
+            {
+                for (cid, script) in creates {
+                    if !script.is_active
+                        && let Some(obj) = wire_creates.get_mut(cid).and_then(Value::as_object_mut)
+                    {
+                        obj.remove("isActive");
+                    }
+                }
+            }
+            // RFC 9661 Section 2.4 forbids sending both `onSuccessActivateScript` and
+            // `onSuccessDeactivateScript` in the same request. When deactivating via
+            // `SieveScriptSetRequest::deactivating()`, omit the redundant null key.
+            if chunk_req.on_success_deactivate_script == Some(true)
+                && chunk_req.on_success_activate_script == Some(Value::Null)
+                && let Some(obj) = wire_req.as_object_mut()
+            {
+                obj.remove("onSuccessActivateScript");
+            }
             let arguments = self.single_call_with_created_ids(
                 USING,
                 "SieveScript/set",
-                &chunk_req,
+                &wire_req,
                 created_ids,
             )?;
             Ok(serde_json::from_value(arguments)?)
