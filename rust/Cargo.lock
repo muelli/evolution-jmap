@@ -379,6 +379,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-test-support",
  "evolution-jmap-tracing-capture",
  "serde_json",
  "tracing",
@@ -420,6 +421,14 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "evolution-jmap-test-support"
+version = "0.5.0"
+dependencies = [
+ "evolution-jmap-client",
+ "evolution-jmap-mock",
 ]
 
 [[package]]

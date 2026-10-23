@@ -30,6 +30,7 @@ default-members = [
     "crates/jmap-mail-sync",
     "crates/jmap-collection-sync",
     "crates/jmap-tracing-capture",
+    "crates/jmap-test-support",
     "crates/po-compile",
 ]
 
@@ -94,6 +95,7 @@ evolution-jmap-mail-sync = { path = "crates/jmap-mail-sync" }
 evolution-jmap-collection-sync = { path = "crates/jmap-collection-sync" }
 evolution-jmap-object-sync = { path = "crates/jmap-object-sync" }
 evolution-jmap-tracing-capture = { path = "crates/jmap-tracing-capture" }
+evolution-jmap-test-support = { path = "crates/jmap-test-support" }
 jmap-backend-core = { path = "crates/jmap-backend-core" }
 jmap-backend-book = { path = "crates/jmap-backend-book" }
 jmap-backend-cal = { path = "crates/jmap-backend-cal" }

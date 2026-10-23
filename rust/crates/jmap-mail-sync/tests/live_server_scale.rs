@@ -29,44 +29,15 @@
 //! that variable is set but `JMAP_LIVE_SERVER_WRITE_PASSWORD` or
 //! `JMAP_LIVE_SERVER_URL` is unset.
 
-use std::env;
 use std::time::{Duration, Instant};
 
-use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{Keywords, MailSync, MessageUpdate};
 use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_MAIL;
-
-/// Returns a value unique to this run, so that messages from a different run
-/// cannot match.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Same as `connect_for_write` in `live_server.rs`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
+use jmap_test_support::{connect_for_write, env_count, unique_suffix};
 
 fn batch_size() -> usize {
-    env::var("JMAP_SCALE_TEST_MESSAGES")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(500)
+    env_count("JMAP_SCALE_TEST_MESSAGES", 500)
 }
 
 /// Returns the peak resident set size of this process from `/proc`. Returns

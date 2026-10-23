@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-test-support"
+description = "Test-only helpers for the live-server tests: test accounts from the environment, unique names, error checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "jmap_test_support"
+
+[dependencies]
+evolution-jmap-client = { workspace = true }
+
+[dev-dependencies]
+evolution-jmap-mock = { workspace = true }
