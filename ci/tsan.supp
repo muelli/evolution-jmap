@@ -86,6 +86,11 @@ race:^e_server_side_source_init$
 # same value.
 race_top:^e_source_registry_debug_print$
 
+# libical: loading a builtin zone frees and replaces its location under the
+# builtin lock. This lookup reads every location with no lock. The race is
+# real, and the master branch of libical has it too. Only libical can fix it.
+race:^icaltimezone_get_builtin_timezone$
+
 # libical-glib: the library is not instrumented, so ThreadSanitizer does not
 # see the atomic g_once that publishes its type ids to g_object_new.
 race:^i_cal_object_construct$
@@ -93,3 +98,7 @@ race:^i_cal_object_construct$
 # glibc: mktime changes its time zone state under an internal lock that
 # ThreadSanitizer cannot see.
 race:^camel_mktime_utc$
+
+# glibc: gmtime_r, called here, sets up its time zone state under the same
+# internal lock as mktime.
+race:^icaltime_from_timet_with_zone$
