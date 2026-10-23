@@ -11,10 +11,9 @@ use std::ptr;
 use eds_sys::{
     E_CONFLICT_RESOLUTION_KEEP_LOCAL, E_SOURCE_AUTHENTICATION_ACCEPTED,
     E_SOURCE_AUTHENTICATION_REJECTED, E_SOURCE_EXTENSION_AUTHENTICATION,
-    E_SOURCE_EXTENSION_SECURITY, ECalComponent, ESource, e_cal_component_new_from_string,
+    E_SOURCE_EXTENSION_SECURITY, ECalComponent, e_cal_component_new_from_string,
     e_cal_meta_backend_info_free, e_source_authentication_set_host,
-    e_source_authentication_set_port, e_source_get_extension, e_source_new_with_uid,
-    e_source_security_set_secure,
+    e_source_authentication_set_port, e_source_get_extension, e_source_security_set_secure,
 };
 use glib_sys::{
     GError, GFALSE, GSList, GTRUE, g_free, g_slist_free, g_slist_free_full, g_slist_prepend, gchar,
@@ -22,7 +21,7 @@ use glib_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::connect::{self, open_calendar};
 use jmap_backend_cal::ops::{self, Outcome};
-use jmap_backend_core::source::{ConnectTarget, SourceConfig};
+use jmap_backend_core::source::{ConnectTarget, OwnedSource, SourceConfig};
 use jmap_cal_sync::Itip;
 use jmap_client::Credentials;
 use jmap_mock::MockServer;
@@ -83,14 +82,11 @@ impl Fixture {
     }
 }
 
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new(origin: &str) -> Self {
-        let uid = CString::new("jmap-tracing-cal-source").unwrap();
-        let mut error = ptr::null_mut();
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null());
+        let source = OwnedSource::new("jmap-tracing-cal-source");
 
         let (host, port) = origin
             .trim_start_matches("http://")
@@ -98,19 +94,14 @@ impl TestSource {
             .expect("the mock origin has a port");
         let host = CString::new(host).unwrap();
         unsafe {
-            let auth = e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr());
+            let auth =
+                e_source_get_extension(source.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr());
             e_source_authentication_set_host(auth.cast(), host.as_ptr());
             e_source_authentication_set_port(auth.cast(), port.parse().unwrap());
-            let sec = e_source_get_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr());
+            let sec = e_source_get_extension(source.as_ptr(), E_SOURCE_EXTENSION_SECURITY.as_ptr());
             e_source_security_set_secure(sec.cast(), 0);
         }
         Self(source)
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
@@ -440,7 +431,7 @@ fn connect_from_source_traces_structured_fields() {
     let (_, captured) = capture(|| {
         let sync = unsafe {
             connect::connect(
-                source.0,
+                source.0.as_ptr(),
                 ptr::null(),
                 ptr::null_mut(),
                 &mut auth_result,

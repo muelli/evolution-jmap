@@ -8,15 +8,16 @@ use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_CALENDAR, ECalComponent, ECalMetaBackendInfo, ESource, ESourceSelectable,
+    E_SOURCE_EXTENSION_CALENDAR, ECalComponent, ECalMetaBackendInfo, ESourceSelectable,
     ETimezoneCache, I_CAL_VCALENDAR_COMPONENT, e_cal_cache_new, e_cal_component_new_from_string,
-    e_cal_meta_backend_info_free, e_source_get_extension, e_source_new_with_uid,
-    e_source_selectable_set_color, e_timezone_cache_add_timezone, i_cal_component_get_timezone,
-    i_cal_component_isa, i_cal_component_new_from_string, i_cal_timezone_get_component,
+    e_cal_meta_backend_info_free, e_source_get_extension, e_source_selectable_set_color,
+    e_timezone_cache_add_timezone, i_cal_component_get_timezone, i_cal_component_isa,
+    i_cal_component_new_from_string, i_cal_timezone_get_component,
 };
 use glib_sys::{GError, GSList, g_slist_length, g_slist_nth_data};
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
+use jmap_backend_core::source::OwnedSource;
 use jmap_cal_sync::ComponentInfo;
 
 /// Event fixture in a `VCALENDAR` envelope.
@@ -1701,20 +1702,14 @@ fn libical_keeps_the_reminder_this_mapping_writes() {
 static NEXT_SOURCE: AtomicU32 = AtomicU32::new(0);
 
 /// Test wrapper around an `ESource` pointer without registry dependencies.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
-        let uid = CString::new(format!(
+        Self(OwnedSource::new(&format!(
             "jmap-cal-selectable-color-{}",
             NEXT_SOURCE.fetch_add(1, Ordering::Relaxed)
-        ))
-        .expect("no NUL in a generated uid");
-        let mut error = ptr::null_mut();
-        // SAFETY: UID string is NUL-terminated. Context pointer and error out-parameter are valid.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        )))
     }
 
     fn set_color(&self, color: &str) {
@@ -1722,16 +1717,10 @@ impl TestSource {
         // SAFETY: Source pointer is valid. The extension is owned by the source. `set_color` copies the string.
         unsafe {
             let selectable: *mut ESourceSelectable =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_CALENDAR.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_CALENDAR.as_ptr())
+                    .cast();
             e_source_selectable_set_color(selectable, color.as_ptr());
         }
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: Source pointer is valid and holds no remaining references.
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
@@ -1742,7 +1731,7 @@ fn selectable_color_reads_the_calendar_extensions_color() {
     source.set_color("#ff0000");
 
     // SAFETY: Source pointer is valid and carries a calendar extension.
-    let color = unsafe { marshal::selectable_color(source.0) };
+    let color = unsafe { marshal::selectable_color(source.0.as_ptr()) };
     assert_eq!(color.as_deref(), Some("#ff0000"));
 }
 
@@ -1752,6 +1741,6 @@ fn selectable_color_of_an_uncoloured_source_is_the_built_in_default_not_none() {
     let source = TestSource::new();
 
     // SAFETY: Source pointer is valid and carries a calendar extension.
-    let color = unsafe { marshal::selectable_color(source.0) };
+    let color = unsafe { marshal::selectable_color(source.0.as_ptr()) };
     assert_eq!(color.as_deref(), Some("#62a0ea"));
 }
