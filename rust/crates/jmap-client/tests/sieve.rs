@@ -83,6 +83,153 @@ fn sieve_script_create_stores_an_inactive_script() {
     assert_eq!(scripts[0].id, created.id);
 }
 
+/// Verifies that `sieve_script_create` omits server-set `isActive` from the wire create object
+/// per RFC 9661 section 2.1, and `sieve_script_deactivate` omits `onSuccessActivateScript`
+/// when `onSuccessDeactivateScript` is sent per RFC 9661 section 2.4.
+#[test]
+fn sieve_script_create_and_deactivate_emit_rfc_9661_wire_shapes() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let origin = format!("http://{addr}");
+
+    let handle = std::thread::spawn(move || {
+        let mut recorded_bodies = Vec::new();
+        for step in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = rest.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            reader.read_exact(&mut body).unwrap();
+            drop(reader);
+            if content_length > 0 {
+                recorded_bodies.push(serde_json::from_slice::<serde_json::Value>(&body).unwrap());
+            }
+
+            let response_json = match step {
+                0 => json!({
+                    "capabilities": {
+                        "urn:ietf:params:jmap:core": {
+                            "maxSizeUpload": 50000000,
+                            "maxConcurrentUpload": 4,
+                            "maxSizeRequest": 10000000,
+                            "maxConcurrentRequests": 4,
+                            "maxCallsInRequest": 16,
+                            "maxObjectsInGet": 500,
+                            "maxObjectsInSet": 500,
+                            "collationAlgorithms": ["i;unicode-casemap"]
+                        },
+                        "urn:ietf:params:jmap:sieve": {}
+                    },
+                    "accounts": {
+                        "A1": {
+                            "name": "writer",
+                            "isPersonal": true,
+                            "isReadOnly": false,
+                            "accountCapabilities": {
+                                "urn:ietf:params:jmap:sieve": {
+                                    "maxSizeScript": 65536
+                                }
+                            }
+                        }
+                    },
+                    "primaryAccounts": {
+                        "urn:ietf:params:jmap:sieve": "A1"
+                    },
+                    "username": "writer",
+                    "apiUrl": format!("http://{addr}/jmap/"),
+                    "downloadUrl": format!("http://{addr}/download/{{accountId}}/{{blobId}}/{{name}}?type={{type}}"),
+                    "uploadUrl": format!("http://{addr}/upload/{{accountId}}/"),
+                    "eventSourceUrl": format!("http://{addr}/eventsource/"),
+                    "state": "s0"
+                }),
+                1 => json!({
+                    "methodResponses": [[
+                        "SieveScript/set",
+                        {
+                            "accountId": "A1",
+                            "oldState": "s0",
+                            "newState": "s1",
+                            "created": {
+                                "new": {
+                                    "id": "script-cyrus-1",
+                                    "isActive": false,
+                                    "blobId": "B-server"
+                                }
+                            }
+                        },
+                        "c0"
+                    ]],
+                    "sessionState": "s0"
+                }),
+                _ => json!({
+                    "methodResponses": [[
+                        "SieveScript/set",
+                        {
+                            "accountId": "A1",
+                            "oldState": "s1",
+                            "newState": "s2"
+                        },
+                        "c1"
+                    ]],
+                    "sessionState": "s0"
+                }),
+            };
+            let payload = serde_json::to_vec(&response_json).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()
+            )
+            .unwrap();
+            stream.write_all(&payload).unwrap();
+        }
+        recorded_bodies
+    });
+
+    let client = Client::connect(&origin, Credentials::none()).unwrap();
+    let account_id = Id::from("A1");
+    let script = SieveScript::new("cyrus-filter", "B-client");
+    let created = client.sieve_script_create(&account_id, &script).unwrap();
+    assert_eq!(created.id, Some(Id::from("script-cyrus-1")));
+    assert_eq!(
+        created.name, "cyrus-filter",
+        "sieve_script_create must merge caller-supplied name when server omits it in created"
+    );
+    assert_eq!(created.blob_id, Id::from("B-server"));
+    assert!(!created.is_active);
+
+    client.sieve_script_deactivate(&account_id).unwrap();
+
+    let bodies = handle.join().unwrap();
+    let create_obj = &bodies[0]["methodCalls"][0][1]["create"]["new"];
+    assert_eq!(create_obj["name"], "cyrus-filter");
+    assert_eq!(create_obj["blobId"], "B-client");
+    assert!(
+        create_obj.get("isActive").is_none(),
+        "sieve_script_create must omit server-set isActive on create (RFC 9661 section 2.1), got {create_obj}"
+    );
+
+    let deactivate_args = &bodies[1]["methodCalls"][0][1];
+    assert_eq!(deactivate_args["onSuccessDeactivateScript"], true);
+    assert!(
+        deactivate_args.get("onSuccessActivateScript").is_none(),
+        "sieve_script_deactivate must not send both onSuccessActivateScript and onSuccessDeactivateScript (RFC 9661 section 2.4), got {deactivate_args}"
+    );
+}
+
 /// Verifies that duplicate script names fail with `alreadyExists`.
 #[test]
 fn sieve_script_create_rejects_a_duplicate_name() {
