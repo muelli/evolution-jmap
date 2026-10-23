@@ -55,12 +55,13 @@ use gio_sys::{
 };
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_new_literal, gboolean, gpointer};
 use gobject_sys::{
-    GObject, GObjectClass, GTypeInstance, g_object_get, g_object_get_data, g_object_ref,
-    g_object_set, g_object_set_data_full, g_object_unref, g_signal_connect_data, g_type_from_name,
+    GObject, GObjectClass, GTypeInstance, g_object_get, g_object_ref, g_object_set, g_object_unref,
+    g_signal_connect_data, g_type_from_name,
 };
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
+use jmap_backend_core::object_data::ObjectData;
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, TypeSizes};
 use jmap_backend_core::trampoline::{guard, log_critical};
 
@@ -70,7 +71,7 @@ use crate::vacation::form::VacationForm;
 use crate::vacation::io;
 
 const NAME: &CStr = c"JmapVacationPage";
-const STATE_KEY: &CStr = c"jmap-vacation-page-state";
+const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-vacation-page-state");
 
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"This account’s server does not offer a vacation autoresponder.");
@@ -99,19 +100,8 @@ struct UiState {
 /// `page` must be a live `JmapVacationPage`. The reference must not live
 /// longer than the page (callers use it in one main-loop callback).
 unsafe fn state<'a>(page: *mut GObject) -> Option<&'a RefCell<UiState>> {
-    // SAFETY: instance_init sets the data one time. The cast uses the type
-    // that build_widgets stored.
-    unsafe {
-        g_object_get_data(page, STATE_KEY.as_ptr())
-            .cast::<RefCell<UiState>>()
-            .as_ref()
-    }
-}
-
-unsafe extern "C" fn drop_state(data: gpointer) {
-    // SAFETY: this frees the box that build_widgets leaked. GObject calls this
-    // one time, when it clears the qdata at finalization.
-    drop(unsafe { Box::from_raw(data.cast::<RefCell<UiState>>()) });
+    // SAFETY: per the contract. instance_init sets the data one time.
+    unsafe { STATE.get(page) }
 }
 
 pub struct VacationPage;
@@ -257,7 +247,7 @@ unsafe fn build_widgets(page: *mut GObject) {
             0,
         );
 
-        let ui = Box::new(RefCell::new(UiState {
+        let ui = RefCell::new(UiState {
             link: None,
             baseline: None,
             enabled,
@@ -267,13 +257,8 @@ unsafe fn build_widgets(page: *mut GObject) {
             buffer,
             status,
             grid,
-        }));
-        g_object_set_data_full(
-            page,
-            STATE_KEY.as_ptr(),
-            Box::into_raw(ui).cast(),
-            Some(drop_state),
-        );
+        });
+        STATE.set(page, ui);
     }
 }
 

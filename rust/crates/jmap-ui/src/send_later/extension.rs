@@ -75,15 +75,13 @@ use gio_sys::GAsyncResult;
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, g_free, gpointer};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::g_object_set;
-use gobject_sys::{
-    GObject, GParamSpec, g_object_get_data, g_object_set_data_full, g_object_unref,
-    g_signal_connect_data,
-};
+use gobject_sys::{GObject, GParamSpec, g_object_unref, g_signal_connect_data};
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::{extension_if_present, read_string, take_string};
 use jmap_backend_core::mime::write_message;
+use jmap_backend_core::object_data::ObjectData;
 use jmap_backend_core::trampoline::guard;
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 
@@ -95,7 +93,7 @@ use crate::send_later::submit;
 /// `vacation::extension` tells why the code does not import this literal.
 const BACKEND_NAME: &CStr = c"jmap";
 
-const STATE_KEY: &CStr = c"jmap-send-later-state";
+const STATE: ObjectData<RefCell<SendState>> = ObjectData::new(c"jmap-send-later-state");
 
 const CHECKING: &CStr = N_(c"Checking whether the sending account offers scheduled send…");
 const NOT_JMAP: &CStr = N_(c"The selected sending account is not a JMAP account");
@@ -150,17 +148,8 @@ static GENERATIONS: AtomicU64 = AtomicU64::new(1);
 /// `composer` must be a live composer that this extension decorated. The
 /// reference must not live longer than one main-loop callback.
 unsafe fn state<'a>(composer: *mut GObject) -> Option<&'a RefCell<SendState>> {
-    // SAFETY: `constructed` sets the data one time, with this type.
-    unsafe {
-        g_object_get_data(composer, STATE_KEY.as_ptr())
-            .cast::<RefCell<SendState>>()
-            .as_ref()
-    }
-}
-
-unsafe extern "C" fn drop_state(data: gpointer) {
-    // SAFETY: this takes back the box that `constructed` leaked, one time only.
-    drop(unsafe { Box::from_raw(data.cast::<RefCell<SendState>>()) });
+    // SAFETY: per the contract. `constructed` sets the data one time.
+    unsafe { STATE.get(composer) }
 }
 
 /// The Send Later menu of the composer.
@@ -439,18 +428,13 @@ unsafe fn constructed(extension: *mut EExtension) {
             return;
         };
 
-        let state = Box::new(RefCell::new(SendState {
+        let state = RefCell::new(SendState {
             link: None,
             generation: 0,
             menu_action,
             action_group,
-        }));
-        g_object_set_data_full(
-            composer.cast(),
-            STATE_KEY.as_ptr(),
-            Box::into_raw(state).cast(),
-            Some(drop_state),
-        );
+        });
+        STATE.set(composer.cast(), state);
         // 3.52 only: the group holds a reference to the menu action. This
         // releases the local reference from `gtk_action_new`. On 3.55+,
         // `menu_action` is borrowed from the group, thus nothing is released.

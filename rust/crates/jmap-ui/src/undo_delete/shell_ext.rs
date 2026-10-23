@@ -33,13 +33,13 @@ use evo_sys::{
 use gio_sys::GAsyncResult;
 use glib_sys::{GError, GFALSE, GList, GType, g_error_free, g_list_free_full, gpointer};
 use gobject_sys::{
-    GClosure, GObject, g_object_get_data, g_object_ref, g_object_set_data_full, g_object_unref,
-    g_signal_connect_data, g_signal_connect_object,
+    GClosure, GObject, g_object_ref, g_object_unref, g_signal_connect_data, g_signal_connect_object,
 };
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::i18n::{N_, translate_static, translate_with};
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::object_data::ObjectData;
 use jmap_backend_core::trampoline::guard;
 use jmap_backend_core::weak::WeakBackend;
 use jmap_collection_sync::ChildKind;
@@ -67,8 +67,8 @@ impl Extension for UndoDeleteShell {
     }
 }
 
-/// The key of the set of shown deletes on the view.
-const SHOWN_KEY: &CStr = c"jmap-undo-delete-shown";
+/// The set of shown deletes on the view.
+const SHOWN: ObjectData<Shown> = ObjectData::new(c"jmap-undo-delete-shown");
 
 /// The deletes that a view showed an info bar for: the uid and the due time.
 /// A new delete of the same source has a new due time, and gets a new info bar.
@@ -95,13 +95,7 @@ unsafe fn constructed(extension: *mut EExtension) {
             return;
         }
 
-        let shown: *mut Shown = Box::into_raw(Box::default());
-        g_object_set_data_full(
-            view.cast(),
-            SHOWN_KEY.as_ptr(),
-            shown.cast(),
-            Some(free_shown),
-        );
+        SHOWN.set(view.cast(), Shown::default());
 
         // The view is the object of the connection, so GLib disconnects the
         // handler when the view is finalized.
@@ -125,11 +119,6 @@ unsafe fn constructed(extension: *mut EExtension) {
         }
         g_list_free_full(sources, Some(unref));
     }
-}
-
-unsafe extern "C" fn free_shown(data: gpointer) {
-    // SAFETY: the box that `constructed` gave to the view, freed one time.
-    drop(unsafe { Box::from_raw(data.cast::<Shown>()) });
 }
 
 unsafe extern "C" fn unref(object: gpointer) {
@@ -189,12 +178,11 @@ unsafe fn consider(view: *mut EShellView, kind: ChildKind, source: *mut ESource)
     };
     // SAFETY: `constructed` set the data before it connected the handler, and
     // the view frees it only when it is finalized.
-    let shown = unsafe { g_object_get_data(view.cast(), SHOWN_KEY.as_ptr()) }.cast::<Shown>();
-    if shown.is_null() {
+    let Some(shown) = (unsafe { SHOWN.get(view.cast()) }) else {
         return;
-    }
-    // SAFETY: only the main thread uses the set, and no borrow is open.
-    if !unsafe { &*shown }.borrow_mut().insert((uid, due.stamp())) {
+    };
+    // Only the main thread uses the set, and no borrow is open.
+    if !shown.borrow_mut().insert((uid, due.stamp())) {
         return;
     }
     // SAFETY: the contract of this function.
