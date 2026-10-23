@@ -577,6 +577,61 @@ fn a_session_document_from_a_foreign_redirect_target_gets_no_credentials() {
     );
 }
 
+/// The mock's hostile discovery mode sends `/.well-known/jmap` to a foreign host that serves a session.
+#[test]
+fn a_well_known_redirect_to_a_foreign_session_host_gets_no_credentials() {
+    let foreign = ForeignSessionHost::start();
+    let server = MockServer::builder()
+        .basic_auth("agent", "sekret")
+        .well_known_redirect_to(foreign.origin())
+        .start();
+
+    let result = Client::connect(server.origin(), Credentials::basic("agent", "sekret"));
+
+    match result {
+        Err(Error::RedirectCredentialsWithheld {
+            requested,
+            followed,
+        }) => {
+            assert_eq!(requested, server.origin());
+            assert_eq!(followed, foreign.origin());
+        }
+        Ok(_) => panic!("the client accepted a session document from a foreign redirect target"),
+        Err(other) => panic!("expected Error::RedirectCredentialsWithheld, got {other:?}"),
+    }
+    assert!(
+        !foreign.saw_authorization.load(Ordering::SeqCst),
+        "the foreign redirect target received the credentials"
+    );
+}
+
+/// A foreign JMAP server that knows the same credentials still gets no method call.
+#[test]
+fn a_well_known_redirect_to_another_jmap_server_sends_it_no_method_call() {
+    let foreign = MockServer::builder()
+        .basic_auth("agent", "sekret")
+        .session_via_redirect()
+        .start();
+    let server = MockServer::builder()
+        .basic_auth("agent", "sekret")
+        .well_known_redirect_to(foreign.origin())
+        .start();
+
+    let result = Client::connect(server.origin(), Credentials::basic("agent", "sekret"));
+
+    assert!(
+        matches!(result, Err(Error::RedirectCredentialsWithheld { .. })),
+        "expected Error::RedirectCredentialsWithheld, got {result:?}"
+    );
+    assert_eq!(
+        foreign.api_requests(),
+        0,
+        "the foreign server got an API request"
+    );
+    assert!(foreign.method_calls().is_empty());
+    assert_eq!(server.api_requests(), 0);
+}
+
 #[test]
 #[ignore = "touches live Fastmail server without credentials"]
 fn fastmail_live_trailing_dot_session_redirect() {
