@@ -35,12 +35,11 @@
 use std::ffi::CStr;
 use std::ptr;
 
-use glib_sys::{GTRUE, GType, gboolean};
 use gobject_sys::{
-    GTypeModule, GTypeModuleClass, g_object_new, g_type_from_name, g_type_get_plugin,
-    g_type_module_get_type, g_type_module_use,
+    GTypeModule, g_object_new, g_type_from_name, g_type_get_plugin, g_type_module_use,
 };
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::test_module;
 
 // Initialise the parent classes of the Evolution types before the tests start threads.
 jmap_backend_core::initialise_parents_before_main!(
@@ -60,82 +59,20 @@ const CONFIG_BACKEND: &CStr = c"EMailConfigServiceBackendJmap";
 const COLLECTION_BACKEND: &CStr = c"ECollectionBackendJmap";
 const COLLECTION_FACTORY: &CStr = c"ECollectionBackendJmapFactory";
 
-/// A `GTypeModule` in place of the `EModule` that a host loads this code as.
-/// The concrete types below select the entry point.
-#[repr(C)]
-struct TestModule {
-    parent: GTypeModule,
-}
-
-#[repr(C)]
-struct TestModuleClass {
-    parent_class: GTypeModuleClass,
-}
-
-/// The substitute for the setup module: its `load` calls the `jmap-config`
-/// entry point.
-#[repr(C)]
-struct ConfigModule(TestModule);
-
-#[repr(C)]
-struct ConfigModuleClass(TestModuleClass);
-
-// SAFETY: both structs are #[repr(C)] and lead with the GTypeModule instance
-// and class structs, and GTypeModule derives from GObject.
-unsafe impl ObjectSubclass for ConfigModule {
-    const NAME: &'static CStr = c"JmapConfigEntryPointTestModule";
-    type Instance = ConfigModule;
-    type Class = ConfigModuleClass;
-
-    fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
-        unsafe { g_type_module_get_type() }
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points to a newly allocated class struct of this type,
-        // which starts with GTypeModuleClass, where the slot is.
-        unsafe { (*class).0.parent_class.load = Some(load_config) }
-    }
-}
-
-unsafe extern "C" fn load_config(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib gives the module that loads, which is what the entry
-    // point needs.
-    unsafe { jmap_config::module::load(module) };
-    GTRUE
-}
-
-/// The substitute for the collection module: its `load` calls the entry point
-/// of the *other* crate, which was the same C symbol before.
-#[repr(C)]
-struct CollectionModule(TestModule);
-
-#[repr(C)]
-struct CollectionModuleClass(TestModuleClass);
-
-// SAFETY: as `ConfigModule`.
-unsafe impl ObjectSubclass for CollectionModule {
-    const NAME: &'static CStr = c"JmapCollectionEntryPointTestModule";
-    type Instance = CollectionModule;
-    type Class = CollectionModuleClass;
-
-    fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
-        unsafe { g_type_module_get_type() }
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: as `ConfigModule`'s.
-        unsafe { (*class).0.parent_class.load = Some(load_collection) }
-    }
-}
-
-unsafe extern "C" fn load_collection(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: as `load_config`.
-    unsafe { jmap_backend_collection::module::load(module) };
-    GTRUE
-}
+// Two `GTypeModule`s in place of the `EModule` that a host loads this code as.
+// The setup module's `load` calls the `jmap-config` entry point. The collection
+// module's `load` calls the entry point of the *other* crate, which was the same
+// C symbol before.
+test_module!(
+    ConfigModule,
+    c"JmapConfigEntryPointTestModule",
+    load = jmap_config::module::load
+);
+test_module!(
+    CollectionModule,
+    c"JmapCollectionEntryPointTestModule",
+    load = jmap_backend_collection::module::load,
+);
 
 /// Builds a substitute module of type `T` and uses it, which runs its `load`.
 ///
