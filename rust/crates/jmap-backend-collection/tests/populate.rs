@@ -224,8 +224,8 @@ fn run(
 
 #[test]
 fn an_oauth2_account_is_authenticated_silently_rather_than_prompted() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_backend_schedule_credentials_required` sends an OAuth 2.0 source
         // directly to the consent window. On that path, the EDS OAuth2
         // credentials provider cannot find or store a token
@@ -254,8 +254,8 @@ fn an_oauth2_account_is_authenticated_silently_rather_than_prompted() {
 
 #[test]
 fn the_cached_children_of_previous_sessions_are_exported_again() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This is the purpose of the offline part. EDS loads the cached
         // `.source` files of a collection into an unclaimed table and exports
         // none of them. Evolution cannot see them until a populate claims them
@@ -280,8 +280,8 @@ fn the_cached_children_of_previous_sessions_are_exported_again() {
 
 #[test]
 fn the_cache_is_claimed_after_the_chain_up_and_before_any_password_is_asked_for() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This test checks three EDS order rules:
         //
         // - The freeze is first. It prevents two populates of one account from
@@ -313,8 +313,8 @@ fn the_cache_is_claimed_after_the_chain_up_and_before_any_password_is_asked_for(
 
 #[test]
 fn every_reference_the_claim_handed_over_is_given_back() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_collection_backend_claim_all_resources` is `(transfer full)`: it
         // gives one reference for each source and the list. If the populate kept
         // them, each cached child would stay in memory until the process stops.
@@ -339,8 +339,8 @@ fn every_reference_the_claim_handed_over_is_given_back() {
 
 #[test]
 fn a_populate_that_lost_the_freeze_does_nothing_but_give_it_back() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This is the EDS guard, and it is not `if (frozen) return`.
         // `e_collection_backend_freeze_populate` increments the counter for each
         // answer, so a populate that does not get the freeze must still thaw. A
@@ -367,8 +367,8 @@ fn a_populate_that_lost_the_freeze_does_nothing_but_give_it_back() {
 
 #[test]
 fn the_freeze_is_given_back_even_when_the_work_panics() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // An idle callback in `evolution-source-registry` calls the populate. The
         // panic guard of the vfunc changes a Rust panic into a logged critical,
         // not an unwind into C. But the guard cannot undo the freeze. A panic
@@ -395,8 +395,8 @@ fn the_freeze_is_given_back_even_when_the_work_panics() {
 
 #[test]
 fn an_account_with_nothing_switched_on_still_gets_its_children_back() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The children of a disabled part are dormant, not removed. EDS binds the
         // `enabled` property of each child to the part flag of the account, so
         // the sidebar shows these children as disabled. If the populate did not
@@ -420,8 +420,8 @@ fn an_account_with_nothing_switched_on_still_gets_its_children_back() {
 
 #[test]
 fn an_account_with_only_mail_switched_on_is_not_asked_for_a_password() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This backend does not create mail children (see
         // `jmap_collection_sync::children`). Thus a login for a mail-only account
         // has nothing to discover, and a password prompt would give no result.
@@ -458,8 +458,8 @@ fn an_account_with_only_mail_switched_on_is_not_asked_for_a_password() {
 
 #[test]
 fn an_account_that_makes_children_is_offered_as_a_place_to_create_them() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Without this flag, `create_resource_sync` never runs.
         // `server_side_source_remote_create_sync` refuses a collection source
         // without `remote-creatable`. Thus an account with address books or
@@ -490,8 +490,8 @@ fn an_account_that_makes_children_is_offered_as_a_place_to_create_them() {
 
 #[test]
 fn an_account_that_makes_no_children_is_not_offered_as_a_place_to_create_them() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The password request uses the same condition. An account with contacts
         // and calendars disabled has no children of this backend. The next
         // populate would make a new collection in it dormant. The populate writes
@@ -518,8 +518,8 @@ fn an_account_that_makes_no_children_is_not_offered_as_a_place_to_create_them() 
 
 #[test]
 fn one_switched_on_part_is_enough_to_ask_for_a_password() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The opposite case: contacts alone, or calendars alone, is sufficient for
         // a login. If both were necessary, an account with one part enabled would
         // never authenticate.
@@ -551,8 +551,8 @@ fn one_switched_on_part_is_enough_to_ask_for_a_password() {
 
 #[test]
 fn an_account_that_names_no_user_is_authenticated_without_a_password() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_backend_schedule_credentials_required` asks for a password.
         // `e_backend_schedule_authenticate` asks for authentication now, with the
         // available data. `credentials()` reads a source with no user as an
@@ -580,8 +580,8 @@ fn an_account_that_names_no_user_is_authenticated_without_a_password() {
 
 #[test]
 fn a_cached_source_this_backend_cannot_name_is_not_exported() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // EDS cannot cause this case, but the behaviour is defined. EDS caches
         // only a source for which `dup_resource_id` of this crate gave an answer.
         // Thus a claimed source that gives `None` changed after the cache. If

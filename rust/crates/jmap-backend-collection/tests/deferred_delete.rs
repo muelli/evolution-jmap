@@ -18,7 +18,7 @@ use jmap_backend_collection::deferred_delete::{
 };
 use jmap_backend_collection::delete_resource::DeleteError;
 use jmap_collection_sync::DeleteFailure;
-use jmap_collection_sync::pending::{Due, UNDO_WINDOW};
+use jmap_collection_sync::pending::{Due, Pending, UNDO_WINDOW, decide};
 
 mod common;
 use common::{with_timeout, with_timeout_duration};
@@ -97,6 +97,8 @@ struct Fake {
     destroy: Outcome,
     remove: Outcome,
     calls: Mutex<Vec<&'static str>>,
+    /// The number of reads of the due time, so a test knows that a check ran.
+    due_reads: AtomicU32,
 }
 
 impl Fake {
@@ -109,6 +111,7 @@ impl Fake {
             destroy: Outcome::Ok,
             remove: Outcome::Ok,
             calls: Mutex::new(Vec::new()),
+            due_reads: AtomicU32::new(0),
         }
     }
 
@@ -139,6 +142,7 @@ impl PendingChild for Fake {
     }
 
     fn due(&self) -> Option<Due> {
+        self.due_reads.fetch_add(1, Ordering::SeqCst);
         *self.due.lock().unwrap()
     }
 
@@ -469,33 +473,57 @@ impl PendingChild for Shared {
 /// delete gets its own full window, not the end of the first one.
 #[test]
 fn a_delete_again_after_undo_waits_for_its_own_due_time() {
-    with_timeout_duration(Duration::from_secs(20), || {
-        let source = Source::new();
-        let start = Instant::now();
-        let first = SystemTime::now() + Duration::from_secs(2) - UNDO_WINDOW;
-        let fake = Arc::new(Fake::pending(Due::after_window(first)));
-
-        // SAFETY: a live source, and the fake stands for it.
-        unsafe { delete_later(source.0, Shared(Arc::clone(&fake)), first) };
-        // Let the thread do its first check and sleep, then Undo.
-        std::thread::sleep(Duration::from_millis(300));
-        *fake.enabled.lock().unwrap() = true;
-        std::thread::sleep(Duration::from_millis(300));
-
-        let again = SystemTime::now() + Duration::from_secs(4) - UNDO_WINDOW;
-        *fake.due.lock().unwrap() = Some(Due::after_window(again));
-        *fake.enabled.lock().unwrap() = false;
-        // SAFETY: as above.
-        unsafe { delete_later(source.0, Shared(Arc::clone(&fake)), again) };
-
-        while !fake.calls().contains(&"destroy_on_server") {
-            std::thread::sleep(Duration::from_millis(20));
+    with_timeout_duration(Duration::from_secs(60), || {
+        // A slow machine can start the thread after the first due time. Then the
+        // first delete completes before the Undo, and the try proves nothing.
+        for _ in 0..3 {
+            if let Some(waited) = delete_undo_delete() {
+                assert!(
+                    waited >= Duration::from_secs(4),
+                    "destroyed after {waited:?}, before the second due time"
+                );
+                return;
+            }
         }
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed >= Duration::from_secs(4),
-            "destroyed after {elapsed:?}, before the second due time"
-        );
-        assert_eq!(fake.calls(), ["destroy_on_server", "remove"]);
+        panic!("in each try, the first due time was too near at the Undo");
     });
+}
+
+/// Deletes, undoes and deletes again inside the first window. Returns the time
+/// from the second delete to the destroy. Returns `None` if less than one second
+/// of the first window is left at the Undo.
+fn delete_undo_delete() -> Option<Duration> {
+    let source = Source::new();
+    let first = SystemTime::now() + Duration::from_secs(2) - UNDO_WINDOW;
+    let first_due = Due::after_window(first);
+    let fake = Arc::new(Fake::pending(first_due));
+
+    // SAFETY: a live source, and the fake stands for it.
+    unsafe { delete_later(source.0, Shared(Arc::clone(&fake)), first) };
+    // The thread checks once, then sleeps until the first due time.
+    while fake.due_reads.load(Ordering::SeqCst) == 0 {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    *fake.enabled.lock().unwrap() = true;
+    match decide(false, Some(first_due), SystemTime::now()) {
+        Pending::Wait(left) if left >= Duration::from_secs(1) => {}
+        _ => return None,
+    }
+    if !fake.calls().is_empty() {
+        return None;
+    }
+
+    let start = Instant::now();
+    let again = SystemTime::now() + Duration::from_secs(4) - UNDO_WINDOW;
+    *fake.due.lock().unwrap() = Some(Due::after_window(again));
+    *fake.enabled.lock().unwrap() = false;
+    // SAFETY: as above.
+    unsafe { delete_later(source.0, Shared(Arc::clone(&fake)), again) };
+
+    while !fake.calls().contains(&"destroy_on_server") {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let waited = start.elapsed();
+    assert_eq!(fake.calls(), ["destroy_on_server", "remove"]);
+    Some(waited)
 }

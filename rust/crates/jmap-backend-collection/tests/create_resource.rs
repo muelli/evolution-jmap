@@ -207,8 +207,8 @@ fn create(server: &MockServer, scratch: &Scratch) -> Child {
 
 #[test]
 fn a_scratch_address_book_asks_for_an_address_book_under_its_display_name() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
 
         assert_eq!(
@@ -223,8 +223,8 @@ fn a_scratch_address_book_asks_for_an_address_book_under_its_display_name() {
 
 #[test]
 fn a_scratch_calendar_asks_for_a_calendar_under_its_display_name() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let scratch = Scratch::new(Some(ChildKind::Calendar), "Trips");
 
         assert_eq!(
@@ -239,8 +239,8 @@ fn a_scratch_calendar_asks_for_a_calendar_under_its_display_name() {
 
 #[test]
 fn a_scratch_source_that_names_no_kind_asks_for_nothing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The EDS documentation of the vfunc says: "If this cannot be determined
         // without ambiguity, the function must return an error." A guessed kind
         // can create the wrong type of collection.
@@ -252,8 +252,8 @@ fn a_scratch_source_that_names_no_kind_asks_for_nothing() {
 
 #[test]
 fn reading_the_kind_does_not_give_the_scratch_source_an_extension_it_lacked() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_source_get_extension` *creates* an extension that it cannot find.
         // A scratch source is a real source that EDS writes to disk. A read of
         // `[Calendar]` would make each new address book a source that both
@@ -272,8 +272,8 @@ fn reading_the_kind_does_not_give_the_scratch_source_an_extension_it_lacked() {
 
 #[test]
 fn a_created_address_book_leaves_a_source_this_backend_reads_back_as_its_child() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This property prevents a duplicate after a create. EDS uses
         // `dup_resource_id` to pair a published child with a resource id
         // (`collection_backend_ref_child_source`). If the resource id does not
@@ -295,8 +295,8 @@ fn a_created_address_book_leaves_a_source_this_backend_reads_back_as_its_child()
 
 #[test]
 fn a_created_calendar_leaves_a_source_this_backend_reads_back_as_its_child() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let server = MockServer::builder().start();
         let scratch = Scratch::new(Some(ChildKind::Calendar), "Trips");
 
@@ -313,8 +313,8 @@ fn a_created_calendar_leaves_a_source_this_backend_reads_back_as_its_child() {
 
 #[test]
 fn a_created_child_reaches_the_server_the_account_names() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The child uses the connection of the *account*, not the URL of the
         // create. A child with the discovery URL works only while the two URLs
         // agree.
@@ -342,8 +342,8 @@ fn a_created_child_reaches_the_server_the_account_names() {
 
 #[test]
 fn a_created_child_is_parented_writable_and_written_back_to_the_collections_cache() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `collection_backend_new_source()` sets these three things on a child
         // that EDS makes, so a scratch source does not have them.
         // - Without the parent, the source is not a child of this account, and
@@ -367,8 +367,8 @@ fn a_created_child_is_parented_writable_and_written_back_to_the_collections_cach
 
 #[test]
 fn adopting_a_created_child_is_not_what_offers_it_for_deletion() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This is intentional. evolution-ews sets `remote-deletable` at each of
         // the three sites that make a child. This backend sets it at one site:
         // `delete_resource::offer_deletion`, from the `child_added` that fires
@@ -391,8 +391,8 @@ fn adopting_a_created_child_is_not_what_offers_it_for_deletion() {
 
 #[test]
 fn stored_password_of_a_gone_registry_server_names_the_account_in_a_structured_field() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `server.is_null()` is the branch for a registry server that is gone.
         // This branch needs no `ESourceRegistryServer`. Thus the test examines
         // only the `account_id` field and needs no credentials provider.
@@ -443,10 +443,14 @@ unsafe fn set_display_name(source: *mut ESource, name: *const std::ffi::c_char) 
     unsafe { e_source_set_display_name(source, name) };
 }
 
+/// The race test writes 20,000 display names. It takes about 5 s, and up to 60 s
+/// under ThreadSanitizer.
+const RACE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
 #[test]
 fn requested_of_on_another_thread_copies_a_display_name_the_main_thread_is_replacing() {
-    with_timeout_duration(std::time::Duration::from_secs(60), || {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    with_timeout_duration(RACE_TIMEOUT, || {
         let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
         read_while_another_thread_writes(
             scratch.source,

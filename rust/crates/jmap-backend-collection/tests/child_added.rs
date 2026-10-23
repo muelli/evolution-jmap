@@ -218,8 +218,8 @@ fn bound() -> (Source, Source) {
 
 #[test]
 fn the_bound_properties_exist_on_the_extensions_they_are_named_under() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A misspelt property name is not a compile error. It causes a runtime
         // `g_critical` and no binding. The test asks the GObject class, so it fails
         // even if no other test uses that property.
@@ -255,8 +255,8 @@ fn the_bound_properties_exist_on_the_extensions_they_are_named_under() {
 
 #[test]
 fn a_cached_child_is_brought_up_to_date_the_moment_it_is_bound() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // An earlier session wrote this child, and this session loads it from the
         // cache directory with the old server. A copy at populate cannot update it.
         // `child_added` fires before a connection, so the binding updates it here.
@@ -297,8 +297,8 @@ fn a_cached_child_is_brought_up_to_date_the_moment_it_is_bound() {
 
 #[test]
 fn moving_the_account_to_another_server_moves_its_children() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The user changes the host and the port. A populate writes only the
         // children that it creates, so nothing runs `apply` again. Without the
         // binding, the child keeps the old server.
@@ -318,8 +318,8 @@ fn moving_the_account_to_another_server_moves_its_children() {
 
 #[test]
 fn renaming_the_account_user_renames_its_children() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (account, child) = bound();
 
         account.set_user("vera@example.org");
@@ -334,8 +334,8 @@ fn renaming_the_account_user_renames_its_children() {
 
 #[test]
 fn switching_tls_off_on_the_account_reaches_its_children() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // An error here is a security problem, not only a connection failure. A
         // child on TLS with a plaintext account fails visibly. A child on plain
         // text with a TLS account (the second half) does not.
@@ -360,8 +360,8 @@ fn switching_tls_off_on_the_account_reaches_its_children() {
 
 #[test]
 fn the_authentication_method_follows_too() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The method tells EDS how to get a credential. A child with a different
         // method asks for a password that the account does not use.
         let (account, child) = bound();
@@ -377,8 +377,8 @@ fn the_authentication_method_follows_too() {
 
 #[test]
 fn the_credential_name_follows_too() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // eds#663: EDS stores the OAuth2 credentials of an account under the uid
         // of the account. A child must use that key, not its own key or no key.
         let (account, child) = bound();
@@ -395,8 +395,8 @@ fn the_credential_name_follows_too() {
 
 #[test]
 fn a_child_does_not_write_back_to_the_account() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The binding is one-way. A two-way binding would let a child change the
         // account file of the user, and through it, all the other children.
         let (account, child) = bound();
@@ -413,8 +413,8 @@ fn a_child_does_not_write_back_to_the_account() {
 
 #[test]
 fn an_account_with_no_authentication_group_is_not_given_one() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_source_get_extension` creates a missing extension, but the backend must
         // only read the account source. An account with no `[Authentication]` names
         // no host, so there is nothing to bind.
@@ -442,8 +442,8 @@ fn an_account_with_no_authentication_group_is_not_given_one() {
 
 #[test]
 fn a_child_of_a_kind_this_backend_did_not_write_is_left_alone() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `child_added` fires for each child of the collection, mail identities
         // included. A source with no `[Authentication]` connects to nothing. A
         // binding on it would change a source of a different part of Evolution.
@@ -466,8 +466,8 @@ fn a_child_of_a_kind_this_backend_did_not_write_is_left_alone() {
 
 #[test]
 fn a_child_that_authenticates_but_names_no_security_keeps_naming_none() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The module binds each group separately. A child with `[Authentication]`
         // and no `[Security]` (possible for a mail account from the setup UI)
         // follows the host and the user. It does not get a `[Security]` group.
@@ -496,8 +496,8 @@ fn a_child_that_authenticates_but_names_no_security_keeps_naming_none() {
 
 #[test]
 fn a_child_with_security_but_no_authentication_still_follows_the_secure_flag() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The rule applies to each group separately. A missing `[Authentication]`
         // on the child does not stop the binding of `[Security]` after it.
         let account = Source::account();
@@ -547,8 +547,8 @@ fn oauth2_config() -> jmap_config::oauth2::Config {
 
 #[test]
 fn a_childs_jmap_oauth2_group_follows_the_accounts() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let account = Source::account();
         // SAFETY: a live source and a config of literals.
         unsafe { jmap_config::oauth2::apply(account.0, &oauth2_config()) };
@@ -588,8 +588,8 @@ fn a_mail_transport_child_gets_the_jmap_oauth2_group_too() {
     // Without the group, Send on the transport opens the consent window. The
     // transport takes the early `follow_server` path in `follow_collection`, so
     // the OAuth2 binding must occur before that branch.
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let account = Source::account();
         // SAFETY: a live source and a config of literals.
         unsafe { jmap_config::oauth2::apply(account.0, &oauth2_config()) };
@@ -626,8 +626,8 @@ fn an_account_without_the_oauth2_group_leaves_the_child_without_it() {
     // Nothing creates the group on the account, because its `.source` file
     // belongs to the user. A child of an account with no client registration
     // does not get the group either.
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let account = Source::account();
         let child = Source::child_of(&connection());
 
@@ -794,8 +794,8 @@ unsafe extern "C" fn mark_finalized(user_data: gpointer, _object: *mut gobject_s
 
 #[test]
 fn dropping_a_source_finalizes_its_extension_once_the_pending_idle_runs() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = Source::account();
         let auth: *mut ESourceAuthentication = source.authentication();
         let finalized: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
@@ -829,8 +829,8 @@ fn dropping_a_source_finalizes_its_extension_once_the_pending_idle_runs() {
 
 #[test]
 fn dropping_the_child_disconnects_the_binding_and_the_account_stays_usable() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (account, child) = bound();
 
         drop(child);
@@ -851,8 +851,8 @@ fn dropping_the_child_disconnects_the_binding_and_the_account_stays_usable() {
 
 #[test]
 fn dropping_the_account_leaves_the_childs_last_values_in_place() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (account, child) = bound();
         let before = child.config();
 
@@ -869,8 +869,8 @@ fn dropping_the_account_leaves_the_childs_last_values_in_place() {
 
 #[test]
 fn dropping_the_child_does_not_break_a_later_oauth2_reregistration() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let account = Source::account();
         // SAFETY: a live source and a config of literals.
         unsafe { jmap_config::oauth2::apply(account.0, &oauth2_config()) };
@@ -902,8 +902,8 @@ fn dropping_the_child_does_not_break_a_later_oauth2_reregistration() {
 
 #[test]
 fn dropping_the_account_leaves_the_childs_oauth2_group_in_place() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let account = Source::account();
         // SAFETY: a live source and a config of literals.
         unsafe { jmap_config::oauth2::apply(account.0, &oauth2_config()) };

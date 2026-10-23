@@ -105,8 +105,8 @@ fn fresh_source() -> *mut ESource {
 
 #[test]
 fn the_module_load_registers_the_oauth2_extension_type() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let gtype = register_static::<TestModule>();
         assert_ne!(gtype, 0, "the stand-in module type did not register");
 

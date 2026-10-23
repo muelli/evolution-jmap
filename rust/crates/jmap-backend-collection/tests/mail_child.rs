@@ -304,8 +304,8 @@ const SERVICES: [&CStr; 2] = [
 
 #[test]
 fn a_mail_source_of_this_account_is_recognised_by_its_service_and_its_provider() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for extension in SERVICES {
             let source = Source::service(extension, MAIL_BACKEND_NAME);
             // SAFETY: a live source.
@@ -335,8 +335,8 @@ fn a_mail_source_of_this_account_is_recognised_by_its_service_and_its_provider()
 
 #[test]
 fn the_mail_sources_the_assistant_leaves_behind_reach_the_accounts_server() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The assistant creates the three scratch sources and writes the service
         // name. The setup module's `commit_changes` writes the server only on the
         // receiving source, because the sending page is hidden for a
@@ -362,8 +362,8 @@ fn the_mail_sources_the_assistant_leaves_behind_reach_the_accounts_server() {
 
 #[test]
 fn a_mail_sources_credential_name_follows_the_account_too() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The token-cache key of eds#663. A mail source must find its OAuth2 token
         // under the key of the account, not under a key of its own.
         let account = Source::account();
@@ -386,8 +386,8 @@ fn a_mail_sources_credential_name_follows_the_account_too() {
 
 #[test]
 fn a_mail_source_carries_camels_own_spelling_of_the_security_method() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The EDS `secure` boolean writes a word that Camel does not know. Thus the
         // module cannot bind `secure` on a mail source as `child_added` does on an
         // address book. This assertion pins the EDS spelling.
@@ -422,8 +422,8 @@ fn a_mail_source_carries_camels_own_spelling_of_the_security_method() {
 
 #[test]
 fn the_camel_spelling_a_commit_wrote_is_not_replaced_by_the_accounts() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `jmap_config::mail::apply_server` writes the Camel nick on the mail
         // account source. A `secure` binding would replace it with the EDS `"tls"`
         // when `G_BINDING_SYNC_CREATE` fires.
@@ -444,8 +444,8 @@ fn the_camel_spelling_a_commit_wrote_is_not_replaced_by_the_accounts() {
 
 #[test]
 fn switching_tls_off_on_the_account_reaches_its_mail_sources() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A mail source that requests encryption from a plaintext server (for
         // example, the mock server) does not connect.
         let account = Source::account();
@@ -466,8 +466,8 @@ fn switching_tls_off_on_the_account_reaches_its_mail_sources() {
 
 #[test]
 fn moving_the_account_to_another_server_moves_its_mail_sources() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A binding, not a copy: nothing runs the commit again, so a copy keeps the
         // old server. EDS also compares these two host strings to decide if the
         // mail source shares the account password. An old host causes a second
@@ -490,8 +490,8 @@ fn moving_the_account_to_another_server_moves_its_mail_sources() {
 
 #[test]
 fn the_accounts_authentication_method_reaches_its_mail_sources() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `[Authentication] Method` follows the account, as host, port and user do.
         // `jmap-mail` reads it through `CamelNetworkSettings:auth-mechanism` to
         // select the credential type. `uses_api_token` and `uses_oauth2` use it to
@@ -525,8 +525,8 @@ fn the_accounts_authentication_method_reaches_its_mail_sources() {
 
 #[test]
 fn the_transport_sends_through_the_server_the_provider_would_connect_to() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This test checks the end result, not the written keys. The settings that
         // `e_source_camel_configure_service` gives a `CamelJmapTransport` must name
         // the account server. The test reads them with the `jmap-mail` reader that
@@ -553,8 +553,8 @@ fn the_transport_sends_through_the_server_the_provider_would_connect_to() {
 
 #[test]
 fn a_plaintext_account_reaches_its_transport_as_plaintext() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A wrong `[Security] Method` spelling is visible in this case. An unknown
         // nick keeps the `CamelNetworkSettings` default (`STARTTLS_ON_STANDARD_PORT`
         // in EDS 3.52), which is encryption that the account does not have. A
@@ -585,8 +585,8 @@ fn a_plaintext_account_reaches_its_transport_as_plaintext() {
 
 #[test]
 fn an_identity_is_left_without_a_server() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // An identity has no server. A group written on it would change a source
         // that belongs to a different part of Evolution. `child_added` applies this
         // rule to each child that is not a mail service of this account.
@@ -603,8 +603,8 @@ fn an_identity_is_left_without_a_server() {
 
 #[test]
 fn a_mail_source_of_another_provider_is_left_alone() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let account = Source::account();
         let smtp = Source::service(E_SOURCE_EXTENSION_MAIL_TRANSPORT, c"smtp");
 
@@ -621,8 +621,8 @@ fn a_mail_source_of_another_provider_is_left_alone() {
 
 #[test]
 fn an_account_with_no_security_group_reaches_its_mail_sources_as_tls() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A hand-written `.source` file (for example, from the manual test recipe)
         // has no `[Security]` group. `collection_source::server_of` reads that as
         // TLS. A mail source with no `[Security]` would get the
@@ -647,8 +647,8 @@ fn an_account_with_no_security_group_reaches_its_mail_sources_as_tls() {
 
 #[test]
 fn an_account_that_names_no_server_writes_none_on_its_mail_sources() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Neither source gets the group. The account is the file of the user, and
         // the backend must not invent a host that it does not know.
         let account = Source::new("jmap-account-no-server");

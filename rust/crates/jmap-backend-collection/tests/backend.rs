@@ -153,8 +153,8 @@ fn query(gtype: glib_sys::GType) -> GTypeQuery {
 
 #[test]
 fn the_backend_registers_as_a_subclass_of_ecollectionbackend() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let gtype = register_static::<JmapCollectionBackend>();
         assert_ne!(gtype, 0, "the backend type did not register");
 
@@ -171,8 +171,8 @@ fn the_backend_registers_as_a_subclass_of_ecollectionbackend() {
 
 #[test]
 fn the_registered_sizes_are_the_rust_struct_sizes() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // GObject allocates the sizes given at registration. A mismatch writes
         // vfunc pointers past the end of the class. The eds-sys layout test does
         // the same check for the parent types.
@@ -189,8 +189,8 @@ fn the_registered_sizes_are_the_rust_struct_sizes() {
 
 #[test]
 fn class_init_replaces_the_default_dup_resource_id_rather_than_leaving_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The inherited `dup_resource_id` returns `[Resource] Identity` unchanged.
         // Thus a missing override is not visible until two children of one JMAP id
         // collide.
@@ -216,8 +216,8 @@ fn class_init_replaces_the_default_dup_resource_id_rather_than_leaving_it() {
 
 #[test]
 fn the_installed_vfunc_answers_with_the_kind_as_well_as_the_identity() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let class = Class::get();
 
         assert_eq!(
@@ -240,8 +240,8 @@ fn the_installed_vfunc_answers_with_the_kind_as_well_as_the_identity() {
 
 #[test]
 fn a_source_this_backend_did_not_create_gets_a_null_back() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // For EDS, NULL means "not a source of this backend". For a source in the
         // cache directory of the backend, NULL causes its deletion. Thus NULL is
         // correct only for a foreign source.
@@ -256,8 +256,8 @@ fn a_source_this_backend_did_not_create_gets_a_null_back() {
 
 #[test]
 fn class_init_replaces_the_default_populate_rather_than_leaving_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `ECollectionBackendClass::populate` is a placeholder "so subclasses can
         // safely chain up". Without the override, the sidebar is empty. Nothing
         // claims or exports the cached children, and nothing asks EDS for the
@@ -284,8 +284,8 @@ fn class_init_replaces_the_default_populate_rather_than_leaving_it() {
 
 #[test]
 fn the_installed_populate_is_the_one_the_parent_can_still_be_reached_through() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The vfunc chains up through `g_type_class_peek` of `ECollectionBackend`,
         // not through the class of the instance. For a subclass of this type, the
         // class of the instance gives this populate again, and the recursion
@@ -309,8 +309,8 @@ fn the_installed_populate_is_the_one_the_parent_can_still_be_reached_through() {
 
 #[test]
 fn class_init_replaces_the_default_child_added_rather_than_leaving_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `ECollectionBackendClass::child_added` is a signal class closure that
         // works. It adds the child to the backend table, binds its enabled flag and
         // makes it not removable. Without the override, the children keep the old
@@ -337,8 +337,8 @@ fn class_init_replaces_the_default_child_added_rather_than_leaving_it() {
 
 #[test]
 fn class_init_replaces_the_default_create_resource_sync_rather_than_leaving_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The EDS default of this slot is a refusal, not a wrong answer.
         // `collection_backend_create_resource()` only calls
         // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
@@ -369,8 +369,8 @@ fn class_init_replaces_the_default_create_resource_sync_rather_than_leaving_it()
 
 #[test]
 fn installing_the_middle_slots_left_the_ones_beside_them_inherited() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This crate writes `child_added`, `create_resource_sync` and
         // `delete_resource_sync` in the middle of `ECollectionBackendClass`.
         // (`populate` and `dup_resource_id` are at the start.) EDS fills the
@@ -420,8 +420,8 @@ fn installing_the_middle_slots_left_the_ones_beside_them_inherited() {
 
 #[test]
 fn class_init_replaces_the_default_delete_resource_sync_rather_than_leaving_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // As for create, the EDS default is a refusal:
         // `collection_backend_delete_resource()` only calls
         // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
@@ -459,8 +459,8 @@ fn e_backend_class() -> *mut EBackendClass {
 
 #[test]
 fn class_init_replaces_the_default_authenticate_sync_rather_than_leaving_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_backend_class_init` installs `EBackendClass::authenticate_sync`. Its
         // body says "the default implementation just reports success, it's for
         // backends which do not use (nor define) authentication routines". It
@@ -493,8 +493,8 @@ fn class_init_replaces_the_default_authenticate_sync_rather_than_leaving_it() {
 
 #[test]
 fn installing_authenticate_sync_and_get_destination_address_leaves_prepare_shutdown_inherited() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This crate writes `authenticate_sync` and `get_destination_address` in
         // the bindgen `EBackendClass`, two levels up. This crate does not control
         // that layout. A wrong offset compiles, but it replaces an adjacent slot
@@ -522,8 +522,8 @@ fn installing_authenticate_sync_and_get_destination_address_leaves_prepare_shutd
 
 #[test]
 fn class_init_replaces_the_default_get_destination_address_rather_than_leaving_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The default `backend_get_destination_address` reads the "connectable"
         // property through `e_backend_ref_connectable`. This crate does not set
         // that property, so the default always returns `FALSE`. Then the EDS

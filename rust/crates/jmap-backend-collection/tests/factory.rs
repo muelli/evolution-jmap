@@ -201,8 +201,8 @@ fn parent_class() -> &'static ECollectionBackendFactoryClass {
 
 #[test]
 fn the_entry_point_registers_the_backend_type() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let gtype = backend_type();
         assert_ne!(gtype, 0, "e_module_load did not register the backend type");
         assert_ne!(
@@ -219,8 +219,8 @@ fn the_entry_point_registers_the_backend_type() {
 /// a module unless the type derives from it.
 #[test]
 fn the_entry_point_registers_a_collection_backend_factory() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let gtype = factory_type();
         assert_ne!(gtype, 0, "e_module_load did not register the factory type");
         assert_ne!(
@@ -245,8 +245,8 @@ fn the_entry_point_registers_a_collection_backend_factory() {
 /// tests in this file, but nothing makes an instance of it.
 #[test]
 fn the_factory_is_an_extension_of_the_registry_server() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let class = FactoryClass::get();
         assert_eq!(
             class.get_ref().parent_class.parent_class.extensible_type,
@@ -265,8 +265,8 @@ fn the_factory_is_an_extension_of_the_registry_server() {
 /// a factory with the default is silently the wrong factory.
 #[test]
 fn the_factory_answers_to_the_backend_name_an_account_source_asks_for() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let class = FactoryClass::get();
         let name = class.get_ref().factory_name;
         assert!(!name.is_null(), "the factory installed no name");
@@ -297,8 +297,8 @@ fn the_factory_answers_to_the_backend_name_an_account_source_asks_for() {
 /// which ends in the `g_type_free_instance` that matches this allocation.
 #[test]
 fn the_registry_would_file_the_factory_under_the_account_name() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let gtype = factory_type();
         assert_ne!(gtype, 0, "the factory type is not registered");
         // SAFETY: a registered type that can have instances. The GObject
@@ -329,8 +329,8 @@ fn the_registry_would_file_the_factory_under_the_account_name() {
 /// a collection backend.
 #[test]
 fn the_factory_builds_the_jmap_collection_backend() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let class = FactoryClass::get();
         let built = class.get_ref().backend_type;
         assert_eq!(
@@ -361,8 +361,8 @@ fn the_factory_builds_the_jmap_collection_backend() {
 /// `prepare_mail` and corrupts the padding that EDS keeps for future vfuncs.
 #[test]
 fn writing_the_fields_left_the_parent_vfuncs_alone() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let class = FactoryClass::get();
         let ours = class.get_ref();
         let parent = parent_class();
@@ -406,8 +406,8 @@ fn writing_the_fields_left_the_parent_vfuncs_alone() {
 /// unloads the module.
 #[test]
 fn the_types_belong_to_the_module_that_registered_them() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let loaded = loaded();
         for gtype in [backend_type(), factory_type()] {
             assert_eq!(
@@ -429,8 +429,8 @@ fn the_types_belong_to_the_module_that_registered_them() {
 /// refuses the module, and no JMAP account can be constructed.
 #[test]
 fn a_module_that_is_unloaded_and_loaded_again_hands_its_types_back() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let loaded = loaded();
         assert_ne!(loaded.first_use, GFALSE, "the module would not load at all");
         assert_ne!(

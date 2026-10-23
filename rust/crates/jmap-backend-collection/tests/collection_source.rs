@@ -168,8 +168,8 @@ fn account() -> TestSource {
 
 #[test]
 fn an_account_that_says_nothing_about_its_parts_has_all_of_them_and_is_not_given_any() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_source_get_extension` creates the extension that it gets, as
         // `resource_id_of` also finds. A direct read of `[Collection]` would add
         // three flags to the keyfile of the account, which EDS writes back. Thus
@@ -187,8 +187,8 @@ fn an_account_that_says_nothing_about_its_parts_has_all_of_them_and_is_not_given
 
 #[test]
 fn a_disabled_account_has_no_parts_whatever_its_extension_says() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_collection_backend_get_part_enabled()` checks the `enabled` property
         // of the source before the extension. If a disabled account populated, the
         // sidebar would show children of an account that is not there.
@@ -201,8 +201,8 @@ fn a_disabled_account_has_no_parts_whatever_its_extension_says() {
 
 #[test]
 fn each_tick_is_read_as_the_part_it_is() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Each flag must go to its own part. EDS spells the calendar flag in the
         // singular (`calendar-enabled`) and the contacts flag in the plural. A swap
         // is easy to miss in the code.
@@ -234,8 +234,8 @@ fn each_tick_is_read_as_the_part_it_is() {
 
 #[test]
 fn a_switched_off_part_is_read_off_the_account_and_not_off_the_collections() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `Fanout::discover` uses this condition before each listing. `wants` is in
         // the sync crate, but it gets only the `Parts` from `parts_of`. Thus the
         // two must agree about each flag.
@@ -252,8 +252,8 @@ fn a_switched_off_part_is_read_off_the_account_and_not_off_the_collections() {
 
 #[test]
 fn an_account_names_the_server_its_children_will_repeat() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // EDS binds only `oauth2-support` to a child, so the child gets none of
         // these fields from EDS. Without each field, a child cannot connect.
         let server = account().server_of().expect("a well-formed account");
@@ -277,8 +277,8 @@ fn an_account_names_the_server_its_children_will_repeat() {
 
 #[test]
 fn the_server_this_backend_contacts_is_the_one_its_children_are_given() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The origin and the connection come from one read. This backend gets
         // `/.well-known/jmap` itself, and each child makes its origin from the
         // copied fields. Two reads could disagree. Then the account would discover
@@ -322,8 +322,8 @@ fn the_server_this_backend_contacts_is_the_one_its_children_are_given() {
 
 #[test]
 fn a_port_the_account_does_not_name_is_left_unnamed_rather_than_zero() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The keyfile uses 0 for "not set", and a missing key also reads as 0. If
         // passed on, the children would get `Port=0`, and this backend would use
         // port zero, not the default port of the scheme.
@@ -343,8 +343,8 @@ fn a_port_the_account_does_not_name_is_left_unnamed_rather_than_zero() {
 
 #[test]
 fn an_account_with_no_security_extension_is_secure_and_is_not_given_one() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `ESourceSecurity:secure` is FALSE by default. Thus a direct read cannot
         // tell a missing [Security] group from TLS that the user disabled. Plain
         // HTTP for a missing group would downgrade each hand-written account and
@@ -370,8 +370,8 @@ fn an_account_with_no_security_extension_is_secure_and_is_not_given_one() {
 
 #[test]
 fn an_account_that_names_no_server_is_refused_without_being_given_an_empty_group() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The result is `MissingHost`, not a fan-out with no server. The read
         // also must not create the extension. EDS writes the account source back
         // to disk, so an empty `[Authentication]` group would change the file.
@@ -387,8 +387,8 @@ fn an_account_that_names_no_server_is_refused_without_being_given_an_empty_group
 
 #[test]
 fn a_host_that_is_not_a_bare_host_name_is_refused_before_any_child_gets_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The origin is made by concatenation, so the host field is not only data.
         // Each child validates the host again. But by then, the `.source` file of
         // each child contains the string, and this backend has contacted the host.
@@ -409,8 +409,8 @@ fn a_host_that_is_not_a_bare_host_name_is_refused_before_any_child_gets_it() {
 
 #[test]
 fn a_plain_http_account_is_refused_unless_it_stays_on_the_machine() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The book and calendar backends apply the same rule through the same
         // function. The collection backend contacts the server first, and only it
         // writes the setting into the children.
@@ -445,8 +445,8 @@ fn a_plain_http_account_is_refused_unless_it_stays_on_the_machine() {
 
 #[test]
 fn the_user_an_account_names_is_read_without_the_host_being_looked_at() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `populate` needs only one field of `[Authentication]`: the user. It
         // decides between a password request and an anonymous authentication.
         // This must not need `server_of`. An account with a user and an invalid
@@ -469,8 +469,8 @@ fn the_user_an_account_names_is_read_without_the_host_being_looked_at() {
 
 #[test]
 fn an_account_that_names_no_user_reads_as_anonymous_and_is_not_given_a_group() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `jmap_backend_core::connect::credentials` reads `None` as intentionally
         // anonymous, so a populate must not ask for a password. Also, the read
         // must not create the extension in the file of the account.
@@ -486,8 +486,8 @@ fn an_account_that_names_no_user_reads_as_anonymous_and_is_not_given_a_group() {
 
 #[test]
 fn a_user_key_that_is_present_but_empty_is_no_user_at_all() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `User=` in a keyfile reads as "", and the EDS collection backends test
         // `user && *user` for this case. Both forms must give the same decision.
         // `credentials()` returns `CredentialsRequired` for a named user with no
@@ -541,8 +541,8 @@ unsafe fn set_method(source: *mut ESource, method: *const std::ffi::c_char) {
 
 #[test]
 fn user_of_on_another_thread_copies_a_user_the_main_thread_is_replacing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout_duration(RACE_TIMEOUT, || {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = account();
         read_while_another_thread_writes(
             source.0,
@@ -557,8 +557,8 @@ fn user_of_on_another_thread_copies_a_user_the_main_thread_is_replacing() {
 
 #[test]
 fn server_of_on_another_thread_copies_a_user_the_main_thread_is_replacing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout_duration(RACE_TIMEOUT, || {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = account();
         read_while_another_thread_writes(
             source.0,
@@ -578,8 +578,8 @@ fn server_of_on_another_thread_copies_a_user_the_main_thread_is_replacing() {
 
 #[test]
 fn server_of_on_another_thread_copies_a_method_the_main_thread_is_replacing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout_duration(RACE_TIMEOUT, || {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let source = account();
         read_while_another_thread_writes(
             source.0,

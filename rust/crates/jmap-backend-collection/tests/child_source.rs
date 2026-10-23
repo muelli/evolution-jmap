@@ -151,8 +151,8 @@ fn child(kind: ChildKind, collection: &str, name: &str) -> Child {
 
 #[test]
 fn the_extension_names_are_the_ones_eds_defines() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `jmap-collection-sync` builds without the EDS headers, so it has its
         // own keyfile group names. Only this crate sees both spellings. A
         // mismatch compiles, because `e_source_get_extension` takes a string,
@@ -168,8 +168,8 @@ fn the_extension_names_are_the_ones_eds_defines() {
 
 #[test]
 fn a_written_child_is_read_back_as_the_child_it_was_written_from() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // EDS does this round trip at each later start.
         // `collection_backend_load_resources()` reads the cached `.source` file
         // and calls `dup_resource_id`. A different string causes a second source
@@ -196,8 +196,8 @@ fn a_written_child_is_read_back_as_the_child_it_was_written_from() {
 
 #[test]
 fn a_written_child_reaches_the_server_its_account_named() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // From the connection of the account, EDS binds only `oauth2-support` to
         // the child. The address book and calendar backends get the child. Thus
         // the copied settings are all the data that these backends have.
@@ -225,8 +225,8 @@ fn a_written_child_reaches_the_server_its_account_named() {
 
 #[test]
 fn every_setting_a_child_can_be_described_by_is_one_this_writes() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `Child::settings` is in a different crate, which can add a setting. If
         // `apply` cannot write it, the backend only logs the error. Thus this
         // test asserts that `apply` writes all settings of each child and account
@@ -263,8 +263,8 @@ fn every_setting_a_child_can_be_described_by_is_one_this_writes() {
 
 #[test]
 fn a_setting_this_backend_cannot_write_is_refused_rather_than_dropped() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `apply` must not silently skip an unknown setting. Otherwise the child
         // looks correct but is without a necessary property. The error names the
         // group and key, because the log is the only place where a user sees it.
@@ -317,8 +317,8 @@ fn a_setting_this_backend_cannot_write_is_refused_rather_than_dropped() {
 
 #[test]
 fn a_child_carries_the_extension_of_its_own_kind_and_not_the_other() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The extension sets the kind. `collection_backend_child_is_contacts()`,
         // `collection_backend_child_is_calendar()` and the kind part of the
         // resource id all use `e_source_has_extension`. A child with both would
@@ -352,8 +352,8 @@ fn a_child_carries_the_extension_of_its_own_kind_and_not_the_other() {
 
 #[test]
 fn a_plain_http_account_writes_children_that_do_not_insist_on_tls() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `Child::settings` writes `[Security] Method` as the keyfile string
         // "tls" or "none". The backends read `ESourceSecurity:secure`, a boolean.
         // They agree only if EDS spells the secure method the same way. If not, a
@@ -378,8 +378,8 @@ fn a_plain_http_account_writes_children_that_do_not_insist_on_tls() {
 
 #[test]
 fn a_port_the_account_did_not_name_leaves_the_child_at_the_scheme_default() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `Child::settings` omits the setting and does not write 0. An omitted
         // setting must leave the property "not set". A child with port 0 cannot
         // connect.
@@ -398,8 +398,8 @@ fn a_port_the_account_did_not_name_leaves_the_child_at_the_scheme_default() {
 
 #[test]
 fn a_collection_name_with_an_interior_nul_still_produces_a_usable_child() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The display name is the only setting with a value from the server. A
         // JSON string can contain an escaped NUL, but a C string cannot. A refused
         // write would remove the child. Thus `apply` truncates the name at the
@@ -414,8 +414,8 @@ fn a_collection_name_with_an_interior_nul_still_produces_a_usable_child() {
 
 #[test]
 fn a_calendars_color_reaches_the_child_and_reads_back_as_the_one_written() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A real backend needs this round trip. `Child::settings` describes the
         // color as a `("Calendar", "Color", …)` triple. This test checks that the
         // triple sets the `ESourceSelectable:color` property.
@@ -429,8 +429,8 @@ fn a_calendars_color_reaches_the_child_and_reads_back_as_the_one_written() {
 
 #[test]
 fn a_calendar_the_server_named_no_color_for_gets_no_color_setting() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Unlike the other properties of a new extension, `ESourceSelectable:color`
         // is not NULL by default. The EDS GParamSpec gives it a default ("#62a0ea",
         // the GNOME accent blue). A calendar without a server color gets that

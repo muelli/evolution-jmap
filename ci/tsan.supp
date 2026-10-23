@@ -51,6 +51,11 @@ race_top:^freelist_free$
 # with a plain load.
 race_top:^g_private_get$
 
+# GLib: g_rec_mutex_lock makes the pthread lock of a static GRecMutex lazily
+# with a compare-and-exchange. When it loses the race, it reads the winner's
+# lock with a plain load.
+race_top:^g_rec_mutex_lock$
+
 # GLib: get_tmp_file increments a static counter with no lock. The counter
 # only seeds the name, and a name that exists already gives a retry.
 race_top:^get_tmp_file$
@@ -75,6 +80,11 @@ race_top:^camel_provider_init$
 # parallel threads. The registry service makes them on its main thread.
 race:^e_get_user_config_dir$
 race:^e_server_side_source_init$
+
+# EDS: e_source_registry_debug_enabled (inlined into the print function)
+# reads ESR_DEBUG into a lazy static with no lock. Every thread computes the
+# same value.
+race_top:^e_source_registry_debug_print$
 
 # libical-glib: the library is not instrumented, so ThreadSanitizer does not
 # see the atomic g_once that publishes its type ids to g_object_new.

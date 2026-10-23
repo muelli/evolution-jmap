@@ -184,8 +184,8 @@ fn removals(
 
 #[test]
 fn a_child_whose_collection_the_server_no_longer_lists_is_the_one_removed() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // This is the purpose of the removal half. An address book that the web
         // UI deleted must leave the sidebar. The other child must stay.
         let gone = TestSource::child(ChildKind::AddressBook, "AB2");
@@ -199,8 +199,8 @@ fn a_child_whose_collection_the_server_no_longer_lists_is_the_one_removed() {
 
 #[test]
 fn a_child_of_a_part_the_user_switched_off_is_kept() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A disabled part lists nothing. Thus each child of that kind seems to
         // be a collection that the server does not have. The WebDAV backend of
         // EDS removes these children, but this backend must not. The cache and
@@ -223,8 +223,8 @@ fn a_child_of_a_part_the_user_switched_off_is_kept() {
 
 #[test]
 fn a_source_this_backend_did_not_write_is_never_removed() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `e_collection_backend_list_*_sources` returns all sources in the
         // collection. This backend makes no decision about a source without our
         // resource id. A source that this backend cannot read is not obsolete.
@@ -239,8 +239,8 @@ fn a_source_this_backend_did_not_write_is_never_removed() {
 
 #[test]
 fn an_address_book_and_a_calendar_with_one_id_are_judged_apart() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Ids are unique for each account *and* each object type (RFC 8620
         // §1.2). Thus one id for both kinds is normal on a server that counts
         // from one. The kind comes from the extension of the source. Without the
@@ -259,8 +259,8 @@ fn an_address_book_and_a_calendar_with_one_id_are_judged_apart() {
 
 #[test]
 fn every_obsolete_child_is_picked_and_in_the_order_it_was_given_in() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // If a populate stops at the first child, the others stay until the next
         // populate. Until then, the sidebar is only partly correct.
         let first = TestSource::child(ChildKind::AddressBook, "AB1");
@@ -278,8 +278,8 @@ fn every_obsolete_child_is_picked_and_in_the_order_it_was_given_in() {
 
 #[test]
 fn a_child_that_cannot_be_removed_is_reported_with_what_eds_said() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // These sources have no D-Bus object, so EDS refuses the removal. This
         // test can only run this branch of `e_source_remove_sync`. A populate
         // must continue after this refusal. The vfunc returns void, so the
@@ -303,8 +303,8 @@ fn a_child_that_cannot_be_removed_is_reported_with_what_eds_said() {
 
 #[test]
 fn a_removal_that_failed_does_not_stop_the_ones_after_it() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // If EDS refuses to remove one child, the removal of the others must
         // continue.
         let first = TestSource::child(ChildKind::AddressBook, "AB1");
@@ -390,8 +390,8 @@ unsafe extern "C" fn count_message(
 
 #[test]
 fn a_removal_that_eds_accepts_is_not_reported_and_deletes_the_keyfile() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let gone = ServerSide::child(ChildKind::AddressBook, "AB2");
         let fanout = fanout(Parts::ALL, &["AB1"], &[]);
 
