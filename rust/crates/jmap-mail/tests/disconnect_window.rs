@@ -23,67 +23,21 @@
 //! `messages` call park mid-flight while `drop_connection` runs
 //! concurrently.
 
+mod common;
+
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use common::race::Gate;
 use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError};
 use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
 use jmap_proto::Id;
 use serde_json::json;
-
-/// The longest time a `Gate` wait blocks. A missed signal fails the test and does not hang it.
-const GATE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Lets the test park a transport call, and learn when it parks, instead
-/// of racing a sleep against it.
-#[derive(Default)]
-struct Gate {
-    started: Mutex<bool>,
-    started_cond: Condvar,
-    released: Mutex<bool>,
-    released_cond: Condvar,
-}
-
-impl Gate {
-    fn wait_for_start(&self) {
-        let started = self.started.lock().unwrap();
-        let (_guard, wait) = self
-            .started_cond
-            .wait_timeout_while(started, GATE_TIMEOUT, |started| !*started)
-            .unwrap();
-        assert!(
-            !wait.timed_out(),
-            "the gated response did not arrive in {GATE_TIMEOUT:?}"
-        );
-    }
-
-    fn signal_start(&self) {
-        *self.started.lock().unwrap() = true;
-        self.started_cond.notify_all();
-    }
-
-    fn wait_for_release(&self) {
-        let released = self.released.lock().unwrap();
-        let (_guard, wait) = self
-            .released_cond
-            .wait_timeout_while(released, GATE_TIMEOUT, |released| !*released)
-            .unwrap();
-        assert!(
-            !wait.timed_out(),
-            "the test did not release the gate in {GATE_TIMEOUT:?}"
-        );
-    }
-
-    fn release(&self) {
-        *self.released.lock().unwrap() = true;
-        self.released_cond.notify_all();
-    }
-}
 
 /// Answers the first request (session discovery) normally, then parks every
 /// later request on `gate` until the test releases it.

@@ -29,6 +29,7 @@
 
 #![allow(dead_code)]
 
+pub mod race;
 pub mod signals;
 
 use std::ffi::CString;
