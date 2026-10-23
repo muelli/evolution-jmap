@@ -33,7 +33,7 @@ use std::ptr;
 
 use eds_sys::{
     CamelFolder, ESource, camel_folder_get_parent_store, camel_service_get_provider,
-    camel_service_get_uid, e_source_get_parent, e_source_registry_ref_source,
+    camel_service_get_uid, e_source_dup_parent, e_source_registry_ref_source,
 };
 use evo_sys::{
     EMailReader, EShellContent, GTK_BUTTONS_CLOSE, GTK_MESSAGE_ERROR,
@@ -62,7 +62,7 @@ use gobject_sys::{g_object_set, g_signal_connect_data};
 #[cfg(not(evolution_eui_manager))]
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::marshal::{read_string, take_string};
 use jmap_backend_core::trampoline::guard;
 use jmap_proto::Id;
 use jmap_proto::mail::SnoozeDetails;
@@ -561,7 +561,7 @@ unsafe fn connect_source_of(reader: *mut EMailReader) -> Option<*mut ESource> {
         if account.is_null() {
             return None;
         }
-        let parent = read_string(e_source_get_parent(account))
+        let parent = take_string(e_source_dup_parent(account))
             .and_then(|uid| CString::new(uid).ok())
             .map(|uid| e_source_registry_ref_source(registry, uid.as_ptr()))
             .filter(|source| !source.is_null());
