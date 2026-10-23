@@ -4,41 +4,13 @@
 //! Detection of changes to the folder list: what `Mailbox/changes` can tell,
 //! and what it cannot tell.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync};
-use jmap_mock::{MockServer, MockServerBuilder};
+use jmap_mail_sync::{FolderTree, FolderUpdate};
+use jmap_mock::MockServer;
+use jmap_proto::State;
 use jmap_proto::mail::role;
-use jmap_proto::{Id, State};
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        Self::started_with(MockServer::builder())
-    }
-
-    fn started_with(builder: MockServerBuilder) -> Self {
-        let server = builder.start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    /// Change the account as a different client does: as a state transition,
-    /// which `Mailbox/changes` reports.
-    fn edit<R>(&self, edit: impl FnOnce(&mut jmap_mock::AccountState) -> R) -> R {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        edit(state.account_mut(&self.account_id).unwrap())
-    }
-}
+mod common;
+use common::Fixture;
 
 fn rebuilt(update: FolderUpdate) -> (State, FolderTree) {
     match update {

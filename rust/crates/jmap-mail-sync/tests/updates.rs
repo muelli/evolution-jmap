@@ -19,44 +19,17 @@
 
 use std::collections::BTreeMap;
 
-use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{
-    Filing, KeywordChange, Keywords, MailSync, MessageFlags, MessageSummary, MessageUpdate,
-    SyncError,
+    Filing, KeywordChange, Keywords, MessageFlags, MessageSummary, MessageUpdate, SyncError,
 };
-use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
+use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::mail::role;
 use jmap_proto::{Id, State};
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        Self::started_with(MockServer::builder())
-    }
-
-    fn started_with(builder: MockServerBuilder) -> Self {
-        let server = builder.start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    /// Change the account as a different client does: as a state transition,
-    /// which `Email/changes` reports.
-    fn edit<R>(&self, edit: impl FnOnce(&mut jmap_mock::AccountState) -> R) -> R {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        edit(state.account_mut(&self.account_id).unwrap())
-    }
-
     /// Seed (not deliver) a message in `mailbox`. It is older than each state
     /// that the tests use, so it is *old* mail that a delta must not name.
     fn seed(&self, mailbox: &Id, subject: &str, hour: u32) -> Id {

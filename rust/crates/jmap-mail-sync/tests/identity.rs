@@ -10,36 +10,14 @@
 //! wrong match causes a refusal. The important case is an account with
 //! several addresses, where the message must use the correct one.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{MailSync, SyncError};
-use jmap_mock::MockServer;
+use jmap_mail_sync::SyncError;
 use jmap_proto::Id;
 use jmap_proto::mail::Identity;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    fn seed_identity(&self, name: &str, email: &str) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        let account = state.account_mut(&self.account_id).unwrap();
-        account.seed_identity(name, email)
-    }
-
     /// Seed an identity without an `id`, which violates RFC 8620 §5.1 in the
     /// `Identity/get` answer.
     fn seed_identity_without_id(&self, email: &str) -> Id {

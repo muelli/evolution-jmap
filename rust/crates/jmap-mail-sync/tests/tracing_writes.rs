@@ -6,53 +6,17 @@
 //! `rename_folder`, `set_keywords`, `file_message`, `expunge_message`,
 //! `import_message` and `send_message`.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{Filing, KeywordChange, Keywords, MailSync, Outgoing};
+use jmap_mail_sync::{Filing, KeywordChange, Keywords, Outgoing};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 use jmap_tracing_capture::capture;
 use tracing::Level;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        Self::started_with(MockServer::builder())
-    }
-
-    fn started_with(builder: jmap_mock::MockServerBuilder) -> Self {
-        let server = builder.start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    fn seed_mailbox(&self, name: &str) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        state
-            .account_mut(&self.account_id)
-            .unwrap()
-            .seed_mailbox(name, None)
-    }
-
-    fn seed_identity(&self, name: &str, email: &str) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        state
-            .account_mut(&self.account_id)
-            .unwrap()
-            .seed_identity(name, email)
-    }
-
     /// Seed one message in `mailbox`, with no keywords.
     fn seed_message(&self, mailbox: &Id) -> Id {
         let state = self.server.state();
@@ -105,7 +69,7 @@ fn creating_a_folder_traces_the_account_and_name_on_success() {
 #[test]
 fn creating_a_folder_with_a_name_a_sibling_already_has_traces_the_failure() {
     let fixture = Fixture::start();
-    fixture.seed_mailbox("Projects");
+    fixture.seed_mailbox("Projects", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {
@@ -123,7 +87,7 @@ fn creating_a_folder_with_a_name_a_sibling_already_has_traces_the_failure() {
 #[test]
 fn deleting_a_folder_traces_the_account_and_mailbox_id_on_success() {
     let fixture = Fixture::start();
-    let doomed = fixture.seed_mailbox("Projects");
+    let doomed = fixture.seed_mailbox("Projects", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {
@@ -169,7 +133,7 @@ fn deleting_a_nonexistent_folder_traces_the_failure() {
 #[test]
 fn subscribing_a_folder_traces_the_account_and_mailbox_id_on_success() {
     let fixture = Fixture::start();
-    let mailbox = fixture.seed_mailbox("Projects");
+    let mailbox = fixture.seed_mailbox("Projects", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {
@@ -215,7 +179,7 @@ fn subscribing_a_nonexistent_folder_traces_the_failure() {
 #[test]
 fn renaming_a_folder_traces_the_account_and_mailbox_id_on_success() {
     let fixture = Fixture::start();
-    let folder = fixture.seed_mailbox("Projects");
+    let folder = fixture.seed_mailbox("Projects", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {
@@ -261,7 +225,7 @@ fn renaming_a_nonexistent_folder_traces_the_failure() {
 #[test]
 fn setting_keywords_traces_the_account_and_uid_on_success() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
     let before = Keywords::default();
@@ -326,7 +290,7 @@ fn setting_keywords_on_a_nonexistent_message_traces_the_failure() {
 #[test]
 fn setting_an_empty_keyword_change_traces_nothing_at_all() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
     let same = Keywords::default();
@@ -346,8 +310,8 @@ fn setting_an_empty_keyword_change_traces_nothing_at_all() {
 #[test]
 fn filing_a_message_traces_the_account_and_uid_on_success() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
 
@@ -378,7 +342,7 @@ fn filing_a_message_traces_the_account_and_uid_on_success() {
 #[test]
 fn filing_a_nonexistent_message_traces_the_failure() {
     let fixture = Fixture::start();
-    let archive = fixture.seed_mailbox("Archive");
+    let archive = fixture.seed_mailbox("Archive", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {
@@ -396,7 +360,7 @@ fn filing_a_nonexistent_message_traces_the_failure() {
 #[test]
 fn filing_a_message_into_the_mailbox_it_is_already_in_traces_nothing_at_all() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
     let filing = Filing::moved(inbox.clone(), inbox);
@@ -415,7 +379,7 @@ fn filing_a_message_into_the_mailbox_it_is_already_in_traces_nothing_at_all() {
 #[test]
 fn expunging_a_message_this_mailbox_is_the_last_home_of_traces_the_account_uid_and_mailbox() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
 
@@ -449,8 +413,8 @@ fn expunging_a_message_this_mailbox_is_the_last_home_of_traces_the_account_uid_a
 #[test]
 fn expunging_a_message_filed_elsewhere_too_traces_the_account_uid_and_mailbox() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
     capture(|| {
@@ -492,8 +456,8 @@ fn expunging_a_message_that_is_not_in_this_mailbox_traces_no_write() {
     // that the write trace of this crate is absent, not that the capture is
     // empty.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
     let uid = fixture.seed_message(&archive);
     let sync = fixture.sync();
 
@@ -514,7 +478,7 @@ fn expunging_a_message_that_is_not_in_this_mailbox_traces_no_write() {
 #[test]
 fn expunging_a_nonexistent_message_traces_the_failure() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {
@@ -540,7 +504,7 @@ One o'clock at the usual place.\r\n";
 #[test]
 fn importing_a_message_traces_the_account_and_mailbox_id_on_success() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {
@@ -570,7 +534,7 @@ fn importing_a_message_traces_the_account_and_mailbox_id_on_success() {
 #[test]
 fn importing_bytes_that_are_not_a_message_traces_the_failure() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {
@@ -593,7 +557,7 @@ fn importing_bytes_that_are_not_a_message_traces_the_failure() {
 #[test]
 fn importing_a_message_over_the_accounts_upload_limit_traces_the_failure() {
     let fixture = Fixture::started_with(MockServer::builder().size_upload(1024));
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {
@@ -611,7 +575,7 @@ fn importing_a_message_over_the_accounts_upload_limit_traces_the_failure() {
 #[test]
 fn sending_a_message_traces_the_account_and_identity_on_success() {
     let fixture = Fixture::start();
-    let drafts = fixture.seed_mailbox("Drafts");
+    let drafts = fixture.seed_mailbox("Drafts", None);
     let identity = fixture.seed_identity("Alice", "alice@example.com");
     let sync = fixture.sync();
 
@@ -651,7 +615,7 @@ fn sending_a_message_traces_the_account_and_identity_on_success() {
 #[test]
 fn sending_a_message_through_no_identity_traces_the_failure() {
     let fixture = Fixture::start();
-    let drafts = fixture.seed_mailbox("Drafts");
+    let drafts = fixture.seed_mailbox("Drafts", None);
     let sync = fixture.sync();
 
     let (_, captured) = capture(|| {

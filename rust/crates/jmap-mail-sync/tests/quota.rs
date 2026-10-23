@@ -4,29 +4,11 @@
 //! `Quota/get` against a mock server. `MailSync::quotas` supplies the data
 //! for `get_quota_info_sync` in `jmap-mail`.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::MailSync;
-use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::quota::{Quota, quota_data_type, quota_resource_type, quota_scope};
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-}
+mod common;
+use common::Fixture;
 
 #[test]
 fn every_seeded_quota_comes_back() {

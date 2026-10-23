@@ -14,35 +14,10 @@
 //! `role` for this purpose. An account with drafts in `Entwürfe` is a normal
 //! account that can send.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{MailSync, SyncError};
-use jmap_mock::MockServer;
-use jmap_proto::Id;
+use jmap_mail_sync::SyncError;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    fn seed_mailbox(&self, name: &str, role: Option<&str>) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        let account = state.account_mut(&self.account_id).unwrap();
-        account.seed_mailbox(name, role)
-    }
-}
+mod common;
+use common::Fixture;
 
 #[test]
 fn a_message_waits_in_drafts_and_is_filed_in_sent() {

@@ -10,11 +10,13 @@
 //! mostly check that the bytes stay the same: the listed row and the source
 //! must both agree with the uploaded message.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{Keywords, MailSync, MessageFlags, MessageSummary, SyncError};
+use jmap_mail_sync::{Keywords, MessageFlags, MessageSummary, SyncError};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::email_import_error;
+
+mod common;
+use common::Fixture;
 
 /// The RFC 5322 bytes of a message from Evolution: CRLF line endings, a header
 /// block, a blank line, and a body.
@@ -26,42 +28,6 @@ Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
 \r\n\
 One o'clock at the usual place.\r\n";
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        Self::started_with(MockServer::builder())
-    }
-
-    fn started_with(builder: jmap_mock::MockServerBuilder) -> Self {
-        let server = builder.start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    /// An empty mailbox to import into.
-    fn seed_mailbox(&self, name: &str) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        let account = state.account_mut(&self.account_id).unwrap();
-        account.seed_mailbox(name, None)
-    }
-
-    /// The current contents of the mailbox, as a folder refresh finds them.
-    fn listing(&self, mailbox: &Id) -> Vec<MessageSummary> {
-        let (_, messages) = self.sync().messages(mailbox).expect("the mailbox lists");
-        messages
-    }
-}
-
 /// The single row of a mailbox. Fails with the count if it is not one row.
 fn only(messages: Vec<MessageSummary>) -> MessageSummary {
     assert_eq!(messages.len(), 1, "one imported message");
@@ -71,7 +37,7 @@ fn only(messages: Vec<MessageSummary>) -> MessageSummary {
 #[test]
 fn an_imported_message_is_a_message_of_the_mailbox_it_was_filed_into() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     let uid = fixture
         .sync()
@@ -94,7 +60,7 @@ fn an_imported_message_is_a_message_of_the_mailbox_it_was_filed_into() {
 #[test]
 fn the_bytes_that_went_up_are_the_bytes_that_come_back_down() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let sync = fixture.sync();
 
     let uid = sync
@@ -110,7 +76,7 @@ fn the_bytes_that_went_up_are_the_bytes_that_come_back_down() {
 #[test]
 fn the_keywords_a_row_carries_go_up_with_the_message() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let flags = MessageFlags {
         seen: true,
         flagged: true,
@@ -137,7 +103,7 @@ fn the_keywords_a_row_carries_go_up_with_the_message() {
 #[test]
 fn a_message_imported_with_no_keywords_arrives_carrying_none() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     fixture
         .sync()
@@ -154,7 +120,7 @@ fn a_message_imported_with_no_keywords_arrives_carrying_none() {
 #[test]
 fn the_moment_the_message_was_received_is_the_moment_it_keeps() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     // Camel gives seconds since the epoch, here 2026-01-15T09:30:00Z.
     let received_at = 1_768_469_400;
 
@@ -177,7 +143,7 @@ fn the_moment_the_message_was_received_is_the_moment_it_keeps() {
 #[test]
 fn a_message_imported_without_a_moment_is_dated_by_the_server() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     fixture
         .sync()
@@ -194,7 +160,7 @@ fn a_message_imported_without_a_moment_is_dated_by_the_server() {
 #[test]
 fn a_date_no_utc_date_can_name_is_left_to_the_server() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     // Camel keeps a date as a signed 64-bit count of seconds. This value has
     // no year that a `UTCDate` can show. The import must not fail for this:
@@ -217,7 +183,7 @@ fn a_date_no_utc_date_can_name_is_left_to_the_server() {
 #[test]
 fn bytes_that_are_not_a_message_are_refused_as_such() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     let error = fixture
         .sync()
@@ -243,7 +209,7 @@ fn bytes_that_are_not_a_message_are_refused_as_such() {
 #[test]
 fn a_mailbox_the_account_does_not_have_takes_no_message() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     let error = fixture
         .sync()
@@ -273,7 +239,7 @@ fn a_mailbox_the_account_does_not_have_takes_no_message() {
 #[test]
 fn a_message_over_the_accounts_upload_limit_is_not_imported() {
     let fixture = Fixture::started_with(MockServer::builder().size_upload(1024));
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     let error = fixture
         .sync()
@@ -301,7 +267,7 @@ fn a_message_over_the_accounts_upload_limit_is_not_imported() {
 #[test]
 fn importing_a_message_with_multiple_recipients_and_custom_headers_preserves_summary() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     let message_bytes = b"From: Alice <alice@example.com>\r\n\
 To: Bob <bob@example.com>, \"Doe, Charlie\" <charlie@example.org>\r\n\
@@ -342,7 +308,7 @@ Detailed test body.\r\n";
 #[test]
 fn importing_a_multipart_message_with_attachment_and_html_alternate_preserves_content() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     let multipart_bytes = b"From: Sender <sender@example.com>\r\n\
 To: Recipient <recipient@example.com>\r\n\
@@ -410,7 +376,7 @@ JVBERi0xLjQKJcfsj6IKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMiAw\r\n\
 #[test]
 fn importing_a_message_with_base64_attachment_and_qp_body_preserves_wire_format() {
     let fixture = Fixture::start();
-    let archive = fixture.seed_mailbox("Archive");
+    let archive = fixture.seed_mailbox("Archive", None);
 
     let wire_bytes = b"From: Developer <dev@example.org>\r\n\
 To: Reviewer <rev@example.org>\r\n\
