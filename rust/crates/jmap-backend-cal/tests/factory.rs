@@ -11,59 +11,24 @@ use eds_sys::{
     ECalBackendFactoryClass, I_CAL_VEVENT_COMPONENT, e_cal_backend_factory_get_type,
     e_cal_meta_backend_get_type,
 };
-use glib_sys::{GFALSE, GTRUE, GType, gboolean};
+use glib_sys::{GFALSE, GType, gboolean};
 use gobject_sys::{
-    GTypeModule, GTypeModuleClass, g_object_new, g_type_class_ref, g_type_class_unref,
-    g_type_from_name, g_type_get_plugin, g_type_is_a, g_type_module_get_type, g_type_module_unuse,
-    g_type_module_use,
+    GTypeModule, g_object_new, g_type_class_ref, g_type_class_unref, g_type_from_name,
+    g_type_get_plugin, g_type_is_a, g_type_module_unuse, g_type_module_use,
 };
 use jmap_backend_cal::backend::JmapCalBackend;
 use jmap_backend_cal::factory::JmapCalFactory;
 use jmap_backend_cal::module::{load, unload};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::test_module;
 
-/// A `GTypeModule` standing in for the `EModule` loaded by EDS.
-#[repr(C)]
-struct TestModule {
-    parent: GTypeModule,
-}
-
-#[repr(C)]
-struct TestModuleClass {
-    parent_class: GTypeModuleClass,
-}
-
-// SAFETY: both structs are #[repr(C)] and lead with the GTypeModule instance
-// and class structs, and GTypeModule derives from GObject.
-unsafe impl ObjectSubclass for TestModule {
-    const NAME: &'static CStr = c"JmapCalFactoryTestModule";
-    type Instance = TestModule;
-    type Class = TestModuleClass;
-
-    fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
-        unsafe { g_type_module_get_type() }
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points to an allocated class struct starting with GTypeModuleClass.
-        let vfuncs = unsafe { &mut (*class).parent_class };
-        vfuncs.load = Some(module_load);
-        vfuncs.unload = Some(module_unload);
-    }
-}
-
-unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib passes the module being loaded, which is what the entry
-    // point wants.
-    unsafe { load(module) };
-    GTRUE
-}
-
-unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
-    // SAFETY: as `module_load`.
-    unsafe { unload(module) };
-}
+// A `GTypeModule` standing in for the `EModule` loaded by EDS.
+test_module!(
+    TestModule,
+    c"JmapCalFactoryTestModule",
+    load = load,
+    unload = unload
+);
 
 /// Tracks module loading and re-use lifecycle.
 struct Loaded {
