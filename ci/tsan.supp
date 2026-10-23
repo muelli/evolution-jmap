@@ -12,9 +12,10 @@
 # computes the same value.
 race_top:_error_quark$
 # The same race in a quark that the compiler inlined into these functions:
-# CAMEL_STORE_ERROR and G_KEY_FILE_ERROR.
+# CAMEL_STORE_ERROR, G_KEY_FILE_ERROR and E_CLIENT_ERROR.
 race_top:^camel_store_get_folder_sync$
 race_top:^g_key_file_get_value$
+race_top:^e_client_error_create$
 
 # GLib: g_once_impl writes the status with a plain store, and the g_once
 # macro reads it atomically. The mutex in g_once_impl orders the real work.
@@ -34,6 +35,16 @@ race_top:^closure_invoke_notifiers$
 # lock. g_type_is_a reads another bit of the same word with no lock. That bit
 # does not change after the type is registered.
 race_top:^type_data_make_W$
+
+# GLib: g_object_base_class_init sets a bit in the flags of the parent class
+# under the type lock. g_object_new_internal reads other bits of the same word
+# with no lock. Those bits do not change after the parent class is made.
+race_top:^g_object_base_class_init$
+
+# GLib: GAtomicArray puts an old buffer on a free list under its lock, and a
+# reader can still read it. The reader then sees a changed array pointer and
+# reads again.
+race_top:^freelist_free$
 
 # GLib: g_private_get makes its pthread key lazily with a
 # compare-and-exchange. When it loses the race, it reads the winner's key
