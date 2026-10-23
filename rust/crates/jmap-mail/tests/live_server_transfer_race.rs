@@ -35,20 +35,21 @@ mod common;
 use std::env;
 use std::ffi::CString;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, channel};
-use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use common::Account;
+use common::array::StringArray;
+use common::race::DelayedDeliveryTransport;
+use common::race::Gate;
 use eds_sys::{
     CamelFolder, camel_folder_get_folder_summary, camel_folder_refresh_info_sync,
     camel_folder_summary_get, camel_folder_transfer_messages_to_sync,
 };
-use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_free, gpointer};
+use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_free};
 use gobject_sys::g_object_unref;
-use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
 use jmap_mail_sync::{Keywords, MailSync};
@@ -77,83 +78,6 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// The longest time a `Gate` wait blocks. A missed signal fails the test and does not hang it.
-const GATE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Lets the test park the racing request's response, and learn when it has
-/// actually parked, instead of racing a sleep against it. Copy of
-/// `transfer_race.rs`'s `Gate`.
-#[derive(Default)]
-struct Gate {
-    started: Mutex<bool>,
-    started_cond: Condvar,
-    released: Mutex<bool>,
-    released_cond: Condvar,
-}
-
-impl Gate {
-    fn wait_for_start(&self) {
-        let started = self.started.lock().unwrap();
-        let (_guard, wait) = self
-            .started_cond
-            .wait_timeout_while(started, GATE_TIMEOUT, |started| !*started)
-            .unwrap();
-        assert!(
-            !wait.timed_out(),
-            "the gated response did not arrive in {GATE_TIMEOUT:?}"
-        );
-    }
-
-    fn signal_start(&self) {
-        *self.started.lock().unwrap() = true;
-        self.started_cond.notify_all();
-    }
-
-    fn wait_for_release(&self) {
-        let released = self.released.lock().unwrap();
-        let (_guard, wait) = self
-            .released_cond
-            .wait_timeout_while(released, GATE_TIMEOUT, |released| !*released)
-            .unwrap();
-        assert!(
-            !wait.timed_out(),
-            "the test did not release the gate in {GATE_TIMEOUT:?}"
-        );
-    }
-
-    fn release(&self) {
-        *self.released.lock().unwrap() = true;
-        self.released_cond.notify_all();
-    }
-}
-
-/// Forwards every request to a real transport, but holds the *first*
-/// `Email/query` response back until the test releases it. The request is
-/// made first, against the real server, so the answer is honest (the
-/// message still shows present) for the mailbox's contents at the time of
-/// the request, before the race's transfer moves it away. Copy of
-/// `transfer_race.rs`'s `DelayedDeliveryTransport`.
-struct DelayedDeliveryTransport {
-    inner: UreqTransport,
-    gate: Arc<Gate>,
-    delayed_once: AtomicBool,
-}
-
-impl Transport for DelayedDeliveryTransport {
-    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
-        let is_query = request
-            .body
-            .map(|body| String::from_utf8_lossy(body).contains("Email/query"))
-            .unwrap_or(false);
-        let response = self.inner.execute(request)?;
-        if is_query && !self.delayed_once.swap(true, Ordering::SeqCst) {
-            self.gate.signal_start();
-            self.gate.wait_for_release();
-        }
-        Ok(response)
-    }
-}
-
 /// A raw folder pointer, sent to a background thread. Copy of
 /// `transfer_race.rs`'s `FolderPtr`.
 #[derive(Clone, Copy)]
@@ -161,38 +85,6 @@ struct FolderPtr(*mut CamelFolder);
 // SAFETY: the folder outlives every use of this wrapper, and every use goes
 // through Camel's own thread-safe vfunc dispatch.
 unsafe impl Send for FolderPtr {}
-
-/// The uid array Camel hands the vfunc, owned for the length of one call.
-/// Mirrors `live_server_transfer.rs::UidList`.
-struct UidList {
-    array: *mut GPtrArray,
-    #[allow(dead_code)]
-    uid: CString,
-}
-
-impl UidList {
-    fn of(uid: &str) -> Self {
-        let uid = CString::new(uid).expect("a uid with no NUL");
-        // SAFETY: a fresh array, filled with one pointer into `uid`. This
-        // struct owns `uid`, and drops it after the array, so the pointer
-        // stays valid for as long as the array exists.
-        let array = unsafe {
-            let array = glib_sys::g_ptr_array_new();
-            glib_sys::g_ptr_array_add(array, uid.as_ptr() as gpointer);
-            array
-        };
-        Self { array, uid }
-    }
-}
-
-impl Drop for UidList {
-    fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. TRUE frees its pointer
-        // block. The array has no element free function, so the strings
-        // in `self.uid` stay.
-        unsafe { g_ptr_array_free(self.array, GTRUE) };
-    }
-}
 
 /// Mirrors `live_server_folder_listing_race.rs::connect_for_write_with_gate`.
 fn connect_for_write_with_gate(gate: Arc<Gate>) -> Client {
@@ -204,11 +96,7 @@ fn connect_for_write_with_gate(gate: Arc<Gate>) -> Client {
         env::var("JMAP_LIVE_SERVER_URL").expect("connect_for_write already confirmed this is set");
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
 
-    let transport = DelayedDeliveryTransport {
-        inner: UreqTransport::default(),
-        gate,
-        delayed_once: AtomicBool::new(false),
-    };
+    let transport = DelayedDeliveryTransport::new(gate, "Email/query");
     Client::builder()
         .transport(transport)
         .rebase_urls_to_origin(rebase)
@@ -304,7 +192,7 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
         // As above: names the whole `Send` wrappers so the closure does not
         // capture their raw pointer fields directly.
         let (source, dest) = (source, dest);
-        let list = UidList::of(uid_to_move.as_str());
+        let list = StringArray::of(&[uid_to_move.as_str()]);
         let mut transferred: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: two live folders of one store, and an array of one
@@ -313,7 +201,7 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
         let ok = unsafe {
             let ok = camel_folder_transfer_messages_to_sync(
                 source.0,
-                list.array,
+                list.as_ptr(),
                 dest.0,
                 GTRUE,
                 &mut transferred,

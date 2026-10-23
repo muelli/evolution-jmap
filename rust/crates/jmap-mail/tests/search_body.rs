@@ -18,15 +18,14 @@
 
 mod common;
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::ptr;
 
 use common::Account;
+use common::array::StringArray;
 use eds_sys::{CAMEL_SERVICE_ERROR_NOT_CONNECTED, CamelFolder, camel_service_error_quark};
-use glib_sys::{
-    GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_add, g_ptr_array_free, gchar,
-};
-use glib_sys::{g_ptr_array_new, g_ptr_array_unref, gpointer};
+use glib_sys::g_ptr_array_unref;
+use glib_sys::{GError, GFALSE, GPtrArray, g_error_free, gchar};
 use gobject_sys::g_object_unref;
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
@@ -34,44 +33,6 @@ use jmap_mail::search_body::search_body_sync;
 use jmap_mail_sync::{FolderInfo, MailSync};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
-
-/// Holds the words of a body term for the length of one call. This is the
-/// input shape the vfunc takes, built the way `tests/search.rs`'s `UidList` is
-/// built.
-struct Words {
-    array: *mut GPtrArray,
-    words: Vec<CString>,
-}
-
-impl Words {
-    fn of(words: &[&str]) -> Self {
-        let words: Vec<CString> = words
-            .iter()
-            .map(|word| CString::new(*word).expect("a word with no NUL"))
-            .collect();
-        // SAFETY: builds a fresh array of pointers into the strings in
-        // `words`. The `Words` value owns `words` and lives at least as long
-        // as the array.
-        let array = unsafe {
-            let array = g_ptr_array_new();
-            for word in &words {
-                g_ptr_array_add(array, word.as_ptr() as gpointer);
-            }
-            array
-        };
-        Self { array, words }
-    }
-}
-
-impl Drop for Words {
-    fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. TRUE frees its pointer
-        // block. The array has no element free function, so the strings
-        // in `self.words` stay.
-        unsafe { g_ptr_array_free(self.array, GTRUE) };
-        self.words.clear();
-    }
-}
 
 /// The one mailbox that every folder in this file is a view of.
 fn mailbox(id: Id) -> FolderInfo {
@@ -163,12 +124,12 @@ fn a_body_word_is_answered_by_the_server() {
     unsafe {
         let (_server, _account, folder, lunch, _status) = connected_folder_with_two_bodies();
 
-        let words = Words::of(&["canteen"]);
+        let words = StringArray::of(&["canteen"]);
         let mut uids: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         let ok = search_body_sync(
             folder,
-            words.array,
+            words.as_ptr(),
             ptr::addr_of_mut!(uids),
             ptr::null_mut(),
             ptr::addr_of_mut!(error),
@@ -191,12 +152,12 @@ fn a_word_no_body_has_is_an_empty_answer() {
     unsafe {
         let (_server, _account, folder, _lunch, _status) = connected_folder_with_two_bodies();
 
-        let words = Words::of(&["escalator"]);
+        let words = StringArray::of(&["escalator"]);
         let mut uids: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         let ok = search_body_sync(
             folder,
-            words.array,
+            words.as_ptr(),
             ptr::addr_of_mut!(uids),
             ptr::null_mut(),
             ptr::addr_of_mut!(error),
@@ -219,12 +180,12 @@ fn several_words_have_to_share_a_body() {
         let (_server, _account, folder, lunch, _status) = connected_folder_with_two_bodies();
 
         // Both words appear in the folder, one in each message.
-        let split = Words::of(&["canteen", "green"]);
+        let split = StringArray::of(&["canteen", "green"]);
         let mut uids: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         let ok = search_body_sync(
             folder,
-            split.array,
+            split.as_ptr(),
             ptr::addr_of_mut!(uids),
             ptr::null_mut(),
             ptr::addr_of_mut!(error),
@@ -234,12 +195,12 @@ fn several_words_have_to_share_a_body() {
         assert_eq!(take(uids), Vec::<String>::new());
 
         // Both words are in the same body, which matches.
-        let shared = Words::of(&["canteen", "o'clock"]);
+        let shared = StringArray::of(&["canteen", "o'clock"]);
         let mut uids: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         let ok = search_body_sync(
             folder,
-            shared.array,
+            shared.as_ptr(),
             ptr::addr_of_mut!(uids),
             ptr::null_mut(),
             ptr::addr_of_mut!(error),
@@ -263,12 +224,12 @@ fn a_disconnected_folder_refuses_rather_than_answering_nothing() {
         let folder = new_folder(account.store, &mailbox(Id::new("Mbx0001")));
         assert!(!folder.is_null(), "no folder for the mailbox");
 
-        let words = Words::of(&["canteen"]);
+        let words = StringArray::of(&["canteen"]);
         let mut uids: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         let ok = search_body_sync(
             folder,
-            words.array,
+            words.as_ptr(),
             ptr::addr_of_mut!(uids),
             ptr::null_mut(),
             ptr::addr_of_mut!(error),
@@ -295,12 +256,12 @@ fn a_term_of_no_words_is_refused() {
     unsafe {
         let (_server, _account, folder, _lunch, _status) = connected_folder_with_two_bodies();
 
-        for words in [Words::of(&[]), Words::of(&[""])] {
+        for words in [StringArray::of::<&str>(&[]), StringArray::of(&[""])] {
             let mut uids: *mut GPtrArray = ptr::null_mut();
             let mut error: *mut GError = ptr::null_mut();
             let ok = search_body_sync(
                 folder,
-                words.array,
+                words.as_ptr(),
                 ptr::addr_of_mut!(uids),
                 ptr::null_mut(),
                 ptr::addr_of_mut!(error),
@@ -329,12 +290,12 @@ fn the_slot_camel_calls_is_the_one_this_provider_filled() {
     unsafe {
         let (_server, _account, folder, lunch, _status) = connected_folder_with_two_bodies();
 
-        let words = Words::of(&["canteen"]);
+        let words = StringArray::of(&["canteen"]);
         let mut uids: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         let ok = eds_sys::camel_folder_search_body_sync(
             folder,
-            words.array,
+            words.as_ptr(),
             ptr::addr_of_mut!(uids),
             ptr::null_mut(),
             ptr::addr_of_mut!(error),

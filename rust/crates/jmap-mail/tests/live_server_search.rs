@@ -38,12 +38,13 @@
 mod common;
 
 use std::env;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::ptr;
 
 use common::Account;
+use common::array::StringArray;
 use eds_sys::CamelFolder;
-use glib_sys::{GError, GPtrArray, GTRUE, g_ptr_array_add, g_ptr_array_free, gchar, gpointer};
+use glib_sys::{GError, GPtrArray, gchar};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
 use jmap_mail_sync::{Keywords, MailSync};
@@ -70,42 +71,6 @@ fn connect_for_write() -> Option<Client> {
         .connect(&origin, Credentials::basic(user, password))
         .expect("could not fetch the session document for the write-test account");
     Some(client)
-}
-
-/// A `GPtrArray` of uids, owned for the length of one call. This is the
-/// input shape `search_by_uids` takes. Mirrors `tests/search.rs::UidList`.
-struct UidList {
-    array: *mut GPtrArray,
-    uids: Vec<CString>,
-}
-
-impl UidList {
-    fn of(uids: &[&str]) -> Self {
-        let uids: Vec<CString> = uids
-            .iter()
-            .map(|uid| CString::new(*uid).expect("a uid with no NUL"))
-            .collect();
-        // SAFETY: a fresh array, filled with pointers into strings this value
-        // owns. Those strings outlive the array.
-        let array = unsafe {
-            let array = glib_sys::g_ptr_array_new();
-            for uid in &uids {
-                g_ptr_array_add(array, uid.as_ptr() as gpointer);
-            }
-            array
-        };
-        Self { array, uids }
-    }
-}
-
-impl Drop for UidList {
-    fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. TRUE frees its pointer
-        // block. The array has no element free function, so the strings
-        // in `self.uids` stay.
-        unsafe { g_ptr_array_free(self.array, GTRUE) };
-        self.uids.clear();
-    }
 }
 
 /// The uids a search answer names, in order.
@@ -233,14 +198,14 @@ fn a_translatable_expression_is_answered_by_the_real_server() {
 
     // Narrowed to both uids. The match must come from the filter, not from
     // the restriction excluding the other row.
-    let restrict = UidList::of(&[lunch_uid.as_str(), other_uid.as_str()]);
+    let restrict = StringArray::of(&[lunch_uid.as_str(), other_uid.as_str()]);
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: as above, plus a live `GPtrArray` of NUL-terminated uids.
     let result = unsafe {
         eds_sys::camel_folder_search_by_uids(
             folder,
             expression.as_ptr(),
-            restrict.array,
+            restrict.as_ptr(),
             ptr::null_mut(),
             &mut error,
         )
@@ -263,14 +228,14 @@ fn a_translatable_expression_is_answered_by_the_real_server() {
 
     // Narrowed to exclude the matching row. The restriction wins even though
     // the expression alone matches.
-    let excluding = UidList::of(&[other_uid.as_str()]);
+    let excluding = StringArray::of(&[other_uid.as_str()]);
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: as above.
     let result = unsafe {
         eds_sys::camel_folder_search_by_uids(
             folder,
             expression.as_ptr(),
-            excluding.array,
+            excluding.as_ptr(),
             ptr::null_mut(),
             &mut error,
         )

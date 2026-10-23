@@ -19,6 +19,9 @@
 //! `jmap-backend-core` answers that question on both sides. This file only
 //! checks the answer.
 
+mod common;
+
+use common::sync_against;
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
     CAMEL_FOLDER_ERROR_INVALID, CAMEL_FOLDER_ERROR_INVALID_UID,
@@ -28,7 +31,7 @@ use eds_sys::{
     camel_service_error_quark, camel_store_error_quark,
 };
 use jmap_backend_core::source::{ConnectTarget, SourceError};
-use jmap_client::{Client, Credentials, Error};
+use jmap_client::{Credentials, Error};
 use jmap_mail::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail, password_credentials};
 use jmap_mail::server::ServerConfig;
 use jmap_mail::store::JmapStore;
@@ -544,11 +547,6 @@ fn a_message_over_the_size_limit_is_reported_in_camels_folder_domain() {
 
 // ---------------------------------------------------------------------------
 // the connection a store holds between connect and disconnect
-
-fn sync_against(server: &MockServer) -> MailSync {
-    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    MailSync::new(client, server.account_id())
-}
 
 #[test]
 fn a_fresh_store_holds_no_connection() {

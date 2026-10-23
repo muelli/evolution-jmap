@@ -24,20 +24,21 @@
 //!   the whole decision the vfuncs make. `tests/emissions.rs` covers the
 //!   emission itself.
 
+mod common;
+
 use std::ffi::CString;
 use std::sync::Arc;
 
+use common::sync_against;
 use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_REFRESH, CamelSubscribable, CamelSubscribableInterface,
     camel_subscribable_get_type,
 };
 use glib_sys::GFALSE;
 use gobject_sys::{g_type_class_ref, g_type_class_unref, g_type_interface_peek, g_type_is_a};
-use jmap_client::{Client, Credentials};
 use jmap_mail::connect::StoreError;
 use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail::subscribe;
-use jmap_mail_sync::MailSync;
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::role;
@@ -46,11 +47,6 @@ use jmap_proto::mail::role;
 /// This matches the reach of the non-blocking `folder_is_subscribed` method.
 const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
 const REFRESH: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INFO_REFRESH;
-
-fn sync_against(server: &MockServer) -> MailSync {
-    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    MailSync::new(client, server.account_id())
-}
 
 /// A server with an inbox and a sibling, and a store connected to it.
 fn connected() -> (MockServer, Box<JmapStore>, Id) {

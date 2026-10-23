@@ -31,12 +31,13 @@
 mod common;
 
 use std::env;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::ptr;
 
 use common::Account;
+use common::array::StringArray;
 use eds_sys::CamelFolder;
-use glib_sys::{GError, GPtrArray, GTRUE, g_ptr_array_add, g_ptr_array_free, g_ptr_array_unref};
+use glib_sys::{GError, GPtrArray, g_ptr_array_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
 use jmap_mail::search_body::search_body_sync;
@@ -66,42 +67,6 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
-/// A `GPtrArray` of words, owned for the length of one call: the input shape
-/// `search_body_sync` takes. Mirrors `tests/live_server_search.rs::UidList`.
-struct WordList {
-    array: *mut GPtrArray,
-    words: Vec<CString>,
-}
-
-impl WordList {
-    fn of(words: &[&str]) -> Self {
-        let words: Vec<CString> = words
-            .iter()
-            .map(|word| CString::new(*word).expect("a word with no NUL"))
-            .collect();
-        // SAFETY: a fresh array, filled with pointers into strings this value
-        // owns and outlives it by.
-        let array = unsafe {
-            let array = glib_sys::g_ptr_array_new();
-            for word in &words {
-                g_ptr_array_add(array, word.as_ptr() as glib_sys::gpointer);
-            }
-            array
-        };
-        Self { array, words }
-    }
-}
-
-impl Drop for WordList {
-    fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. TRUE frees its pointer
-        // block. The array has no element free function, so the strings
-        // in `self.words` stay.
-        unsafe { g_ptr_array_free(self.array, GTRUE) };
-        self.words.clear();
-    }
-}
-
 /// Calls `search_body_sync` for `words` against `folder` and collects the
 /// uids it answers with.
 ///
@@ -109,16 +74,16 @@ impl Drop for WordList {
 ///
 /// `folder` must be a live `JmapFolder` instance.
 unsafe fn search(folder: *mut CamelFolder, words: &[&str]) -> Vec<String> {
-    let list = WordList::of(words);
+    let list = StringArray::of(words);
     let mut out_uids: *mut GPtrArray = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: `folder` is live per the caller's contract.
-    // `list.array` is a live `GPtrArray` of NUL-terminated strings.
+    // `list.as_ptr()` is a live `GPtrArray` of NUL-terminated strings.
     // `out_uids` and `error` are valid, writable places.
     let ok = unsafe {
         search_body_sync(
             folder,
-            list.array,
+            list.as_ptr(),
             &mut out_uids,
             ptr::null_mut(),
             &mut error,

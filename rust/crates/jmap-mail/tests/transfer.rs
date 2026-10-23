@@ -89,6 +89,7 @@ use std::thread;
 use std::time::Duration;
 
 use common::Account;
+use common::array::StringArray;
 use common::signals::{Context, Emission, emissions, watch};
 use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
@@ -99,10 +100,7 @@ use eds_sys::{
     camel_folder_transfer_messages_to_sync, camel_folder_unlock, camel_message_info_set_flags,
     camel_service_error_quark, camel_store_get_folder_sync,
 };
-use glib_sys::{
-    GError, GFALSE, GPtrArray, GTRUE, g_free, g_ptr_array_add, g_ptr_array_free, g_ptr_array_new,
-    gboolean, gpointer,
-};
+use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_free, g_ptr_array_free, gboolean};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
@@ -250,7 +248,7 @@ impl Fixture {
         uids: &[&Id],
         delete_originals: bool,
     ) -> Transferred {
-        let list = UidList::of(uids);
+        let list = StringArray::of(uids);
         let mut transferred: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: two live folders of one store, an array of NUL-terminated
@@ -259,7 +257,7 @@ impl Fixture {
         let ok = unsafe {
             camel_folder_transfer_messages_to_sync(
                 source,
-                list.array,
+                list.as_ptr(),
                 destination,
                 gboolean::from(delete_originals),
                 &mut transferred,
@@ -281,7 +279,7 @@ impl Fixture {
         uids: &[&Id],
         delete_originals: bool,
     ) -> Transferred {
-        let list = UidList::of(uids);
+        let list = StringArray::of(uids);
         let mut transferred: *mut GPtrArray = ptr::null_mut();
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: referencing the class runs the class_init that installs
@@ -294,7 +292,7 @@ impl Fixture {
                 .expect("the folder cannot transfer messages");
             let ok = vfunc(
                 source,
-                list.array,
+                list.as_ptr(),
                 destination,
                 gboolean::from(delete_originals),
                 &mut transferred,
@@ -440,43 +438,6 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<String> {
                 CStr::from_ptr(uid.cast()).to_string_lossy().into_owned()
             })
             .collect()
-    }
-}
-
-/// The array of uids Camel hands the vfunc, owned for the length of one
-/// call.
-struct UidList {
-    array: *mut GPtrArray,
-    // The strings the array points at; freed with it.
-    uids: Vec<CString>,
-}
-
-impl UidList {
-    fn of(uids: &[&Id]) -> Self {
-        let uids: Vec<CString> = uids
-            .iter()
-            .map(|uid| CString::new(uid.as_str()).expect("a uid with no NUL"))
-            .collect();
-        // SAFETY: a fresh array, filled with pointers into strings that this
-        // value owns and outlives.
-        let array = unsafe {
-            let array = g_ptr_array_new();
-            for uid in &uids {
-                g_ptr_array_add(array, uid.as_ptr() as gpointer);
-            }
-            array
-        };
-        Self { array, uids }
-    }
-}
-
-impl Drop for UidList {
-    fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. TRUE frees its pointer
-        // block. The array has no element free function, so the strings
-        // in `self.uids` stay.
-        unsafe { g_ptr_array_free(self.array, GTRUE) };
-        self.uids.clear();
     }
 }
 

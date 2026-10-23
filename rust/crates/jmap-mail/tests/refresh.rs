@@ -53,6 +53,7 @@ use std::ptr;
 
 use common::Account;
 use common::signals::{Context, emissions, uid_list, watch};
+use common::sync_against;
 use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
     CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass,
@@ -61,18 +62,11 @@ use eds_sys::{
 };
 use glib_sys::{GError, GFALSE, gboolean};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
-use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
 use jmap_mail::summary::{set_summary_state, summary_state};
-use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
 use jmap_proto::mail::role;
 use jmap_proto::{Id, State};
-
-fn sync_against(server: &MockServer) -> MailSync {
-    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    MailSync::new(client, server.account_id())
-}
 
 /// Mutate the account the way another client would.
 fn edit<R>(server: &MockServer, edit: impl FnOnce(&mut jmap_mock::AccountState) -> R) -> R {

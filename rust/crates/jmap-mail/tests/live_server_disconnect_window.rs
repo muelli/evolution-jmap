@@ -29,14 +29,17 @@
 //! The test is skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER` or
 //! `_PASSWORD` is unset.
 
+mod common;
+
 use std::env;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
+use common::race::DelayedDeliveryTransport;
+use common::race::Gate;
+use common::race::StorePtr;
 use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
@@ -49,107 +52,6 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// The longest time a `Gate` wait blocks. A missed signal fails the test and does not hang it.
-const GATE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Lets the test park a transport call, and learn when the call actually
-/// parked, instead of racing a sleep against it. Copy of
-/// `disconnect_window.rs`'s `Gate`.
-#[derive(Default)]
-struct Gate {
-    started: Mutex<bool>,
-    started_cond: Condvar,
-    released: Mutex<bool>,
-    released_cond: Condvar,
-}
-
-impl Gate {
-    fn wait_for_start(&self) {
-        let started = self.started.lock().unwrap();
-        let (_guard, wait) = self
-            .started_cond
-            .wait_timeout_while(started, GATE_TIMEOUT, |started| !*started)
-            .unwrap();
-        assert!(
-            !wait.timed_out(),
-            "the gated response did not arrive in {GATE_TIMEOUT:?}"
-        );
-    }
-
-    fn signal_start(&self) {
-        *self.started.lock().unwrap() = true;
-        self.started_cond.notify_all();
-    }
-
-    fn wait_for_release(&self) {
-        let released = self.released.lock().unwrap();
-        let (_guard, wait) = self
-            .released_cond
-            .wait_timeout_while(released, GATE_TIMEOUT, |released| !*released)
-            .unwrap();
-        assert!(
-            !wait.timed_out(),
-            "the test did not release the gate in {GATE_TIMEOUT:?}"
-        );
-    }
-
-    fn release(&self) {
-        *self.released.lock().unwrap() = true;
-        self.released_cond.notify_all();
-    }
-}
-
-/// Forwards every request to a real transport, but holds back delivery of
-/// the first `Email/get` request until the test releases it. By then, the
-/// real server has already answered it. `messages()` makes exactly this
-/// call (it fetches the account's `Email` state) right after cloning the
-/// connection's `Arc` and dropping the read guard. Holding this delivery
-/// creates exactly the window that `drop_connection` needs to race.
-///
-/// The match is on the request body, not a raw call index. `create_folder`
-/// (`Mailbox/set`) runs on the same client and transport before the race
-/// starts. A plain call counter would arm on one of those requests instead,
-/// and deadlock the calling thread against a gate that nothing else would
-/// ever release.
-struct DelayedDeliveryTransport {
-    inner: UreqTransport,
-    gate: Arc<Gate>,
-    delayed_once: AtomicBool,
-}
-
-impl Transport for DelayedDeliveryTransport {
-    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
-        let is_email_get = request
-            .body
-            .map(|body| String::from_utf8_lossy(body).contains("Email/get"))
-            .unwrap_or(false);
-        let response = self.inner.execute(request)?;
-        if is_email_get && !self.delayed_once.swap(true, Ordering::SeqCst) {
-            self.gate.signal_start();
-            self.gate.wait_for_release();
-        }
-        Ok(response)
-    }
-}
-
-/// `JmapStore::detached()` is not a GObject, so it cannot be shared across a
-/// real thread boundary the way Rust's `Sync` would want proof of; see
-/// `disconnect_window.rs`'s copy of the same wrapper for why this is sound
-/// here too.
-#[derive(Clone, Copy)]
-struct StorePtr(*const JmapStore);
-// SAFETY: every use below dereferences this only while the `Box<JmapStore>`
-// it came from is still alive on the test's main thread. The test joins
-// both threads before that box drops.
-unsafe impl Send for StorePtr {}
-
-impl StorePtr {
-    fn borrow<'a>(self) -> &'a JmapStore {
-        // SAFETY: see the type's own doc comment.
-        unsafe { &*self.0 }
-    }
-}
-
 /// Mirrors `live_server_folder_listing_race.rs`'s `connect_for_write_with_gate`.
 fn connect_for_write_with_gate(gate: Arc<Gate>) -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
@@ -159,11 +61,9 @@ fn connect_for_write_with_gate(gate: Arc<Gate>) -> Option<Client> {
         .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
 
-    let transport = DelayedDeliveryTransport {
-        inner: UreqTransport::default(),
-        gate,
-        delayed_once: AtomicBool::new(false),
-    };
+    // `messages()` sends `Email/get` just after it clones the connection's `Arc` and drops the
+    // read guard. A hold on that response opens the window that `drop_connection` races.
+    let transport = DelayedDeliveryTransport::new(gate, "Email/get");
     let client = Client::builder()
         .transport(transport)
         .rebase_urls_to_origin(rebase)
@@ -197,7 +97,8 @@ fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight_on_the_
         .create_folder(None, &name)
         .expect("create_folder should succeed against the real server");
 
-    let store_ptr = StorePtr(&*store as *const JmapStore);
+    // SAFETY: the test joins both threads before `store` drops.
+    let store_ptr = unsafe { StorePtr::new(&store) };
     let mailbox = created.id.clone();
     let listing = thread::spawn(move || store_ptr.borrow().messages(&mailbox));
 

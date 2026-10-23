@@ -14,6 +14,7 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use common::Account;
+use common::sync_against;
 use eds_sys::{
     CAMEL_MESSAGE_SEEN, CAMEL_STORE_FOLDER_NONE, CamelFolder, camel_folder_get_folder_summary,
     camel_folder_get_message_sync, camel_folder_refresh_info_sync, camel_folder_summary_get,
@@ -22,8 +23,6 @@ use eds_sys::{
 };
 use glib_sys::{GError, GFALSE, g_error_free};
 use gobject_sys::g_object_unref;
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
@@ -47,11 +46,6 @@ fn server_with(subject: &str, body: &str) -> (MockServer, Id) {
         ))
     };
     (server, uid)
-}
-
-fn sync_against(server: &MockServer) -> MailSync {
-    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    MailSync::new(client, server.account_id())
 }
 
 fn open_inbox(account: &Account) -> *mut CamelFolder {

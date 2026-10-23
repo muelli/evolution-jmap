@@ -31,16 +31,16 @@
 //! reach any of this. The pair is: the three vfunc slots being filled, and
 //! the store's flags word carrying `CAMEL_STORE_CAN_EDIT_FOLDERS`.
 
+use common::sync_against;
 use eds_sys::{
     CAMEL_STORE_CAN_EDIT_FOLDERS, CAMEL_STORE_SUPPORTS_INITIAL_SETUP, CAMEL_STORE_VJUNK,
     CAMEL_STORE_VTRASH, CamelStoreClass, camel_offline_store_get_type, camel_store_get_flags,
 };
 use gobject_sys::{g_type_class_peek, g_type_class_ref, g_type_class_unref};
-use jmap_client::{Client, Credentials};
 use jmap_mail::connect::StoreError;
 use jmap_mail::manage;
 use jmap_mail::store::{JmapStore, store_type};
-use jmap_mail_sync::{FolderInfo, FolderTree, MailSync};
+use jmap_mail_sync::{FolderInfo, FolderTree};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::mail::role;
 
@@ -48,11 +48,6 @@ mod common;
 
 /// No flags. The store returns its already-held tree, without a server request.
 const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
-
-fn sync_against(server: &MockServer) -> MailSync {
-    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    MailSync::new(client, server.account_id())
-}
 
 /// A server with an inbox and one ordinary folder, and a store connected to it.
 fn connected() -> (MockServer, Box<JmapStore>) {

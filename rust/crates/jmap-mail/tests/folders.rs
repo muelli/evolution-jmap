@@ -37,6 +37,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::Account;
+use common::sync_against;
 use eds_sys::{
     CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
     CAMEL_STORE_ERROR_NO_FOLDER, CAMEL_STORE_FOLDER_INFO_RECURSIVE,
@@ -78,11 +79,6 @@ const SUBSCRIBED: eds_sys::CamelStoreGetFolderInfoFlags = CAMEL_STORE_FOLDER_INF
 /// What the subscription editor asks with: every folder there is to tick.
 const SUBSCRIPTION_LIST: eds_sys::CamelStoreGetFolderInfoFlags =
     CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST;
-
-fn sync_against(server: &MockServer) -> MailSync {
-    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    MailSync::new(client, server.account_id())
-}
 
 /// A server with an inbox, and a store already connected to it.
 fn connected() -> (MockServer, Box<JmapStore>) {
