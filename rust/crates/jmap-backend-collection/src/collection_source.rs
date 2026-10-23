@@ -61,18 +61,15 @@
 //! [`SourceConfig`]: jmap_backend_core::source::SourceConfig
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
-    ESource, ESourceAuthentication, ESourceCollection, ESourceSecurity,
-    e_source_authentication_dup_host, e_source_authentication_dup_method,
-    e_source_authentication_dup_user, e_source_authentication_get_port,
-    e_source_authentication_get_type, e_source_collection_get_calendar_enabled,
-    e_source_collection_get_contacts_enabled, e_source_collection_get_mail_enabled,
-    e_source_collection_get_type, e_source_get_enabled, e_source_security_get_secure,
-    e_source_security_get_type,
+    E_SOURCE_EXTENSION_COLLECTION, ESource, ESourceCollection,
+    e_source_collection_get_calendar_enabled, e_source_collection_get_contacts_enabled,
+    e_source_collection_get_mail_enabled, e_source_collection_get_type, e_source_get_enabled,
 };
 use glib_sys::GFALSE;
-use jmap_backend_core::marshal::{extension_if_present, take_string};
-use jmap_backend_core::source::{ConnectTarget, SourceError, connect_target};
+use jmap_backend_core::marshal::extension_if_present;
+use jmap_backend_core::source::{
+    AuthFields, ConnectTarget, SourceError, connect_target, read_auth,
+};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 
@@ -145,26 +142,17 @@ pub unsafe fn parts_of(source: *mut ESource) -> Parts {
 /// `None` covers both forms of "no user": no `[Authentication]` group, and an
 /// empty `User=` key. The second is important.
 /// [`jmap_backend_core::connect::credentials`] decides what the account
-/// authenticates *as*, and reads an empty user as anonymous through the same
-/// [`take_string`]. If `populate` disagreed, it would ask EDS for a password
+/// authenticates *as*, and gets its user from the same
+/// [`read_auth`], which reads an empty user as `None`. If `populate` disagreed, it would ask EDS for a password
 /// that `credentials` then discards.
 ///
 /// # Safety
 ///
 /// As [`parts_of`].
 pub unsafe fn user_of(source: *mut ESource) -> Option<String> {
-    // SAFETY: no arguments; registers the type the lookup below needs.
-    unsafe { e_source_authentication_get_type() };
-
-    // Test for the group and do not get it, as everywhere in this module:
-    // `e_source_get_extension` would add the group to the account file.
-    // SAFETY: a valid source by the contract above, and a header constant.
-    let auth = unsafe {
-        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
-    }?;
-    // SAFETY: a live extension. The `dup_` getter gives a copy that a setter
-    // on another thread cannot free.
-    unsafe { take_string(e_source_authentication_dup_user(auth)) }
+    // `read_auth` adds no group to the account file.
+    // SAFETY: a valid source by the contract above.
+    unsafe { read_auth(source) }.user
 }
 
 /// The server that this account names, or why it names none.
@@ -173,44 +161,16 @@ pub unsafe fn user_of(source: *mut ESource) -> Option<String> {
 ///
 /// As [`parts_of`].
 pub unsafe fn server_of(source: *mut ESource) -> Result<Server, SourceError> {
-    // SAFETY: no arguments; registers the types the lookups below need.
-    unsafe {
-        e_source_authentication_get_type();
-        e_source_security_get_type();
-    }
-
-    // Absent means TLS, and this test comes before any
-    // `e_source_get_extension`. `ESourceSecurity:secure` defaults to FALSE, so
-    // an unconditional read cannot tell an account without `[Security]` from
-    // an account with TLS off.
-    // SAFETY: a valid source by the contract above, and a header constant.
-    let secure = match unsafe {
-        extension_if_present::<ESourceSecurity>(source, E_SOURCE_EXTENSION_SECURITY)
-    } {
-        None => true,
-        // SAFETY: a live extension of the type the name selects.
-        Some(security) => unsafe { e_source_security_get_secure(security) != GFALSE },
-    };
-
-    // The same test, for the same reason. An account without
-    // `[Authentication]` names no host, as an empty group does, and the file
-    // of the user does not change.
-    // SAFETY: as above.
-    let Some(auth) = (unsafe {
-        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
-    }) else {
-        return Err(SourceError::MissingHost);
-    };
-    // SAFETY: a live extension. Each `dup_` getter gives NULL or a copy that
-    // the caller frees, so a setter on another thread cannot free it.
-    let (host, user, auth_method, port) = unsafe {
-        (
-            take_string(e_source_authentication_dup_host(auth)),
-            take_string(e_source_authentication_dup_user(auth)),
-            take_string(e_source_authentication_dup_method(auth)),
-            e_source_authentication_get_port(auth),
-        )
-    };
+    // `read_auth` adds no group to the account file. An account without
+    // `[Authentication]` names no host, as an empty group does.
+    // SAFETY: a valid source by the contract above.
+    let AuthFields {
+        host,
+        port,
+        user,
+        method: auth_method,
+        secure,
+    } = unsafe { read_auth(source) };
 
     // The one validation. The connect target of this backend and the host of
     // its children come from the same checked fields.
