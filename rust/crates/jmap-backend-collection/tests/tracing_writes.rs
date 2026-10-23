@@ -47,6 +47,7 @@ use jmap_tracing_capture::capture;
 use tracing::Level;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
+use jmap_backend_core::source::OwnedSource;
 
 mod common;
 use common::{with_timeout, with_timeout_duration};
@@ -95,7 +96,7 @@ impl Drop for Source {
     }
 }
 
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new(uid: &str) -> Self {
@@ -104,18 +105,16 @@ impl TestSource {
             e_source_authentication_get_type();
             e_source_security_get_type();
         }
-        let uid = CString::new(uid).expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        unsafe { e_source_set_enabled(source, GTRUE) };
+        let source = OwnedSource::new(uid);
+        unsafe { e_source_set_enabled(source.as_ptr(), GTRUE) };
         Self(source)
     }
 
     fn parts(self, parts: Parts) -> Self {
         unsafe {
             let collection: *mut ESourceCollection =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_COLLECTION.as_ptr())
+                    .cast();
             let flag = |on: bool| if on { GTRUE } else { GFALSE };
             e_source_collection_set_mail_enabled(collection, flag(parts.mail));
             e_source_collection_set_contacts_enabled(collection, flag(parts.contacts));
@@ -129,7 +128,8 @@ impl TestSource {
         let user = user.map(|user| CString::new(user).expect("no NUL in a test user"));
         unsafe {
             let auth: *mut ESourceAuthentication =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                    .cast();
             e_source_authentication_set_host(auth, host.as_ptr());
             e_source_authentication_set_port(auth, port);
             if let Some(user) = &user {
@@ -142,16 +142,11 @@ impl TestSource {
     fn secure(self, secure: bool) -> Self {
         unsafe {
             let security: *mut ESourceSecurity =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_SECURITY.as_ptr())
+                    .cast();
             e_source_security_set_secure(security, if secure { GTRUE } else { GFALSE });
         }
         self
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
@@ -301,7 +296,7 @@ fn authenticate_with_traces_structured_fields() {
         let (_, captured) = capture(|| {
             let result = unsafe {
                 authenticate_with(
-                    source.0,
+                    source.0.as_ptr(),
                     ptr::null(),
                     ptr::null_mut(),
                     &mut error,
@@ -337,7 +332,7 @@ fn authenticate_with_no_parts_traces_fast_path() {
         let (_, captured) = capture(|| {
             let result = unsafe {
                 authenticate_with(
-                    source.0,
+                    source.0.as_ptr(),
                     ptr::null(),
                     ptr::null_mut(),
                     &mut error,

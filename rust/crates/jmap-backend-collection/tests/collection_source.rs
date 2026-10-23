@@ -13,7 +13,6 @@
 // different place.
 
 use std::ffi::{CStr, CString};
-use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
@@ -23,12 +22,11 @@ use eds_sys::{
     e_source_authentication_set_user, e_source_collection_get_type,
     e_source_collection_set_calendar_enabled, e_source_collection_set_contacts_enabled,
     e_source_collection_set_mail_enabled, e_source_get_extension, e_source_has_extension,
-    e_source_new_with_uid, e_source_security_get_type, e_source_security_set_secure,
-    e_source_set_enabled,
+    e_source_security_get_type, e_source_security_set_secure, e_source_set_enabled,
 };
 use glib_sys::{GFALSE, GTRUE};
-use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::{Server, parts_of, server_of, user_of};
+use jmap_backend_core::source::OwnedSource;
 use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Child, ChildKind, Parts};
@@ -41,7 +39,7 @@ static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// An `ESource` without a registry, as in `tests/resource_id.rs`. EDS uses
 /// `e_source_new_with_uid` with a NULL D-Bus object for a source from a keyfile.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
@@ -56,20 +54,14 @@ impl TestSource {
             e_source_security_get_type();
         }
 
-        let uid = CString::new("jmap-collection").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new("jmap-collection"))
     }
 
     /// The `enabled` property of the collection source.
     /// `e_collection_backend_get_part_enabled()` checks it first.
     fn enabled(self, enabled: bool) -> Self {
         // SAFETY: a live source.
-        unsafe { e_source_set_enabled(self.0, if enabled { GTRUE } else { GFALSE }) };
+        unsafe { e_source_set_enabled(self.0.as_ptr(), if enabled { GTRUE } else { GFALSE }) };
         self
     }
 
@@ -79,7 +71,8 @@ impl TestSource {
         // extension when necessary and owns it.
         unsafe {
             let collection: *mut ESourceCollection =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_COLLECTION.as_ptr())
+                    .cast();
             let flag = |on: bool| if on { GTRUE } else { GFALSE };
             e_source_collection_set_mail_enabled(collection, flag(parts.mail));
             e_source_collection_set_contacts_enabled(collection, flag(parts.contacts));
@@ -101,7 +94,8 @@ impl TestSource {
         // SAFETY: as above. Each setter copies the string that it receives.
         unsafe {
             let auth: *mut ESourceAuthentication =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                    .cast();
             e_source_authentication_set_host(auth, host.as_ptr());
             e_source_authentication_set_port(auth, port);
             if let Some(user) = &user {
@@ -118,7 +112,8 @@ impl TestSource {
         // SAFETY: as above.
         unsafe {
             let security: *mut ESourceSecurity =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_SECURITY.as_ptr())
+                    .cast();
             e_source_security_set_secure(security, if secure { GTRUE } else { GFALSE });
         }
         self
@@ -126,30 +121,22 @@ impl TestSource {
 
     fn has_extension(&self, name: &CStr) -> bool {
         // SAFETY: a live source and a NUL-terminated name.
-        unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
+        unsafe { e_source_has_extension(self.0.as_ptr(), name.as_ptr()) != GFALSE }
     }
 
     fn parts_of(&self) -> Parts {
         // SAFETY: a live source.
-        unsafe { parts_of(self.0) }
+        unsafe { parts_of(self.0.as_ptr()) }
     }
 
     fn server_of(&self) -> Result<Server, SourceError> {
         // SAFETY: a live source.
-        unsafe { server_of(self.0) }
+        unsafe { server_of(self.0.as_ptr()) }
     }
 
     fn user_of(&self) -> Option<String> {
         // SAFETY: a live source.
-        unsafe { user_of(self.0) }
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this releases the reference from `e_source_new_with_uid`
-        // exactly once.
-        unsafe { g_object_unref(self.0.cast()) };
+        unsafe { user_of(self.0.as_ptr()) }
     }
 }
 
@@ -545,7 +532,7 @@ fn user_of_on_another_thread_copies_a_user_the_main_thread_is_replacing() {
     with_timeout_duration(RACE_TIMEOUT, || {
         let source = account();
         read_while_another_thread_writes(
-            source.0,
+            source.0.as_ptr(),
             long_values("@example.com"),
             set_user,
             // SAFETY: a live source.
@@ -561,7 +548,7 @@ fn server_of_on_another_thread_copies_a_user_the_main_thread_is_replacing() {
     with_timeout_duration(RACE_TIMEOUT, || {
         let source = account();
         read_while_another_thread_writes(
-            source.0,
+            source.0.as_ptr(),
             long_values("@example.com"),
             set_user,
             // SAFETY: a live source.
@@ -582,7 +569,7 @@ fn server_of_on_another_thread_copies_a_method_the_main_thread_is_replacing() {
     with_timeout_duration(RACE_TIMEOUT, || {
         let source = account();
         read_while_another_thread_writes(
-            source.0,
+            source.0.as_ptr(),
             long_values("/password"),
             set_method,
             // SAFETY: a live source.
