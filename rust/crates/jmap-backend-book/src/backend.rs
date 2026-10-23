@@ -7,9 +7,7 @@
 
 use std::ffi::CStr;
 use std::ptr;
-use std::sync::{
-    Mutex, MutexGuard, OnceLock, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard,
-};
+use std::sync::{Mutex, OnceLock, RwLock};
 
 use eds_sys::{
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_CONTACT_ADDRESS, E_CONTACT_ADDRESS_HOME,
@@ -65,6 +63,7 @@ use jmap_backend_core::instance::Slot;
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::dup_string;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
+use jmap_backend_core::poison::{lock, read, write};
 use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_on_authentication_failure;
 use jmap_backend_core::source::{backend_source, destination_address};
@@ -618,19 +617,6 @@ unsafe fn fail_offline(error: *mut *mut GError) -> gboolean {
         );
     }
     GFALSE
-}
-
-/// Recovers the inner value across poisoned lock boundaries.
-fn read(session: &RwLock<Option<BookSync>>) -> RwLockReadGuard<'_, Option<BookSync>> {
-    session.read().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn write(session: &RwLock<Option<BookSync>>) -> RwLockWriteGuard<'_, Option<BookSync>> {
-    session.write().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn lock(push: &Mutex<Option<PushRefresh>>) -> MutexGuard<'_, Option<PushRefresh>> {
-    push.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Resolves destination host and port for `EBackendClass::get_destination_address`.

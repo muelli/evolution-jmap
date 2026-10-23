@@ -33,6 +33,8 @@
 //! - [`push`] turns a server-pushed JMAP `StateChange` into the refresh that
 //!   EDS already runs. [`weak`] lets its thread reach a backend it does not
 //!   own, without a race against the backend's destruction.
+//! - [`poison`] holds the lock helpers that continue after a panic in a
+//!   different thread.
 //! - [`rebase`] is the per-account opt-in to rebase a session's advertised
 //!   URLs onto the origin of the actual connection.
 //!
@@ -56,6 +58,7 @@ pub mod marshal;
 pub mod mime;
 pub mod oauth2;
 pub mod owned;
+pub mod poison;
 pub mod push;
 pub mod rebase;
 pub mod resolver;

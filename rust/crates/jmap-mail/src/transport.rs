@@ -68,6 +68,7 @@ use jmap_backend_core::instance::Slot;
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::{checked_borrow_ptr, dispatched_borrow};
 use jmap_backend_core::owned::Owned;
+use jmap_backend_core::poison::{read, write};
 use jmap_backend_core::retry::retry_once_after;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_client::Credentials;
@@ -81,7 +82,6 @@ use crate::connect::StoreError;
 use crate::oauth2;
 use crate::service::Connected;
 use crate::settings::settings_type;
-use crate::store::{read, write};
 
 /// The result of a sent message.
 pub struct Sent {
