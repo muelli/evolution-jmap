@@ -557,3 +557,95 @@ fn the_live_client_fails_the_connect_on_a_rejected_password() {
         "the client made {unauthorized} attempts that got a 401\n{report}"
     );
 }
+
+/// A server that answers each `Email/query` with the same limited, non-empty
+/// page is out of spec (RFC 8620 §5.5). The provider lists the messages when
+/// Camel opens the inbox. That step must fail with an error. It must not hang
+/// the Camel thread or crash.
+/// `messages.rs` of `jmap-mail-sync` tests the same limit without Camel.
+#[test]
+fn a_query_that_never_stops_paging_fails_the_inbox_with_an_error() {
+    let client = required_path("JMAP_FUNCTIONAL_MAIL_CLIENT");
+    let server = jmap_mock::MockServer::builder()
+        .query_page_size(1)
+        .query_never_terminates()
+        .start();
+    let account_id = server.account_id();
+    {
+        let state = server.state();
+        let mut state = state.lock().expect("mock state lock");
+        let account = state
+            .account_mut(&account_id)
+            .expect("the mock's default account");
+        // The client works on all five folders before it refreshes the inbox.
+        let inbox = account.seed_mailbox("Inbox", Some("inbox"));
+        for (name, role) in [
+            ("Sent", "sent"),
+            ("Drafts", "drafts"),
+            ("Trash", "trash"),
+            ("Junk", "junk"),
+        ] {
+            account.seed_mailbox(name, Some(role));
+        }
+        account.seed_email(EmailSeed::new(
+            inbox,
+            ("Bob", "bob@example.com"),
+            FIRST_SUBJECT,
+            FIRST_BODY,
+            "2026-01-14T09:00:00Z",
+        ));
+    }
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/mail-query-paging"));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_camel_provider(
+        &required_path("JMAP_FUNCTIONAL_MAIL_MODULE"),
+        &required_path("JMAP_FUNCTIONAL_MAIL_URLS"),
+    );
+
+    // `timeout` exits with 124 when it stops the client.
+    let client = client.to_str().expect("the client path is UTF-8");
+    let output = session.run(
+        std::path::Path::new("/usr/bin/timeout"),
+        &["--kill-after=5", "60", client, "jmap-functional"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let queries = server
+        .method_calls()
+        .iter()
+        .filter(|name| name.as_str() == "Email/query")
+        .count();
+
+    assert_ne!(
+        output.status.code(),
+        Some(124),
+        "the listing was still paging after 60 s ({queries} Email/query calls)\n{report}"
+    );
+    assert_eq!(
+        observations(&stdout).get("store-connected"),
+        Some(&"1"),
+        "the store did not connect, so the listing never ran\n{report}"
+    );
+    assert!(
+        !output.status.success(),
+        "the client accepted a query that never stopped paging\n{report}"
+    );
+    assert!(
+        stderr.contains("inbox: protocol error: Email/query never stopped"),
+        "opening the inbox did not fail with the paging error\n{report}"
+    );
+    // The page limit of `jmap-mail-sync` is 1024 pages for one listing.
+    assert!(
+        (1024..=2048).contains(&queries),
+        "the provider made {queries} Email/query calls\n{report}"
+    );
+}
