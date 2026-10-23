@@ -136,43 +136,10 @@ fn spawn_resolver_worker() -> std::io::Result<ResolverWorker> {
     })
 }
 
-/// A job dispatched to a worker's context. It is boxed once, and
-/// [`invoke_cb`] runs it once. It is `None` after [`invoke_cb`] takes it. A
-/// cancelled invocation (its context is destroyed before it runs) leaves it
-/// `Some`. [`drop_payload`] must then drop it without running it.
-type Job = Option<Box<dyn FnOnce() + Send>>;
-
-unsafe extern "C" fn invoke_cb(data: glib_sys::gpointer) -> glib_sys::gboolean {
-    // SAFETY: data points to the heap-allocated Job passed to invoke_full.
-    let job = unsafe { &mut *data.cast::<Job>() };
-    if let Some(f) = job.take() {
-        crate::trampoline::guard("jmap-resolver worker", (), f);
-    }
-    glib_sys::GFALSE
-}
-
-unsafe extern "C" fn drop_payload(data: glib_sys::gpointer) {
-    // SAFETY: reclaims the leaked Job box after dispatch or cancellation.
-    drop(unsafe { Box::from_raw(data.cast::<Job>()) });
-}
-
-/// Runs `f` on the GMainContext of `worker`. This is the same dispatch
-/// mechanism that every lookup used before the pool: a boxed job that
-/// [`invoke_cb`] takes and runs once, and that [`drop_payload`] always frees.
+/// Runs `f` on the GMainContext of `worker`.
 fn invoke_on_worker(worker: &ResolverWorker, f: impl FnOnce() + Send + 'static) {
-    let job: Job = Some(Box::new(f));
-    let payload: Box<Job> = Box::new(job);
-
     // SAFETY: worker.context.0 is a live GMainContext for the process lifetime.
-    unsafe {
-        glib_sys::g_main_context_invoke_full(
-            worker.context.0,
-            glib_sys::G_PRIORITY_DEFAULT,
-            Some(invoke_cb),
-            Box::into_raw(payload).cast(),
-            Some(drop_payload),
-        );
-    }
+    unsafe { crate::invoke::invoke_in(worker.context.0, "jmap-resolver worker", f) };
 }
 
 /// Dispatches an SRV lookup request to the next resolver worker in the pool.
