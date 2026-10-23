@@ -169,3 +169,69 @@ fn a_login_that_serves_no_collections_has_no_children() {
     assert!(fanout.layout.mail.is_some(), "the login still serves mail");
     assert!(fanout.children().is_empty());
 }
+
+#[test]
+fn a_shared_account_named_as_the_user_gives_children_apart_from_the_users_own() {
+    // A hostile server names the shared account as the user. Both accounts hold
+    // a "Team" book and calendar with the same ids.
+    let server = MockServer::builder()
+        .shared_account_name_copies_user()
+        .start();
+    let shared = Id::new("A2");
+    {
+        let state = server.state();
+        let mut state = state.lock().expect("the mock server thread is alive");
+        let own = state
+            .account_mut(&Id::new(DEFAULT_ACCOUNT_ID))
+            .expect("the default account");
+        own.seed_address_book("Team", true);
+        own.seed_calendar("Team", true);
+        let sharer = state.add_account(shared.clone(), "bob@example.com");
+        sharer.is_personal = false;
+        sharer.seed_address_book("Team", true);
+        sharer.seed_calendar("Team", true);
+    }
+
+    let client = Client::connect(server.origin(), Credentials::none())
+        .expect("the mock serves a session document");
+    let session = client.session();
+    assert_eq!(
+        session.accounts[&shared].name, session.username,
+        "the mock did not copy the user's name onto the shared account"
+    );
+    let username = session.username.clone();
+    let children = Fanout::discover(&client, Parts::ALL)
+        .expect("the mock answers every listing it is asked for")
+        .children();
+
+    let shared_label = format!("{username}: Team");
+    assert_eq!(
+        children
+            .iter()
+            .map(|child| (
+                child.kind,
+                child.account_id.as_str(),
+                child.display_name.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (ChildKind::AddressBook, DEFAULT_ACCOUNT_ID, "Team"),
+            (ChildKind::Calendar, DEFAULT_ACCOUNT_ID, "Team"),
+            (ChildKind::AddressBook, "A2", shared_label.as_str()),
+            (ChildKind::Calendar, "A2", shared_label.as_str()),
+        ],
+        "the owner prefix still marks the shared children, and a name never picks the account"
+    );
+    for (own, other) in children[..2].iter().zip(&children[2..]) {
+        assert_eq!(
+            own.collection_id, other.collection_id,
+            "the fixture must give both accounts the same collection ids"
+        );
+        assert_ne!(
+            own.resource_id, other.resource_id,
+            "the shared {:?} merged into the user's own source",
+            own.kind
+        );
+        assert_eq!(other.identity(), format!("A2/{}", other.collection_id));
+    }
+}
