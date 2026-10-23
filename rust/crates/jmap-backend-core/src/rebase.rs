@@ -37,22 +37,10 @@
 //! which registers the type first. Thus this module is self-contained.
 
 use std::ffi::CStr;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-use eds_sys::{
-    E_SOURCE_PARAM_SETTING, ESource, ESourceExtension, ESourceExtensionClass,
-    e_source_extension_get_type,
-};
-use glib_sys::{GFALSE, GType};
-use gobject_sys::{
-    G_PARAM_READWRITE, GObject, GObjectClass, GParamSpec, GValue, g_object_class_install_property,
-    g_param_spec_boolean, g_value_get_boolean, g_value_set_boolean,
-};
+use eds_sys::ESource;
 
-use crate::marshal::extension_if_present;
-use crate::subclass::{ObjectSubclass, register_static};
-use crate::trampoline::{guard, log_critical};
+use crate::setting_extension::{self, Setting, SettingExtension};
 
 /// The keyfile group that EDS uses to find this extension. The `.source`
 /// file of an account shows it as `[JMAP Rebase]`.
@@ -76,125 +64,26 @@ use crate::trampoline::{guard, log_critical};
 pub const EXTENSION_NAME: &CStr = c"JMAP Rebase";
 
 const PROPERTY_NAME: &CStr = c"rebase-urls";
-const PROP_REBASE_URLS: u32 = 1;
 
-/// The instance struct: only the state of [`ESourceExtension`] and the one
-/// flag, in the layout that [`ObjectSubclass`] requires.
-#[repr(C)]
-pub struct Extension {
-    parent: ESourceExtension,
-    rebase_urls: AtomicBool,
+/// The rebase opt-in as a [`Setting`]: one boolean property, `rebase-urls`.
+pub struct RebaseUrls;
+
+impl Setting for RebaseUrls {
+    const TYPE_NAME: &'static CStr = c"JmapRebaseUrlsExtension";
+    const EXTENSION_NAME: &'static CStr = EXTENSION_NAME;
+    const PROPERTY: &'static CStr = PROPERTY_NAME;
+    type Value = bool;
 }
 
-/// The class struct: only the state of [`ESourceExtensionClass`].
-#[repr(C)]
-pub struct ExtensionClass {
-    parent_class: ESourceExtensionClass,
-}
-
-// SAFETY: both structs are #[repr(C)] and start with the instance/class
-// structs of ESourceExtension. tests/layout.rs of eds-sys checks their layout
-// against `g_type_query`. ESourceExtension derives from GObject.
-// `jmap_config::oauth2::Extension` uses the same contract.
-unsafe impl ObjectSubclass for Extension {
-    const NAME: &'static CStr = c"JmapRebaseUrlsExtension";
-    type Instance = Extension;
-    type Class = ExtensionClass;
-
-    fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
-        unsafe { e_source_extension_get_type() }
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` starts with `ESourceExtensionClass`. This is the
-        // field that `source_find_extension_classes_rec` reads to match an
-        // extension name to a `GType`.
-        unsafe { (*class).parent_class.name = EXTENSION_NAME.as_ptr() };
-
-        // SAFETY: `ExtensionClass` starts with `ESourceExtensionClass`, which
-        // starts with `GObjectClass`.
-        let object_class = class.cast::<GObjectClass>();
-        unsafe {
-            (*object_class).set_property = Some(set_property);
-            (*object_class).get_property = Some(get_property);
-            g_object_class_install_property(
-                object_class,
-                PROP_REBASE_URLS,
-                g_param_spec_boolean(
-                    PROPERTY_NAME.as_ptr(),
-                    ptr::null(),
-                    ptr::null(),
-                    GFALSE,
-                    G_PARAM_READWRITE | E_SOURCE_PARAM_SETTING,
-                ),
-            );
-        }
-    }
-
-    unsafe fn instance_init(instance: *mut Self::Instance) {
-        // SAFETY: a new zeroed instance. Zero is the bit pattern of `false`,
-        // but the code writes it explicitly and does not assume it.
-        unsafe { ptr::addr_of_mut!((*instance).rebase_urls).write(AtomicBool::new(false)) };
-    }
-}
-
-/// Sends a property write to the storage of the instance.
-///
-/// This has a guard, as every function that C calls in this crate has. It
-/// runs inside `g_object_set`, which the `.source` parser of EDS calls when
-/// it restores an account. A panic that unwinds out of it is undefined
-/// behaviour in a process that holds the mail of other users.
-unsafe extern "C" fn set_property(
-    object: *mut GObject,
-    id: u32,
-    value: *mut GValue,
-    _pspec: *mut GParamSpec,
-) {
-    guard("JmapRebaseUrlsExtension::set_property", (), || {
-        if id != PROP_REBASE_URLS {
-            log_critical(&format!(
-                "JmapRebaseUrlsExtension has no property with id {id}; the value is dropped"
-            ));
-            return;
-        }
-        // SAFETY: GObject passes an instance of this type. `instance_init`
-        // runs before a vfunc can be dispatched on it.
-        let extension = unsafe { &*object.cast::<Extension>() };
-        // SAFETY: `value` holds the boolean type that the pspec declares.
-        let flag = unsafe { g_value_get_boolean(value) } != GFALSE;
-        extension.rebase_urls.store(flag, Ordering::Relaxed);
-    });
-}
-
-/// The read half, symmetric with [`set_property`].
-unsafe extern "C" fn get_property(
-    object: *mut GObject,
-    id: u32,
-    value: *mut GValue,
-    _pspec: *mut GParamSpec,
-) {
-    guard("JmapRebaseUrlsExtension::get_property", (), || {
-        if id != PROP_REBASE_URLS {
-            log_critical(&format!(
-                "JmapRebaseUrlsExtension has no property with id {id}; nothing is read"
-            ));
-            return;
-        }
-        // SAFETY: as `set_property`.
-        let extension = unsafe { &*object.cast::<Extension>() };
-        let flag = extension.rebase_urls.load(Ordering::Relaxed);
-        // SAFETY: `value` is the `GValue` that GObject fills for this get.
-        unsafe { g_value_set_boolean(value, flag as _) };
-    });
-}
+/// The registered extension type of [`RebaseUrls`].
+pub type Extension = SettingExtension<RebaseUrls>;
 
 /// Registers [`Extension`] (or finds it already registered). After this,
 /// `e_source_get_extension`/`e_source_has_extension` can match
 /// [`EXTENSION_NAME`] to it. The module docs tell why a lazy call from
 /// [`rebase_urls`] is sufficient.
 pub fn ensure_registered() {
-    register_static::<Extension>();
+    setting_extension::ensure_registered::<RebaseUrls>();
 }
 
 /// Whether `source` opts in to the rebase of
@@ -208,21 +97,19 @@ pub fn ensure_registered() {
 /// `source` must be a valid `ESource` that stays alive for the call. The
 /// call only reads it.
 pub unsafe fn rebase_urls(source: *mut ESource) -> bool {
-    ensure_registered();
-    // SAFETY: the contract above; `extension_if_present` only reads.
-    match unsafe { extension_if_present::<Extension>(source, EXTENSION_NAME) } {
-        None => false,
-        // SAFETY: a live extension of this type, by the contract of
-        // `extension_if_present`.
-        Some(extension) => unsafe { &*extension }.rebase_urls.load(Ordering::Relaxed),
-    }
+    // SAFETY: the contract above; a read does not change the source.
+    unsafe { setting_extension::read::<RebaseUrls>(source) }.unwrap_or(false)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ptr;
+
     use eds_sys::{e_source_get_extension, e_source_parameter_to_key, e_source_to_string};
     use glib_sys::g_free;
-    use gobject_sys::{g_object_set_property, g_value_init, g_value_unset};
+    use gobject_sys::{
+        GValue, g_object_set_property, g_value_init, g_value_set_boolean, g_value_unset,
+    };
 
     use super::*;
     use crate::source::OwnedSource;

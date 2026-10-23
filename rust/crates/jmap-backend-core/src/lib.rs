@@ -61,6 +61,7 @@ pub mod resolver;
 pub mod resolver_thread;
 pub mod retry;
 pub mod secret_store;
+pub mod setting_extension;
 pub mod source;
 pub mod subclass;
 pub mod trampoline;
