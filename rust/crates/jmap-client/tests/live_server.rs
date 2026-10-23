@@ -1134,8 +1134,18 @@ fn send_email_delivers_to_a_second_account_on_the_real_server() {
         return;
     };
 
-    let sender_email = env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap();
-    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+    let sender_user = env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap();
+    let recipient_user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+    let sender_email = if sender_user.contains('@') {
+        sender_user.clone()
+    } else {
+        format!("{sender_user}@example.com")
+    };
+    let recipient_email = if recipient_user.contains('@') {
+        recipient_user.clone()
+    } else {
+        format!("{recipient_user}@example.com")
+    };
 
     let sender_account_id = sender
         .primary_account(CAPABILITY_MAIL)
@@ -1149,14 +1159,28 @@ fn send_email_delivers_to_a_second_account_on_the_real_server() {
         .expect("the write-test account needs a Drafts mailbox")
         .id
         .expect("the server named the Drafts mailbox");
-    let identity_id = sender
-        .identities(&sender_account_id)
-        .unwrap()
-        .into_iter()
-        .find(|identity| identity.email == sender_email)
-        .expect("the write-test account needs a sending identity for its own address")
-        .id
-        .expect("the server named the identity");
+    let identities = sender.identities(&sender_account_id).unwrap();
+    let identity_id = if is_cyrus_server(&sender) && !sender_user.contains('@') {
+        // Cyrus Finding 3: Identity/get for a default-domain account whose userid has no '@'
+        // returns email: "" instead of appending @defaultdomain (violating RFC 8621 section 6).
+        let identity = identities
+            .into_iter()
+            .find(|identity| identity.id.as_ref().map(Id::as_str) == Some(sender_user.as_str()))
+            .expect("Cyrus default-domain account must return an identity matching userid");
+        assert!(
+            identity.email.is_empty(),
+            "Cyrus Finding 3 expects empty email on default-domain identity, got {:?}",
+            identity.email
+        );
+        identity.id.expect("the server named the identity")
+    } else {
+        identities
+            .into_iter()
+            .find(|identity| identity.email == sender_email)
+            .expect("the write-test account needs a sending identity for its own address")
+            .id
+            .expect("the server named the identity")
+    };
 
     let subject = format!("agent-livewrite-send-{}", unique_suffix());
     let draft = Email {
@@ -1848,44 +1872,113 @@ fn blob_copy_within_the_same_real_account_copies_the_content() {
         .expect("the server named the new blob");
     let source_id = uploaded.get("b0").expect("b0 was created").id.clone();
 
-    let response = client
-        .blob_copy(&BlobCopyRequest::new(
+    if is_cyrus_server(&client) {
+        // Cyrus enforces RFC 8620 section 5.5 and section 5.7 (fromAccountId MUST differ
+        // from accountId) and rejects same-account Blob/copy with invalidArguments.
+        match client.blob_copy(&BlobCopyRequest::new(
             account_id.clone(),
             account_id.clone(),
             [source_id.clone()],
-        ))
-        .expect("Blob/copy failed against the real server");
-    let copied = response.copied.expect("the server copied the blob");
-    let copy_id = copied
-        .get(&source_id)
-        .expect("the source id was copied")
-        .clone();
-    assert!(
-        response
-            .not_copied
-            .is_none_or(|not_copied| not_copied.is_empty()),
-        "the blob copy reported a failure for an id that should have succeeded"
-    );
+        )) {
+            Err(jmap_client::Error::Method(method_error)) => {
+                assert_eq!(method_error.error_type, method::INVALID_ARGUMENTS);
+                assert_eq!(
+                    method_error.extra.get("arguments"),
+                    Some(&json!(["accountId", "fromAccountId"]))
+                );
+            }
+            other => panic!(
+                "expected invalidArguments for same-account Blob/copy on Cyrus, got {other:?}"
+            ),
+        }
 
-    let source_get = client
-        .blob_get(
-            &BlobGetRequest::new(account_id.clone(), [source_id]).with_properties(["data:asText"]),
-        )
-        .expect("Blob/get on the source blob failed against the real server");
-    let copy_get = client
-        .blob_get(&BlobGetRequest::new(account_id, [copy_id]).with_properties(["data:asText"]))
-        .expect("Blob/get on the copied blob failed against the real server");
-    assert_eq!(
-        source_get.list[0].data_as_text, copy_get.list[0].data_as_text,
-        "the copy's content diverged from the source's"
-    );
+        // Cyrus Finding 6: Blob/upload (RFC 9404 section 4.1) stores created blobs only in
+        // req->inmemory_blobs for the duration of that single HTTP request, so a subsequent
+        // HTTP Blob/get reports the blob id in notFound.
+        let separate_get = client
+            .blob_get(
+                &BlobGetRequest::new(account_id.clone(), [source_id.clone()])
+                    .with_properties(["data:asText"]),
+            )
+            .expect("Blob/get failed against the real server");
+        assert!(
+            separate_get.list.is_empty(),
+            "Cyrus Finding 6 expects separate-request Blob/get to return empty list"
+        );
+        assert_eq!(separate_get.not_found, vec![source_id]);
+
+        // Within the same HTTP JMAP request, Blob/upload chained to Blob/get resolves from
+        // req->inmemory_blobs and returns the uploaded text.
+        let batch_req = Request::new([CAPABILITY_CORE, CAPABILITY_BLOB])
+            .call(
+                "Blob/upload",
+                &BlobUploadRequest::new(account_id.clone())
+                    .create_blob("b_inline", UploadBlob::from_text(&text, "text/plain")),
+                "c0",
+            )
+            .unwrap()
+            .call(
+                "Blob/get",
+                &json!({
+                    "accountId": account_id,
+                    "ids": ["#b_inline"],
+                    "properties": ["data:asText"]
+                }),
+                "c1",
+            )
+            .unwrap();
+        let batch_resp = client
+            .api_call(&batch_req)
+            .expect("batched Blob/upload + Blob/get failed");
+        let get_resp: jmap_proto::blob::BlobGetResponse =
+            batch_resp.method_responses[1].parse().unwrap();
+        assert_eq!(get_resp.list.len(), 1);
+        assert_eq!(
+            get_resp.list[0].data_as_text.as_deref(),
+            Some(text.as_str())
+        );
+    } else {
+        let response = client
+            .blob_copy(&BlobCopyRequest::new(
+                account_id.clone(),
+                account_id.clone(),
+                [source_id.clone()],
+            ))
+            .expect("Blob/copy failed against the real server");
+        let copied = response.copied.expect("the server copied the blob");
+        let copy_id = copied
+            .get(&source_id)
+            .expect("the source id was copied")
+            .clone();
+        assert!(
+            response
+                .not_copied
+                .is_none_or(|not_copied| not_copied.is_empty()),
+            "the blob copy reported a failure for an id that should have succeeded"
+        );
+
+        let source_get = client
+            .blob_get(
+                &BlobGetRequest::new(account_id.clone(), [source_id])
+                    .with_properties(["data:asText"]),
+            )
+            .expect("Blob/get on the source blob failed against the real server");
+        let copy_get = client
+            .blob_get(&BlobGetRequest::new(account_id, [copy_id]).with_properties(["data:asText"]))
+            .expect("Blob/get on the copied blob failed against the real server");
+        assert_eq!(
+            source_get.list[0].data_as_text, copy_get.list[0].data_as_text,
+            "the copy's content diverged from the source's"
+        );
+    }
 }
 
 /// A genuine `fromAccountId != accountId` copy was the first shape tried
 /// here, mirroring the two throwaway accounts every other cross-account test
 /// in this file uses. Real Stalwart rejected it outright: `Blob/copy` with a
 /// target account the caller does not own answers a `forbidden` method
-/// error ("You are not an owner of account ..."), even though `jmap-mockd`'s
+/// error ("You are not an owner of account ..."), while Cyrus answers
+/// `accountNotFound` (RFC 8620 §3.6.2), even though `jmap-mockd`'s
 /// own implementation allows it unconditionally (`blob_copy_between_two_
 /// accounts_copies_the_content` in `blob_management.rs`): the mock never
 /// modeled an ownership check at all. Setting up ACL sharing between the two
@@ -1933,18 +2026,23 @@ fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
         .expect_err("copying into an account this session does not own must be rejected");
     match error {
         jmap_client::Error::Method(method_error) => {
-            assert_eq!(method_error.error_type, "forbidden");
+            if is_cyrus_server(&from_client) {
+                assert_eq!(method_error.error_type, method::ACCOUNT_NOT_FOUND);
+            } else {
+                assert_eq!(method_error.error_type, method::FORBIDDEN);
+            }
         }
-        other => panic!("expected a forbidden Method error, got {other:?}"),
+        other => panic!("expected a Method error, got {other:?}"),
     }
 }
 
 /// Tests `Blob/lookup` per RFC 9404 section 4.3 against a real server.
 ///
 /// Imports an email and queries references for the resulting blob identifier.
-/// Confirms that unreferenced blobs return empty `matchedIds`.
-/// Confirms that referenced blobs return the matching email identifier.
-/// Unknown blob identifiers return neither in `list` nor in `notFound` on Stalwart.
+/// On Stalwart, unreferenced blobs return empty `matchedIds` and unknown blob
+/// identifiers are omitted from both `list` and `notFound` (Stalwart Finding 24).
+/// On Cyrus, unreferenced staging blobs are reported in `notFound` (Cyrus Finding 7)
+/// and unknown blob identifiers are conformantly reported in `notFound`.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn blob_lookup_reports_the_email_referencing_an_uploaded_blob_through_the_real_api() {
@@ -1988,18 +2086,33 @@ fn blob_lookup_reports_the_email_referencing_an_uploaded_blob_through_the_real_a
             [uploaded.blob_id.clone()],
         ))
         .expect("Blob/lookup failed against the real server");
-    let before_match = before
-        .list
-        .iter()
-        .find(|m| m.id == uploaded.blob_id)
-        .expect("the freshly uploaded blob must appear in Blob/lookup's list");
-    assert!(
-        before_match
-            .matched_ids
-            .get("Email")
-            .is_none_or(|ids| ids.is_empty()),
-        "an unreferenced blob must not already show an Email match"
-    );
+    if is_cyrus_server(&client) {
+        // Cyrus Finding 7: jmap_blob_lookup only marks a blob as found if a mailbox matching
+        // one of the queried typeNames's mbtype contains the blob GUID, so an unreferenced
+        // blob in the #jmapupload staging mailbox is reported in notFound instead of list.
+        assert!(
+            before.list.is_empty(),
+            "Cyrus Finding 7 expects unreferenced staging blob to be omitted from list"
+        );
+        assert_eq!(
+            before.not_found,
+            vec![uploaded.blob_id.clone()],
+            "Cyrus Finding 7 reports unreferenced staging blob in notFound"
+        );
+    } else {
+        let before_match = before
+            .list
+            .iter()
+            .find(|m| m.id == uploaded.blob_id)
+            .expect("the freshly uploaded blob must appear in Blob/lookup's list");
+        assert!(
+            before_match
+                .matched_ids
+                .get("Email")
+                .is_none_or(|ids| ids.is_empty()),
+            "an unreferenced blob must not already show an Email match"
+        );
+    }
 
     let imported = client
         .email_import(&account_id, &EmailImport::new(uploaded.blob_id, inbox_id))
@@ -2033,16 +2146,25 @@ fn blob_lookup_reports_the_email_referencing_an_uploaded_blob_through_the_real_a
         .blob_lookup(&BlobLookupRequest::new(
             account_id.clone(),
             ["Email"],
-            [nonexistent],
+            [nonexistent.clone()],
         ))
         .expect("Blob/lookup failed against the real server");
-    assert!(
-        unknown.list.is_empty() && unknown.not_found.is_empty(),
-        "documenting known real-server deviation finding 24: an unknown blob \
-         id is silently dropped from both list and notFound, instead of \
-         appearing in notFound as RFC 9404 section 4.3.1 requires; if this \
-         ever starts failing, Stalwart may have fixed it, update the finding"
-    );
+    if is_cyrus_server(&client) {
+        assert!(unknown.list.is_empty());
+        assert_eq!(
+            unknown.not_found,
+            vec![nonexistent],
+            "Cyrus conformantly reports unknown blob id in notFound (RFC 9404 section 4.3)"
+        );
+    } else {
+        assert!(
+            unknown.list.is_empty() && unknown.not_found.is_empty(),
+            "documenting known real-server deviation finding 24: an unknown blob \
+             id is silently dropped from both list and notFound, instead of \
+             appearing in notFound as RFC 9404 section 4.3.1 requires; if this \
+             ever starts failing, Stalwart may have fixed it, update the finding"
+        );
+    }
 
     client
         .email_destroy(&account_id, &email_id)
@@ -2209,15 +2331,34 @@ fn quota_query_ignores_its_filter_against_the_real_server() {
         .quota_query(&account_id, non_matching_filter)
         .expect("Quota/query failed against the real server");
 
-    assert!(
-        ids.contains(&quota.id),
-        "finding 6 expects Quota/query to ignore its filter and return every \
-         quota id regardless; a non-matching name filter returned {ids:?}, \
-         missing the account's own quota {:?} — Stalwart may have fixed the \
-         filter, which would need finding 6 updated, not this assertion \
-         loosened",
-        quota.id
-    );
+    if is_cyrus_server(&client) {
+        assert!(
+            ids.is_empty(),
+            "Cyrus conformantly filters Quota/query by name and returns empty for non-matching name"
+        );
+        let matching_filter = QuotaQueryFilter::new()
+            .with_name(&quota.name)
+            .with_resource_type(&quota.resource_type)
+            .with_scope(&quota.scope);
+        let matched_ids = client
+            .quota_query(&account_id, matching_filter)
+            .expect("Quota/query with matching filter failed against Cyrus");
+        assert!(
+            matched_ids.contains(&quota.id),
+            "Cyrus Quota/query with matching filter must return {:?}",
+            quota.id
+        );
+    } else {
+        assert!(
+            ids.contains(&quota.id),
+            "finding 6 expects Quota/query to ignore its filter and return every \
+             quota id regardless; a non-matching name filter returned {ids:?}, \
+             missing the account's own quota {:?}; Stalwart may have fixed the \
+             filter, which would need finding 6 updated, not this assertion \
+             loosened",
+            quota.id
+        );
+    }
 }
 
 /// `Client::snoozed_mailbox` (`jmap-client/src/snooze.rs`) only ever had mock
@@ -4133,7 +4274,7 @@ fn email_submission_lifecycle_and_validation_through_the_real_api() {
         "expected invalidProperties when emailId and identityId are omitted"
     );
 
-    // c. Nonexistent emailId must be rejected with invalidProperties (property 'emailId').
+    // c. Nonexistent emailId must be rejected on create.
     let nonexistent_email_resp = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
@@ -4149,10 +4290,19 @@ fn email_submission_lifecycle_and_validation_through_the_real_api() {
             }),
         )
         .expect("EmailSubmission/set nonexistent email create call failed on wire");
-    assert_eq!(
-        nonexistent_email_resp["notCreated"]["sub_no_email"]["type"],
-        json!("invalidProperties")
-    );
+    if is_cyrus_server(&client) {
+        // Cyrus Finding 5: Cyrus returns SetError type "emailNotFound" (an unregistered
+        // pre-RFC 8621 error type) instead of "invalidProperties" (RFC 8620 section 5.3).
+        assert_eq!(
+            nonexistent_email_resp["notCreated"]["sub_no_email"]["type"],
+            json!("emailNotFound")
+        );
+    } else {
+        assert_eq!(
+            nonexistent_email_resp["notCreated"]["sub_no_email"]["type"],
+            json!("invalidProperties")
+        );
+    }
 
     // 6. Destroying a nonexistent submission via EmailSubmission/set reports notFound.
     let destroy_resp = client
@@ -4201,9 +4351,15 @@ fn server_call_and_object_limits_enforced_through_the_real_api() {
         .max_objects_in_set()
         .expect("session core capability must advertise maxObjectsInSet");
 
-    assert_eq!(max_calls, 16);
-    assert_eq!(max_objects_in_get, 500);
-    assert_eq!(max_objects_in_set, 500);
+    if is_cyrus_server(&client) {
+        assert_eq!(max_calls, 256);
+        assert_eq!(max_objects_in_get, 4096);
+        assert_eq!(max_objects_in_set, 4096);
+    } else {
+        assert_eq!(max_calls, 16);
+        assert_eq!(max_objects_in_get, 500);
+        assert_eq!(max_objects_in_set, 500);
+    }
 
     // 2. Provoke maxCallsInRequest:
     // a. Exactly maxCallsInRequest (16) calls in one request succeed with 200 OK.
@@ -4642,54 +4798,77 @@ fn changes_with_an_unrecognized_state_reports_invalid_arguments_not_cannot_calcu
         .changes(&account_id, "Mailbox", &bogus_state)
         .expect_err("an unrecognized sinceState must be rejected, not answered");
 
-    assert!(
-        error.is_unrecognized_changes_state(),
-        "finding 17 expects Mailbox/changes with a bogus sinceState to come back as \
-         invalidArguments mentioning state; got {error:?} instead — Stalwart may have \
-         fixed this to answer cannotCalculateChanges, which would need finding 17 \
-         updated and is_cannot_calculate_changes() checked instead, not this assertion \
-         loosened"
-    );
-    assert!(
-        !error.is_cannot_calculate_changes(),
-        "finding 17 is specifically that the server does NOT use the RFC's own error \
-         type for this; if it now does, both predicates agreeing is the bug report, \
-         not a reason to accept it silently"
-    );
+    if is_cyrus_server(&client) {
+        assert!(
+            error.is_cannot_calculate_changes(),
+            "Cyrus conformantly reports cannotCalculateChanges for an unrecognized sinceState, got {error:?}"
+        );
+        assert!(
+            !error.is_unrecognized_changes_state(),
+            "cannotCalculateChanges and is_unrecognized_changes_state must remain disjoint"
+        );
+    } else {
+        assert!(
+            error.is_unrecognized_changes_state(),
+            "finding 17 expects Mailbox/changes with a bogus sinceState to come back as \
+             invalidArguments mentioning state; got {error:?} instead: Stalwart may have \
+             fixed this to answer cannotCalculateChanges, which would need finding 17 \
+             updated and is_cannot_calculate_changes() checked instead, not this assertion \
+             loosened"
+        );
+        assert!(
+            !error.is_cannot_calculate_changes(),
+            "finding 17 is specifically that the server does NOT use the RFC's own error \
+             type for this; if it now does, both predicates agreeing is the bug report, \
+             not a reason to accept it silently"
+        );
+    }
 }
 
 /// Tests unauthenticated session discovery against a real server.
 /// Stalwart returns HTTP 200 with empty accounts rather than HTTP 401 Unauthorized.
-/// Confirms that `Client::connect` with `Credentials::none()` succeeds and reports `is_anonymous()`.
+/// Cyrus conformantly returns HTTP 401 Unauthorized per RFC 8620 section 2.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
 fn unauthenticated_session_discovery_reports_anonymous_through_the_real_api() {
+    let authed = connect();
     let origin = env::var("JMAP_LIVE_SERVER_URL").expect(
         "set JMAP_LIVE_SERVER_URL to the server's origin, e.g. https://jmap.example.com \
          (see docs/manual-test-live-server.md)",
     );
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
 
-    let client = Client::builder()
+    let unauthed_res = Client::builder()
         .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::none())
-        .expect("unauthenticated session discovery must succeed on live server");
+        .connect(&origin, Credentials::none());
 
-    assert!(
-        client.is_anonymous(),
-        "unauthenticated session on Stalwart must report is_anonymous() == true"
-    );
-    let session = client.session();
-    assert_eq!(session.username, "");
-    assert!(session.accounts.is_empty());
-    assert!(session.primary_accounts.is_empty());
-    assert!(session.capabilities.contains_key(CAPABILITY_CORE));
-    assert!(client.primary_account(CAPABILITY_MAIL).is_err());
+    if is_cyrus_server(&authed) {
+        let err =
+            unauthed_res.expect_err("Cyrus conformantly rejects unauthenticated session discovery");
+        assert!(
+            err.is_unauthorized(),
+            "expected HTTP 401 Unauthorized on Cyrus (RFC 8620 section 2), got {err:?}"
+        );
+    } else {
+        let client =
+            unauthed_res.expect("unauthenticated session discovery must succeed on Stalwart");
+
+        assert!(
+            client.is_anonymous(),
+            "unauthenticated session on Stalwart must report is_anonymous() == true"
+        );
+        let session = client.session();
+        assert_eq!(session.username, "");
+        assert!(session.accounts.is_empty());
+        assert!(session.primary_accounts.is_empty());
+        assert!(session.capabilities.contains_key(CAPABILITY_CORE));
+        assert!(client.primary_account(CAPABILITY_MAIL).is_err());
+    }
 }
 
 /// Tests creating a mailbox with whitespace padding against a real server.
 /// Stalwart trims whitespace and omits the name property from the create response.
-/// Confirms that `Client::mailbox_create` returns the trimmed name.
+/// Cyrus preserves whitespace verbatim and conformantly omits the unchanged name property.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
 fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
@@ -4730,7 +4909,14 @@ fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
         .into_iter()
         .find(|m| m.id.as_ref() == Some(&id))
         .expect("created mailbox found in Mailbox/get");
-    assert_eq!(fetched.name, raw_name.trim());
+    if is_cyrus_server(&client) {
+        assert_eq!(
+            fetched.name, raw_name,
+            "Cyrus preserves whitespace padding on Mailbox.name verbatim"
+        );
+    } else {
+        assert_eq!(fetched.name, raw_name.trim());
+    }
 
     // Clean up created mailbox:
     client
@@ -6072,28 +6258,43 @@ fn an_unknown_set_argument_is_ignored_rather_than_refused() {
     let title = format!("agent-unknown-argument-{}", unique_suffix());
     let event = CalendarEvent::simple(calendar_id, &title, "2026-12-01T10:00:00", "PT1H");
 
-    let arguments = client
-        .single_call(
-            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
-            "CalendarEvent/set",
-            &json!({
-                "accountId": account_id,
-                "create": {"probe": event},
-                "agentNoSuchArgument": true,
-            }),
-        )
-        .expect("Stalwart applies the call instead of answering invalidArguments");
-    let response: SetResponse<CalendarEvent> = serde_json::from_value(arguments).unwrap();
-    let event_id = response
-        .created
-        .as_ref()
-        .and_then(|map| map.get("probe"))
-        .and_then(|event| event.id.clone())
-        .unwrap_or_else(|| panic!("the create was not applied: {response:?}"));
+    let call_res = client.single_call(
+        &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+        "CalendarEvent/set",
+        &json!({
+            "accountId": account_id,
+            "create": {"probe": event},
+            "agentNoSuchArgument": true,
+        }),
+    );
+    if is_cyrus_server(&client) {
+        match call_res {
+            Err(jmap_client::Error::Method(method_error)) => {
+                assert_eq!(method_error.error_type, method::INVALID_ARGUMENTS);
+                assert_eq!(
+                    method_error.extra.get("arguments"),
+                    Some(&json!(["agentNoSuchArgument"]))
+                );
+            }
+            other => panic!(
+                "Cyrus conformantly rejects unknown /set arguments with invalidArguments, got {other:?}"
+            ),
+        }
+    } else {
+        let arguments =
+            call_res.expect("Stalwart applies the call instead of answering invalidArguments");
+        let response: SetResponse<CalendarEvent> = serde_json::from_value(arguments).unwrap();
+        let event_id = response
+            .created
+            .as_ref()
+            .and_then(|map| map.get("probe"))
+            .and_then(|event| event.id.clone())
+            .unwrap_or_else(|| panic!("the create was not applied: {response:?}"));
 
-    client
-        .event_destroy(&account_id, &event_id)
-        .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
+        client
+            .event_destroy(&account_id, &event_id)
+            .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
+    }
 }
 
 /// Prove on the live Stalwart oracle that CalendarEvent/parse emits
