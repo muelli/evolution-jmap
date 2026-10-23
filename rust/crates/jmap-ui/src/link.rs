@@ -23,18 +23,17 @@
 //!
 //! This module does *not* use the prompt mechanism of EDS. A settings page
 //! has no `ESourceCredentialsProvider`. Thus, for an account with no stored
-//! secret, this module reports an error and does not prompt.
+//! secret, this module reports an error and does not prompt. An empty stored
+//! secret is sent, as in the backends. If the server refuses it, the 401
+//! gives the error.
 
 use std::ffi::{CStr, c_char};
 use std::ptr;
 
-use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, ESource, ESourceAuthentication,
-    e_source_authentication_dup_method, e_source_lookup_password_sync,
-};
+use eds_sys::{ESource, e_source_lookup_password_sync};
 use glib_sys::{GError, g_error_free, g_free};
 use jmap_backend_core::i18n::{translate, translate_with};
-use jmap_backend_core::marshal::{extension_if_present, read_string, take_string};
+use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::{api_token, connect, oauth2, retry, source};
 use jmap_client::{Client, Credentials};
 
@@ -214,16 +213,16 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
     let config = unsafe { source::SourceConfig::from_source(source) }
         .map_err(|failure| gerror_message(failure.to_gerror()))?;
 
+    // SAFETY: as above. The backends choose the method with the same two reads.
+    let is_oauth2 = unsafe { oauth2::source_uses_oauth2(source) };
     // SAFETY: as above.
-    let method = unsafe { auth_method(source) };
-
-    let is_oauth2 = oauth2::method_is_oauth2(method.as_deref());
+    let uses_api_token = unsafe { api_token::source_uses_api_token(source) };
     let credentials = if is_oauth2 {
         // SAFETY: a valid source. No cancellable: this thread can block.
         let token = unsafe { oauth2::access_token(source, ptr::null_mut()) }
             .map_err(|failure| gerror_message(failure.to_gerror()))?;
         Credentials::bearer(token)
-    } else if api_token::method_is_api_token(method.as_deref()) {
+    } else if uses_api_token {
         // SAFETY: a valid source, as above.
         connect::bearer_credentials(unsafe { stored_password(source) }.as_deref())
             .map_err(|failure| gerror_message(failure.to_gerror()))?
@@ -257,23 +256,6 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
     })
 }
 
-/// The `[Authentication] Method` of `source`, if the source has one.
-///
-/// # Safety
-///
-/// `source` must be a valid `ESource`.
-unsafe fn auth_method(source: *mut ESource) -> Option<String> {
-    // SAFETY: a valid source. The extension pointer belongs to the source.
-    unsafe {
-        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
-    }
-    .and_then(|authentication| {
-        // SAFETY: a live extension of the source. The `dup_` getter gives a copy
-        // (`transfer full`), so a setter on another thread cannot free it.
-        unsafe { take_string(e_source_authentication_dup_method(authentication)) }
-    })
-}
-
 /// The password (or API token) that EDS stores for `source`, if any.
 ///
 /// # Safety
@@ -295,6 +277,20 @@ unsafe fn stored_password(source: *mut ESource) -> Option<String> {
         // SAFETY: owned, freed one time.
         unsafe { g_error_free(error) };
     }
+    // SAFETY: NULL or the g_malloc string that e_source_lookup_password_sync gave.
+    unsafe { owned_secret(raw) }
+}
+
+/// A copy of the stored secret `raw`. This function frees `raw`.
+///
+/// An empty secret stays `Some("")`, as in the backends: it is sent, and the
+/// server decides. Only a missing secret gives `None`.
+///
+/// # Safety
+///
+/// `raw` must be NULL or a NUL-terminated string allocated by GLib, which
+/// the caller gives to this function.
+unsafe fn owned_secret(raw: *mut c_char) -> Option<String> {
     if raw.is_null() {
         return None;
     }
@@ -302,9 +298,9 @@ unsafe fn stored_password(source: *mut ESource) -> Option<String> {
     let password = unsafe { CStr::from_ptr(raw) }
         .to_string_lossy()
         .into_owned();
-    // SAFETY: the g_malloc string that e_source_lookup_password_sync gave.
+    // SAFETY: the GLib string that the caller gave.
     unsafe { g_free(raw.cast()) };
-    (!password.is_empty()).then_some(password)
+    Some(password)
 }
 
 /// The message of one `GError` as the text for the user. This function frees
@@ -406,71 +402,29 @@ mod send_source_tests {
 }
 
 #[cfg(test)]
-mod auth_method_tests {
-    use std::ffi::{CString, c_char};
-    use std::ptr;
-    use std::sync::Arc;
+mod owned_secret_tests {
+    use glib_sys::g_strdup;
 
-    use eds_sys::{
-        E_SOURCE_EXTENSION_AUTHENTICATION, ESource, ESourceAuthentication,
-        e_source_authentication_set_method, e_source_get_extension, e_source_new_with_uid,
-    };
-    use gobject_sys::g_object_unref;
+    use super::owned_secret;
 
-    use super::auth_method;
-
-    /// A source that two threads share, as a worker thread and the main loop
-    /// share it in Evolution.
-    struct Shared(*mut ESource);
-    // SAFETY: an `ESource` and its extensions guard their state with a lock.
-    unsafe impl Send for Shared {}
-    unsafe impl Sync for Shared {}
-
-    unsafe fn set_method(source: *mut ESource, method: *const c_char) {
-        // SAFETY: a live source and a NUL-terminated value, by the contract.
-        unsafe {
-            let auth = e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr());
-            e_source_authentication_set_method(auth.cast::<ESourceAuthentication>(), method);
-        }
+    #[test]
+    fn an_empty_stored_secret_stays_a_secret() {
+        // SAFETY: a literal, copied into a GLib string that `owned_secret` frees.
+        let secret = unsafe { owned_secret(g_strdup(c"".as_ptr())) };
+        assert_eq!(secret.as_deref(), Some(""));
     }
 
     #[test]
-    fn auth_method_on_another_thread_copies_a_method_the_main_thread_is_replacing() {
-        let uid = CString::new("jmap-ui-auth-method-test").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, no D-Bus object, a GError out-parameter.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        let values = ["a".repeat(4000) + "oauth2", "b".repeat(9000) + "oauth2"];
-        let names: Vec<CString> = values
-            .iter()
-            .map(|value| CString::new(value.as_str()).expect("no NUL"))
-            .collect();
-        // SAFETY: a live source and a NUL-terminated value.
-        unsafe { set_method(source, names[0].as_ptr()) };
+    fn a_stored_secret_is_copied() {
+        // SAFETY: as above.
+        let secret = unsafe { owned_secret(g_strdup(c"s3cret".as_ptr())) };
+        assert_eq!(secret.as_deref(), Some("s3cret"));
+    }
 
-        let shared = Arc::new(Shared(source));
-        let writer = {
-            let shared = Arc::clone(&shared);
-            std::thread::spawn(move || {
-                for round in 0..20_000 {
-                    // SAFETY: a live source and a NUL-terminated value.
-                    unsafe { set_method(shared.0, names[round % 2].as_ptr()) };
-                }
-            })
-        };
-        while !writer.is_finished() {
-            // SAFETY: a live source that this test holds a reference to.
-            let method = unsafe { auth_method(shared.0) };
-            assert!(
-                values.iter().any(|v| method.as_deref() == Some(v.as_str())),
-                "a torn value of {:?} bytes",
-                method.map(|m| m.len())
-            );
-        }
-        writer.join().expect("writer");
-        // SAFETY: the reference that `e_source_new_with_uid` returned.
-        unsafe { g_object_unref(source.cast()) };
+    #[test]
+    fn no_stored_secret_is_none() {
+        // SAFETY: NULL is allowed.
+        assert_eq!(unsafe { owned_secret(std::ptr::null_mut()) }, None);
     }
 }
 
