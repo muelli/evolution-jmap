@@ -23,5 +23,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
+evolution-jmap-test-support = { workspace = true }
 evolution-jmap-tracing-capture = { workspace = true }
 serde_json = { workspace = true }

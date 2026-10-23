@@ -23,54 +23,14 @@
 //!
 //! The tests skip (and do not fail) when one of the two `_USER` variables is unset.
 
-use std::env;
-
-use jmap_client::{Client, Credentials};
 use jmap_collection_sync::{ChildKind, DeleteFailure, Doomed, Fanout, Parts, delete_collection};
 use jmap_proto::contacts::AddressBook;
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_PRINCIPALS};
+use jmap_test_support::{
+    connect_owner, connect_recipient_with_user as connect_recipient, unique_suffix,
+};
 use serde_json::json;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Same as `jmap_test_support::connect_owner`.
-fn connect_owner() -> Option<(Client, String)> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user.clone(), password))
-        .expect("could not fetch the session document for the write-test account");
-    Some((client, user))
-}
-
-/// Same as `jmap_test_support::connect_recipient_with_user`.
-fn connect_recipient() -> Option<(Client, String)> {
-    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
-    );
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user.clone(), password))
-        .expect("could not fetch the session document for the recipient account");
-    Some((client, user))
-}
 
 /// Shares a writable book and a read-only calendar, then withdraws both grants.
 ///
