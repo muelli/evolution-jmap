@@ -587,6 +587,41 @@ fn is_loopback(host: &str) -> bool {
     false
 }
 
+/// An `ESource` with only a uid and no registry, released on drop. For tests.
+///
+/// EDS makes a source from a keyfile in the same way, with
+/// `e_source_new_with_uid` and no D-Bus object. Thus its extensions behave as
+/// they do in a backend, and tests call the real readers, not mocks.
+#[cfg(feature = "testing")]
+pub struct OwnedSource(crate::owned::Owned<ESource>);
+
+#[cfg(feature = "testing")]
+impl OwnedSource {
+    /// Makes a source with the uid `uid`. Panics if EDS refuses it.
+    #[must_use]
+    pub fn new(uid: &str) -> Self {
+        let uid = std::ffi::CString::new(uid).expect("no NUL in a test uid");
+        let mut error = std::ptr::null_mut();
+        // SAFETY: the documented arguments are a NUL-terminated uid, a NULL
+        // D-Bus object and a GError out-parameter. The result is `(transfer
+        // full)`, and `Owned` takes that one reference.
+        let source = unsafe {
+            crate::owned::Owned::from_raw(eds_sys::e_source_new_with_uid(
+                uid.as_ptr(),
+                std::ptr::null_mut(),
+                &mut error,
+            ))
+        };
+        Self(source.expect("e_source_new_with_uid failed"))
+    }
+
+    /// The source, still owned here.
+    #[must_use]
+    pub fn as_ptr(&self) -> *mut ESource {
+        self.0.as_ptr()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use jmap_tracing_capture::capture;

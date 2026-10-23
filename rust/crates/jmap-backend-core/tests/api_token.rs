@@ -11,31 +11,23 @@
 // account never looks like an account that pastes a token.
 
 use std::ffi::{CString, c_char};
-use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, ESource, e_source_authentication_get_type,
+    E_SOURCE_EXTENSION_AUTHENTICATION, e_source_authentication_get_type,
     e_source_authentication_set_method, e_source_get_extension, e_source_has_extension,
-    e_source_new_with_uid,
 };
 use glib_sys::GFALSE;
-use gobject_sys::g_object_unref;
 use jmap_backend_core::api_token::{API_TOKEN_METHOD, method_is_api_token, source_uses_api_token};
+use jmap_backend_core::source::OwnedSource;
 
 /// This is the same fixture shape as in `tests/oauth2.rs`, for the same
 /// reason. You can construct an `ESource` without a registry, so the tests
 /// use the real extension readers, not mocks.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new(uid: &str) -> Self {
-        let uid = CString::new(uid).expect("no NUL in a test uid");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new(uid))
     }
 
     fn with_method(self, method: &str) -> Self {
@@ -47,17 +39,11 @@ impl TestSource {
         unsafe {
             e_source_authentication_get_type();
             let auth =
-                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+                e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                    .cast();
             e_source_authentication_set_method(auth, method.as_ptr() as *const c_char);
         }
         self
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this owns the only reference `e_source_new_with_uid` returned.
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
@@ -82,20 +68,20 @@ fn the_other_methods_are_not_api_token() {
 fn the_method_is_read_off_the_source() {
     let absent = TestSource::new("jmap-api-token-absent");
     // SAFETY: a live source.
-    assert!(!unsafe { source_uses_api_token(absent.0) });
+    assert!(!unsafe { source_uses_api_token(absent.0.as_ptr()) });
 
     let password = TestSource::new("jmap-api-token-password").with_method("none");
     // SAFETY: a live source.
-    assert!(!unsafe { source_uses_api_token(password.0) });
+    assert!(!unsafe { source_uses_api_token(password.0.as_ptr()) });
 
     let oauth2 = TestSource::new("jmap-api-token-oauth2").with_method("OAuth2");
     // SAFETY: a live source.
-    assert!(!unsafe { source_uses_api_token(oauth2.0) });
+    assert!(!unsafe { source_uses_api_token(oauth2.0.as_ptr()) });
 
     let token =
         TestSource::new("jmap-api-token-yes").with_method(API_TOKEN_METHOD.to_str().unwrap());
     // SAFETY: a live source.
-    assert!(unsafe { source_uses_api_token(token.0) });
+    assert!(unsafe { source_uses_api_token(token.0.as_ptr()) });
 }
 
 /// The read must not add an `[Authentication]` group to a source that has none.
@@ -103,9 +89,13 @@ fn the_method_is_read_off_the_source() {
 fn the_read_does_not_add_the_extension_to_a_source_without_it() {
     let absent = TestSource::new("jmap-api-token-untouched");
     // SAFETY: a live source.
-    assert!(!unsafe { source_uses_api_token(absent.0) });
+    assert!(!unsafe { source_uses_api_token(absent.0.as_ptr()) });
     // SAFETY: a live source and an EDS constant.
-    let added =
-        unsafe { e_source_has_extension(absent.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) };
+    let added = unsafe {
+        e_source_has_extension(
+            absent.0.as_ptr(),
+            E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr(),
+        )
+    };
     assert_eq!(added, GFALSE, "the read created the extension");
 }

@@ -223,29 +223,18 @@ pub unsafe fn rebase_urls(source: *mut ESource) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CString;
-
-    use eds_sys::{
-        e_source_get_extension, e_source_new_with_uid, e_source_parameter_to_key,
-        e_source_to_string,
-    };
+    use eds_sys::{e_source_get_extension, e_source_parameter_to_key, e_source_to_string};
     use glib_sys::g_free;
-    use gobject_sys::{g_object_set_property, g_object_unref, g_value_init, g_value_unset};
+    use gobject_sys::{g_object_set_property, g_value_init, g_value_unset};
 
     use super::*;
+    use crate::source::OwnedSource;
 
-    struct TestSource(*mut ESource);
+    struct TestSource(OwnedSource);
 
     impl TestSource {
         fn new() -> Self {
-            let uid = CString::new("jmap-rebase-test-source").expect("no NUL in a literal");
-            let mut error = ptr::null_mut();
-            // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
-            // out-parameter are the documented arguments.
-            let source =
-                unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-            assert!(!source.is_null(), "e_source_new_with_uid failed");
-            Self(source)
+            Self(OwnedSource::new("jmap-rebase-test-source"))
         }
 
         /// Sets the property through the raw GObject API. The `.source`
@@ -253,7 +242,8 @@ mod tests {
         fn set(self, value: bool) -> Self {
             ensure_registered();
             // SAFETY: the type is registered above, and the source is alive.
-            let extension = unsafe { e_source_get_extension(self.0, EXTENSION_NAME.as_ptr()) };
+            let extension =
+                unsafe { e_source_get_extension(self.0.as_ptr(), EXTENSION_NAME.as_ptr()) };
             // SAFETY: a live extension of this class, which installs
             // `rebase-urls` as a boolean. The code initialises, fills and
             // unsets the GValue before it goes out of scope.
@@ -274,7 +264,7 @@ mod tests {
             // full)`. The result is NUL-terminated, and the code reads and
             // frees it here.
             unsafe {
-                let text = e_source_to_string(self.0, ptr::null_mut());
+                let text = e_source_to_string(self.0.as_ptr(), ptr::null_mut());
                 assert!(!text.is_null(), "e_source_to_string returned NULL");
                 let owned = CStr::from_ptr(text).to_string_lossy().into_owned();
                 g_free(text.cast());
@@ -283,23 +273,16 @@ mod tests {
         }
     }
 
-    impl Drop for TestSource {
-        fn drop(&mut self) {
-            // SAFETY: this value holds the only reference.
-            unsafe { g_object_unref(self.0.cast()) };
-        }
-    }
-
     #[test]
     fn a_source_with_no_jmap_backend_group_does_not_rebase() {
         let source = TestSource::new();
-        assert!(!unsafe { rebase_urls(source.0) });
+        assert!(!unsafe { rebase_urls(source.0.as_ptr()) });
     }
 
     #[test]
     fn a_source_with_rebase_urls_true_rebases() {
         let source = TestSource::new().set(true);
-        assert!(unsafe { rebase_urls(source.0) });
+        assert!(unsafe { rebase_urls(source.0.as_ptr()) });
     }
 
     #[test]
@@ -340,7 +323,7 @@ mod tests {
         let tunnelled = TestSource::new().set(true);
         let ordinary = TestSource::new();
 
-        assert!(unsafe { rebase_urls(tunnelled.0) });
-        assert!(!unsafe { rebase_urls(ordinary.0) });
+        assert!(unsafe { rebase_urls(tunnelled.0.as_ptr()) });
+        assert!(!unsafe { rebase_urls(ordinary.0.as_ptr()) });
     }
 }
