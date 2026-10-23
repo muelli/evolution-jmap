@@ -32,11 +32,12 @@ use std::ffi::CString;
 use std::ptr;
 
 use common::Account;
+use common::array::StringArray;
 use eds_sys::{
     camel_folder_get_folder_summary, camel_folder_refresh_info_sync, camel_folder_summary_get,
     camel_folder_transfer_messages_to_sync,
 };
-use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_free, gpointer};
+use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_free};
 use gobject_sys::g_object_unref;
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
@@ -64,39 +65,6 @@ fn connect_for_write() -> Option<Client> {
         .connect(&origin, Credentials::basic(user, password))
         .expect("could not fetch the session document for the write-test account");
     Some(client)
-}
-
-/// The uid array Camel hands the vfunc, owned for the length of one call.
-///
-/// Mirrors `tests/transfer_race.rs::UidList`.
-struct UidList {
-    array: *mut GPtrArray,
-    #[allow(dead_code)]
-    uid: CString,
-}
-
-impl UidList {
-    fn of(uid: &str) -> Self {
-        let uid = CString::new(uid).expect("a uid with no NUL");
-        // SAFETY: a fresh array, filled with one pointer into `uid`. This
-        // struct owns `uid`, and drops it after the array, so the pointer
-        // stays valid for as long as the array exists.
-        let array = unsafe {
-            let array = glib_sys::g_ptr_array_new();
-            glib_sys::g_ptr_array_add(array, uid.as_ptr() as gpointer);
-            array
-        };
-        Self { array, uid }
-    }
-}
-
-impl Drop for UidList {
-    fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. TRUE frees its pointer
-        // block. The array has no element free function, so the strings
-        // in `self.uid` stay.
-        unsafe { g_ptr_array_free(self.array, GTRUE) };
-    }
 }
 
 /// Imports a message into a real source folder. Opens real `CamelFolder`s
@@ -184,7 +152,7 @@ fn transfer_messages_to_sync_moves_a_message_on_the_real_server() {
         g_object_unref(row.cast());
     }
 
-    let list = UidList::of(uid.as_str());
+    let list = StringArray::of(&[uid.as_str()]);
     let mut transferred: *mut GPtrArray = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: two live folders of one store, an array of one NUL-terminated
@@ -193,7 +161,7 @@ fn transfer_messages_to_sync_moves_a_message_on_the_real_server() {
     let ok = unsafe {
         camel_folder_transfer_messages_to_sync(
             source_folder,
-            list.array,
+            list.as_ptr(),
             dest_folder,
             GTRUE,
             &mut transferred,

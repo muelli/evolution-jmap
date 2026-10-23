@@ -29,6 +29,7 @@
 
 #![allow(dead_code)]
 
+pub mod array;
 pub mod race;
 pub mod signals;
 

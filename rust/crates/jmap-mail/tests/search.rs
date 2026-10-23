@@ -47,15 +47,13 @@
 mod common;
 
 use std::ffi::CStr;
-#[cfg(camel_folder_search_object)]
-use std::ffi::CString;
 use std::ptr;
 
 use common::Account;
+#[cfg(camel_folder_search_object)]
+use common::array::StringArray;
 use eds_sys::{CamelFolder, camel_folder_get_folder_summary, camel_folder_summary_save};
 use glib_sys::{GError, GPtrArray, gchar};
-#[cfg(camel_folder_search_object)]
-use glib_sys::{GTRUE, g_ptr_array_add, g_ptr_array_free, gpointer};
 use gobject_sys::g_object_unref;
 #[cfg(camel_folder_search_object)]
 use jmap_client::{Client, Credentials};
@@ -352,46 +350,6 @@ unsafe fn connected_folder_with_two_subjects() -> (MockServer, Account, *mut Cam
     (server, account, folder, lunch, other)
 }
 
-/// A `GPtrArray` of uids, owned for the length of one call. This is the
-/// input shape `search_by_uids` takes, built the same way `transfer.rs`'s
-/// tests build one.
-#[cfg(camel_folder_search_object)]
-struct UidList {
-    array: *mut GPtrArray,
-    uids: Vec<CString>,
-}
-
-#[cfg(camel_folder_search_object)]
-impl UidList {
-    fn of(uids: &[&Id]) -> Self {
-        let uids: Vec<CString> = uids
-            .iter()
-            .map(|uid| CString::new(uid.as_str()).expect("a uid with no NUL"))
-            .collect();
-        // SAFETY: a fresh array, filled with pointers into strings that this
-        // same value owns. The strings stay alive as long as the array does.
-        let array = unsafe {
-            let array = glib_sys::g_ptr_array_new();
-            for uid in &uids {
-                g_ptr_array_add(array, uid.as_ptr() as gpointer);
-            }
-            array
-        };
-        Self { array, uids }
-    }
-}
-
-#[cfg(camel_folder_search_object)]
-impl Drop for UidList {
-    fn drop(&mut self) {
-        // SAFETY: the one array, allocated above. TRUE frees its pointer
-        // block. The array has no element free function, so the strings
-        // in `self.uids` stay.
-        unsafe { g_ptr_array_free(self.array, GTRUE) };
-        self.uids.clear();
-    }
-}
-
 /// A translatable expression is answered by the server, not the (empty)
 /// local summary.
 #[cfg(camel_folder_search_object)]
@@ -432,12 +390,12 @@ fn a_translatable_expression_over_uids_is_narrowed_to_them() {
 
         // Both uids are in the restriction, so the match must come from the
         // filter, not merely from the restriction excluding the other row.
-        let restrict = UidList::of(&[&lunch, &other]);
+        let restrict = StringArray::of(&[&lunch, &other]);
         let mut error: *mut GError = ptr::null_mut();
         let result = eds_sys::camel_folder_search_by_uids(
             folder,
             c"(header-contains \"Subject\" \"Lunch\")".as_ptr(),
-            restrict.array,
+            restrict.as_ptr(),
             ptr::null_mut(),
             ptr::addr_of_mut!(error),
         );
@@ -451,12 +409,12 @@ fn a_translatable_expression_over_uids_is_narrowed_to_them() {
 
         // A restriction that excludes the matching row leaves nothing. The
         // same expression matches when unrestricted.
-        let excluding = UidList::of(&[&other]);
+        let excluding = StringArray::of(&[&other]);
         let mut error: *mut GError = ptr::null_mut();
         let result = eds_sys::camel_folder_search_by_uids(
             folder,
             c"(header-contains \"Subject\" \"Lunch\")".as_ptr(),
-            excluding.array,
+            excluding.as_ptr(),
             ptr::null_mut(),
             ptr::addr_of_mut!(error),
         );
