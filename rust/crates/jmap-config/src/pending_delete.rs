@@ -16,15 +16,14 @@ use std::ptr;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use eds_sys::{
-    ESource, ESourceExtension, ESourceExtensionClass, e_source_extension_get_type,
-    e_source_get_extension,
+    E_SOURCE_PARAM_SETTING, ESource, ESourceExtension, ESourceExtensionClass,
+    e_source_extension_get_type, e_source_get_extension,
 };
 use glib_sys::GType;
 use gobject_sys::{
-    G_PARAM_READWRITE, G_PARAM_USER_SHIFT, G_TYPE_INT64, GObject, GObjectClass, GParamFlags,
-    GParamSpec, GValue, g_object_class_install_property, g_object_get_property,
-    g_object_set_property, g_param_spec_int64, g_value_get_int64, g_value_init, g_value_set_int64,
-    g_value_unset,
+    G_PARAM_READWRITE, G_TYPE_INT64, GObject, GObjectClass, GParamSpec, GValue,
+    g_object_class_install_property, g_object_get_property, g_object_set_property,
+    g_param_spec_int64, g_value_get_int64, g_value_init, g_value_set_int64, g_value_unset,
 };
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::marshal::extension_if_present;
@@ -40,9 +39,6 @@ pub const EXTENSION_NAME: &CStr = c"JMAP Pending Delete";
 pub const PROPERTY_DUE: &CStr = c"due";
 
 const PROP_DUE: u32 = 1;
-
-/// `E_SOURCE_PARAM_SETTING`. [`crate::oauth2`] tells why it is calculated here.
-const E_SOURCE_PARAM_SETTING: GParamFlags = 1 << (G_PARAM_USER_SHIFT as u32);
 
 /// The instance struct: [`ESourceExtension`]'s own state plus the due time.
 #[repr(C)]

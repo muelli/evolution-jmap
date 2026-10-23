@@ -40,12 +40,14 @@ use std::ffi::CStr;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use eds_sys::{ESource, ESourceExtension, ESourceExtensionClass, e_source_extension_get_type};
+use eds_sys::{
+    E_SOURCE_PARAM_SETTING, ESource, ESourceExtension, ESourceExtensionClass,
+    e_source_extension_get_type,
+};
 use glib_sys::{GFALSE, GType};
 use gobject_sys::{
-    G_PARAM_READWRITE, G_PARAM_USER_SHIFT, GObject, GObjectClass, GParamFlags, GParamSpec, GValue,
-    g_object_class_install_property, g_param_spec_boolean, g_value_get_boolean,
-    g_value_set_boolean,
+    G_PARAM_READWRITE, GObject, GObjectClass, GParamSpec, GValue, g_object_class_install_property,
+    g_param_spec_boolean, g_value_get_boolean, g_value_set_boolean,
 };
 
 use crate::marshal::extension_if_present;
@@ -72,11 +74,6 @@ use crate::trampoline::{guard, log_critical};
 /// `tests/extension_name_collision.rs` in `jmap-backend-collection` locks
 /// the rule for both custom extensions.
 pub const EXTENSION_NAME: &CStr = c"JMAP Rebase";
-
-/// `E_SOURCE_PARAM_SETTING`, computed and not bound, as in
-/// `jmap_config::oauth2`. `e-source.h` defines it as a plain `#define (1 <<
-/// G_PARAM_USER_SHIFT)`, not a symbol, so bindgen cannot supply it.
-const E_SOURCE_PARAM_SETTING: GParamFlags = 1 << (G_PARAM_USER_SHIFT as u32);
 
 const PROPERTY_NAME: &CStr = c"rebase-urls";
 const PROP_REBASE_URLS: u32 = 1;

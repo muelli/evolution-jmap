@@ -38,6 +38,14 @@
 /// `docs/eds-versions.md`.
 pub const EDS_HEADER_VERSION: &str = env!("EDS_HEADER_VERSION");
 
+/// `E_SOURCE_PARAM_SETTING`: an `ESource` extension saves a property with
+/// this flag in the `.source` file.
+///
+/// `e-source.h` defines it as `(1 << G_PARAM_USER_SHIFT)`, a macro that
+/// bindgen does not evaluate. `tests/source_param.rs` compares it with the
+/// flags of the properties of EDS.
+pub const E_SOURCE_PARAM_SETTING: GParamFlags = 1 << (G_PARAM_USER_SHIFT as u32);
+
 pub mod compat;
 
 // Suppress the unnecessary_transmutes warnings that bindgen causes for the
