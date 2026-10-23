@@ -76,14 +76,13 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::GError;
-use jmap_backend_core::api_token::source_uses_api_token;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::connect::{
-    ACCEPTED_AUTH_RESULT, ConnectError, bearer_credentials, credentials as login_as,
+    ACCEPTED_AUTH_RESULT, AuthScheme, ConnectError, resolve_credentials,
 };
 use jmap_backend_core::error::{invalid_arg_gerror, set_raw_gerror};
 use jmap_backend_core::marshal::{password as stored_password, read_string};
-use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
+use jmap_backend_core::oauth2::source_uses_oauth2;
 use jmap_backend_core::source::SourceError;
 use jmap_client::{Credentials, Error};
 use jmap_collection_sync::Parts;
@@ -301,8 +300,10 @@ pub unsafe fn login_of(
     // SAFETY: the contract of this function makes `source` valid.
     let server = unsafe { server_of(source) }?;
 
-    let uses_oauth2 = unsafe { source_uses_oauth2(source) };
-    let uses_api_token = unsafe { source_uses_api_token(source) };
+    // SAFETY: as above.
+    let scheme = unsafe { AuthScheme::of(source) };
+    let uses_oauth2 = scheme == AuthScheme::OAuth2;
+    let uses_api_token = scheme == AuthScheme::ApiToken;
     let has_password = password.is_some();
     tracing::debug!(
         uses_oauth2,
@@ -311,8 +312,8 @@ pub unsafe fn login_of(
         "resolving collection backend login credentials"
     );
 
-    // Select the authentication scheme with the same rule as `connect_with` for
-    // the address book and calendar backends. See the module documentation of
+    // `resolve_credentials` is the same choice that `connect_with` makes for the
+    // address book and calendar backends. See the module documentation of
     // `jmap_backend_core::oauth2` for the source of this rule. An OAuth 2.0
     // account can name no `[Authentication] User`. If a missing user meant
     // "anonymous" here, as for a password account, the backend would skip
@@ -320,13 +321,13 @@ pub unsafe fn login_of(
     // SAFETY: the contract of this function makes `source` valid, and makes
     // `cancellable` satisfy the contract of `access_token`.
     let credentials = unsafe {
-        if uses_oauth2 {
-            access_token(source, cancellable).map(Credentials::bearer)
-        } else if uses_api_token {
-            bearer_credentials(password)
-        } else {
-            login_as(server.connection.user.as_deref(), password)
-        }
+        resolve_credentials(
+            source,
+            scheme,
+            server.connection.user.as_deref(),
+            || password.map(str::to_owned),
+            cancellable,
+        )
     }?;
 
     Ok(Login {

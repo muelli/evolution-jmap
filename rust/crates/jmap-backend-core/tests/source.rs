@@ -13,13 +13,16 @@ use std::ptr;
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_RESOURCE, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceAuthentication, ESourceResource, ESourceSecurity,
-    e_source_authentication_set_host, e_source_authentication_set_port,
-    e_source_authentication_set_user, e_source_get_extension, e_source_has_extension,
-    e_source_new_with_uid, e_source_resource_set_identity, e_source_security_set_secure,
+    e_source_authentication_set_host, e_source_authentication_set_method,
+    e_source_authentication_set_port, e_source_authentication_set_user, e_source_get_extension,
+    e_source_has_extension, e_source_new_with_uid, e_source_resource_set_identity,
+    e_source_security_set_secure,
 };
 use glib_sys::GFALSE;
 use gobject_sys::g_object_unref;
-use jmap_backend_core::source::{ConnectTarget, SourceConfig, SourceError, destination_address};
+use jmap_backend_core::source::{
+    AuthFields, ConnectTarget, SourceConfig, SourceError, destination_address, read_auth,
+};
 
 /// An `ESource` that is not backed by the registry. EDS itself uses
 /// `e_source_new_with_uid` with a NULL D-Bus object for a source read from a
@@ -71,6 +74,13 @@ impl TestSource {
         let user = CString::new(user).expect("no NUL in a test user");
         // SAFETY: as `host`.
         unsafe { e_source_authentication_set_user(self.authentication(), user.as_ptr()) };
+        self
+    }
+
+    fn method(self, method: &str) -> Self {
+        let method = CString::new(method).expect("no NUL in a test method");
+        // SAFETY: as `host`.
+        unsafe { e_source_authentication_set_method(self.authentication(), method.as_ptr()) };
         self
     }
 
@@ -568,5 +578,50 @@ fn destination_address_on_another_thread_copies_a_host_the_main_thread_is_replac
         // SAFETY: a live source.
         |source| unsafe { destination_address(source) }.map(|(host, _)| host),
         &[Some("jmap.example.com".into())],
+    );
+}
+
+#[test]
+fn read_auth_of_a_source_without_the_groups_gives_the_defaults_and_creates_nothing() {
+    let source = TestSource::new();
+
+    // SAFETY: a live source.
+    let fields = unsafe { read_auth(source.0) };
+
+    assert_eq!(
+        fields,
+        AuthFields {
+            host: None,
+            port: 0,
+            user: None,
+            method: None,
+            secure: true,
+        }
+    );
+    assert!(!source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION));
+    assert!(!source.has_extension(E_SOURCE_EXTENSION_SECURITY));
+}
+
+#[test]
+fn read_auth_reads_every_field_of_both_groups() {
+    let source = TestSource::new()
+        .host("jmap.example.com")
+        .port(8443)
+        .user("vera@example.com")
+        .method("OAuth2")
+        .secure(false);
+
+    // SAFETY: a live source.
+    let fields = unsafe { read_auth(source.0) };
+
+    assert_eq!(
+        fields,
+        AuthFields {
+            host: Some("jmap.example.com".into()),
+            port: 8443,
+            user: Some("vera@example.com".into()),
+            method: Some("OAuth2".into()),
+            secure: false,
+        }
     );
 }

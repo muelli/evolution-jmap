@@ -111,11 +111,10 @@ use std::ptr;
 use std::sync::OnceLock;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Services, ESource, ESourceAuthentication,
-    ESourceCredentialsProvider, e_oauth2_services_is_oauth2_alias, e_oauth2_services_new,
-    e_source_authentication_dup_method, e_source_authentication_get_type,
-    e_source_credentials_provider_new, e_source_credentials_provider_ref_credentials_source,
-    e_source_dup_parent, e_source_get_oauth2_access_token_sync, e_source_registry_new_sync,
+    EOAuth2Services, ESource, ESourceCredentialsProvider, e_oauth2_services_is_oauth2_alias,
+    e_oauth2_services_new, e_source_credentials_provider_new,
+    e_source_credentials_provider_ref_credentials_source, e_source_dup_parent,
+    e_source_get_oauth2_access_token_sync, e_source_registry_new_sync,
 };
 use gio_sys::{
     G_DBUS_ERROR_NAME_HAS_NO_OWNER, G_DBUS_ERROR_SERVICE_UNKNOWN, G_IO_ERROR_NOT_FOUND,
@@ -126,7 +125,8 @@ use glib_sys::{GError, GFALSE, g_error_free, g_free};
 use crate::connect::ConnectError;
 use crate::forever::Forever;
 use crate::i18n::{translate, translate_with};
-use crate::marshal::{extension_if_present, read_string, take_string};
+use crate::marshal::{read_string, take_string};
+use crate::source::read_auth;
 
 /// The generic spelling of "this source authenticates with OAuth 2.0", not
 /// the name of one particular service.
@@ -424,27 +424,9 @@ pub fn method_is_oauth2(method: Option<&str>) -> bool {
 /// `source` must be a valid `ESource` (the one EDS gave the backend). The
 /// function only reads from it, and nothing outlives the call.
 pub unsafe fn source_uses_oauth2(source: *mut ESource) -> bool {
-    // As everywhere in this crate, the lookup finds an extension by name. It
-    // walks the registered children of `E_TYPE_SOURCE_EXTENSION`, so it cannot
-    // find a type that nothing has referenced yet.
-    // SAFETY: no arguments, and the type system initialises itself.
-    unsafe { e_source_authentication_get_type() };
-
-    // Make sure that the extension exists before `e_source_get_extension`
-    // runs: it *creates* an extension that it cannot find. This source is the
-    // user's own account source. To create a group on it only to read a
-    // default is a side effect on another object's state.
-    // SAFETY: the source is valid by this function's contract, and the name
-    // is a header constant.
-    let Some(auth) = (unsafe {
-        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
-    }) else {
-        return false;
-    };
-
-    // SAFETY: the extension exists and the source owns it. The `dup_` getter
-    // gives a copy (`transfer full`), so a setter on another thread cannot free it.
-    let method = unsafe { take_string(e_source_authentication_dup_method(auth)) };
+    // `read_auth` adds no `[Authentication]` group to the account source.
+    // SAFETY: the source is valid by this function's contract.
+    let method = unsafe { read_auth(source) }.method;
 
     method_is_oauth2(method.as_deref())
 }

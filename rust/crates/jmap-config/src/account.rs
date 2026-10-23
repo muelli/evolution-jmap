@@ -117,8 +117,6 @@ use std::ptr;
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceAuthentication, ESourceBackend, ESourceCollection, ESourceSecurity,
-    e_source_authentication_dup_host, e_source_authentication_dup_method,
-    e_source_authentication_dup_user, e_source_authentication_get_port,
     e_source_authentication_get_type, e_source_authentication_set_host,
     e_source_authentication_set_method, e_source_authentication_set_port,
     e_source_authentication_set_user, e_source_backend_set_backend_name,
@@ -127,7 +125,7 @@ use eds_sys::{
     e_source_collection_get_type, e_source_collection_set_calendar_enabled,
     e_source_collection_set_contacts_enabled, e_source_collection_set_identity,
     e_source_collection_set_mail_enabled, e_source_get_extension, e_source_get_uid,
-    e_source_security_get_secure, e_source_security_get_type, e_source_security_set_method,
+    e_source_security_get_type, e_source_security_set_method,
 };
 // The token-cache-key setter that the installed EDS has. See the module
 // comment on `credential-name`/`credential-store-id`.
@@ -139,6 +137,7 @@ use glib_sys::{GFALSE, GTRUE, gboolean};
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::marshal::{extension_if_present, take_string};
 use jmap_backend_core::oauth2::{OAUTH2_AUTH_METHOD, OAUTH2_METHOD};
+use jmap_backend_core::source::{AuthFields, read_auth};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 
@@ -343,23 +342,12 @@ pub unsafe fn read(source: *mut ESource) -> Account {
     // As in `apply`, and for the same reason: `e_source_has_extension` also
     // cannot find an extension GType that nothing referenced yet.
     // SAFETY: no arguments, and the type system initializes itself.
-    unsafe {
-        e_source_collection_get_type();
-        e_source_authentication_get_type();
-        e_source_security_get_type();
-    }
+    unsafe { e_source_collection_get_type() };
 
     // SAFETY: a valid source by this function's contract, and each header
     // constant names an extension of the type that the code reads.
     let collection =
         unsafe { extension_if_present::<ESourceCollection>(source, E_SOURCE_EXTENSION_COLLECTION) };
-    // SAFETY: as above.
-    let security =
-        unsafe { extension_if_present::<ESourceSecurity>(source, E_SOURCE_EXTENSION_SECURITY) };
-    // SAFETY: as above.
-    let auth = unsafe {
-        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
-    };
 
     // SAFETY: a live extension, by the contract of `extension_if_present`.
     // Each `dup` getter returns NULL or a copy that the caller owns. A config
@@ -376,19 +364,15 @@ pub unsafe fn read(source: *mut ESource) -> Account {
         )
     });
 
-    // SAFETY: as above.
-    let secure =
-        security.is_none_or(|security| unsafe { e_source_security_get_secure(security) != GFALSE });
-
-    // SAFETY: as above.
-    let (host, port, user, auth_method) = auth.map_or((None, 0, None, None), |auth| unsafe {
-        (
-            take_string(e_source_authentication_dup_host(auth)),
-            e_source_authentication_get_port(auth),
-            take_string(e_source_authentication_dup_user(auth)),
-            take_string(e_source_authentication_dup_method(auth)),
-        )
-    });
+    // `read_auth` adds no group either, and reads with the `dup_` getters.
+    // SAFETY: a valid source by this function's contract.
+    let AuthFields {
+        host,
+        port,
+        user,
+        method: auth_method,
+        secure,
+    } = unsafe { read_auth(source) };
 
     // SAFETY: a valid source by this function's contract. `oauth2::read`
     // creates nothing, and returns `Config::default()` (no client id) for a

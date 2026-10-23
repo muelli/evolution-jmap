@@ -28,12 +28,9 @@
 
 use std::ffi::CStr;
 
-use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, ESource, ESourceAuthentication,
-    e_source_authentication_dup_method, e_source_authentication_get_type,
-};
+use eds_sys::ESource;
 
-use crate::marshal::{extension_if_present, take_string};
+use crate::source::read_auth;
 
 /// The literal [`jmap-config`](../../jmap_config/index.html)'s "API Token"
 /// combo entry writes to `[Authentication] Method`. Unlike
@@ -63,25 +60,9 @@ pub fn method_is_api_token(method: Option<&str>) -> bool {
 /// `source` must be a valid `ESource` (the one EDS gave the backend). The
 /// function only reads from it, and nothing outlives the call.
 pub unsafe fn source_uses_api_token(source: *mut ESource) -> bool {
-    // SAFETY: no arguments. It registers the extension type that the lookup
-    // below needs, as `source_uses_oauth2` does before its own lookup.
-    unsafe { e_source_authentication_get_type() };
-
-    // Make sure that the extension exists before `e_source_get_extension`
-    // runs: it *creates* an extension that it cannot find. This source is the
-    // user's own account source. To create a group on it only to read a
-    // default is a side effect on another object's state.
-    // SAFETY: the source is valid by this function's contract, and the name
-    // is a header constant.
-    let Some(auth) = (unsafe {
-        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
-    }) else {
-        return false;
-    };
-
-    // SAFETY: the extension exists and the source owns it. The `dup_` getter
-    // gives a copy (`transfer full`), so a setter on another thread cannot free it.
-    let method = unsafe { take_string(e_source_authentication_dup_method(auth)) };
+    // `read_auth` adds no `[Authentication]` group to the account source.
+    // SAFETY: the source is valid by this function's contract.
+    let method = unsafe { read_auth(source) }.method;
 
     method_is_api_token(method.as_deref())
 }

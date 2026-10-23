@@ -34,7 +34,7 @@ use eds_sys::{ESource, e_source_lookup_password_sync};
 use glib_sys::{GError, g_error_free, g_free};
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::{api_token, connect, oauth2, retry, source};
+use jmap_backend_core::{connect, oauth2, retry, source};
 use jmap_client::{Client, Credentials};
 
 use crate::session_cache::AccountFeatures;
@@ -213,27 +213,22 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
     let config = unsafe { source::SourceConfig::from_source(source) }
         .map_err(|failure| gerror_message(failure.to_gerror()))?;
 
-    // SAFETY: as above. The backends choose the method with the same two reads.
-    let is_oauth2 = unsafe { oauth2::source_uses_oauth2(source) };
-    // SAFETY: as above.
-    let uses_api_token = unsafe { api_token::source_uses_api_token(source) };
-    let credentials = if is_oauth2 {
-        // SAFETY: a valid source. No cancellable: this thread can block.
-        let token = unsafe { oauth2::access_token(source, ptr::null_mut()) }
-            .map_err(|failure| gerror_message(failure.to_gerror()))?;
-        Credentials::bearer(token)
-    } else if uses_api_token {
-        // SAFETY: a valid source, as above.
-        connect::bearer_credentials(unsafe { stored_password(source) }.as_deref())
-            .map_err(|failure| gerror_message(failure.to_gerror()))?
-    } else {
-        // SAFETY: a valid source, as above.
-        connect::credentials(
+    // SAFETY: as above. The backends choose the method with the same function.
+    let scheme = unsafe { connect::AuthScheme::of(source) };
+    // Only the API-token and password schemes call this libsecret lookup.
+    // SAFETY: a valid source, as above.
+    let password = || unsafe { stored_password(source) };
+    // SAFETY: a valid source, as above. No cancellable: this thread can block.
+    let credentials = unsafe {
+        connect::resolve_credentials(
+            source,
+            scheme,
             config.user.as_deref(),
-            unsafe { stored_password(source) }.as_deref(),
+            password,
+            ptr::null_mut(),
         )
-        .map_err(|failure| gerror_message(failure.to_gerror()))?
-    };
+    }
+    .map_err(|failure| gerror_message(failure.to_gerror()))?;
 
     let client = source::connect(&config.target, config.rebase_urls, credentials)
         .map_err(|error| error.to_string())?;
@@ -243,7 +238,7 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
 
     // Only an OAuth 2.0 credential expires. For the other methods, a 401
     // means a wrong password or token, and a retry sends the same one.
-    let refreshable = is_oauth2.then(|| {
+    let refreshable = (scheme == connect::AuthScheme::OAuth2).then(|| {
         // SAFETY: `source` is valid for this call, by the contract of the
         // function. The link owns the reference taken here until it drops.
         unsafe { SendSource::adopt(gobject_sys::g_object_ref(source.cast()).cast()) }
