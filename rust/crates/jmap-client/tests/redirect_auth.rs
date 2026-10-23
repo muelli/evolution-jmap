@@ -643,3 +643,47 @@ fn fastmail_live_trailing_dot_session_redirect() {
         }
     }
 }
+
+/// The mock's hostile advertise mode names every endpoint on a plain-http origin that is not loopback.
+const PLAIN_HTTP_FOREIGN_ORIGIN: &str = "http://jmap-downgrade.invalid";
+
+/// The client refuses the plain-http endpoints at connect, so no method call can carry the credentials.
+#[test]
+fn a_session_that_advertises_a_foreign_plain_http_origin_is_refused_before_any_call() {
+    let server = MockServer::builder()
+        .basic_auth("agent", "sekret")
+        .advertise_origin(PLAIN_HTTP_FOREIGN_ORIGIN)
+        .start();
+
+    let result = Client::builder()
+        .rebase_urls_to_origin(false)
+        .connect(server.origin(), Credentials::basic("agent", "sekret"));
+
+    match result {
+        Err(Error::Protocol(message)) => {
+            assert!(message.contains("apiUrl"), "{message}");
+            assert!(message.contains(PLAIN_HTTP_FOREIGN_ORIGIN), "{message}");
+        }
+        Ok(_) => panic!("the client accepted plain-http endpoints on a foreign origin"),
+        Err(other) => panic!("expected Error::Protocol, got {other:?}"),
+    }
+    assert_eq!(server.api_requests(), 0);
+}
+
+/// Rebasing moves the endpoints back to the configured origin before the check.
+#[test]
+fn rebasing_accepts_a_session_that_advertises_a_foreign_plain_http_origin() {
+    let server = MockServer::builder()
+        .basic_auth("agent", "sekret")
+        .advertise_origin(PLAIN_HTTP_FOREIGN_ORIGIN)
+        .start();
+
+    let client = Client::builder()
+        .rebase_urls_to_origin(true)
+        .connect(server.origin(), Credentials::basic("agent", "sekret"))
+        .expect("the rebased endpoints are on the configured origin");
+
+    let sent = serde_json::json!({"advertised": "plain http"});
+    assert_eq!(client.echo(sent.clone()).unwrap(), sent);
+    assert_eq!(server.api_requests(), 1);
+}
