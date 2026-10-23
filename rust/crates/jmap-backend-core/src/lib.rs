@@ -57,6 +57,7 @@ pub mod logging;
 pub mod marshal;
 pub mod mime;
 pub mod oauth2;
+pub mod object_data;
 pub mod owned;
 pub mod poison;
 pub mod push;
