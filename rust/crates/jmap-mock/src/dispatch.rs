@@ -621,4 +621,41 @@ mod tests {
         let (status, _response) = super::handle_api(&mut state, &body, None);
         assert_eq!(status, 200);
     }
+
+    #[test]
+    fn requests_over_max_calls_are_rejected() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c1")
+            .expect("build request")
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c2")
+            .expect("append request call");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+        state.calls_in_request = Some(1);
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 400);
+        assert_eq!(
+            response.get("type"),
+            Some(&json!("urn:ietf:params:jmap:error:limit"))
+        );
+        assert_eq!(response.get("limit"), Some(&json!("maxCallsInRequest")));
+    }
+
+    #[test]
+    fn requests_at_max_calls_are_accepted() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c1")
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+        state.calls_in_request = Some(1);
+
+        let (status, _response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+    }
 }
