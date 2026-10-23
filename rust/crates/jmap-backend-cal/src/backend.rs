@@ -6,7 +6,7 @@
 
 use std::ffi::CStr;
 use std::ptr;
-use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Mutex, RwLock};
 
 use eds_sys::{
     E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CAL_OBJ_MOD_ALL, E_CAL_OBJ_MOD_THIS,
@@ -33,6 +33,7 @@ use jmap_backend_core::instance::Slot;
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
+use jmap_backend_core::poison::{lock, read, write};
 use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_on_authentication_failure;
 use jmap_backend_core::source::{backend_source, destination_address};
@@ -860,19 +861,6 @@ unsafe fn fail_offline(error: *mut *mut GError) -> gboolean {
         );
     }
     GFALSE
-}
-
-/// Acquires a read lock, recovering from poison.
-fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    lock.read().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    lock.write().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn lock(push: &Mutex<Option<PushRefresh>>) -> MutexGuard<'_, Option<PushRefresh>> {
-    push.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Returns the destination host and port for reachability monitoring.
