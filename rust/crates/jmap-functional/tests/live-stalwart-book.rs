@@ -29,7 +29,9 @@
 
 use std::env;
 
-use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy};
+use jmap_functional::{
+    Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
+};
 
 const EMAIL: &str = "dana@example.com";
 const NICKNAME: &str = "Vee, the tall one";
@@ -78,22 +80,10 @@ fn live_server_params() -> Option<(String, String, String)> {
 /// The keyfile of `address-book.rs`, with a real `User=`. This field causes
 /// `jmap-backend-core::connect::credentials` to use Basic, not anonymous.
 fn keyfile(port: u16, user: &str) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional live-Stalwart test\n\
-         Enabled=true\n\
-         \n\
-         [Address Book]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         User={user}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::AddressBook, port)
+        .display_name("JMAP functional live-Stalwart test")
+        .user(user)
+        .to_string()
 }
 
 #[test]

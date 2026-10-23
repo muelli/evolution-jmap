@@ -21,7 +21,7 @@
 //! `e_cal_client_get_free_busy_sync()` for the address of one seeded
 //! principal, over a window that contains one seeded busy event.
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::principals::Principal;
 
@@ -36,21 +36,7 @@ const WINDOW_END: &str = "20260901T120000Z";
 /// push (`jmap-backend-cal/src/connect.rs`), so no collection backend is
 /// necessary.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Calendar]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::Calendar, port).to_string()
 }
 
 #[test]

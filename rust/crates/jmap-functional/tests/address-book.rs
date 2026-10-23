@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use jmap_proto::Id;
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, Media, Name, NameComponent,
@@ -136,25 +136,11 @@ const REPLACEMENT_PHOTO_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC";
 
 /// The keyfile from `docs/examples/jmap-mock.source`, with the mock's ephemeral
-/// port. It is a literal here, not read from `docs/`, so that a change to the
+/// port. It is written here, not read from `docs/`, so that a change to the
 /// documented recipe makes this test fail. `jmap-backend-book`'s `recipe.rs`
 /// checks the documented file.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Address Book]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::AddressBook, port).to_string()
 }
 
 #[test]

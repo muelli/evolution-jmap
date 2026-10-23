@@ -18,31 +18,22 @@
 //! reports what the registry API says about the children of the account, and
 //! the mock reports what the backend requested from the server.
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 
 /// `docs/examples/jmap-mock-collection.source` with the ephemeral port of the
-/// mock and a different `DisplayName`. It is a literal for the same reason
+/// mock and a different `DisplayName`. It is written here for the same reason
 /// as the `keyfile` of `address-book.rs`: a change to the documented file
 /// does not silently change this test.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test account\n\
-         Enabled=true\n\
-         \n\
-         [Collection]\n\
-         BackendName=jmap\n\
-         ContactsEnabled=true\n\
-         CalendarEnabled=true\n\
-         MailEnabled=false\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
+    Keyfile::new(
+        SourceKind::Collection {
+            contacts: true,
+            calendars: true,
+            mail: false,
+        },
+        port,
     )
+    .to_string()
 }
 
 #[test]

@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
@@ -37,21 +37,7 @@ const ORGANIZER: &str = "mailto:olga@example.com";
 const GUEST: &str = "mailto:gus@example.com";
 
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Calendar]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::Calendar, port).to_string()
 }
 
 fn reminder() -> Value {

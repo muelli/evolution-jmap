@@ -42,7 +42,9 @@
 
 use std::env;
 
-use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy};
+use jmap_functional::{
+    Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
+};
 
 /// `(origin, user, password)`, or `None` to skip. The same as
 /// `live_server_params` in `live-stalwart-book.rs`.
@@ -58,25 +60,17 @@ fn live_server_params() -> Option<(String, String, String)> {
 /// The keyfile of `collection.rs`, with a real `User=`. This field causes
 /// `jmap-backend-core::connect::credentials` to use Basic, not anonymous.
 fn keyfile(port: u16, user: &str) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional live-Stalwart collection test\n\
-         Enabled=true\n\
-         \n\
-         [Collection]\n\
-         BackendName=jmap\n\
-         ContactsEnabled=true\n\
-         CalendarEnabled=true\n\
-         MailEnabled=false\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         User={user}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
+    Keyfile::new(
+        SourceKind::Collection {
+            contacts: true,
+            calendars: true,
+            mail: false,
+        },
+        port,
     )
+    .display_name("JMAP functional live-Stalwart collection test")
+    .user(user)
+    .to_string()
 }
 
 #[test]

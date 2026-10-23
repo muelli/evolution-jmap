@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 
@@ -34,22 +34,9 @@ const UNREACHABLE_GUEST: &str = "urn:uuid:5f0c9a4e-0000-4000-8000-0000000000d1";
 /// The calendar keyfile, with `extra` at the end. No `[Resource] Identity=`:
 /// the backend asks for the default calendar of the account.
 fn keyfile(port: u16, extra: &str) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Calendar]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n\
-         {extra}"
-    )
+    Keyfile::new(SourceKind::Calendar, port)
+        .extra(extra)
+        .to_string()
 }
 
 /// The result of one run: the client observations and the mock outbox.

@@ -15,29 +15,20 @@
 //! `collection-create-calendar.rs` does the same steps with
 //! `E_SOURCE_EXTENSION_CALENDAR`.
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 
 /// The same keyfile as in `collection.rs`. This test needs contacts enabled,
 /// so the populate before the create marks the account `remote-creatable`.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test account\n\
-         Enabled=true\n\
-         \n\
-         [Collection]\n\
-         BackendName=jmap\n\
-         ContactsEnabled=true\n\
-         CalendarEnabled=true\n\
-         MailEnabled=false\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
+    Keyfile::new(
+        SourceKind::Collection {
+            contacts: true,
+            calendars: true,
+            mail: false,
+        },
+        port,
     )
+    .to_string()
 }
 
 #[test]

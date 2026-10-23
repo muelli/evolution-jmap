@@ -35,7 +35,9 @@
 use std::env;
 
 use jmap_client::{Client, Credentials};
-use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy};
+use jmap_functional::{
+    Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
+};
 use jmap_proto::calendars::Calendar;
 use jmap_proto::contacts::AddressBook;
 use jmap_proto::principals::PrincipalQueryFilter;
@@ -70,25 +72,17 @@ fn connect(origin: &str, user: &str, password: &str) -> Client {
 /// The keyfile of `live-stalwart-collection.rs`, for the account of the
 /// recipient: contacts and calendars enabled, mail disabled.
 fn keyfile(port: u16, user: &str) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional live-Stalwart shared collection test\n\
-         Enabled=true\n\
-         \n\
-         [Collection]\n\
-         BackendName=jmap\n\
-         ContactsEnabled=true\n\
-         CalendarEnabled=true\n\
-         MailEnabled=false\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         User={user}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
+    Keyfile::new(
+        SourceKind::Collection {
+            contacts: true,
+            calendars: true,
+            mail: false,
+        },
+        port,
     )
+    .display_name("JMAP functional live-Stalwart shared collection test")
+    .user(user)
+    .to_string()
 }
 
 /// The owner shares an address book (writable) and a calendar (read-only)

@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 
 /// The bearer token of the first connect, and the token that the mock
 /// accepts after the rotation. Different strings make a mock that still
@@ -62,22 +62,10 @@ const READY_TIMEOUT: Duration = Duration::from_secs(45);
 /// not a registered `EOAuth2Service`. The provider asks its session for a
 /// token without a registered service, and this test examines only that step.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP stale-token functional test\n\
-         Enabled=true\n\
-         \n\
-         [Mail Account]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         Method=OAuth2\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::MailAccount, port)
+        .display_name("JMAP stale-token functional test")
+        .auth_method("OAuth2")
+        .to_string()
 }
 
 /// Runs the client against a new mock, and rotates the token while the

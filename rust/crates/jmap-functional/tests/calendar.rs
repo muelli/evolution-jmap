@@ -24,7 +24,7 @@
 
 use std::collections::BTreeMap;
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, NDay};
 
@@ -892,24 +892,10 @@ fn picture<'a>(seen: &BTreeMap<&'a str, &'a str>, prefix: &str, key: &str) -> Op
 }
 
 /// The keyfile from `docs/examples/jmap-mock-calendar.source`, with the mock's
-/// port added. It is a literal here and not read from `docs/`, so a change to
+/// port added. It is written here and not read from `docs/`, so a change to
 /// the documented recipe makes this test fail.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Calendar]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::Calendar, port).to_string()
 }
 
 #[test]

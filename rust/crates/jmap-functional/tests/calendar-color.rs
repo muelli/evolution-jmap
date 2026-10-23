@@ -22,7 +22,7 @@
 //! colour picker of the calendar-properties dialog does, and waits. The
 //! header of that file tells why the wait is a fixed sleep and not a poll.
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 
 const NEW_COLOR: &str = "#336699";
 
@@ -30,21 +30,7 @@ const NEW_COLOR: &str = "#336699";
 /// asks the server for the default calendar of the account, so one seeded
 /// default calendar is sufficient.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Calendar]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::Calendar, port).to_string()
 }
 
 #[test]
