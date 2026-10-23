@@ -20,7 +20,6 @@
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::thread;
 use std::time::Duration;
@@ -34,7 +33,6 @@ use glib_sys::{
     g_ptr_array_new, gpointer,
 };
 use gobject_sys::g_object_unref;
-use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
 use jmap_mail_sync::MailSync;
@@ -44,33 +42,8 @@ use jmap_proto::mail::role;
 
 mod common;
 use common::Account;
+use common::race::DelayedDeliveryTransport;
 use common::race::Gate;
-
-/// Forwards every request to a real transport, but holds the *first*
-/// `Email/query` response back until the test releases it. The request is
-/// made first, so the answer is the server's honest one for the mailbox's
-/// contents at the time of the request (before the race's transfer moves
-/// the message away).
-struct DelayedDeliveryTransport {
-    inner: UreqTransport,
-    gate: Arc<Gate>,
-    delayed_once: AtomicBool,
-}
-
-impl Transport for DelayedDeliveryTransport {
-    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
-        let is_query = request
-            .body
-            .map(|body| String::from_utf8_lossy(body).contains("Email/query"))
-            .unwrap_or(false);
-        let response = self.inner.execute(request)?;
-        if is_query && !self.delayed_once.swap(true, Ordering::SeqCst) {
-            self.gate.signal_start();
-            self.gate.wait_for_release();
-        }
-        Ok(response)
-    }
-}
 
 /// A raw folder pointer, sent to a background thread.
 ///
@@ -152,11 +125,7 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight() {
     let archive_info = tree.find("Archive").expect("the seeded archive").clone();
 
     let gate = Arc::new(Gate::default());
-    let transport = DelayedDeliveryTransport {
-        inner: UreqTransport::default(),
-        gate: Arc::clone(&gate),
-        delayed_once: AtomicBool::new(false),
-    };
+    let transport = DelayedDeliveryTransport::new(Arc::clone(&gate), "Email/query");
     let gated = Client::builder()
         .transport(transport)
         .connect(server.origin(), Credentials::none())

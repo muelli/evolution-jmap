@@ -33,11 +33,10 @@ mod common;
 
 use std::env;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
+use common::race::DelayedDeliveryTransport;
 use common::race::Gate;
-use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
 use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
@@ -48,31 +47,6 @@ fn unique_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
-}
-
-/// Forwards every request to a real transport. Holds back the *first*
-/// `Mailbox/changes` response until the test releases it, after making
-/// the request against the real server. Copy of
-/// `folder_listing_race.rs`'s `DelayedDeliveryTransport`.
-struct DelayedDeliveryTransport {
-    inner: UreqTransport,
-    gate: Arc<Gate>,
-    delayed_once: AtomicBool,
-}
-
-impl Transport for DelayedDeliveryTransport {
-    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
-        let is_changes_call = request
-            .body
-            .map(|body| String::from_utf8_lossy(body).contains("Mailbox/changes"))
-            .unwrap_or(false);
-        let response = self.inner.execute(request)?;
-        if is_changes_call && !self.delayed_once.swap(true, Ordering::SeqCst) {
-            self.gate.signal_start();
-            self.gate.wait_for_release();
-        }
-        Ok(response)
-    }
 }
 
 /// `JmapStore::detached()` is not a GObject, so it cannot be shared across a
@@ -103,11 +77,7 @@ fn connect_for_write_with_gate(gate: Arc<Gate>) -> Option<Client> {
         .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
 
-    let transport = DelayedDeliveryTransport {
-        inner: UreqTransport::default(),
-        gate,
-        delayed_once: AtomicBool::new(false),
-    };
+    let transport = DelayedDeliveryTransport::new(gate, "Mailbox/changes");
     let client = Client::builder()
         .transport(transport)
         .rebase_urls_to_origin(rebase)

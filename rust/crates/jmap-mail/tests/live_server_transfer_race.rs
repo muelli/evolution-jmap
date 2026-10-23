@@ -36,12 +36,12 @@ use std::env;
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::thread;
 use std::time::Duration;
 
 use common::Account;
+use common::race::DelayedDeliveryTransport;
 use common::race::Gate;
 use eds_sys::{
     CamelFolder, camel_folder_get_folder_summary, camel_folder_refresh_info_sync,
@@ -49,7 +49,6 @@ use eds_sys::{
 };
 use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_free, gpointer};
 use gobject_sys::g_object_unref;
-use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
 use jmap_mail_sync::{Keywords, MailSync};
@@ -76,33 +75,6 @@ fn connect_for_write() -> Option<Client> {
         .connect(&origin, Credentials::basic(user, password))
         .expect("could not fetch the session document for the write-test account");
     Some(client)
-}
-
-/// Forwards every request to a real transport, but holds the *first*
-/// `Email/query` response back until the test releases it. The request is
-/// made first, against the real server, so the answer is honest (the
-/// message still shows present) for the mailbox's contents at the time of
-/// the request, before the race's transfer moves it away. Copy of
-/// `transfer_race.rs`'s `DelayedDeliveryTransport`.
-struct DelayedDeliveryTransport {
-    inner: UreqTransport,
-    gate: Arc<Gate>,
-    delayed_once: AtomicBool,
-}
-
-impl Transport for DelayedDeliveryTransport {
-    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
-        let is_query = request
-            .body
-            .map(|body| String::from_utf8_lossy(body).contains("Email/query"))
-            .unwrap_or(false);
-        let response = self.inner.execute(request)?;
-        if is_query && !self.delayed_once.swap(true, Ordering::SeqCst) {
-            self.gate.signal_start();
-            self.gate.wait_for_release();
-        }
-        Ok(response)
-    }
 }
 
 /// A raw folder pointer, sent to a background thread. Copy of
@@ -155,11 +127,7 @@ fn connect_for_write_with_gate(gate: Arc<Gate>) -> Client {
         env::var("JMAP_LIVE_SERVER_URL").expect("connect_for_write already confirmed this is set");
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
 
-    let transport = DelayedDeliveryTransport {
-        inner: UreqTransport::default(),
-        gate,
-        delayed_once: AtomicBool::new(false),
-    };
+    let transport = DelayedDeliveryTransport::new(gate, "Email/query");
     Client::builder()
         .transport(transport)
         .rebase_urls_to_origin(rebase)

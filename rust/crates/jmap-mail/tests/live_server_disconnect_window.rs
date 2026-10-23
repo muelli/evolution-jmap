@@ -33,13 +33,12 @@ mod common;
 
 use std::env;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use common::race::DelayedDeliveryTransport;
 use common::race::Gate;
-use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
 use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
@@ -50,39 +49,6 @@ fn unique_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
-}
-
-/// Forwards every request to a real transport, but holds back delivery of
-/// the first `Email/get` request until the test releases it. By then, the
-/// real server has already answered it. `messages()` makes exactly this
-/// call (it fetches the account's `Email` state) right after cloning the
-/// connection's `Arc` and dropping the read guard. Holding this delivery
-/// creates exactly the window that `drop_connection` needs to race.
-///
-/// The match is on the request body, not a raw call index. `create_folder`
-/// (`Mailbox/set`) runs on the same client and transport before the race
-/// starts. A plain call counter would arm on one of those requests instead,
-/// and deadlock the calling thread against a gate that nothing else would
-/// ever release.
-struct DelayedDeliveryTransport {
-    inner: UreqTransport,
-    gate: Arc<Gate>,
-    delayed_once: AtomicBool,
-}
-
-impl Transport for DelayedDeliveryTransport {
-    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
-        let is_email_get = request
-            .body
-            .map(|body| String::from_utf8_lossy(body).contains("Email/get"))
-            .unwrap_or(false);
-        let response = self.inner.execute(request)?;
-        if is_email_get && !self.delayed_once.swap(true, Ordering::SeqCst) {
-            self.gate.signal_start();
-            self.gate.wait_for_release();
-        }
-        Ok(response)
-    }
 }
 
 /// `JmapStore::detached()` is not a GObject, so it cannot be shared across a
@@ -112,11 +78,9 @@ fn connect_for_write_with_gate(gate: Arc<Gate>) -> Option<Client> {
         .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
     let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
 
-    let transport = DelayedDeliveryTransport {
-        inner: UreqTransport::default(),
-        gate,
-        delayed_once: AtomicBool::new(false),
-    };
+    // `messages()` sends `Email/get` just after it clones the connection's `Arc` and drops the
+    // read guard. A hold on that response opens the window that `drop_connection` races.
+    let transport = DelayedDeliveryTransport::new(gate, "Email/get");
     let client = Client::builder()
         .transport(transport)
         .rebase_urls_to_origin(rebase)
