@@ -52,18 +52,6 @@
 #define EDIT_WAIT_TRIES 200
 #define EDIT_WAIT_INTERVAL_US 50000
 
-/* Return the VEVENT from a get_object result. EDS gives a VEVENT for one
- * instance, or a VCALENDAR with the instances. Accept both forms, so that the
- * form of the result does not cause an unrelated failure. */
-static ICalComponent *
-first_vevent (ICalComponent *component)
-{
-	if (i_cal_component_isa (component) == I_CAL_VEVENT_COMPONENT)
-		return g_object_ref (component);
-
-	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
-}
-
 /* Return the value of one non-standard parameter of a property, or the empty
  * string if there is none.
  *
@@ -516,7 +504,7 @@ main (int argc,
 		return 1;
 	}
 
-	event = first_vevent (fetched);
+	event = functional_first_vevent (fetched);
 	if (!event) {
 		g_printerr ("get-seeded: what EDS handed back holds no VEVENT\n");
 		return 1;
@@ -524,8 +512,8 @@ main (int argc,
 
 	g_print ("read-summary=%s\n", i_cal_component_get_summary (event));
 	/* The VEVENT is sufficient: libical finds a TZID in the component *and its
-	 * parents*. first_vevent returns a child of `fetched` with its parent link,
-	 * thus a VTIMEZONE in the VCALENDAR is available. */
+	 * parents*. functional_first_vevent returns a child of `fetched` with its
+	 * parent link, thus a VTIMEZONE in the VCALENDAR is available. */
 	functional_report_start ("read", event);
 	report_places ("read", event);
 	report_resource ("read", event);
@@ -603,7 +591,7 @@ main (int argc,
 	if (!e_cal_client_get_object_sync (cal, event_uid, NULL, &read_back, NULL, &error))
 		return functional_fail ("get-after-modify", error);
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	if (!read_back_event) {
 		g_printerr ("get-after-modify: what EDS handed back holds no VEVENT\n");
 		return 1;

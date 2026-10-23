@@ -21,6 +21,7 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "event-start.h"
 #include "test-util.h"
 
 #define TEST_DTSTART "20260220T100000Z"
@@ -28,15 +29,6 @@
 #define TEST_ORGANIZER "mailto:organizer@example.com"
 #define TEST_ATTENDEE_1 "mailto:attendee1@example.com"
 #define TEST_ATTENDEE_2 "mailto:attendee2@example.com"
-
-static ICalComponent *
-first_vevent (ICalComponent *component)
-{
-	if (i_cal_component_isa (component) == I_CAL_VEVENT_COMPONENT)
-		return g_object_ref (component);
-
-	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
-}
 
 /* All values of one property, joined by commas, or an empty string. Copy of
  * the helper in `cal-live-client.c`. */
@@ -160,7 +152,7 @@ main (int argc,
 		return functional_fail ("read-back", error);
 	}
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {

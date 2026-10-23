@@ -8,6 +8,8 @@
  * cal-zone-client.c (a zone that only the server names). The tests compare
  * their results. One shared function makes sure that a difference comes from
  * the event, not from the measurement.
+ *
+ * It also holds the function that finds the VEVENT in a get_object result.
  */
 
 #ifndef FUNCTIONAL_EVENT_START_H
@@ -19,6 +21,8 @@ G_BEGIN_DECLS
 
 void	functional_report_start		(const gchar *prefix,
 					 ICalComponent *event);
+ICalComponent *
+	functional_first_vevent		(ICalComponent *component);
 
 G_END_DECLS
 

@@ -22,6 +22,7 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "event-start.h"
 #include "test-util.h"
 
 /* The event that this test writes. A UTC time makes sure that the test does
@@ -55,17 +56,6 @@
  * usually comes before the event. */
 #define TEST_ALARM_UID "k1"
 #define TEST_ALARM_TRIGGER "-PT15M"
-
-/* get_object gives a bare VEVENT or a VCALENDAR that contains it. Copy of
- * the helper in `cal-client.c`. */
-static ICalComponent *
-first_vevent (ICalComponent *component)
-{
-	if (i_cal_component_isa (component) == I_CAL_VEVENT_COMPONENT)
-		return g_object_ref (component);
-
-	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
-}
 
 /* All values of one property, joined by commas. Copy of the helper in
  * `cal-client.c`. */
@@ -245,7 +235,7 @@ main (int argc,
 		return functional_fail ("read-back", error);
 	}
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {

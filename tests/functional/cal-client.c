@@ -23,6 +23,7 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "event-start.h"
 #include "test-util.h"
 
 /* The start of the timed event. A UTC value, so that the scratch session
@@ -248,18 +249,6 @@
 #define TEST_ZONED_MOVED_RECURRENCE_ID "20260312T100000"
 #define TEST_ZONED_MOVED_DTSTART "20260312T080000"
 #define TEST_ZONED_MOVED_DTEND "20260312T090000"
-
-/* Return the first VEVENT of what get_object returns: a bare VEVENT for an
- * event with one instance, or a VCALENDAR that contains the instances. Both
- * forms are accepted, so that the form alone does not cause a failure. */
-static ICalComponent *
-first_vevent (ICalComponent *component)
-{
-	if (i_cal_component_isa (component) == I_CAL_VEVENT_COMPONENT)
-		return g_object_ref (component);
-
-	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
-}
 
 /* Whether a component replaces one occurrence of a series and is not the
  * series. Only the RECURRENCE-ID (RFC 5545 §3.8.4.4) tells the two apart. */
@@ -592,7 +581,7 @@ main (int argc,
 		return functional_fail ("read-back", error);
 	}
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
@@ -796,7 +785,7 @@ main (int argc,
 		return functional_fail ("read-back-occurrence", error);
 	}
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
@@ -857,7 +846,7 @@ main (int argc,
 		return functional_fail ("read-back-series", error);
 	}
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
@@ -921,7 +910,7 @@ main (int argc,
 
 	g_free (recurring_uid);
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
@@ -1037,7 +1026,7 @@ main (int argc,
 
 	g_free (zoned_recurring_uid);
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
