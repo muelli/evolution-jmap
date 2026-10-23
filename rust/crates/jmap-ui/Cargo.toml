@@ -44,6 +44,9 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# Turns on core's `testing` for the test builds only: `tests/undo_delete.rs`
+# makes its `ESource` with `OwnedSource`.
+jmap-backend-core = { workspace = true, features = ["testing"] }
 # `tests/send_later.rs` tests the full scheduled-send exchange against the
 # stateful mock, including the HOLDFOR gate.
 evolution-jmap-mock = { workspace = true }
