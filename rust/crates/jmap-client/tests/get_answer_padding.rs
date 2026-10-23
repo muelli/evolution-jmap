@@ -8,6 +8,7 @@
 
 use jmap_client::transport::{HttpMethod, HttpRequest, HttpResponse, Transport, TransportError};
 use jmap_client::{Client, Credentials};
+use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use serde_json::{Value, json};
 
@@ -212,4 +213,63 @@ fn event_get_keeps_only_the_requested_events_and_not_found_ids() {
 fn principal_get_keeps_only_the_requested_principals() {
     let principals = client().principal_get(&account(), &requested()).unwrap();
     assert_eq!(ids_of(principals.iter().map(|p| p.id.as_ref())), EXPECTED);
+}
+
+/// A `jmap-mockd` that adds every unrequested email of the account to each
+/// `Email/get` answer, seeded with the emails `E1` to `E4`.
+fn padding_mock(objects_in_get: u64) -> MockServer {
+    let server = MockServer::builder()
+        .email_get_includes_unrequested()
+        .objects_in_get(objects_in_get)
+        .start();
+    let state = server.state();
+    let mut state = state.lock().unwrap();
+    let account = state.account_mut(&server.account_id()).unwrap();
+    let inbox = account.seed_mailbox("Inbox", Some(jmap_proto::mail::role::INBOX));
+    for n in 1..=4 {
+        account.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            &format!("Subject {n}"),
+            "Body",
+            &format!("2026-08-0{n}T10:00:00Z"),
+        ));
+    }
+    drop(state);
+    server
+}
+
+#[test]
+fn email_get_against_the_padding_mock_returns_only_the_one_requested_email() {
+    let server = padding_mock(500);
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let emails = client
+        .email_get(&server.account_id(), &[Id::new("E1")], None)
+        .unwrap();
+    assert_eq!(ids_of(emails.iter().map(|e| e.id.as_ref())), ["E1"]);
+}
+
+#[test]
+fn email_get_against_the_padding_mock_drops_padding_from_every_chunk() {
+    let server = padding_mock(2);
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let requested = [Id::new("E1"), Id::new("E3"), Id::new("E4")];
+    let calls_before = server.method_calls().len();
+    let emails = client
+        .email_get(&server.account_id(), &requested, Some(&["subject"]))
+        .unwrap();
+    assert_eq!(
+        ids_of(emails.iter().map(|e| e.id.as_ref())),
+        ["E1", "E3", "E4"]
+    );
+    let subjects: Vec<_> = emails.iter().map(|e| e.subject.as_deref()).collect();
+    assert_eq!(
+        subjects,
+        [Some("Subject 1"), Some("Subject 3"), Some("Subject 4")]
+    );
+    let gets = server.method_calls()[calls_before..]
+        .iter()
+        .filter(|name| name.as_str() == "Email/get")
+        .count();
+    assert_eq!(gets, 2, "maxObjectsInGet 2 splits three ids into two calls");
 }
