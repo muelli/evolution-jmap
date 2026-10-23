@@ -25,36 +25,9 @@
 //!
 //! A test skips (it does not fail) when `JMAP_LIVE_SERVER_WRITE_USER` is unset.
 
-use std::env;
-
 use jmap_book_sync::BookSync;
-use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_CONTACTS;
-
-/// Returns a value unique to this process run, so a leftover contact from
-/// another run never matches this run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Mirrors `live_server.rs::connect_for_write` exactly.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
+use jmap_test_support::{connect_for_write, unique_suffix};
 
 /// Saves a contact with one `TITLE` line, then saves it again with a different
 /// title. Confirms that the real server replaces the title and does not reject

@@ -26,56 +26,11 @@
 //! `JMAP_LIVE_SERVER_RECIPIENT_PASSWORD` for a second account in the same
 //! domain. It skips when `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset.
 
-use std::env;
-
 use jmap_book_sync::BookSync;
-use jmap_client::{Client, Credentials};
 use jmap_proto::contacts::AddressBook;
 use jmap_proto::session::CAPABILITY_CONTACTS;
+use jmap_test_support::{connect_for_write, connect_recipient, unique_suffix};
 use serde_json::json;
-
-/// Returns a value unique to this process run, so a leftover contact from
-/// another run never matches this run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Mirrors `live_server.rs::connect_for_write` exactly.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
-
-/// Mirrors `jmap-client/tests/live_server.rs::connect_recipient` exactly.
-fn connect_recipient() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
-    );
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    Some(
-        Client::builder()
-            .rebase_urls_to_origin(rebase)
-            .connect(&origin, Credentials::basic(user, password))
-            .expect("could not fetch the session document for the recipient account"),
-    )
-}
 
 /// Creates, edits and removes a contact. After each step, confirms that
 /// `get_changes` from the state before that step reports it. Mirrors the
