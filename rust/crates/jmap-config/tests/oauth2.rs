@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use eds_sys::{
     ESource, ESourceExtension, e_source_extension_ref_source, e_source_get_extension,
-    e_source_has_extension, e_source_new_with_uid, e_source_parameter_to_key, e_source_to_string,
+    e_source_has_extension, e_source_parameter_to_key, e_source_to_string,
 };
 use glib_sys::{GFALSE, g_free};
 use gobject_sys::{
@@ -26,6 +26,7 @@ use gobject_sys::{
     g_value_init, g_value_set_string, g_value_unset,
 };
 use jmap_backend_core::callback::{CHandler, gcallback};
+use jmap_backend_core::source::OwnedSource;
 use jmap_config::oauth2::{Config, EXTENSION_NAME, PROPERTY_NAMES, apply, client_id, read};
 
 /// Writes one string property through the raw GObject API. The EDS `.source`
@@ -93,7 +94,7 @@ impl Shared {
 // SAFETY: refer to the comment on the type.
 unsafe impl Send for Shared {}
 
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
@@ -105,24 +106,18 @@ impl TestSource {
         // not register the type itself (`apply`/`read` do).
         jmap_config::oauth2::ensure_registered();
 
-        let uid = CString::new("jmap-account").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new("jmap-account"))
     }
 
     fn written(self, config: &Config) -> Self {
         // SAFETY: a live source.
-        unsafe { apply(self.0, config) };
+        unsafe { apply(self.0.as_ptr(), config) };
         self
     }
 
     fn config(&self) -> Config {
         // SAFETY: a live source.
-        unsafe { read(self.0) }
+        unsafe { read(self.0.as_ptr()) }
     }
 
     /// Reads a property by name through the raw GObject API. The EDS keyfile
@@ -158,7 +153,7 @@ impl TestSource {
     fn extension(&self) -> *mut GObject {
         // SAFETY: a live source. `EXTENSION_NAME` is the group name that the
         // extension of this crate registers with.
-        unsafe { e_source_get_extension(self.0, EXTENSION_NAME.as_ptr()).cast() }
+        unsafe { e_source_get_extension(self.0.as_ptr(), EXTENSION_NAME.as_ptr()).cast() }
     }
 
     /// The source as EDS writes it to disk: the `.source` keyfile that
@@ -168,7 +163,7 @@ impl TestSource {
         // and the length out-parameter is optional. Thus this code reads and
         // frees the NUL-terminated result.
         unsafe {
-            let text = e_source_to_string(self.0, ptr::null_mut());
+            let text = e_source_to_string(self.0.as_ptr(), ptr::null_mut());
             assert!(!text.is_null(), "e_source_to_string returned NULL");
             let owned = CStr::from_ptr(text).to_string_lossy().into_owned();
             g_free(text.cast());
@@ -178,21 +173,14 @@ impl TestSource {
 
     fn has_extension(&self) -> bool {
         // SAFETY: a live source.
-        unsafe { e_source_has_extension(self.0, EXTENSION_NAME.as_ptr()) != GFALSE }
+        unsafe { e_source_has_extension(self.0.as_ptr(), EXTENSION_NAME.as_ptr()) != GFALSE }
     }
 
     /// The `const gchar *` that `EOAuth2Service::get_client_id` gives to EDS:
     /// the borrowed door, not the owned door of [`Self::config`].
     fn borrowed_client_id(&self) -> *const c_char {
         // SAFETY: a live source.
-        unsafe { client_id(self.0) }
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this holds the only reference.
-        unsafe { g_object_unref(self.0.cast()) };
+        unsafe { client_id(self.0.as_ptr()) }
     }
 }
 
@@ -415,7 +403,7 @@ fn a_pointer_handed_out_survives_writes_arriving_on_another_thread() {
     let source = TestSource::new().written(&config());
     let handed_out = source.borrowed_client_id();
 
-    let shared = Shared(source.0);
+    let shared = Shared(source.0.as_ptr());
     let writer = std::thread::spawn(move || {
         for round in 0..2000_u32 {
             let rotating = Config {
@@ -522,7 +510,7 @@ fn applying_a_config_raises_notify_for_every_property_it_wrote() {
 
     let mut seen = notifications_during(extension, || {
         // SAFETY: a live source.
-        unsafe { apply(source.0, &config()) };
+        unsafe { apply(source.0.as_ptr(), &config()) };
     });
     seen.sort();
 
@@ -560,7 +548,7 @@ fn an_unchanged_rewrite_still_raises_notify() {
 
     let seen = notifications_during(extension, || {
         // SAFETY: a live source.
-        unsafe { apply(source.0, &config()) };
+        unsafe { apply(source.0.as_ptr(), &config()) };
     });
 
     assert_eq!(
@@ -646,7 +634,8 @@ fn overriding_the_property_vfuncs_did_not_swallow_the_parent_classes_own_source_
     // `(transfer full)`.
     let owner = unsafe { e_source_extension_ref_source(extension) };
     assert_eq!(
-        owner, source.0,
+        owner,
+        source.0.as_ptr(),
         "the extension lost the `ESource` the parent class stores at property id 1"
     );
     // SAFETY: the reference that `ref_source` returned.
@@ -731,7 +720,7 @@ unsafe extern "C" fn probe_from_another_thread(
 fn another_thread_can_read_the_extension_while_notify_is_running() {
     let source = TestSource::new().written(&config());
     let probe = Probe {
-        source: Shared(source.0),
+        source: Shared(source.0.as_ptr()),
         armed: AtomicBool::new(true),
         observed: Mutex::new(None),
     };
@@ -816,7 +805,7 @@ fn a_notify_handler_can_read_the_extension_back_on_its_own_thread() {
             c"notify::client-id",
             read_on_the_emitting_thread
                 as unsafe extern "C" fn(*mut GObject, *mut GParamSpec, *mut c_void),
-            source.0.cast::<c_void>(),
+            source.0.as_ptr().cast::<c_void>(),
         );
     }
 
@@ -920,7 +909,7 @@ fn the_class_behind_the_group_is_the_one_this_eds_owns_it_with() {
     let source = TestSource::new();
     // SAFETY: a live source. EDS creates the extension on demand, and
     // `EXTENSION_NAME` is a 'static NUL-terminated string.
-    let extension = unsafe { e_source_get_extension(source.0, EXTENSION_NAME.as_ptr()) };
+    let extension = unsafe { e_source_get_extension(source.0.as_ptr(), EXTENSION_NAME.as_ptr()) };
     assert!(
         !extension.is_null(),
         "no class answers to {EXTENSION_NAME:?}"

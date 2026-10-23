@@ -14,13 +14,12 @@
 // child, and this failure writes nothing in a log.
 
 use std::ffi::CString;
-use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceAuthentication, ESourceBackend, ESourceCollection,
     e_source_backend_get_backend_name, e_source_collection_get_identity, e_source_get_extension,
-    e_source_has_extension, e_source_new_with_uid, e_source_set_enabled,
+    e_source_has_extension, e_source_set_enabled,
 };
 // The getter for the token cache key that the installed EDS has. Refer to the
 // module comment of `jmap_config::account`.
@@ -29,10 +28,9 @@ use eds_sys::e_source_authentication_get_credential_name as get_credential_id;
 #[cfg(eds_credential_store_id)]
 use eds_sys::e_source_authentication_get_credential_store_id as get_credential_id;
 use glib_sys::{GFALSE, GTRUE};
-use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::{Server, parts_of, server_of, user_of};
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::{ConnectTarget, SourceError};
+use jmap_backend_core::source::{ConnectTarget, OwnedSource, SourceError};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, BACKEND_NAME, apply, read};
@@ -45,44 +43,38 @@ use jmap_config::account::{Account, BACKEND_NAME, apply, read};
 /// code in this process that uses `[Collection]`, `[Authentication]` or
 /// `[Security]`. `e_source_get_extension` cannot find, and does not create, an
 /// unregistered extension type.
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
-        let uid = CString::new("jmap-account").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new("jmap-account"))
     }
 
     fn written(self, account: &Account) -> Self {
         // SAFETY: a live source.
-        unsafe { apply(self.0, account) };
+        unsafe { apply(self.0.as_ptr(), account) };
         self
     }
 
     fn has_extension(&self, name: &std::ffi::CStr) -> bool {
         // SAFETY: a live source and a NUL-terminated name.
-        unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
+        unsafe { e_source_has_extension(self.0.as_ptr(), name.as_ptr()) != GFALSE }
     }
 
     /// The account as the collection backend reads it.
     fn server(&self) -> Result<Server, SourceError> {
         // SAFETY: a live source.
-        unsafe { server_of(self.0) }
+        unsafe { server_of(self.0.as_ptr()) }
     }
 
     fn parts(&self) -> Parts {
         // SAFETY: a live source.
-        unsafe { parts_of(self.0) }
+        unsafe { parts_of(self.0.as_ptr()) }
     }
 
     fn user(&self) -> Option<String> {
         // SAFETY: a live source.
-        unsafe { user_of(self.0) }
+        unsafe { user_of(self.0.as_ptr()) }
     }
 
     /// `[Authentication] credential-name` (or `credential-store-id` on an EDS
@@ -102,12 +94,15 @@ impl TestSource {
         );
         // SAFETY: the extension is present, so this returns the extension of
         // the source.
-        unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast() }
+        unsafe {
+            e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+                .cast()
+        }
     }
 
     fn uid(&self) -> String {
         // SAFETY: a live source, which owns the uid. The uid is never NULL.
-        unsafe { read_string(eds_sys::e_source_get_uid(self.0)) }
+        unsafe { read_string(eds_sys::e_source_get_uid(self.0.as_ptr())) }
             .expect("a constructed ESource always has a uid")
     }
 
@@ -121,7 +116,9 @@ impl TestSource {
         );
         // SAFETY: the extension is present, so this returns the extension of
         // the source.
-        unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast() }
+        unsafe {
+            e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast()
+        }
     }
 
     fn backend_name(&self) -> Option<String> {
@@ -140,20 +137,13 @@ impl TestSource {
     /// it, and `check_complete` examines it.
     fn account(&self) -> Account {
         // SAFETY: a live source.
-        unsafe { read(self.0) }
+        unsafe { read(self.0.as_ptr()) }
     }
 
     fn set_enabled(self, enabled: bool) -> Self {
         // SAFETY: a live source, and the flag is a plain property.
-        unsafe { e_source_set_enabled(self.0, if enabled { GTRUE } else { GFALSE }) };
+        unsafe { e_source_set_enabled(self.0.as_ptr(), if enabled { GTRUE } else { GFALSE }) };
         self
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this holds the only reference.
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
@@ -630,7 +620,7 @@ fn a_read_on_another_thread_copies_strings_the_main_thread_is_replacing() {
     unsafe impl Sync for Shared {}
 
     let source = TestSource::new().written(&account());
-    let shared = std::sync::Arc::new(Shared(source.0));
+    let shared = std::sync::Arc::new(Shared(source.0.as_ptr()));
     let hosts = ["a".repeat(4000) + ".example", "b".repeat(9000) + ".example"];
     let names: Vec<CString> = hosts
         .iter()

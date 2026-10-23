@@ -5,58 +5,51 @@
 // `read`/`write` functions of this crate and through the raw GObject property
 // that the EDS `.source` (de)serialisation uses.
 
-use std::ffi::{CStr, CString, c_void};
+use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::sync::Mutex;
 
 use eds_sys::{
-    ESource, e_source_get_extension, e_source_has_extension, e_source_new_with_uid,
-    e_source_parameter_to_key, e_source_to_string,
+    e_source_get_extension, e_source_has_extension, e_source_parameter_to_key, e_source_to_string,
 };
 use glib_sys::{GFALSE, g_free};
 use gobject_sys::{
     G_TYPE_INT64, GObject, GParamSpec, GValue, g_object_get_property, g_object_set_property,
-    g_object_unref, g_signal_connect_data, g_value_get_int64, g_value_init, g_value_set_int64,
-    g_value_unset,
+    g_signal_connect_data, g_value_get_int64, g_value_init, g_value_set_int64, g_value_unset,
 };
 use jmap_backend_core::callback::gcallback;
+use jmap_backend_core::source::OwnedSource;
 use jmap_collection_sync::pending::Due;
 use jmap_config::pending_delete::{EXTENSION_NAME, PROPERTY_DUE, ensure_registered, read, write};
 
-struct TestSource(*mut ESource);
+struct TestSource(OwnedSource);
 
 impl TestSource {
     fn new() -> Self {
         // The raw property helpers below do not register the type, so the
         // test registers it, as the module load does.
         ensure_registered();
-        let uid = CString::new("jmap-child").expect("no NUL in a literal");
-        let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context and a GError
-        // out-parameter are the documented arguments.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
+        Self(OwnedSource::new("jmap-child"))
     }
 
     fn due(&self) -> Option<Due> {
         // SAFETY: a live source.
-        unsafe { read(self.0) }
+        unsafe { read(self.0.as_ptr()) }
     }
 
     fn write(&self, due: Option<Due>) {
         // SAFETY: a live source.
-        unsafe { write(self.0, due) };
+        unsafe { write(self.0.as_ptr(), due) };
     }
 
     fn has_extension(&self) -> bool {
         // SAFETY: a live source.
-        unsafe { e_source_has_extension(self.0, EXTENSION_NAME.as_ptr()) != GFALSE }
+        unsafe { e_source_has_extension(self.0.as_ptr(), EXTENSION_NAME.as_ptr()) != GFALSE }
     }
 
     fn extension(&self) -> *mut GObject {
         // SAFETY: a live source, and the type is registered.
-        unsafe { e_source_get_extension(self.0, EXTENSION_NAME.as_ptr()).cast() }
+        unsafe { e_source_get_extension(self.0.as_ptr(), EXTENSION_NAME.as_ptr()).cast() }
     }
 
     /// Reads `due` through the raw GObject API, as the EDS keyfile writer does.
@@ -89,19 +82,12 @@ impl TestSource {
     fn serialised(&self) -> String {
         // SAFETY: a live source. The result is `(transfer full)`.
         unsafe {
-            let text = e_source_to_string(self.0, ptr::null_mut());
+            let text = e_source_to_string(self.0.as_ptr(), ptr::null_mut());
             assert!(!text.is_null(), "e_source_to_string returned NULL");
             let owned = CStr::from_ptr(text).to_string_lossy().into_owned();
             g_free(text.cast());
             owned
         }
-    }
-}
-
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        // SAFETY: this holds the only reference.
-        unsafe { g_object_unref(self.0.cast()) };
     }
 }
 
