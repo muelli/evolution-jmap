@@ -9,6 +9,7 @@ mod common;
 
 use common::Fixture;
 use jmap_cal_sync::{Base, Itip, OnConflict, SyncError, Unsendable};
+use jmap_mock::MockServer;
 use jmap_proto::calendars::NDay;
 use serde_json::{Value, json};
 
@@ -5918,5 +5919,47 @@ END:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT",
             .as_ref()
             .is_some_and(|zones| zones.contains_key("/example.com/Office")),
         "{stored:?}"
+    );
+}
+
+#[test]
+fn a_link_served_as_a_local_file_is_neither_shown_nor_sent_back() {
+    let fixture = Fixture::start_with(MockServer::builder().calendar_event_link_uses_file_uri());
+    let minutes = json!({
+        "@type": "Link",
+        "href": "https://files.example.com/minutes.txt",
+    });
+    let (id, sync) = points_at(&fixture, json!({"l1": agenda(), "l2": minutes.clone()}));
+    let served = fixture.event(&id).links.expect("links");
+    assert!(
+        served
+            .values()
+            .all(|link| link["href"] == "file:///dev/zero"),
+        "the mock must serve local-file links: {served:?}"
+    );
+
+    let icalendar = unfolded(&sync.load_component(id.as_str()).unwrap().icalendar);
+    assert!(!icalendar.contains("ATTACH"), "{icalendar}");
+    assert!(!icalendar.contains("file:"), "{icalendar}");
+    let edited = icalendar.replace("SUMMARY:Standup", "SUMMARY:Standup (short)");
+    assert_ne!(edited, icalendar, "the summary was not found");
+    sync.save_component(&edited, Some(id.as_str())).unwrap();
+
+    // Read the store, because the mock rewrites the link addresses on every `CalendarEvent/get`.
+    let stored = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&fixture.account_id).unwrap();
+        account
+            .calendar_events
+            .get(&id)
+            .expect("the seeded event")
+            .clone()
+    };
+    assert_eq!(stored.title.as_deref(), Some("Standup (short)"));
+    assert_eq!(
+        stored.links.expect("the save removed the links"),
+        serde_json::from_value(json!({"l1": agenda(), "l2": minutes})).unwrap(),
+        "the save changed or wrote back a local-file link"
     );
 }
