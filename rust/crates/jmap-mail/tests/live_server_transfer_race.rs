@@ -77,6 +77,9 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
+/// The longest time a `Gate` wait blocks. A missed signal fails the test and does not hang it.
+const GATE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Lets the test park the racing request's response, and learn when it has
 /// actually parked, instead of racing a sleep against it. Copy of
 /// `transfer_race.rs`'s `Gate`.
@@ -90,10 +93,15 @@ struct Gate {
 
 impl Gate {
     fn wait_for_start(&self) {
-        let mut started = self.started.lock().unwrap();
-        while !*started {
-            started = self.started_cond.wait(started).unwrap();
-        }
+        let started = self.started.lock().unwrap();
+        let (_guard, wait) = self
+            .started_cond
+            .wait_timeout_while(started, GATE_TIMEOUT, |started| !*started)
+            .unwrap();
+        assert!(
+            !wait.timed_out(),
+            "the gated response did not arrive in {GATE_TIMEOUT:?}"
+        );
     }
 
     fn signal_start(&self) {
@@ -102,10 +110,15 @@ impl Gate {
     }
 
     fn wait_for_release(&self) {
-        let mut released = self.released.lock().unwrap();
-        while !*released {
-            released = self.released_cond.wait(released).unwrap();
-        }
+        let released = self.released.lock().unwrap();
+        let (_guard, wait) = self
+            .released_cond
+            .wait_timeout_while(released, GATE_TIMEOUT, |released| !*released)
+            .unwrap();
+        assert!(
+            !wait.timed_out(),
+            "the test did not release the gate in {GATE_TIMEOUT:?}"
+        );
     }
 
     fn release(&self) {
