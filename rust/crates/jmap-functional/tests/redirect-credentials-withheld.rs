@@ -35,28 +35,16 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 
 const USER: &str = "jmap-redirect-withheld";
 const PASSWORD: &str = "the-stored-password";
 
 fn keyfile(front_door_port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP redirect-credentials-withheld functional test\n\
-         Enabled=true\n\
-         \n\
-         [Address Book]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={front_door_port}\n\
-         User={USER}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::AddressBook, front_door_port)
+        .display_name("JMAP redirect-credentials-withheld functional test")
+        .user(USER)
+        .to_string()
 }
 
 /// Binds a loopback port that sends a 302 to

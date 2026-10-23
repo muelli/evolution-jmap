@@ -20,7 +20,7 @@
 //! counter and logs a `Change` for `ContactCard/changes`. Thus the second
 //! connect gives a different, observable result.
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use jmap_proto::contacts::ContactCard;
 
 const FIRST_CONTACT: &str = "Alice Adams";
@@ -29,21 +29,7 @@ const SECOND_CONTACT: &str = "Bob Newman";
 /// `docs/examples/jmap-mock.source` with the ephemeral port of the mock. The
 /// `keyfile` of `address-book.rs` writes the same shape.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Address Book]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::AddressBook, port).to_string()
 }
 
 /// Run the `list` phase and return its sorted `contact-<i>` names.

@@ -42,7 +42,9 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use jmap_client::{Client, Credentials, Error as ClientError};
-use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy};
+use jmap_functional::{
+    Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
+};
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
 use serde_json::{Map, Value, json};
 
@@ -90,22 +92,10 @@ fn retrying<T>(mut attempt: impl FnMut() -> Result<T, ClientError>) -> Result<T,
 
 /// `live-stalwart-mail.rs`'s own keyfile.
 fn keyfile(port: u16, user: &str) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional live-Stalwart mail scale test\n\
-         Enabled=true\n\
-         \n\
-         [Mail Account]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         User={user}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::MailAccount, port)
+        .display_name("JMAP functional live-Stalwart mail scale test")
+        .user(user)
+        .to_string()
 }
 
 /// One `Email/set` create entry: a plain-text message in `inbox_id` with a

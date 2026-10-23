@@ -14,7 +14,7 @@
 //! `jmap-backend-collection/tests/resource_id.rs` tests this risk on the
 //! read side. This test examines the write side, through a real registry.
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 
 /// The same keyfile as in `collection-create.rs`. With contacts or calendars
 /// enabled, the account is `remote-creatable` for each kind of child
@@ -22,24 +22,15 @@ use jmap_functional::{Session, observations, required_path};
 /// The mock has no seeded data, so populate finds nothing, and the account
 /// has no calendar child before the create of this test.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test account\n\
-         Enabled=true\n\
-         \n\
-         [Collection]\n\
-         BackendName=jmap\n\
-         ContactsEnabled=true\n\
-         CalendarEnabled=true\n\
-         MailEnabled=false\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
+    Keyfile::new(
+        SourceKind::Collection {
+            contacts: true,
+            calendars: true,
+            mail: false,
+        },
+        port,
     )
+    .to_string()
 }
 
 #[test]

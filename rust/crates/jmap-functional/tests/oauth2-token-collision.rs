@@ -32,7 +32,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use serde_json::json;
 
 /// The `[Authentication] User` of the two accounts. Per
@@ -65,32 +65,19 @@ const TOKEN_LIFETIME_SECONDS: u64 = 3600;
 /// does). It needs only the "JMAP" `EOAuth2Service` and the `[JMAP OAuth2]`
 /// extension type from `module-jmap-backend.so`.
 fn keyfile(display_name: &str, port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName={display_name}\n\
-         Enabled=true\n\
-         \n\
-         [Collection]\n\
-         BackendName=jmap\n\
-         ContactsEnabled=false\n\
-         CalendarEnabled=false\n\
-         MailEnabled=false\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         User={SECRET_USER}\n\
-         Method=JMAP\n\
-         \n\
-         [JMAP OAuth2]\n\
-         ClientId=jmap-functional-client\n\
-         AuthorizationEndpoint=http://127.0.0.1:{port}/oauth/authorize\n\
-         TokenEndpoint=http://127.0.0.1:{port}/oauth/token\n\
-         RedirectUri=org.gnome.evolution.jmap:/redirect\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
+    Keyfile::new(
+        SourceKind::Collection {
+            contacts: false,
+            calendars: false,
+            mail: false,
+        },
+        port,
     )
+    .display_name(display_name)
+    .user(SECRET_USER)
+    .auth_method("JMAP")
+    .oauth2()
+    .to_string()
 }
 
 /// The form bodies that the token endpoint of a mock deployment received,

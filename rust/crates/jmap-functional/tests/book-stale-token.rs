@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use serde_json::json;
 
 /// See `cal-stale-token.rs`.
@@ -33,29 +33,12 @@ const READY_TIMEOUT: Duration = Duration::from_secs(45);
 /// The account: a standalone address book, with the two OAuth2 additions
 /// that the `keyfile` of `cal-stale-token.rs` describes.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP address book stale-token functional test\n\
-         Enabled=true\n\
-         \n\
-         [Address Book]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         User={SECRET_USER}\n\
-         Method=JMAP\n\
-         \n\
-         [JMAP OAuth2]\n\
-         ClientId=jmap-functional-client\n\
-         AuthorizationEndpoint=http://127.0.0.1:{port}/oauth/authorize\n\
-         TokenEndpoint=http://127.0.0.1:{port}/oauth/token\n\
-         RedirectUri=org.gnome.evolution.jmap:/redirect\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::AddressBook, port)
+        .display_name("JMAP address book stale-token functional test")
+        .user(SECRET_USER)
+        .auth_method("JMAP")
+        .oauth2()
+        .to_string()
 }
 
 /// See `cal-stale-token.rs`.

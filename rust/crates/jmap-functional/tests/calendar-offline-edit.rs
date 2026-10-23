@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use jmap_client::{Client, Credentials};
-use jmap_functional::{Session, required_path, spawn_switchable_proxy};
+use jmap_functional::{Keyfile, Session, SourceKind, required_path, spawn_switchable_proxy};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::calendars::CalendarEvent;
@@ -27,21 +27,7 @@ const LOCAL_TITLE: &str = "Team Standup (local)";
 
 /// `calendar-changes.rs`'s keyfile, with the port of the proxy.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Calendar]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::Calendar, port).to_string()
 }
 
 /// One mock with one seeded event, and a session on a switchable proxy to it.

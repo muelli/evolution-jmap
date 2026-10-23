@@ -44,7 +44,9 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use jmap_client::{Client, Credentials, Error as ClientError};
-use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy};
+use jmap_functional::{
+    Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
+};
 use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
@@ -93,22 +95,10 @@ fn retrying<T>(mut attempt: impl FnMut() -> Result<T, ClientError>) -> Result<T,
 /// The keyfile of `live-stalwart-calendar.rs`, with a different
 /// `DisplayName=`.
 fn keyfile(port: u16, user: &str) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional live-Stalwart calendar scale test\n\
-         Enabled=true\n\
-         \n\
-         [Calendar]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         User={user}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::Calendar, port)
+        .display_name("JMAP functional live-Stalwart calendar scale test")
+        .user(user)
+        .to_string()
 }
 
 #[test]

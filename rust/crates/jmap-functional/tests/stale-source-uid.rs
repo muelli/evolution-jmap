@@ -58,7 +58,7 @@
 //! opposite pair of signals. Without it, a run cannot tell a real escalation
 //! from an echo of the request of this harness.
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 
 /// A UID with the shape that `e_util_generate_uid()` makes (40 lowercase hex
 /// characters). No file on disk has this UID.
@@ -70,24 +70,16 @@ const ACCOUNT_UID: &str = "jmap-functional-stale-source-uid";
 /// The keyfile of `collection.rs` with a different `DisplayName`, and with
 /// the ephemeral port of the mock.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP item-26 reproduction account\n\
-         Enabled=true\n\
-         \n\
-         [Collection]\n\
-         BackendName=jmap\n\
-         ContactsEnabled=true\n\
-         CalendarEnabled=true\n\
-         MailEnabled=false\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
+    Keyfile::new(
+        SourceKind::Collection {
+            contacts: true,
+            calendars: true,
+            mail: false,
+        },
+        port,
     )
+    .display_name("JMAP item-26 reproduction account")
+    .to_string()
 }
 
 #[test]

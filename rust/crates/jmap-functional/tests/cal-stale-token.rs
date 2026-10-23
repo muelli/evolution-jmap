@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use serde_json::json;
 
 /// The bearer token of the first connection, and the token that the mock
@@ -98,29 +98,12 @@ const READY_TIMEOUT: Duration = Duration::from_secs(45);
 /// sends the refresh there. EDS makes the key names from the GObject property
 /// names (`e_source_parameter_to_key`, `token-endpoint` → `TokenEndpoint`).
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP calendar stale-token functional test\n\
-         Enabled=true\n\
-         \n\
-         [Calendar]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         User={SECRET_USER}\n\
-         Method=JMAP\n\
-         \n\
-         [JMAP OAuth2]\n\
-         ClientId=jmap-functional-client\n\
-         AuthorizationEndpoint=http://127.0.0.1:{port}/oauth/authorize\n\
-         TokenEndpoint=http://127.0.0.1:{port}/oauth/token\n\
-         RedirectUri=org.gnome.evolution.jmap:/redirect\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::Calendar, port)
+        .display_name("JMAP calendar stale-token functional test")
+        .user(SECRET_USER)
+        .auth_method("JMAP")
+        .oauth2()
+        .to_string()
 }
 
 /// The token secret in the format of `e-oauth2-service.c`, with only the

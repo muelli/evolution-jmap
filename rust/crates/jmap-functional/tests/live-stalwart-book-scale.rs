@@ -40,7 +40,9 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use jmap_client::{Client, Credentials, Error as ClientError};
-use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy};
+use jmap_functional::{
+    Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
+};
 use jmap_proto::contacts::ContactCard;
 use jmap_proto::session::CAPABILITY_CONTACTS;
 
@@ -91,22 +93,10 @@ fn retrying<T>(mut attempt: impl FnMut() -> Result<T, ClientError>) -> Result<T,
 /// The keyfile of `address-book.rs`, with a real `User=`, as in
 /// `live-stalwart-book.rs`.
 fn keyfile(port: u16, user: &str) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional live-Stalwart scale test\n\
-         Enabled=true\n\
-         \n\
-         [Address Book]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         User={user}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::AddressBook, port)
+        .display_name("JMAP functional live-Stalwart scale test")
+        .user(user)
+        .to_string()
 }
 
 #[test]

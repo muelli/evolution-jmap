@@ -605,3 +605,175 @@ fn relay(mut incoming: std::net::TcpStream, target: &str) {
     let _ = std::io::copy(&mut outgoing, &mut incoming);
     let _ = upstream.join();
 }
+
+/// The kind of `.source` keyfile that [`Keyfile`] writes. It names the group
+/// that carries `BackendName=jmap`.
+#[derive(Clone, Copy, Debug)]
+pub enum SourceKind {
+    AddressBook,
+    Calendar,
+    MailAccount,
+    /// A collection account. The flags enable its address books, calendars and mail.
+    Collection {
+        contacts: bool,
+        calendars: bool,
+        mail: bool,
+    },
+}
+
+/// A `.source` keyfile for a JMAP source on `127.0.0.1` with plaintext transport.
+/// [`Keyfile::to_string`] gives the text for [`Session::write_source`].
+#[derive(Clone, Debug)]
+pub struct Keyfile {
+    kind: SourceKind,
+    port: u16,
+    display_name: String,
+    user: Option<String>,
+    method: Option<String>,
+    oauth2: bool,
+    extra: String,
+}
+
+impl Keyfile {
+    /// A keyfile of `kind` for the server on `port`, with no user and no authentication method.
+    pub fn new(kind: SourceKind, port: u16) -> Self {
+        let display_name = match kind {
+            SourceKind::Collection { .. } => "JMAP functional test account",
+            _ => "JMAP functional test",
+        };
+        Self {
+            kind,
+            port,
+            display_name: display_name.to_owned(),
+            user: None,
+            method: None,
+            oauth2: false,
+            extra: String::new(),
+        }
+    }
+
+    pub fn display_name(mut self, name: &str) -> Self {
+        self.display_name = name.to_owned();
+        self
+    }
+
+    pub fn user(mut self, user: &str) -> Self {
+        self.user = Some(user.to_owned());
+        self
+    }
+
+    /// The `Method` key of the `[Authentication]` group.
+    pub fn auth_method(mut self, method: &str) -> Self {
+        self.method = Some(method.to_owned());
+        self
+    }
+
+    /// Add a `[JMAP OAuth2]` group with the OAuth 2.0 endpoints of the mock on the same port.
+    pub fn oauth2(mut self) -> Self {
+        self.oauth2 = true;
+        self
+    }
+
+    /// Text to add after the `[Security]` group, without changes.
+    pub fn extra(mut self, groups: &str) -> Self {
+        self.extra = groups.to_owned();
+        self
+    }
+}
+
+impl std::fmt::Display for Keyfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let port = self.port;
+        write!(
+            f,
+            "[Data Source]\nDisplayName={}\nEnabled=true\n\n",
+            self.display_name
+        )?;
+        match self.kind {
+            SourceKind::AddressBook => f.write_str("[Address Book]\nBackendName=jmap\n")?,
+            SourceKind::Calendar => f.write_str("[Calendar]\nBackendName=jmap\n")?,
+            SourceKind::MailAccount => f.write_str("[Mail Account]\nBackendName=jmap\n")?,
+            SourceKind::Collection {
+                contacts,
+                calendars,
+                mail,
+            } => write!(
+                f,
+                "[Collection]\nBackendName=jmap\nContactsEnabled={contacts}\n\
+                 CalendarEnabled={calendars}\nMailEnabled={mail}\n"
+            )?,
+        }
+        write!(f, "\n[Authentication]\nHost=127.0.0.1\nPort={port}\n")?;
+        if let Some(user) = &self.user {
+            writeln!(f, "User={user}")?;
+        }
+        if let Some(method) = &self.method {
+            writeln!(f, "Method={method}")?;
+        }
+        if self.oauth2 {
+            write!(
+                f,
+                "\n[JMAP OAuth2]\nClientId=jmap-functional-client\n\
+                 AuthorizationEndpoint=http://127.0.0.1:{port}/oauth/authorize\n\
+                 TokenEndpoint=http://127.0.0.1:{port}/oauth/token\n\
+                 RedirectUri=org.gnome.evolution.jmap:/redirect\n"
+            )?;
+        }
+        write!(f, "\n[Security]\nMethod=none\n{}", self.extra)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Keyfile, SourceKind};
+
+    #[test]
+    fn a_plain_keyfile_names_the_kind_host_and_port() {
+        assert_eq!(
+            Keyfile::new(SourceKind::Calendar, 4321).to_string(),
+            "[Data Source]\nDisplayName=JMAP functional test\nEnabled=true\n\n\
+             [Calendar]\nBackendName=jmap\n\n\
+             [Authentication]\nHost=127.0.0.1\nPort=4321\n\n\
+             [Security]\nMethod=none\n"
+        );
+    }
+
+    #[test]
+    fn a_collection_keyfile_writes_its_flags() {
+        let kind = SourceKind::Collection {
+            contacts: true,
+            calendars: false,
+            mail: false,
+        };
+        assert_eq!(
+            Keyfile::new(kind, 1).user("u").to_string(),
+            "[Data Source]\nDisplayName=JMAP functional test account\nEnabled=true\n\n\
+             [Collection]\nBackendName=jmap\nContactsEnabled=true\n\
+             CalendarEnabled=false\nMailEnabled=false\n\n\
+             [Authentication]\nHost=127.0.0.1\nPort=1\nUser=u\n\n\
+             [Security]\nMethod=none\n"
+        );
+    }
+
+    #[test]
+    fn an_oauth2_keyfile_points_at_the_endpoints_of_the_mock() {
+        let text = Keyfile::new(SourceKind::AddressBook, 7)
+            .display_name("n")
+            .user("u")
+            .auth_method("JMAP")
+            .oauth2()
+            .extra("[X]\nY=z\n")
+            .to_string();
+        assert_eq!(
+            text,
+            "[Data Source]\nDisplayName=n\nEnabled=true\n\n\
+             [Address Book]\nBackendName=jmap\n\n\
+             [Authentication]\nHost=127.0.0.1\nPort=7\nUser=u\nMethod=JMAP\n\n\
+             [JMAP OAuth2]\nClientId=jmap-functional-client\n\
+             AuthorizationEndpoint=http://127.0.0.1:7/oauth/authorize\n\
+             TokenEndpoint=http://127.0.0.1:7/oauth/token\n\
+             RedirectUri=org.gnome.evolution.jmap:/redirect\n\n\
+             [Security]\nMethod=none\n[X]\nY=z\n"
+        );
+    }
+}

@@ -21,7 +21,7 @@
 //! counter and logs a `Change` for `CalendarEvent/changes`. Thus the second
 //! connect gives a different, observable result.
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use jmap_proto::calendars::CalendarEvent;
 
 const FIRST_EVENT: &str = "Team Standup";
@@ -32,21 +32,7 @@ const DURATION: &str = "PT30M";
 /// `docs/examples/jmap-mock-calendar.source` with the ephemeral port of the
 /// mock. The `keyfile` of `calendar.rs` writes the same shape.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Calendar]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::Calendar, port).to_string()
 }
 
 /// Run the calendar-changes client and return its sorted `event-<i>`

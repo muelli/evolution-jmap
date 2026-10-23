@@ -19,7 +19,7 @@
 //! [`the_live_client_fails_the_connect_on_a_rejected_password`] tests the
 //! session of `mail-live-client.c`, not the provider (see its doc).
 
-use jmap_functional::{Session, observations, required_path};
+use jmap_functional::{Keyfile, Session, SourceKind, observations, required_path};
 use jmap_mock::EmailSeed;
 
 /// The two messages in the inbox of the mock. The client only reports what
@@ -40,21 +40,7 @@ const SECOND_BODY: &str = "They are fine.";
 /// It is a literal, so a change to the documented recipe makes this test
 /// fail. `recipe.rs` of `jmap-mail` examines the documented files.
 fn keyfile(port: u16) -> String {
-    format!(
-        "[Data Source]\n\
-         DisplayName=JMAP functional test\n\
-         Enabled=true\n\
-         \n\
-         [Mail Account]\n\
-         BackendName=jmap\n\
-         \n\
-         [Authentication]\n\
-         Host=127.0.0.1\n\
-         Port={port}\n\
-         \n\
-         [Security]\n\
-         Method=none\n"
-    )
+    Keyfile::new(SourceKind::MailAccount, port).to_string()
 }
 
 #[test]
