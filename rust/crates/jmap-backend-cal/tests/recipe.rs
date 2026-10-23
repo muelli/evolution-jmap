@@ -5,18 +5,16 @@
 use std::ffi::CStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_MEMO_LIST, E_SOURCE_EXTENSION_TASK_LIST,
-    ESource, ESourceBackend, ESourceRegistryServer, I_CAL_VEVENT_COMPONENT,
-    I_CAL_VJOURNAL_COMPONENT, I_CAL_VTODO_COMPONENT, ICalComponentKind, e_server_side_source_new,
-    e_source_backend_get_backend_name, e_source_calendar_get_type, e_source_get_extension,
-    e_source_has_extension, e_source_memo_list_get_type, e_source_registry_server_new,
-    e_source_task_list_get_type, g_file_new_for_path, g_object_unref,
+    ESource, ESourceBackend, I_CAL_VEVENT_COMPONENT, I_CAL_VJOURNAL_COMPONENT,
+    I_CAL_VTODO_COMPONENT, ICalComponentKind, e_source_backend_get_backend_name,
+    e_source_calendar_get_type, e_source_get_extension, e_source_has_extension,
+    e_source_memo_list_get_type, e_source_task_list_get_type,
 };
 use jmap_backend_cal::factory::{COMPONENT_KIND, FACTORY_NAME};
-use jmap_backend_core::source::{ConnectTarget, SourceConfig};
+use jmap_backend_core::source::{ConnectTarget, RegistrySource, SourceConfig};
 
 /// The repository root, from the crate this test lives in.
 fn repository() -> PathBuf {
@@ -82,53 +80,27 @@ fn register_calendar_extensions() {
     }
 }
 
-/// A `.source` file loaded the way `evolution-source-registry` loads one.
-struct RegistrySource {
-    server: *mut gobject_sys::GObject,
-    source: *mut ESource,
-}
+/// A documented `.source` file, loaded as `evolution-source-registry` loads it.
+struct Example(RegistrySource);
 
-impl RegistrySource {
-    /// Loads and parses the source file at `path`.
+impl Example {
     fn load(path: &Path) -> Self {
-        let path_string =
-            std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("no NUL in a path");
-        let mut error = ptr::null_mut();
-        // SAFETY: the constructor takes no arguments; the path is
-        // NUL-terminated and copied; the GFile is owned here and released
-        // below.
-        let (server, source) = unsafe {
-            // `e_source_registry_server_new` is declared as returning its own
-            // base class, `EDBusServer *`, the way EDS's own callers use it;
-            // the cast back down is the one C does implicitly.
-            let server = e_source_registry_server_new().cast::<ESourceRegistryServer>();
-            let file = g_file_new_for_path(path_string.as_ptr());
-            let source = e_server_side_source_new(server, file, &mut error);
-            g_object_unref(file.cast());
-            (server, source)
-        };
-        assert!(
-            !source.is_null(),
-            "the registry could not read {}: {}",
-            path.display(),
-            // SAFETY: a NULL return means the GError was set.
-            unsafe { CStr::from_ptr((*error).message) }.to_string_lossy()
-        );
-        Self {
-            server: server.cast(),
-            source,
-        }
+        Self(RegistrySource::load(path))
+    }
+
+    fn as_ptr(&self) -> *mut ESource {
+        self.0.as_ptr()
     }
 
     fn config(&self) -> SourceConfig {
         // SAFETY: the source is alive for the duration of the call.
-        unsafe { SourceConfig::from_source(self.source) }
+        unsafe { SourceConfig::from_source(self.as_ptr()) }
             .expect("the documented account is a valid one")
     }
 
     fn has_extension(&self, name: &CStr) -> bool {
         // SAFETY: the source is alive, and the name is a header constant.
-        unsafe { e_source_has_extension(self.source, name.as_ptr()) != glib_sys::GFALSE }
+        unsafe { e_source_has_extension(self.as_ptr(), name.as_ptr()) != glib_sys::GFALSE }
     }
 
     /// What the group named `extension` says the backend is called.
@@ -136,7 +108,7 @@ impl RegistrySource {
         // SAFETY: the source owns the extension, which it built while parsing;
         // `ESourceCalendar` and its siblings derive from `ESourceBackend`.
         let name = unsafe {
-            let extension = e_source_get_extension(self.source, extension.as_ptr());
+            let extension = e_source_get_extension(self.as_ptr(), extension.as_ptr());
             e_source_backend_get_backend_name(extension.cast::<ESourceBackend>())
         };
         if name.is_null() {
@@ -152,19 +124,9 @@ impl RegistrySource {
     }
 }
 
-impl Drop for RegistrySource {
-    fn drop(&mut self) {
-        // SAFETY: Releases held references to source and server.
-        unsafe {
-            g_object_unref(self.source.cast());
-            g_object_unref(self.server);
-        }
-    }
-}
-
 #[test]
 fn the_recipes_keyfile_describes_the_mock_server() {
-    let config = RegistrySource::load(&keyfile()).config();
+    let config = Example::load(&keyfile()).config();
 
     // `jmap-mockd`'s default port, in the clear, which `SourceConfig` allows
     // for loopback and nothing else.
@@ -185,7 +147,7 @@ fn the_recipes_keyfile_describes_the_mock_server() {
 #[test]
 fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
     register_calendar_extensions();
-    let source = RegistrySource::load(&keyfile());
+    let source = Example::load(&keyfile());
 
     // Matches factory name and component kind against registered ECalBackendFactory.
     assert_eq!(
@@ -197,7 +159,7 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
 #[test]
 fn the_recipes_keyfile_is_a_calendar_and_not_a_task_or_memo_list() {
     register_calendar_extensions();
-    let source = RegistrySource::load(&keyfile());
+    let source = Example::load(&keyfile());
 
     // Keyfile chooses Calendar group matching VEVENT component kind.
     assert_eq!(

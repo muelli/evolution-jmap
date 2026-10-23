@@ -622,6 +622,67 @@ impl OwnedSource {
     }
 }
 
+/// A `.source` file loaded as `evolution-source-registry` loads it, released on
+/// drop. For tests.
+///
+/// `e_server_side_source_new` needs a registry server to report changes to.
+/// A server that does not run owns no bus name and reads no user sources.
+#[cfg(feature = "testing")]
+pub struct RegistrySource {
+    // Declared first, so it is released before the server.
+    source: crate::owned::Owned<ESource>,
+    _server: crate::owned::Owned<eds_sys::ESourceRegistryServer>,
+}
+
+#[cfg(feature = "testing")]
+impl RegistrySource {
+    /// Parses the keyfile at `path`. Panics with the GError message if EDS refuses it.
+    #[must_use]
+    pub fn load(path: &std::path::Path) -> Self {
+        let path_string =
+            std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("no NUL in a path");
+        let mut error = std::ptr::null_mut();
+        // SAFETY: the constructor takes no arguments and returns a new
+        // reference. Its declared return type is the base class, `EDBusServer
+        // *`; C does this downcast implicitly. The path is NUL-terminated and
+        // copied. The GFile and the source are `(transfer full)`.
+        let (server, source) = unsafe {
+            let server = crate::owned::Owned::from_raw(
+                eds_sys::e_source_registry_server_new().cast::<eds_sys::ESourceRegistryServer>(),
+            )
+            .expect("e_source_registry_server_new failed");
+            let file =
+                crate::owned::Owned::from_raw(eds_sys::g_file_new_for_path(path_string.as_ptr()))
+                    .expect("g_file_new_for_path never fails");
+            let source = crate::owned::Owned::from_raw(eds_sys::e_server_side_source_new(
+                server.as_ptr(),
+                file.as_ptr(),
+                &mut error,
+            ));
+            (server, source)
+        };
+        let Some(source) = source else {
+            // SAFETY: a NULL return means the GError was set.
+            let message = unsafe { std::ffi::CStr::from_ptr((*error).message) };
+            panic!(
+                "the registry could not read {}: {}",
+                path.display(),
+                message.to_string_lossy()
+            );
+        };
+        Self {
+            source,
+            _server: server,
+        }
+    }
+
+    /// The source, still owned here.
+    #[must_use]
+    pub fn as_ptr(&self) -> *mut ESource {
+        self.source.as_ptr()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use jmap_tracing_capture::capture;
