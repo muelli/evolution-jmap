@@ -630,9 +630,10 @@ main (int argc,
 	 * calls it when its `expunge` argument is TRUE (above, that argument
 	 * is FALSE). This block uses a different message from the one that
 	 * `synchronize_sync` flagged. That message stays on the server, so the
-	 * Rust harness can check its keyword. This one is destroyed, and the
-	 * harness checks that it is absent. It is still in the inbox, because
-	 * the folder sequence above did not touch it. */
+	 * Rust harness can check its keyword. This one moves into the trash,
+	 * and the harness checks that the trash is its only mailbox. It is
+	 * still in the inbox, because the folder sequence above did not touch
+	 * it. */
 	if (!deleted_uid)
 		return fail ("no-message-to-delete", NULL);
 

@@ -452,21 +452,32 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the expunged message's row is still in the folder's own uid list\n{report}"
     );
 
-    // The other end: the mock no longer has the message. For a message in
-    // only this mailbox, `expunge_sync` is a destroy (RFC 8621 §4.6), not a
-    // keyword patch. A hidden write failure still shows a smaller local
-    // listing, but the server keeps the message.
+    // The other end: the message is now in the trash of the mock, and only
+    // there. The account has a trash, so `expunge_sync` outside the trash is a
+    // move, not a destroy (IMAPX with a real trash). A hidden write failure
+    // still shows a smaller local listing, but the server keeps the message
+    // in the inbox.
     {
         let state = server.state();
         let state = state.lock().expect("mock state lock");
         let account = state
             .account(&account_id)
             .expect("the mock's default account");
-        assert!(
-            !account
-                .emails
-                .contains(&jmap_proto::Id::new(deleted_uid.clone())),
-            "expunge_sync never reached the server: the mock still holds message {deleted_uid}\n{report}"
+        let trash = account
+            .mailboxes
+            .iter()
+            .find(|(_, mailbox)| mailbox.role.as_deref() == Some("trash"))
+            .map(|(id, _)| id.clone())
+            .expect("the trash this test seeded");
+        let mailboxes = account
+            .emails
+            .get(&jmap_proto::Id::new(deleted_uid.clone()))
+            .and_then(|email| email.mailbox_ids.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            mailboxes.keys().collect::<Vec<_>>(),
+            [&trash],
+            "expunge_sync did not move message {deleted_uid} into the trash only\n{report}"
         );
     }
 }
