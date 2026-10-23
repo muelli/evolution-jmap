@@ -2940,6 +2940,10 @@ mod tests {
             "FALSE".to_owned()
         );
         assert_eq!(
+            super::param_text(&VCardParameterValue::ValueType(super::VCardValueType::Uri)),
+            "URI".to_owned()
+        );
+        assert_eq!(
             super::param_text(&VCardParameterValue::Calscale(CalendarScale::Gregorian)),
             "GREGORIAN".to_owned()
         );
