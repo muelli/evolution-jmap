@@ -14,6 +14,8 @@
 
 #include <e-util/e-util.h>
 
+#include "test-util.h"
+
 typedef struct {
 	GMainLoop *loop;
 	gboolean finished;
@@ -65,16 +67,6 @@ timeout_cb (gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
-
 int
 main (int argc,
       char **argv)
@@ -114,7 +106,7 @@ main (int argc,
 	 * registry. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	/* The constructor of EConfigLookup calls e_extensible_load_extensions(),
 	 * which creates JmapConfigLookup. See jmap_config::module. */
@@ -173,7 +165,7 @@ main (int argc,
 		 * them: e-config-lookup-result-simple.c has no getters. */
 		source = e_source_new (NULL, NULL, &error);
 		if (!source)
-			return fail ("source-new", error);
+			return functional_fail ("source-new", error);
 
 		if (!e_config_lookup_result_configure_source (lookup_result, config_lookup, source)) {
 			g_printerr ("configure-source failed\n");

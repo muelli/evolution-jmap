@@ -63,6 +63,8 @@
 
 #include <libedataserver/libedataserver.h>
 
+#include "test-util.h"
+
 /* The schema in which `ESourceRegistry` keeps the default sources. The six
  * keys are written out (not read from the schema), thus a key that upstream
  * removes makes this run fail with its name. From `e-source-registry.c:68`
@@ -122,18 +124,6 @@ observe_boolean (const gchar *key,
                  gboolean value)
 {
 	g_print ("%s=%d\n", key, value ? 1 : 0);
-}
-
-/* Fail the run and name the failed step. Use only for preconditions of this
- * program. Report the behaviour under test, do not judge it here. */
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
 }
 
 /* Iterate the default main context for `milliseconds` (see
@@ -246,7 +236,7 @@ run_dconf_only (const gchar *dangling_uid)
 	 * the question is if a new registry does anything with the stale UID. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, dangling_uid);
 	observe_boolean ("dangling-uid-in-registry", source != NULL);
@@ -365,7 +355,7 @@ run_collection_child (const gchar *account_uid,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	account = e_source_registry_ref_source (registry, account_uid);
 	if (!account) {
@@ -424,7 +414,7 @@ run_collection_child (const gchar *account_uid,
 	if (password != NULL &&
 	    !e_source_store_password_sync (credentials_source ? credentials_source : child,
 					   password, TRUE, NULL, &error))
-		return fail ("store-password", error);
+		return functional_fail ("store-password", error);
 
 	g_clear_object (&credentials_source);
 	g_object_unref (provider);
@@ -436,7 +426,7 @@ run_collection_child (const gchar *account_uid,
 	if (!e_source_invoke_credentials_required_sync (child,
 						       E_SOURCE_CREDENTIALS_REASON_REQUIRED,
 						       NULL, 0, NULL, NULL, &error))
-		return fail ("invoke-credentials-required", error);
+		return functional_fail ("invoke-credentials-required", error);
 
 	settle (SETTLE_MILLISECONDS);
 

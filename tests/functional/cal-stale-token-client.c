@@ -57,6 +57,7 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "test-util.h"
 
 /* The interface that `e_server_side_source_set_oauth2_support` exports. A
  * string, as in `oauth2-stale-proxy-client.c`: the generated
@@ -89,18 +90,6 @@ observe_boolean (const gchar *key,
                  gboolean value)
 {
 	observe (key, value ? "1" : "0");
-}
-
-/* Fail the run and name the failed step. Use only for preconditions of this
- * program. Report the behaviour under test, do not judge it here. */
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
 }
 
 /* Count the signal. In the application, it shows the credentials prompter
@@ -272,13 +261,13 @@ main (int argc,
 	if (!e_secret_store_store_sync (secret_uid, secret_json,
 					"Evolution Data Source - jmap-functional",
 					TRUE, NULL, &error))
-		return fail ("seed-secret", error);
+		return functional_fail ("seed-secret", error);
 
 	/* This starts evolution-source-registry, which reads the scratch sources
 	 * directory. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -300,7 +289,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	cal = E_CAL_CLIENT (client);
 
@@ -319,7 +308,7 @@ main (int argc,
 	 * the next token from the token endpoint). The bug needs a token that
 	 * becomes stale BETWEEN two calls of this client. */
 	if (!g_file_set_contents (ready_path, "ready", -1, &error))
-		return fail ("write-ready", error);
+		return functional_fail ("write-ready", error);
 
 	if (!wait_for_file (go_path, GO_TIMEOUT_SECONDS)) {
 		g_printerr ("the harness never wrote %s\n", go_path);

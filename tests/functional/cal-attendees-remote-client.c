@@ -25,16 +25,7 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
+#include "test-util.h"
 
 /* All values of one property, joined by commas, or an empty string. Copy of
  * the helper in `cal-attendees-client.c`. */
@@ -89,7 +80,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -102,27 +93,27 @@ main (int argc,
 
 		if (seed_password && *seed_password &&
 		    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
-			return fail ("store-password", error);
+			return functional_fail ("store-password", error);
 	}
 
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	cal = E_CAL_CLIENT (client);
 
 	functional_report_connection_status (source, 10);
 
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
-		return fail ("retrieve-properties", error);
+		return functional_fail ("retrieve-properties", error);
 
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
 	/* "#t" matches all objects. The list_existing_sync of the connect
 	 * already got the event from the server. */
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error))
-		return fail ("query", error);
+		return functional_fail ("query", error);
 
 	for (link = components; link; link = link->next) {
 		ICalComponent *component = link->data;

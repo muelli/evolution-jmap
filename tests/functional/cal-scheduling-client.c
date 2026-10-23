@@ -27,22 +27,13 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "test-util.h"
 
 #define ORGANIZER "mailto:olga@example.com"
 #define SENT_GUEST "mailto:vera@example.com"
 #define QUIET_GUEST "mailto:ida@example.com"
 /* Must match UNREACHABLE_GUEST in calendar-scheduling.rs. */
 #define UNREACHABLE_GUEST "urn:uuid:5f0c9a4e-0000-4000-8000-0000000000d1"
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
 
 static void
 report_capability (EClient *client,
@@ -105,7 +96,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, argv[1]);
 	if (!source) {
@@ -116,7 +107,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	functional_report_connection_status (source, 10);
 
@@ -127,26 +118,26 @@ main (int argc,
 	sent_uid = create_meeting (E_CAL_CLIENT (client), "Sent", SENT_GUEST,
 				   E_CAL_OPERATION_FLAG_NONE, &error);
 	if (!sent_uid)
-		return fail ("create-sent", error);
+		return functional_fail ("create-sent", error);
 	g_print ("created-sent=1\n");
 
 	quiet_uid = create_meeting (E_CAL_CLIENT (client), "Quiet", QUIET_GUEST,
 				    E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE, &error);
 	if (!quiet_uid)
-		return fail ("create-quiet", error);
+		return functional_fail ("create-quiet", error);
 	g_print ("created-quiet=1\n");
 
 	if (!e_cal_client_remove_object_sync (E_CAL_CLIENT (client), quiet_uid, NULL,
 					      E_CAL_OBJ_MOD_ALL,
 					      E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE,
 					      NULL, &error))
-		return fail ("remove-quiet", error);
+		return functional_fail ("remove-quiet", error);
 	g_print ("removed-quiet=1\n");
 
 	if (!e_cal_client_remove_object_sync (E_CAL_CLIENT (client), sent_uid, NULL,
 					      E_CAL_OBJ_MOD_ALL, E_CAL_OPERATION_FLAG_NONE,
 					      NULL, &error))
-		return fail ("remove-sent", error);
+		return functional_fail ("remove-sent", error);
 	g_print ("removed-sent=1\n");
 
 	unreachable_uid = create_meeting (E_CAL_CLIENT (client), "Unreachable", UNREACHABLE_GUEST,
@@ -156,7 +147,7 @@ main (int argc,
 		if (!e_cal_client_remove_object_sync (E_CAL_CLIENT (client), unreachable_uid, NULL,
 						      E_CAL_OBJ_MOD_ALL, E_CAL_OPERATION_FLAG_NONE,
 						      NULL, &error))
-			return fail ("remove-unreachable", error);
+			return functional_fail ("remove-unreachable", error);
 	} else {
 		g_print ("unreachable-invalid-arg=%d\n",
 			 g_error_matches (error, E_CLIENT_ERROR, E_CLIENT_ERROR_INVALID_ARG) ? 1 : 0);

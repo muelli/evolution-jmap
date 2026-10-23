@@ -423,6 +423,17 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			${CAMEL_CLIENT_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
 	endforeach()
 
+	# test-util.c holds the small helpers that these clients use in the same form.
+	foreach(_client
+			book book-stale-token
+			cal cal-attendees cal-attendees-remote cal-changes cal-color
+			cal-discard-alarm cal-edit cal-free-busy cal-live cal-received
+			cal-scheduling cal-scheduling-live cal-stale-token cal-zone
+			config-lookup mail mail-live mail-stale-token
+			redirect-credentials-withheld stale-source-uid transport transport-live)
+		target_sources(functional-${_client}-client PRIVATE tests/functional/test-util.c)
+	endforeach()
+
 	# The Rust side builds the scratch EDS installation, runs the client on a
 	# private bus and checks what both ends report. Each test has its own
 	# registration (`cargo test --test <name>`, not one run of the whole crate).

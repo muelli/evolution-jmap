@@ -22,6 +22,7 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "test-util.h"
 
 /* The event that this test writes. A UTC time makes sure that the test does
  * not need a timezone database. */
@@ -54,16 +55,6 @@
  * usually comes before the event. */
 #define TEST_ALARM_UID "k1"
 #define TEST_ALARM_TRIGGER "-PT15M"
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
 
 /* get_object gives a bare VEVENT or a VCALENDAR that contains it. Copy of
  * the helper in `cal-client.c`. */
@@ -163,7 +154,7 @@ main (int argc,
 	/* Starts evolution-source-registry, which reads the scratch sources. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -178,7 +169,7 @@ main (int argc,
 
 		if (seed_password && *seed_password &&
 		    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
-			return fail ("store-password", error);
+			return functional_fail ("store-password", error);
 	}
 
 	/* Starts evolution-calendar-factory, which loads libecalbackendjmap.so
@@ -187,7 +178,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	cal = E_CAL_CLIENT (client);
 
@@ -197,13 +188,13 @@ main (int argc,
 	/* Get the properties over D-Bus. The cached copy needs a main loop, and
 	 * this program has none. */
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
-		return fail ("retrieve-properties", error);
+		return functional_fail ("retrieve-properties", error);
 
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
 	/* "#t" is the S-expression that matches all objects. */
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error))
-		return fail ("query", error);
+		return functional_fail ("query", error);
 
 	g_print ("events-before=%u\n", g_slist_length (components));
 	g_slist_free_full (components, g_object_unref);
@@ -241,7 +232,7 @@ main (int argc,
 	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
 					      &added_uid, NULL, &error)) {
 		g_object_unref (event);
-		return fail ("create", error);
+		return functional_fail ("create", error);
 	}
 
 	g_object_unref (event);
@@ -251,7 +242,7 @@ main (int argc,
 	 * it wrote. */
 	if (!e_cal_client_get_object_sync (cal, added_uid, NULL, &read_back, NULL, &error)) {
 		g_free (added_uid);
-		return fail ("read-back", error);
+		return functional_fail ("read-back", error);
 	}
 
 	read_back_event = first_vevent (read_back);
@@ -289,7 +280,7 @@ main (int argc,
 
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error)) {
 		g_free (added_uid);
-		return fail ("query-after", error);
+		return functional_fail ("query-after", error);
 	}
 
 	g_print ("events-after=%u\n", g_slist_length (components));

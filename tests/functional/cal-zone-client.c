@@ -96,6 +96,7 @@
 
 #include "connection-status.h"
 #include "event-start.h"
+#include "test-util.h"
 
 /* How long to wait until a seeded event is available, and how frequently to
  * ask. The same as EDIT_WAIT_TRIES in cal-edit-client.c, for the reason given
@@ -103,16 +104,6 @@
  * the refresh is complete can get an answer from a cache that is not full. */
 #define WAIT_TRIES 200
 #define WAIT_INTERVAL_US 50000
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
 
 /* Return the first VEVENT of what get_object returns: a bare VEVENT for an
  * event with one instance, or a VCALENDAR that contains the instances. This
@@ -365,10 +356,10 @@ save_and_report (ECalClient *cal,
 
 	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
 					      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
-		return fail ("modify", error);
+		return functional_fail ("modify", error);
 
 	if (!e_cal_client_get_object_sync (cal, uid, NULL, &read_back, NULL, &error))
-		return fail ("get-after-modify", error);
+		return functional_fail ("get-after-modify", error);
 
 	read_back_event = first_vevent (read_back);
 	if (!read_back_event) {
@@ -565,7 +556,7 @@ add_zone_from_file (ECalClient *cal,
 	gchar *owned;
 
 	if (!g_file_get_contents (path, &text, NULL, &error)) {
-		fail ("zone-file", error);
+		functional_fail ("zone-file", error);
 		return NULL;
 	}
 
@@ -603,7 +594,7 @@ add_zone_from_file (ECalClient *cal,
 	if (!e_cal_client_add_timezone_sync (cal, zone, NULL, &error)) {
 		g_object_unref (zone);
 		g_free (owned);
-		fail ("add-timezone", error);
+		functional_fail ("add-timezone", error);
 		return NULL;
 	}
 
@@ -662,7 +653,7 @@ run_create (ECalClient *cal,
 	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
 					      &created_uid, NULL, &error)) {
 		g_object_unref (event);
-		return fail ("create", error);
+		return functional_fail ("create", error);
 	}
 
 	g_object_unref (event);
@@ -781,7 +772,7 @@ run_series (ECalClient *cal,
 		g_object_unref (event);
 		g_free (tzid);
 		g_free (moved_tzid);
-		return fail ("create-series", error);
+		return functional_fail ("create-series", error);
 	}
 
 	g_object_unref (event);
@@ -821,7 +812,7 @@ run_series (ECalClient *cal,
 					      E_CAL_OPERATION_FLAG_NONE, NULL, &error)) {
 		g_object_unref (event);
 		g_free (series_uid);
-		return fail ("modify-occurrence", error);
+		return functional_fail ("modify-occurrence", error);
 	}
 
 	g_object_unref (event);
@@ -834,7 +825,7 @@ run_series (ECalClient *cal,
 	if (!e_cal_client_get_object_sync (cal, series_uid, recurrence_id, &fetched,
 					   NULL, &error)) {
 		g_free (series_uid);
-		return fail ("get-occurrence", error);
+		return functional_fail ("get-occurrence", error);
 	}
 
 	occurrence = first_vevent (fetched);
@@ -924,7 +915,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -941,7 +932,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	/* Reported before the first request to the calendar, for the reason that
 	 * the other calendar clients give: e_cal_client_connect_sync succeeds also

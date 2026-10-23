@@ -37,6 +37,7 @@
 #include <libebook/libebook.h>
 
 #include "connection-status.h"
+#include "test-util.h"
 
 /* `cal-stale-token-client.c` tells why this is a string and not an EDS
  * generated accessor. */
@@ -58,16 +59,6 @@ observe_boolean (const gchar *key,
                  gboolean value)
 {
 	observe (key, value ? "1" : "0");
-}
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
 }
 
 /* Only count this signal. In Evolution, it shows the credentials prompter (and
@@ -199,13 +190,13 @@ main (int argc,
 	if (!e_secret_store_store_sync (secret_uid, secret_json,
 					"Evolution Data Source - jmap-functional",
 					TRUE, NULL, &error))
-		return fail ("seed-secret", error);
+		return functional_fail ("seed-secret", error);
 
 	/* Starts evolution-source-registry on the session bus. It reads the
 	 * temporary sources directory that the test wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -225,7 +216,7 @@ main (int argc,
 	 * and gets its access token once. The test rotates that token later. */
 	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	book = E_BOOK_CLIENT (client);
 
@@ -244,7 +235,7 @@ main (int argc,
 	 * endpoint) after the connection exists. The token must become stale
 	 * BETWEEN two calls of this client. */
 	if (!g_file_set_contents (ready_path, "ready", -1, &error))
-		return fail ("write-ready", error);
+		return functional_fail ("write-ready", error);
 
 	if (!wait_for_file (go_path, GO_TIMEOUT_SECONDS)) {
 		g_printerr ("the harness never wrote %s\n", go_path);

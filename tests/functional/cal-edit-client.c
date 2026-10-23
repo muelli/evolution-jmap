@@ -36,6 +36,7 @@
 
 #include "connection-status.h"
 #include "event-start.h"
+#include "test-util.h"
 
 /* The parameter (jmap-ical X_JMAP_KEY) that tells which entry of the server
  * map a line comes from. A save patches `locations/<key>/name`: if EDS loses
@@ -50,16 +51,6 @@
  * seconds, less than the CTest timeout, thus a missing event fails the test. */
 #define EDIT_WAIT_TRIES 200
 #define EDIT_WAIT_INTERVAL_US 50000
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
 
 /* Return the VEVENT from a get_object result. EDS gives a VEVENT for one
  * instance, or a VCALENDAR with the instances. Accept both forms, so that the
@@ -492,7 +483,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -508,7 +499,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	/* Report the status before the first request, as cal-client.c does.
 	 * e_cal_client_connect_sync succeeds also when the backend connect_sync
@@ -604,13 +595,13 @@ main (int argc,
 
 	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
 					      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
-		return fail ("modify", error);
+		return functional_fail ("modify", error);
 
 	g_object_unref (event);
 	g_object_unref (fetched);
 
 	if (!e_cal_client_get_object_sync (cal, event_uid, NULL, &read_back, NULL, &error))
-		return fail ("get-after-modify", error);
+		return functional_fail ("get-after-modify", error);
 
 	read_back_event = first_vevent (read_back);
 	if (!read_back_event) {

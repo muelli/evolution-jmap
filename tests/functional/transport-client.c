@@ -39,15 +39,7 @@
 #include <camel/camel.h>
 #include <libedataserver/libedataserver.h>
 
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
+#include "test-util.h"
 
 /* One link of the chain: the source that `uid` names, or NULL after it reports
  * the failure. A missing source and an empty UID are different failures, and
@@ -124,7 +116,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	account = ref_source (registry, "account", account_uid);
 	if (!account)
@@ -200,14 +192,14 @@ main (int argc,
 	service = camel_session_add_service (session, transport_uid, protocol,
 					     CAMEL_PROVIDER_TRANSPORT, &error);
 	if (!service) {
-		status = fail ("add-service", error);
+		status = functional_fail ("add-service", error);
 		goto out;
 	}
 
 	e_source_camel_configure_service (transport_source, service);
 
 	if (!camel_service_connect_sync (service, NULL, &error)) {
-		status = fail ("connect", error);
+		status = functional_fail ("connect", error);
 		goto out;
 	}
 
@@ -240,7 +232,7 @@ main (int argc,
 		g_object_unref (recipients);
 		g_object_unref (from);
 		g_object_unref (message);
-		status = fail ("send", error);
+		status = functional_fail ("send", error);
 		goto out;
 	}
 
@@ -258,7 +250,7 @@ main (int argc,
 	 * transport that kept its connection would keep an HTTP client and its
 	 * socket for the life of the account. */
 	if (!camel_service_disconnect_sync (service, TRUE, NULL, &error)) {
-		status = fail ("disconnect", error);
+		status = functional_fail ("disconnect", error);
 		goto out;
 	}
 

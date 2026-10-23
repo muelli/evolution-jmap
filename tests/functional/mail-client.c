@@ -33,15 +33,7 @@
 #include <camel/camel.h>
 #include <libedataserver/libedataserver.h>
 
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
+#include "test-util.h"
 
 /* From 3.58, `camel_folder_dup_uids` replaces the borrowed
  * `camel_folder_get_uids`/`camel_folder_free_uids` pair. It returns a
@@ -160,7 +152,7 @@ main (int argc,
 	 * reads the scratch sources directory from the harness. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -193,14 +185,14 @@ main (int argc,
 	service = camel_session_add_service (session, source_uid, protocol,
 					     CAMEL_PROVIDER_STORE, &error);
 	if (!service)
-		return fail ("add-service", error);
+		return functional_fail ("add-service", error);
 
 	/* Copies the keyfile settings to the service: the host, the port and
 	 * the security method that connect_sync reads. */
 	e_source_camel_configure_service (source, service);
 
 	if (!camel_service_connect_sync (service, NULL, &error))
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	g_print ("store-connected=%d\n",
 		 camel_service_get_connection_status (service) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
@@ -211,7 +203,7 @@ main (int argc,
 						 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
 						 NULL, &error);
 	if (!info)
-		return fail ("folder-info", error);
+		return functional_fail ("folder-info", error);
 
 	names = g_ptr_array_new_with_free_func (g_free);
 	collect_folder_names (info, names);
@@ -227,21 +219,21 @@ main (int argc,
 	 * unsubscribes it. "Drafts" starts unsubscribed (the Rust harness
 	 * seeds it so), and this block subscribes it. `folder_is_subscribed`
 	 * is a non-blocking method with no cancellable or error, so it needs
-	 * no fail() check. */
+	 * no functional_fail() check. */
 	{
 		CamelSubscribable *subscribable = CAMEL_SUBSCRIBABLE (store);
 
 		g_print ("sent-subscribed-initially=%d\n",
 			 camel_subscribable_folder_is_subscribed (subscribable, "Sent") ? 1 : 0);
 		if (!camel_subscribable_unsubscribe_folder_sync (subscribable, "Sent", NULL, &error))
-			return fail ("unsubscribe-sent", error);
+			return functional_fail ("unsubscribe-sent", error);
 		g_print ("sent-subscribed-after-unsubscribe=%d\n",
 			 camel_subscribable_folder_is_subscribed (subscribable, "Sent") ? 1 : 0);
 
 		g_print ("drafts-subscribed-initially=%d\n",
 			 camel_subscribable_folder_is_subscribed (subscribable, "Drafts") ? 1 : 0);
 		if (!camel_subscribable_subscribe_folder_sync (subscribable, "Drafts", NULL, &error))
-			return fail ("subscribe-drafts", error);
+			return functional_fail ("subscribe-drafts", error);
 		g_print ("drafts-subscribed-after-subscribe=%d\n",
 			 camel_subscribable_folder_is_subscribed (subscribable, "Drafts") ? 1 : 0);
 	}
@@ -251,7 +243,7 @@ main (int argc,
 	 * has the name of an inbox. */
 	inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
 	if (!inbox)
-		return fail ("inbox", error);
+		return functional_fail ("inbox", error);
 
 	g_print ("inbox-full-name=%s\n", camel_folder_get_full_name (inbox));
 
@@ -259,18 +251,18 @@ main (int argc,
 	 * and vJunk virtual folders. */
 	trash = camel_store_get_trash_folder_sync (store, NULL, &error);
 	if (!trash)
-		return fail ("trash", error);
+		return functional_fail ("trash", error);
 	g_print ("trash-full-name=%s\n", camel_folder_get_full_name (trash));
 	g_object_unref (trash);
 
 	junk = camel_store_get_junk_folder_sync (store, NULL, &error);
 	if (!junk)
-		return fail ("junk", error);
+		return functional_fail ("junk", error);
 	g_print ("junk-full-name=%s\n", camel_folder_get_full_name (junk));
 	g_object_unref (junk);
 
 	if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
-		return fail ("refresh", error);
+		return functional_fail ("refresh", error);
 
 	uids = folder_dup_uids (inbox);
 	g_print ("inbox-count=%u\n", uids->len);
@@ -318,7 +310,7 @@ main (int argc,
 		message = camel_folder_get_message_sync (inbox, uid, NULL, &error);
 		if (!message) {
 			folder_free_uids (inbox, uids);
-			return fail ("get-message", error);
+			return functional_fail ("get-message", error);
 		}
 
 		body = g_byte_array_new ();
@@ -329,7 +321,7 @@ main (int argc,
 			g_object_unref (stream);
 			g_object_unref (message);
 			folder_free_uids (inbox, uids);
-			return fail ("message-body", error);
+			return functional_fail ("message-body", error);
 		}
 
 		/* The decoded bytes have no NUL terminator. The trailing
@@ -355,7 +347,7 @@ main (int argc,
 	 * keyword. Only this block writes message flags, so only this block
 	 * reaches that vfunc. */
 	if (!flagged_uid)
-		return fail ("no-message-to-flag", NULL);
+		return functional_fail ("no-message-to-flag", NULL);
 
 	g_print ("flagged-uid=%s\n", flagged_uid);
 	{
@@ -364,7 +356,7 @@ main (int argc,
 		flag_info = camel_folder_get_message_info (inbox, flagged_uid);
 		if (!flag_info) {
 			g_free (flagged_uid);
-			return fail ("get-message-info-for-flag", NULL);
+			return functional_fail ("get-message-info-for-flag", NULL);
 		}
 		camel_message_info_set_flags (flag_info, CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FLAGGED);
 		g_clear_object (&flag_info);
@@ -372,7 +364,7 @@ main (int argc,
 
 	if (!camel_folder_synchronize_sync (inbox, FALSE, NULL, &error)) {
 		g_free (flagged_uid);
-		return fail ("synchronize", error);
+		return functional_fail ("synchronize", error);
 	}
 
 	/* A fresh read of the row shows the flag. A synchronize that ignored a
@@ -385,7 +377,7 @@ main (int argc,
 		flag_info = camel_folder_get_message_info (inbox, flagged_uid);
 		if (!flag_info) {
 			g_free (flagged_uid);
-			return fail ("get-message-info-after-sync", NULL);
+			return functional_fail ("get-message-info-after-sync", NULL);
 		}
 		g_print ("flagged-after-sync=%d\n",
 			 (camel_message_info_get_flags (flag_info) & CAMEL_MESSAGE_FLAGGED) ? 1 : 0);
@@ -419,13 +411,13 @@ main (int argc,
 				outside_message, sizeof (outside_message) - 1,
 				NULL, &error)) {
 			g_object_unref (outside);
-			return fail ("parse-outside-message", error);
+			return functional_fail ("parse-outside-message", error);
 		}
 
 		if (!camel_folder_append_message_sync (inbox, outside, NULL,
 							&appended_uid, NULL, &error)) {
 			g_object_unref (outside);
-			return fail ("append-message", error);
+			return functional_fail ("append-message", error);
 		}
 		g_object_unref (outside);
 
@@ -434,7 +426,7 @@ main (int argc,
 		/* The folder listing writes the row, not the append. The
 		 * message shows only after the next refresh. */
 		if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
-			return fail ("refresh-after-append", error);
+			return functional_fail ("refresh-after-append", error);
 
 		uids = folder_dup_uids (inbox);
 		g_print ("inbox-count-after-append=%u\n", uids->len);
@@ -442,7 +434,7 @@ main (int argc,
 		reread = camel_folder_get_message_sync (inbox, appended_uid, NULL, &error);
 		folder_free_uids (inbox, uids);
 		if (!reread)
-			return fail ("get-appended-message", error);
+			return functional_fail ("get-appended-message", error);
 
 		g_print ("appended-subject=%s\n", camel_mime_message_get_subject (reread));
 		g_object_unref (reread);
@@ -460,7 +452,7 @@ main (int argc,
 
 		created = camel_store_create_folder_sync (store, NULL, "Receipts", NULL, &error);
 		if (!created)
-			return fail ("create-folder", error);
+			return functional_fail ("create-folder", error);
 
 		g_print ("create-folder-name=%s\n", created->full_name);
 		camel_folder_info_free (created);
@@ -472,7 +464,7 @@ main (int argc,
 							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
 							 NULL, &error);
 		if (!info)
-			return fail ("folder-info-after-create", error);
+			return functional_fail ("folder-info-after-create", error);
 
 		names = g_ptr_array_new_with_free_func (g_free);
 		collect_folder_names (info, names);
@@ -498,7 +490,7 @@ main (int argc,
 								 CAMEL_STORE_FOLDER_NONE,
 								 NULL, &error);
 			if (!receipts)
-				return fail ("get-receipts-folder", error);
+				return functional_fail ("get-receipts-folder", error);
 
 			transfer_uids = g_ptr_array_new ();
 			g_ptr_array_add (transfer_uids, appended_uid);
@@ -508,7 +500,7 @@ main (int argc,
 								      &transferred, NULL, &error)) {
 				g_ptr_array_unref (transfer_uids);
 				g_object_unref (receipts);
-				return fail ("transfer-message", error);
+				return functional_fail ("transfer-message", error);
 			}
 			g_ptr_array_unref (transfer_uids);
 
@@ -529,7 +521,7 @@ main (int argc,
 
 			if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
 				g_object_unref (receipts);
-				return fail ("refresh-after-transfer-inbox", error);
+				return functional_fail ("refresh-after-transfer-inbox", error);
 			}
 			uids = folder_dup_uids (inbox);
 			g_print ("inbox-count-after-transfer=%u\n", uids->len);
@@ -537,7 +529,7 @@ main (int argc,
 
 			if (!camel_folder_refresh_info_sync (receipts, NULL, &error)) {
 				g_object_unref (receipts);
-				return fail ("refresh-after-transfer-receipts", error);
+				return functional_fail ("refresh-after-transfer-receipts", error);
 			}
 			uids = folder_dup_uids (receipts);
 			g_print ("receipts-count-after-transfer=%u\n", uids->len);
@@ -555,7 +547,7 @@ main (int argc,
 								      &transferred, NULL, &error)) {
 				g_ptr_array_unref (transfer_uids);
 				g_object_unref (receipts);
-				return fail ("transfer-message-back", error);
+				return functional_fail ("transfer-message-back", error);
 			}
 			g_ptr_array_unref (transfer_uids);
 			if (transferred) {
@@ -568,7 +560,7 @@ main (int argc,
 
 			if (!camel_folder_refresh_info_sync (receipts, NULL, &error)) {
 				g_object_unref (receipts);
-				return fail ("refresh-after-transfer-back-receipts", error);
+				return functional_fail ("refresh-after-transfer-back-receipts", error);
 			}
 			uids = folder_dup_uids (receipts);
 			g_print ("receipts-count-after-transfer-back=%u\n", uids->len);
@@ -576,7 +568,7 @@ main (int argc,
 
 			if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
 				g_object_unref (receipts);
-				return fail ("refresh-after-transfer-back-inbox", error);
+				return functional_fail ("refresh-after-transfer-back-inbox", error);
 			}
 			uids = folder_dup_uids (inbox);
 			g_print ("inbox-count-after-transfer-back=%u\n", uids->len);
@@ -592,13 +584,13 @@ main (int argc,
 		 * encoding of the store. Check that the store listing shows
 		 * "Invoices", not only the return value. */
 		if (!camel_store_rename_folder_sync (store, "Receipts", "Invoices", NULL, &error))
-			return fail ("rename-folder", error);
+			return functional_fail ("rename-folder", error);
 
 		info = camel_store_get_folder_info_sync (store, NULL,
 							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
 							 NULL, &error);
 		if (!info)
-			return fail ("folder-info-after-rename", error);
+			return functional_fail ("folder-info-after-rename", error);
 
 		names = g_ptr_array_new_with_free_func (g_free);
 		collect_folder_names (info, names);
@@ -610,13 +602,13 @@ main (int argc,
 		/* `delete_folder_sync` on the renamed folder. Check that the
 		 * store listing no longer shows it, not only the return value. */
 		if (!camel_store_delete_folder_sync (store, "Invoices", NULL, &error))
-			return fail ("delete-folder", error);
+			return functional_fail ("delete-folder", error);
 
 		info = camel_store_get_folder_info_sync (store, NULL,
 							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
 							 NULL, &error);
 		if (!info)
-			return fail ("folder-info-after-delete", error);
+			return functional_fail ("folder-info-after-delete", error);
 
 		names = g_ptr_array_new_with_free_func (g_free);
 		collect_folder_names (info, names);
@@ -635,7 +627,7 @@ main (int argc,
 	 * still in the inbox, because the folder sequence above did not touch
 	 * it. */
 	if (!deleted_uid)
-		return fail ("no-message-to-delete", NULL);
+		return functional_fail ("no-message-to-delete", NULL);
 
 	g_print ("deleted-uid=%s\n", deleted_uid);
 	{
@@ -644,7 +636,7 @@ main (int argc,
 		delete_info = camel_folder_get_message_info (inbox, deleted_uid);
 		if (!delete_info) {
 			g_free (deleted_uid);
-			return fail ("get-message-info-for-delete", NULL);
+			return functional_fail ("get-message-info-for-delete", NULL);
 		}
 		camel_message_info_set_flags (delete_info, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DELETED);
 		g_clear_object (&delete_info);
@@ -652,7 +644,7 @@ main (int argc,
 
 	if (!camel_folder_expunge_sync (inbox, NULL, &error)) {
 		g_free (deleted_uid);
-		return fail ("expunge", error);
+		return functional_fail ("expunge", error);
 	}
 
 	uids = folder_dup_uids (inbox);

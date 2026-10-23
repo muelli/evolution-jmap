@@ -64,6 +64,7 @@
 #include <libebook/libebook.h>
 
 #include "connection-status.h"
+#include "test-util.h"
 
 /* The email address of the contact that the `write` phase creates. The Rust
  * test uses the same value, so the two must agree. */
@@ -181,16 +182,6 @@ report_multiline (const gchar *key,
 
 	g_free (joined);
 	g_strfreev (lines);
-}
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
 }
 
 /* Report the given name and family name that EDS parses from the N line. Both
@@ -466,7 +457,7 @@ write_phase (EBookClient *book,
 
 	if (!e_book_client_get_contacts_sync (book, query_string, &contacts, NULL, &error)) {
 		g_free (query_string);
-		return fail ("query", error);
+		return functional_fail ("query", error);
 	}
 
 	g_print ("contacts-before=%u\n", g_slist_length (contacts));
@@ -521,7 +512,7 @@ write_phase (EBookClient *book,
 					     &added_uid, NULL, &error)) {
 		g_object_unref (contact);
 		g_free (query_string);
-		return fail ("add", error);
+		return functional_fail ("add", error);
 	}
 
 	g_object_unref (contact);
@@ -532,7 +523,7 @@ write_phase (EBookClient *book,
 	if (!e_book_client_get_contact_sync (book, added_uid, &read_back, NULL, &error)) {
 		g_free (added_uid);
 		g_free (query_string);
-		return fail ("read-back", error);
+		return functional_fail ("read-back", error);
 	}
 
 	g_print ("read-back-full-name=%s\n",
@@ -613,7 +604,7 @@ write_phase (EBookClient *book,
 	if (!e_book_client_get_contacts_sync (book, query_string, &contacts, NULL, &error)) {
 		g_free (added_uid);
 		g_free (query_string);
-		return fail ("query-after", error);
+		return functional_fail ("query-after", error);
 	}
 
 	g_print ("contacts-after=%u\n", g_slist_length (contacts));
@@ -690,13 +681,13 @@ save_and_report (EBookClient *book,
 	if (!e_book_client_modify_contact_sync (book, contact, E_BOOK_OPERATION_FLAG_NONE,
 						NULL, &error)) {
 		g_object_unref (contact);
-		return fail ("modify", error);
+		return functional_fail ("modify", error);
 	}
 
 	g_object_unref (contact);
 
 	if (!e_book_client_get_contact_sync (book, uid, &read_back, NULL, &error))
-		return fail ("read-back", error);
+		return functional_fail ("read-back", error);
 
 	g_print ("read-back-full-name=%s\n",
 		 (const gchar *) e_contact_get_const (read_back, E_CONTACT_FULL_NAME));
@@ -1041,7 +1032,7 @@ remove_phase (EBookClient *book,
 
 	if (!e_book_client_remove_contact_by_uid_sync (book, uid, E_BOOK_OPERATION_FLAG_NONE,
 						       NULL, &error))
-		return fail ("remove", error);
+		return functional_fail ("remove", error);
 
 	g_print ("removed=1\n");
 
@@ -1083,7 +1074,7 @@ list_phase (EBookClient *book)
 
 	if (!e_book_client_get_contacts_sync (book, query_string, &contacts, NULL, &error)) {
 		g_free (query_string);
-		return fail ("list", error);
+		return functional_fail ("list", error);
 	}
 	g_free (query_string);
 
@@ -1165,7 +1156,7 @@ main (int argc,
 	 * temporary sources directory that the test wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -1182,7 +1173,7 @@ main (int argc,
 
 		if (seed_password && *seed_password &&
 		    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
-			return fail ("store-password", error);
+			return functional_fail ("store-password", error);
 	}
 
 	/* Starts evolution-addressbook-factory. It dlopens
@@ -1196,7 +1187,7 @@ main (int argc,
 	 * results are complete when this call returns. */
 	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	book = E_BOOK_CLIENT (client);
 
@@ -1207,7 +1198,7 @@ main (int argc,
 	 * updates the cache from notifications on a main context. This program
 	 * has no main loop, so the cache can be out of date. */
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
-		return fail ("retrieve-properties", error);
+		return functional_fail ("retrieve-properties", error);
 
 	/* Report if the book accepts writes. EDS gets this from the backend at
 	 * connect. A backend that does not report writable gives a read-only

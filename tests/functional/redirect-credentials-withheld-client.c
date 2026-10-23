@@ -33,6 +33,8 @@
 
 #include <libebook/libebook.h>
 
+#include "test-util.h"
+
 static void
 observe (const gchar *key,
          const gchar *value)
@@ -45,16 +47,6 @@ observe_boolean (const gchar *key,
                  gboolean value)
 {
 	observe (key, value ? "1" : "0");
-}
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
 }
 
 /* Count the signal, as `book-stale-token-client.c` does. In the application,
@@ -133,7 +125,7 @@ main (int argc,
 	 * directory. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -144,7 +136,7 @@ main (int argc,
 	/* The second attempt uses this password. The first attempt does not read
 	 * it (see the file header). */
 	if (!e_source_store_password_sync (source, password, TRUE, NULL, &error))
-		return fail ("store-password", error);
+		return functional_fail ("store-password", error);
 
 	g_signal_connect (source, "credentials-required",
 			  G_CALLBACK (credentials_required_cb), &credentials_required);

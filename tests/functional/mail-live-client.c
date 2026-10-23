@@ -80,6 +80,8 @@
 #include <camel/camel.h>
 #include <libedataserver/libedataserver.h>
 
+#include "test-util.h"
+
 /* The body of the message that this program appends to the inbox. One line, no
  * MIME structure: the test checks that a blob download from a real server
  * decodes to the uploaded text. */
@@ -209,16 +211,6 @@ test_session_init (TestSession *session)
 {
 }
 
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
-
 /* From 3.58, `camel_folder_dup_uids` replaces the borrowed
  * `camel_folder_get_uids`/`camel_folder_free_uids` pair. It returns a
  * reference-counted `GPtrArray` that the caller owns. This is a copy of the
@@ -329,7 +321,7 @@ run_scale_phase (CamelStore *store,
 	started = g_get_monotonic_time ();
 	inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
 	if (!inbox) {
-		fail ("inbox", error);
+		functional_fail ("inbox", error);
 		return FALSE;
 	}
 	g_print ("open-ms=%" G_GINT64_FORMAT "\n",
@@ -338,7 +330,7 @@ run_scale_phase (CamelStore *store,
 	started = g_get_monotonic_time ();
 	if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
 		g_object_unref (inbox);
-		fail ("refresh", error);
+		functional_fail ("refresh", error);
 		return FALSE;
 	}
 	g_print ("refresh-ms=%" G_GINT64_FORMAT "\n",
@@ -486,7 +478,7 @@ run_password_prompt_phase (const gchar *data_dir,
 	session = NULL;
 	store = open_store (data_dir, cache_dir, &session, &error);
 	if (!store)
-		return fail ("authenticated-connect", error);
+		return functional_fail ("authenticated-connect", error);
 
 	g_print ("authenticated-connect-succeeded=1\n");
 	g_print ("authenticated-password-prompts=%u\n", password_prompts - prompts_before);
@@ -844,7 +836,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	account_source = e_source_registry_ref_source (registry, account_uid);
 	if (!account_source) {
@@ -868,7 +860,7 @@ main (int argc,
 
 	store = open_store (data_dir, cache_dir, &session, &error);
 	if (!store)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	g_print ("store-connected=%d\n",
 		 camel_service_get_connection_status (CAMEL_SERVICE (store)) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
@@ -882,7 +874,7 @@ main (int argc,
 							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
 							 NULL, &error);
 		if (!info)
-			return fail ("folder-info", error);
+			return functional_fail ("folder-info", error);
 
 		names = g_ptr_array_new_with_free_func (g_free);
 		collect_folder_names (info, names);
@@ -913,25 +905,25 @@ main (int argc,
 	 * folder by name passes against the mock and fails here. */
 	inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
 	if (!inbox)
-		return fail ("inbox", error);
+		return functional_fail ("inbox", error);
 	g_print ("inbox-full-name=%s\n", camel_folder_get_full_name (inbox));
 
 	if (phase_id == PHASE_RECEIVE) {
 		trash = camel_store_get_trash_folder_sync (store, NULL, &error);
 		if (!trash)
-			return fail ("trash", error);
+			return functional_fail ("trash", error);
 		g_print ("trash-full-name=%s\n", camel_folder_get_full_name (trash));
 		g_object_unref (trash);
 
 		junk = camel_store_get_junk_folder_sync (store, NULL, &error);
 		if (!junk)
-			return fail ("junk", error);
+			return functional_fail ("junk", error);
 		g_print ("junk-full-name=%s\n", camel_folder_get_full_name (junk));
 		g_object_unref (junk);
 	}
 
 	if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
-		return fail ("refresh", error);
+		return functional_fail ("refresh", error);
 
 	/* Report the count, do not assert zero. A throwaway account stays
 	 * after the run that seeded it, so the test can only check that the
@@ -966,14 +958,14 @@ main (int argc,
 			NULL, &error)) {
 		g_free (raw);
 		g_object_unref (outside);
-		return fail ("parse-outside-message", error);
+		return functional_fail ("parse-outside-message", error);
 	}
 	g_free (raw);
 
 	if (!camel_folder_append_message_sync (inbox, outside, NULL,
 						&appended_uid, NULL, &error)) {
 		g_object_unref (outside);
-		return fail ("append-message", error);
+		return functional_fail ("append-message", error);
 	}
 	g_object_unref (outside);
 
@@ -988,7 +980,7 @@ main (int argc,
 	 * only after the next refresh. */
 	if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
 		g_free (appended_uid);
-		return fail ("refresh-after-append", error);
+		return functional_fail ("refresh-after-append", error);
 	}
 
 	uids = folder_dup_uids (inbox);
@@ -1019,14 +1011,14 @@ main (int argc,
 		reread = camel_folder_get_message_sync (inbox, appended_uid, NULL, &error);
 		if (!reread) {
 			g_free (appended_uid);
-			return fail ("get-message", error);
+			return functional_fail ("get-message", error);
 		}
 
 		body = message_body (reread, &error);
 		if (!body) {
 			g_object_unref (reread);
 			g_free (appended_uid);
-			return fail ("message-body", error);
+			return functional_fail ("message-body", error);
 		}
 
 		g_print ("appended-body=%s\n", body);
@@ -1052,14 +1044,14 @@ main (int argc,
 				  CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED,
 				  &error)) {
 			g_free (appended_uid);
-			return fail ("synchronize-set", error);
+			return functional_fail ("synchronize-set", error);
 		}
 
 		report_local_flags (inbox, appended_uid, "local-after-set");
 
 		if (!report_reopened ("reopened-set", appended_uid, &error)) {
 			g_free (appended_uid);
-			return fail ("reopen-after-set", error);
+			return functional_fail ("reopen-after-set", error);
 		}
 
 		/* The other direction. A provider that only adds keywords
@@ -1068,12 +1060,12 @@ main (int argc,
 				  CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED, 0,
 				  &error)) {
 			g_free (appended_uid);
-			return fail ("synchronize-clear", error);
+			return functional_fail ("synchronize-clear", error);
 		}
 
 		if (!report_reopened ("reopened-cleared", appended_uid, &error)) {
 			g_free (appended_uid);
-			return fail ("reopen-after-clear", error);
+			return functional_fail ("reopen-after-clear", error);
 		}
 
 		/* `expunge_sync` does the deletion. CAMEL_MESSAGE_DELETED is a
@@ -1093,7 +1085,7 @@ main (int argc,
 
 		if (!camel_folder_expunge_sync (inbox, NULL, &error)) {
 			g_free (appended_uid);
-			return fail ("expunge", error);
+			return functional_fail ("expunge", error);
 		}
 
 		/* No refresh before this: the rows must go with the expunge,
@@ -1113,7 +1105,7 @@ main (int argc,
 		 * removed the message only locally. */
 		if (!report_reopened ("reopened-expunged", appended_uid, &error)) {
 			g_free (appended_uid);
-			return fail ("reopen-after-expunge", error);
+			return functional_fail ("reopen-after-expunge", error);
 		}
 	} else {
 		CamelFolderInfo *created;
@@ -1128,7 +1120,7 @@ main (int argc,
 		created = camel_store_create_folder_sync (store, NULL, subject,
 							  NULL, &error);
 		if (!created)
-			return fail ("create-folder", error);
+			return functional_fail ("create-folder", error);
 
 		g_print ("created-folder=%s\n", created->full_name);
 		scratch_name = g_strdup (created->full_name);
@@ -1138,7 +1130,7 @@ main (int argc,
 						       CAMEL_STORE_FOLDER_NONE,
 						       NULL, &error);
 		if (!scratch)
-			return fail ("get-scratch-folder", error);
+			return functional_fail ("get-scratch-folder", error);
 
 		/* Count the folder, so that the transfers below start from a
 		 * known empty folder. The inbox counts can only be
@@ -1146,7 +1138,7 @@ main (int argc,
 		if (!report_refreshed_listing (scratch, appended_uid,
 					       "scratch-before", &error)) {
 			g_object_unref (scratch);
-			return fail ("relist-scratch-before", error);
+			return functional_fail ("relist-scratch-before", error);
 		}
 
 		/* The move: `delete_originals=TRUE`, one `Email/set` that adds
@@ -1156,18 +1148,18 @@ main (int argc,
 		if (!transfer_one (inbox, scratch, appended_uid, TRUE,
 				   "moved-uid", &error)) {
 			g_object_unref (scratch);
-			return fail ("transfer-move", error);
+			return functional_fail ("transfer-move", error);
 		}
 
 		if (!report_refreshed_listing (inbox, appended_uid,
 					       "inbox-after-move", &error)) {
 			g_object_unref (scratch);
-			return fail ("relist-inbox-after-move", error);
+			return functional_fail ("relist-inbox-after-move", error);
 		}
 		if (!report_refreshed_listing (scratch, appended_uid,
 					       "scratch-after-move", &error)) {
 			g_object_unref (scratch);
-			return fail ("relist-scratch-after-move", error);
+			return functional_fail ("relist-scratch-after-move", error);
 		}
 
 		/* The summary row of the destination. The refresh above wrote
@@ -1181,7 +1173,7 @@ main (int argc,
 		if (!report_reopened_filed ("reopened-moved", appended_uid,
 					    scratch_name, &error)) {
 			g_object_unref (scratch);
-			return fail ("reopen-after-move", error);
+			return functional_fail ("reopen-after-move", error);
 		}
 
 		/* The copy back: `delete_originals=FALSE`, the patch that only
@@ -1190,24 +1182,24 @@ main (int argc,
 		if (!transfer_one (scratch, inbox, appended_uid, FALSE,
 				   "copied-uid", &error)) {
 			g_object_unref (scratch);
-			return fail ("transfer-copy", error);
+			return functional_fail ("transfer-copy", error);
 		}
 
 		if (!report_refreshed_listing (inbox, appended_uid,
 					       "inbox-after-copy", &error)) {
 			g_object_unref (scratch);
-			return fail ("relist-inbox-after-copy", error);
+			return functional_fail ("relist-inbox-after-copy", error);
 		}
 		if (!report_refreshed_listing (scratch, appended_uid,
 					       "scratch-after-copy", &error)) {
 			g_object_unref (scratch);
-			return fail ("relist-scratch-after-copy", error);
+			return functional_fail ("relist-scratch-after-copy", error);
 		}
 
 		if (!report_reopened_filed ("reopened-copied", appended_uid,
 					    scratch_name, &error)) {
 			g_object_unref (scratch);
-			return fail ("reopen-after-copy", error);
+			return functional_fail ("reopen-after-copy", error);
 		}
 
 		/* A third transfer type: a move into a folder that already
@@ -1217,18 +1209,18 @@ main (int argc,
 		if (!transfer_one (scratch, inbox, appended_uid, TRUE,
 				   "cleanup-uid", &error)) {
 			g_object_unref (scratch);
-			return fail ("transfer-cleanup", error);
+			return functional_fail ("transfer-cleanup", error);
 		}
 
 		if (!report_refreshed_listing (inbox, appended_uid,
 					       "inbox-after-cleanup", &error)) {
 			g_object_unref (scratch);
-			return fail ("relist-inbox-after-cleanup", error);
+			return functional_fail ("relist-inbox-after-cleanup", error);
 		}
 		if (!report_refreshed_listing (scratch, appended_uid,
 					       "scratch-after-cleanup", &error)) {
 			g_object_unref (scratch);
-			return fail ("relist-scratch-after-cleanup", error);
+			return functional_fail ("relist-scratch-after-cleanup", error);
 		}
 
 		/* Now the folder is empty and can be deleted. A JMAP server
@@ -1240,7 +1232,7 @@ main (int argc,
 
 		if (!camel_store_delete_folder_sync (store, scratch_name,
 						     NULL, &error))
-			return fail ("delete-folder", error);
+			return functional_fail ("delete-folder", error);
 
 		/* The store listing must also show that the folder is gone,
 		 * not only the return value. This is the point of manage.rs,
@@ -1249,7 +1241,7 @@ main (int argc,
 							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
 							 NULL, &error);
 		if (!info)
-			return fail ("folder-info-after-delete", error);
+			return functional_fail ("folder-info-after-delete", error);
 
 		names = g_ptr_array_new_with_free_func (g_free);
 		collect_folder_names (info, names);
@@ -1275,7 +1267,7 @@ main (int argc,
 		g_clear_object (&message_info);
 
 		if (!camel_folder_expunge_sync (inbox, NULL, &error))
-			return fail ("cleanup-expunge", error);
+			return functional_fail ("cleanup-expunge", error);
 
 		uids = folder_dup_uids (inbox);
 		g_print ("final-inbox-count=%u\n", uids->len);

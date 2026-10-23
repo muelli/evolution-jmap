@@ -51,6 +51,8 @@
 #include <camel/camel.h>
 #include <libedataserver/libedataserver.h>
 
+#include "test-util.h"
+
 /* The body of the message that this program sends. One line, no MIME
  * structure: the test checks that the bytes from the Camel emitter come back
  * from the blob download of a different account. `SEND_BODY` in the test file
@@ -151,16 +153,6 @@ test_session_class_init (TestSessionClass *klass)
 static void
 test_session_init (TestSession *session)
 {
-}
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
 }
 
 /* From 3.58, `camel_folder_dup_uids` replaces the borrowed
@@ -430,7 +422,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	account = ref_source (registry, "account", account_uid);
 	if (!account)
@@ -503,7 +495,7 @@ main (int argc,
 	service = camel_session_add_service (session, transport_uid, protocol,
 					     CAMEL_PROVIDER_TRANSPORT, &error);
 	if (!service) {
-		status = fail ("add-service", error);
+		status = functional_fail ("add-service", error);
 		goto out;
 	}
 
@@ -517,7 +509,7 @@ main (int argc,
 		camel_service_set_password (service, sender_password);
 
 	if (!camel_service_connect_sync (service, NULL, &error)) {
-		status = fail ("connect", error);
+		status = functional_fail ("connect", error);
 		goto out;
 	}
 
@@ -549,7 +541,7 @@ main (int argc,
 		g_object_unref (recipients);
 		g_object_unref (from);
 		g_object_unref (message);
-		status = fail ("send", error);
+		status = functional_fail ("send", error);
 		goto out;
 	}
 
@@ -561,7 +553,7 @@ main (int argc,
 	g_object_unref (message);
 
 	if (!camel_service_disconnect_sync (service, TRUE, NULL, &error)) {
-		status = fail ("disconnect", error);
+		status = functional_fail ("disconnect", error);
 		goto out;
 	}
 
@@ -575,7 +567,7 @@ main (int argc,
 	sender_store = open_account_store (account, account_uid, sender_password,
 					   "sender", &sender_session, &error);
 	if (!sender_store) {
-		status = fail ("reopen-sender", error);
+		status = functional_fail ("reopen-sender", error);
 		goto out;
 	}
 
@@ -586,7 +578,7 @@ main (int argc,
 		g_clear_object (&sent_folder);
 		g_object_unref (sender_store);
 		g_object_unref (sender_session);
-		status = fail ("sent-folder", error);
+		status = functional_fail ("sent-folder", error);
 		goto out;
 	}
 
@@ -612,7 +604,7 @@ main (int argc,
 		g_object_unref (sent_folder);
 		g_object_unref (sender_store);
 		g_object_unref (sender_session);
-		status = fail ("drafts-folder", error);
+		status = functional_fail ("drafts-folder", error);
 		goto out;
 	}
 
@@ -628,7 +620,7 @@ main (int argc,
 		g_object_unref (sent_folder);
 		g_object_unref (sender_store);
 		g_object_unref (sender_session);
-		status = fail ("cleanup-drafts", error);
+		status = functional_fail ("cleanup-drafts", error);
 		goto out;
 	}
 	g_object_unref (drafts_folder);
@@ -638,7 +630,7 @@ main (int argc,
 			g_object_unref (sent_folder);
 			g_object_unref (sender_store);
 			g_object_unref (sender_session);
-			status = fail ("cleanup-sent", error);
+			status = functional_fail ("cleanup-sent", error);
 			goto out;
 		}
 
@@ -646,7 +638,7 @@ main (int argc,
 			g_object_unref (sent_folder);
 			g_object_unref (sender_store);
 			g_object_unref (sender_session);
-			status = fail ("relist-sent", error);
+			status = functional_fail ("relist-sent", error);
 			goto out;
 		}
 
@@ -667,7 +659,7 @@ main (int argc,
 					      recipient_password, "recipient",
 					      &recipient_session, &error);
 	if (!recipient_store) {
-		status = fail ("reopen-recipient", error);
+		status = functional_fail ("reopen-recipient", error);
 		goto out;
 	}
 
@@ -675,7 +667,7 @@ main (int argc,
 	if (!recipient_inbox) {
 		g_object_unref (recipient_store);
 		g_object_unref (recipient_session);
-		status = fail ("recipient-inbox", error);
+		status = functional_fail ("recipient-inbox", error);
 		goto out;
 	}
 
@@ -687,7 +679,7 @@ main (int argc,
 			g_object_unref (recipient_inbox);
 			g_object_unref (recipient_store);
 			g_object_unref (recipient_session);
-			status = fail ("refresh-recipient-inbox", error);
+			status = functional_fail ("refresh-recipient-inbox", error);
 			goto out;
 		}
 
@@ -714,7 +706,7 @@ main (int argc,
 			g_object_unref (recipient_inbox);
 			g_object_unref (recipient_store);
 			g_object_unref (recipient_session);
-			status = fail ("get-delivered-message", error);
+			status = functional_fail ("get-delivered-message", error);
 			goto out;
 		}
 
@@ -724,7 +716,7 @@ main (int argc,
 			g_object_unref (recipient_inbox);
 			g_object_unref (recipient_store);
 			g_object_unref (recipient_session);
-			status = fail ("delivered-body", error);
+			status = functional_fail ("delivered-body", error);
 			goto out;
 		}
 
@@ -736,7 +728,7 @@ main (int argc,
 			g_object_unref (recipient_inbox);
 			g_object_unref (recipient_store);
 			g_object_unref (recipient_session);
-			status = fail ("cleanup-recipient", error);
+			status = functional_fail ("cleanup-recipient", error);
 			goto out;
 		}
 
@@ -744,7 +736,7 @@ main (int argc,
 			g_object_unref (recipient_inbox);
 			g_object_unref (recipient_store);
 			g_object_unref (recipient_session);
-			status = fail ("relist-recipient", error);
+			status = functional_fail ("relist-recipient", error);
 			goto out;
 		}
 

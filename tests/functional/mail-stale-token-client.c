@@ -46,6 +46,8 @@
 #include <camel/camel.h>
 #include <libedataserver/libedataserver.h>
 
+#include "test-util.h"
+
 /* The time limit for the `go` file of the harness. It is long, because the
  * harness polls for `ready`. The limit makes this program fail, not hang the
  * ctest run, when the harness stops. */
@@ -135,16 +137,6 @@ test_session_class_init (TestSessionClass *klass)
 static void
 test_session_init (TestSession *self)
 {
-}
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
 }
 
 /* Writes the folder tree as one sorted, comma-separated line, as
@@ -244,7 +236,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -269,7 +261,7 @@ main (int argc,
 	service = camel_session_add_service (session, source_uid, protocol,
 					     CAMEL_PROVIDER_STORE, &error);
 	if (!service)
-		return fail ("add-service", error);
+		return functional_fail ("add-service", error);
 
 	e_source_camel_configure_service (source, service);
 
@@ -287,7 +279,7 @@ main (int argc,
 	g_clear_object (&settings);
 
 	if (!camel_service_connect_sync (service, NULL, &error))
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	g_print ("store-connected=%d\n",
 		 camel_service_get_connection_status (service) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
@@ -300,7 +292,7 @@ main (int argc,
 	 * and cannot get a 401. */
 	info = camel_store_get_folder_info_sync (store, NULL, listing_flags, NULL, &error);
 	if (!info)
-		return fail ("folder-info", error);
+		return functional_fail ("folder-info", error);
 	report_folder_names ("folders", info);
 	camel_folder_info_free (info);
 
@@ -308,7 +300,7 @@ main (int argc,
 	g_print ("authenticate-calls-before-rotation=%u\n", authenticate_calls);
 
 	if (!handshake (ready_file, go_file, &error))
-		return fail ("handshake", error);
+		return functional_fail ("handshake", error);
 
 	/* The main step. The connection worked before, but the server now
 	 * refuses its token. Report the result, do not check it: the harness
