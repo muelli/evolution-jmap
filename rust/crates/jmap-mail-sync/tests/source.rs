@@ -4,28 +4,14 @@
 //! The bytes of one summary row, against a mock server: the second `Email/get`
 //! request, the download result, and the three failure cases.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{MailSync, SyncError};
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mail_sync::SyncError;
+use jmap_mock::EmailSeed;
 use jmap_proto::Id;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
     /// Seed one message in one mailbox, and return its id.
     fn seed_message(&self, subject: &str, body: &str) -> Id {
         let state = self.server.state();

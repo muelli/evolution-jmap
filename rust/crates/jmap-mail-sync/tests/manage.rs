@@ -22,40 +22,16 @@
 //! * **A refusal changes nothing.** A refused create must not add a folder,
 //!   and a refused destroy must not remove one.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{FolderInfo, MailSync, SyncError};
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mail_sync::{FolderInfo, SyncError};
+use jmap_mock::EmailSeed;
 use jmap_proto::Id;
 use jmap_proto::error::set::{INVALID_PROPERTIES, NOT_FOUND};
 use jmap_proto::mail::mailbox_set_error::{HAS_CHILD, HAS_EMAIL};
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    /// Seed a top-level mailbox with the given name.
-    fn seed_mailbox(&self, name: &str) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        state
-            .account_mut(&self.account_id)
-            .unwrap()
-            .seed_mailbox(name, None)
-    }
-
     /// Seed a mailbox with the given name below `parent`.
     fn seed_child_mailbox(&self, name: &str, parent: &Id) -> Id {
         let state = self.server.state();
@@ -109,7 +85,7 @@ fn refusal(failure: SyncError) -> String {
 #[test]
 fn a_created_folder_reaches_the_server() {
     let fixture = Fixture::start();
-    fixture.seed_mailbox("Inbox");
+    fixture.seed_mailbox("Inbox", None);
 
     fixture.sync().create_folder(None, "Projects").unwrap();
 
@@ -165,7 +141,7 @@ fn a_new_folder_is_subscribed() {
 #[test]
 fn a_child_hangs_under_its_parent() {
     let fixture = Fixture::start();
-    fixture.seed_mailbox("Work");
+    fixture.seed_mailbox("Work", None);
     let parent = fixture.folder("Work").unwrap();
 
     let created = fixture
@@ -202,7 +178,7 @@ fn a_name_that_is_not_a_path_component_is_encoded() {
 #[test]
 fn a_name_a_sibling_already_has_is_refused() {
     let fixture = Fixture::start();
-    fixture.seed_mailbox("Projects");
+    fixture.seed_mailbox("Projects", None);
     let before = fixture.folder_count();
 
     let failure = fixture.sync().create_folder(None, "Projects").unwrap_err();
@@ -217,8 +193,8 @@ fn a_name_a_sibling_already_has_is_refused() {
 #[test]
 fn a_deleted_folder_is_gone_from_the_account() {
     let fixture = Fixture::start();
-    fixture.seed_mailbox("Inbox");
-    let doomed = fixture.seed_mailbox("Projects");
+    fixture.seed_mailbox("Inbox", None);
+    let doomed = fixture.seed_mailbox("Projects", None);
 
     fixture.sync().delete_folder(&doomed).unwrap();
 
@@ -232,7 +208,7 @@ fn a_deleted_folder_is_gone_from_the_account() {
 #[test]
 fn a_folder_that_still_holds_mail_is_refused() {
     let fixture = Fixture::start();
-    let full = fixture.seed_mailbox("Projects");
+    let full = fixture.seed_mailbox("Projects", None);
     fixture.seed_email(&full);
 
     let failure = fixture.sync().delete_folder(&full).unwrap_err();
@@ -246,7 +222,7 @@ fn a_folder_that_still_holds_mail_is_refused() {
 #[test]
 fn a_folder_that_still_holds_a_subfolder_is_refused() {
     let fixture = Fixture::start();
-    let parent = fixture.seed_mailbox("Work");
+    let parent = fixture.seed_mailbox("Work", None);
     let child = fixture.seed_child_mailbox("Notes", &parent);
 
     let failure = fixture.sync().delete_folder(&parent).unwrap_err();
@@ -266,7 +242,7 @@ fn a_folder_that_still_holds_a_subfolder_is_refused() {
 #[test]
 fn a_mailbox_the_account_does_not_have_is_no_such_folder() {
     let fixture = Fixture::start();
-    fixture.seed_mailbox("Inbox");
+    fixture.seed_mailbox("Inbox", None);
 
     let failure = fixture.sync().delete_folder(&Id::new("M404")).unwrap_err();
 
@@ -281,7 +257,7 @@ fn a_mailbox_the_account_does_not_have_is_no_such_folder() {
 #[test]
 fn the_other_refusals_are_not_read_as_a_missing_folder() {
     let fixture = Fixture::start();
-    let full = fixture.seed_mailbox("Projects");
+    let full = fixture.seed_mailbox("Projects", None);
     fixture.seed_email(&full);
 
     let failure = fixture.sync().delete_folder(&full).unwrap_err();
@@ -295,7 +271,7 @@ fn the_other_refusals_are_not_read_as_a_missing_folder() {
 #[test]
 fn a_renamed_folder_answers_to_its_new_name() {
     let fixture = Fixture::start();
-    let folder = fixture.seed_mailbox("Projects");
+    let folder = fixture.seed_mailbox("Projects", None);
 
     fixture.sync().rename_folder(&folder, None, "Work").unwrap();
 
@@ -308,7 +284,7 @@ fn a_renamed_folder_answers_to_its_new_name() {
 #[test]
 fn the_answer_is_the_path_the_folder_now_has() {
     let fixture = Fixture::start();
-    let folder = fixture.seed_mailbox("Projects");
+    let folder = fixture.seed_mailbox("Projects", None);
 
     let path = fixture.sync().rename_folder(&folder, None, "Work").unwrap();
 
@@ -320,8 +296,8 @@ fn the_answer_is_the_path_the_folder_now_has() {
 #[test]
 fn a_moved_folder_hangs_under_its_new_parent() {
     let fixture = Fixture::start();
-    let folder = fixture.seed_mailbox("Notes");
-    fixture.seed_mailbox("Work");
+    let folder = fixture.seed_mailbox("Notes", None);
+    fixture.seed_mailbox("Work", None);
     let parent = fixture.folder("Work").unwrap();
 
     let path = fixture
@@ -342,7 +318,7 @@ fn a_moved_folder_hangs_under_its_new_parent() {
 #[test]
 fn a_folder_moved_to_the_top_level_loses_its_parent() {
     let fixture = Fixture::start();
-    let parent = fixture.seed_mailbox("Work");
+    let parent = fixture.seed_mailbox("Work", None);
     let folder = fixture.seed_child_mailbox("Notes", &parent);
 
     let path = fixture
@@ -362,7 +338,7 @@ fn a_folder_moved_to_the_top_level_loses_its_parent() {
 #[test]
 fn a_new_name_that_is_not_a_path_component_is_encoded() {
     let fixture = Fixture::start();
-    let folder = fixture.seed_mailbox("Projects");
+    let folder = fixture.seed_mailbox("Projects", None);
 
     let path = fixture
         .sync()
@@ -381,8 +357,8 @@ fn a_new_name_that_is_not_a_path_component_is_encoded() {
 #[test]
 fn a_new_name_a_sibling_already_has_is_refused() {
     let fixture = Fixture::start();
-    fixture.seed_mailbox("Work");
-    let folder = fixture.seed_mailbox("Projects");
+    fixture.seed_mailbox("Work", None);
+    let folder = fixture.seed_mailbox("Projects", None);
 
     let failure = fixture
         .sync()
@@ -401,7 +377,7 @@ fn a_new_name_a_sibling_already_has_is_refused() {
 #[test]
 fn a_move_into_the_folders_own_subtree_is_refused() {
     let fixture = Fixture::start();
-    let folder = fixture.seed_mailbox("Work");
+    let folder = fixture.seed_mailbox("Work", None);
     fixture.seed_child_mailbox("Notes", &folder);
     let child = fixture.folder("Work/Notes").unwrap();
 
@@ -419,7 +395,7 @@ fn a_move_into_the_folders_own_subtree_is_refused() {
 #[test]
 fn renaming_a_mailbox_the_account_does_not_have_is_no_such_folder() {
     let fixture = Fixture::start();
-    fixture.seed_mailbox("Inbox");
+    fixture.seed_mailbox("Inbox", None);
 
     let failure = fixture
         .sync()

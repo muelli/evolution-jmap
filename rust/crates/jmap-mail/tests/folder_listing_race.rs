@@ -25,12 +25,16 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
 use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
 use jmap_mock::MockServer;
+
+/// The longest time a `Gate` wait blocks. A missed signal fails the test and does not hang it.
+const GATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Lets the test park the `Mailbox/changes` response and learn when it
 /// actually parked. This avoids racing a sleep against it.
@@ -44,10 +48,15 @@ struct Gate {
 
 impl Gate {
     fn wait_for_start(&self) {
-        let mut started = self.started.lock().unwrap();
-        while !*started {
-            started = self.started_cond.wait(started).unwrap();
-        }
+        let started = self.started.lock().unwrap();
+        let (_guard, wait) = self
+            .started_cond
+            .wait_timeout_while(started, GATE_TIMEOUT, |started| !*started)
+            .unwrap();
+        assert!(
+            !wait.timed_out(),
+            "the gated response did not arrive in {GATE_TIMEOUT:?}"
+        );
     }
 
     fn signal_start(&self) {
@@ -56,10 +65,15 @@ impl Gate {
     }
 
     fn wait_for_release(&self) {
-        let mut released = self.released.lock().unwrap();
-        while !*released {
-            released = self.released_cond.wait(released).unwrap();
-        }
+        let released = self.released.lock().unwrap();
+        let (_guard, wait) = self
+            .released_cond
+            .wait_timeout_while(released, GATE_TIMEOUT, |released| !*released)
+            .unwrap();
+        assert!(
+            !wait.timed_out(),
+            "the test did not release the gate in {GATE_TIMEOUT:?}"
+        );
     }
 
     fn release(&self) {

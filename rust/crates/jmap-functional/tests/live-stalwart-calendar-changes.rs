@@ -145,9 +145,8 @@ fn a_second_connect_pulls_a_real_servers_change_through_get_changes_sync() {
     // the real server, not through the loopback proxy or the EDS backend.
     // `rebase_urls_to_origin` is necessary because the session document can
     // name a hostname that this runner cannot reach.
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
     let raw_client = Client::builder()
-        .rebase_urls_to_origin(rebase)
+        .rebase_urls_to_origin(true)
         .connect(&origin, Credentials::basic(user, password))
         .expect("could not fetch the session document for the raw second client");
     let account_id = raw_client

@@ -118,9 +118,9 @@ fn a_real_backend_answers_free_busy_for_the_write_test_account_against_stalwart(
 
     // A second client that connects directly to the real server, not
     // through the loopback proxy or the EDS backend.
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+    // Always rebase, as the backend does behind the loopback proxy.
     let raw_client = Client::builder()
-        .rebase_urls_to_origin(rebase)
+        .rebase_urls_to_origin(true)
         .connect(&origin, Credentials::basic(user.clone(), password.clone()))
         .expect("could not fetch the session document for the raw second client");
     let account_id = raw_client

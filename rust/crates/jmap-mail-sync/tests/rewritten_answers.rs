@@ -15,10 +15,13 @@ use std::time::Duration;
 use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{MailSync, MessageUpdate, SyncError};
-use jmap_mock::{AccountState, EmailSeed, MockServer};
+use jmap_mock::EmailSeed;
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 use serde_json::{Value, json};
+
+mod common;
+use common::Fixture;
 
 type Rewrite = Arc<dyn Fn(&mut Value) + Send + Sync>;
 
@@ -40,24 +43,7 @@ impl Transport for Rewriting {
     }
 }
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
-
 impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    /// A sync with a client that gets no rewritten answers.
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
     /// A sync with a client that gets each answer to `method` (the invocation
     /// `[name, arguments, callId]`) through `rewrite`.
     fn sync_rewriting(
@@ -91,12 +77,6 @@ impl Fixture {
             .connect(self.server.origin(), Credentials::none())
             .unwrap();
         MailSync::new(client, self.account_id.clone())
-    }
-
-    fn edit<R>(&self, edit: impl FnOnce(&mut AccountState) -> R) -> R {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        edit(state.account_mut(&self.account_id).unwrap())
     }
 
     fn message(mailbox: &Id, subject: &str) -> EmailSeed {

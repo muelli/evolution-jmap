@@ -128,9 +128,9 @@ fn the_calendar_factorys_first_open_of_a_real_sized_calendar_is_measured() {
     // A raw client that connects directly to the real server, not through
     // the loopback proxy or EDS. It makes the large calendar before EDS sees
     // it.
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+    // Always rebase, as the backend does behind the loopback proxy.
     let raw_client = Client::builder()
-        .rebase_urls_to_origin(rebase)
+        .rebase_urls_to_origin(true)
         .connect(&origin, Credentials::basic(user.clone(), password.clone()))
         .expect("could not fetch the session document for the raw seeding client");
     let account_id = raw_client

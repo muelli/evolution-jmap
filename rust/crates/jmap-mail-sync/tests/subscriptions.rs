@@ -17,39 +17,15 @@
 //! - The write changes nothing else: not the siblings of the mailbox and not
 //!   its mail.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{MailSync, SyncError};
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mail_sync::SyncError;
+use jmap_mock::EmailSeed;
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    /// Seed a top-level mailbox with the given name.
-    fn seed_mailbox(&self, name: &str) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        state
-            .account_mut(&self.account_id)
-            .unwrap()
-            .seed_mailbox(name, None)
-    }
-
     /// The subscription state of the folder at `path` in the folder tree.
     fn subscribed(&self, path: &str) -> Option<bool> {
         let (_, tree) = self.sync().folder_tree().unwrap();
@@ -60,7 +36,7 @@ impl Fixture {
 #[test]
 fn unsubscribing_reaches_the_server() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     fixture.sync().set_subscribed(&inbox, false).unwrap();
 
@@ -70,7 +46,7 @@ fn unsubscribing_reaches_the_server() {
 #[test]
 fn subscribing_again_reaches_it_too() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let sync = fixture.sync();
 
     sync.set_subscribed(&inbox, false).unwrap();
@@ -84,7 +60,7 @@ fn subscribing_again_reaches_it_too() {
 #[test]
 fn a_subscription_that_changes_nothing_is_still_a_success() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     fixture.sync().set_subscribed(&inbox, true).unwrap();
 
@@ -96,8 +72,8 @@ fn a_subscription_that_changes_nothing_is_still_a_success() {
 #[test]
 fn one_mailbox_unsubscribed_leaves_its_siblings_alone() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    fixture.seed_mailbox("Sent");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    fixture.seed_mailbox("Sent", None);
 
     fixture.sync().set_subscribed(&inbox, false).unwrap();
 
@@ -137,7 +113,7 @@ fn unsubscribing_does_not_touch_the_mail_in_the_folder() {
 #[test]
 fn a_mailbox_the_account_does_not_have_is_no_such_folder() {
     let fixture = Fixture::start();
-    fixture.seed_mailbox("Inbox");
+    fixture.seed_mailbox("Inbox", None);
 
     let failure = fixture
         .sync()

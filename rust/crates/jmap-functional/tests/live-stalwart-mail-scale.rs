@@ -177,9 +177,8 @@ fn camels_first_open_of_a_real_sized_inbox_is_measured() {
     // The raw seeding client connects directly to the server, not through
     // the loopback proxy or Camel. See `live-stalwart-book-scale.rs` for why
     // it rebases the URLs of the session.
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
     let raw_client = Client::builder()
-        .rebase_urls_to_origin(rebase)
+        .rebase_urls_to_origin(true)
         .connect(&origin, Credentials::basic(user.clone(), password.clone()))
         .expect("could not fetch the session document for the raw seeding client");
     let account_id = raw_client

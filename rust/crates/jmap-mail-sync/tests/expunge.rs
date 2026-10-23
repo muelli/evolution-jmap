@@ -24,37 +24,14 @@
 
 use std::collections::BTreeMap;
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{Filing, MailSync, SyncError};
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mail_sync::{Filing, SyncError};
+use jmap_mock::EmailSeed;
 use jmap_proto::Id;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    fn seed_mailbox(&self, name: &str) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        state
-            .account_mut(&self.account_id)
-            .unwrap()
-            .seed_mailbox(name, None)
-    }
-
     fn seed_message(&self, mailbox: &Id) -> Id {
         let state = self.server.state();
         let mut state = state.lock().unwrap();
@@ -115,7 +92,7 @@ fn a_message_this_mailbox_is_the_last_home_of_is_destroyed() {
     // mailbox. Removal from the mailbox and destruction then have the same
     // result, but RFC 8621 §4.6 permits only destruction.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let uid = fixture.seed_message(&inbox);
 
     fixture
@@ -134,8 +111,8 @@ fn a_message_filed_elsewhere_too_only_leaves_this_mailbox() {
     // This case is the reason for the read. The user copied the message to a
     // folder, then deleted it from the inbox. Destruction also removes the copy.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
     sync.file_message(&uid, &Filing::copied_into(archive.clone()))
@@ -162,8 +139,8 @@ fn a_message_that_is_not_in_this_mailbox_is_left_exactly_as_it_is() {
     // out of this mailbox, so the expunge does nothing. A destruction based on
     // an old row deletes mail.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
     let uid = fixture.seed_message(&archive);
 
     fixture
@@ -185,7 +162,7 @@ fn a_message_another_client_destroyed_is_reported_as_gone_rather_than_failed() {
     // listing. If a different client destroyed the message, the expunge has
     // no work, and it is not an error.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
 
     let error = fixture
         .sync()
@@ -203,7 +180,7 @@ fn expunging_the_same_message_twice_reports_the_second_as_gone() {
     // The same expunge again, as in a retry after a partial failure. Thus the
     // caller can remove the row on NoSuchMessage and show no error.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
     sync.expunge_message(&uid, &inbox).expect("the first");
@@ -228,8 +205,8 @@ fn a_false_valued_mailbox_entry_is_refused_rather_than_guessed_at() {
     // Thus the code refuses it at the start, as `identity_for` refuses an
     // identity without an id.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
     let uid = fixture.seed_message(&inbox);
     fixture.set_mailbox_ids(
         &uid,
@@ -261,8 +238,8 @@ fn a_message_trashed_from_its_last_mailbox_moves_into_the_trash() {
     // A delete outside the trash keeps the message. The trash is the place
     // where the user and every other client look for it.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let trash = fixture.seed_mailbox("Trash");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let trash = fixture.seed_mailbox("Trash", None);
     let uid = fixture.seed_message(&inbox);
 
     fixture
@@ -282,9 +259,9 @@ fn a_message_trashed_from_one_of_two_mailboxes_only_leaves_that_mailbox() {
     // The copy in the other mailbox stays. The trash does not get it, because
     // the message is not deleted: only one of its places is gone.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
-    let trash = fixture.seed_mailbox("Trash");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
+    let trash = fixture.seed_mailbox("Trash", None);
     let uid = fixture.seed_message(&inbox);
     let sync = fixture.sync();
     sync.file_message(&uid, &Filing::copied_into(archive.clone()))
@@ -304,9 +281,9 @@ fn a_message_trashed_from_a_mailbox_it_is_not_in_is_left_as_it_is() {
     // A different client moved the message after the last listing. A move
     // based on the old row would take it from where the user put it.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
-    let trash = fixture.seed_mailbox("Trash");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
+    let trash = fixture.seed_mailbox("Trash", None);
     let uid = fixture.seed_message(&archive);
 
     fixture
@@ -323,8 +300,8 @@ fn a_message_trashed_from_a_mailbox_it_is_not_in_is_left_as_it_is() {
 #[test]
 fn a_message_trashed_that_the_account_does_not_hold_is_no_such_message() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let trash = fixture.seed_mailbox("Trash");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let trash = fixture.seed_mailbox("Trash", None);
 
     let outcome = fixture
         .sync()

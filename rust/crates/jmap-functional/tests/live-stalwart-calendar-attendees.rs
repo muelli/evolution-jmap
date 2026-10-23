@@ -96,9 +96,9 @@ fn attendees_survive_a_local_create_against_the_real_server() {
 
     // A direct connection, not through EDS. It reads the copy that Stalwart
     // stored, not the EDS version of it.
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+    // Always rebase, as the backend does behind the loopback proxy.
     let direct = Client::builder()
-        .rebase_urls_to_origin(rebase)
+        .rebase_urls_to_origin(true)
         .connect(&origin, Credentials::basic(user.clone(), password.clone()))
         .expect("could not fetch the session document for the write-test account");
     let account_id = direct

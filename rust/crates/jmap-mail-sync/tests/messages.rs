@@ -7,31 +7,14 @@
 use jmap_client::limits::IdBudget;
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::MailSync;
-use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
+use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{keyword, role};
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        Self::started_with(MockServer::builder())
-    }
-
-    fn started_with(builder: MockServerBuilder) -> Self {
-        let server = builder.start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
     /// Seed a mailbox with `count` messages, one hour apart, *newest first*.
     /// Creation order (and thus id order) is then the reverse of the listing
     /// order. With the opposite order, a wrong answer can look correct.

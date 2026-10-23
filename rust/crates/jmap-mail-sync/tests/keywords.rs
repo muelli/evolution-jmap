@@ -9,29 +9,15 @@
 
 use std::collections::BTreeMap;
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{KeywordChange, Keywords, MailSync, MessageFlags, SyncError};
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mail_sync::{KeywordChange, Keywords, MessageFlags, SyncError};
+use jmap_mock::EmailSeed;
 use jmap_proto::Id;
 use serde_json::json;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
     /// One message in one mailbox, with the given keywords.
     fn seed_message(&self, keywords: &[&str]) -> Id {
         let state = self.server.state();

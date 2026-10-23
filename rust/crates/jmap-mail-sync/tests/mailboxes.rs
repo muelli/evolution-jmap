@@ -13,39 +13,15 @@
 
 use std::collections::BTreeMap;
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{Filing, MailSync, SyncError};
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mail_sync::{Filing, SyncError};
+use jmap_mock::EmailSeed;
 use jmap_proto::Id;
 use serde_json::json;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
+mod common;
+use common::Fixture;
 
 impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    /// Seed a mailbox with the given name.
-    fn seed_mailbox(&self, name: &str) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        state
-            .account_mut(&self.account_id)
-            .unwrap()
-            .seed_mailbox(name, None)
-    }
-
     /// Seed one message in the given mailbox.
     fn seed_message(&self, mailbox: &Id) -> Id {
         let state = self.server.state();
@@ -123,8 +99,8 @@ fn a_mailbox_id_with_a_pointer_character_in_it_names_one_mailbox() {
 #[test]
 fn copying_a_message_leaves_it_where_it_was() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
     let uid = fixture.seed_message(&inbox);
 
     fixture
@@ -141,8 +117,8 @@ fn copying_a_message_leaves_it_where_it_was() {
 #[test]
 fn moving_a_message_takes_it_out_of_the_mailbox_it_came_from() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
-    let archive = fixture.seed_mailbox("Archive");
+    let inbox = fixture.seed_mailbox("Inbox", None);
+    let archive = fixture.seed_mailbox("Archive", None);
     let uid = fixture.seed_message(&inbox);
 
     fixture
@@ -174,7 +150,7 @@ fn a_filing_that_says_nothing_is_not_a_request() {
 #[test]
 fn a_message_another_client_deleted_is_reported_as_gone() {
     let fixture = Fixture::start();
-    let archive = fixture.seed_mailbox("Archive");
+    let archive = fixture.seed_mailbox("Archive", None);
 
     let error = fixture
         .sync()
@@ -192,7 +168,7 @@ fn a_message_another_client_deleted_is_reported_as_gone() {
 #[test]
 fn filing_into_a_mailbox_the_account_does_not_have_is_refused() {
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let uid = fixture.seed_message(&inbox);
 
     let error = fixture
@@ -224,7 +200,7 @@ fn a_message_may_not_be_left_in_no_mailbox_at_all() {
     // Email in one or more Mailboxes. Thus no server accepts the first patch of
     // a two-request move. Send it raw, because `Filing` cannot make it.
     let fixture = Fixture::start();
-    let inbox = fixture.seed_mailbox("Inbox");
+    let inbox = fixture.seed_mailbox("Inbox", None);
     let uid = fixture.seed_message(&inbox);
 
     let sync = fixture.sync();

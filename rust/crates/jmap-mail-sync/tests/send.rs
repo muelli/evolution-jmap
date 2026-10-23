@@ -13,11 +13,13 @@
 //!   always the header addresses.
 //! - A sent message is no longer a draft, and it goes to the expected mailbox.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{MailSync, MessageSummary, Outgoing, SyncError};
+use jmap_mail_sync::{MessageSummary, Outgoing, SyncError};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
+
+mod common;
+use common::Fixture;
 
 /// The RFC 5322 bytes that the Evolution composer gives to a transport.
 const MESSAGE: &[u8] = b"From: Alice <alice@example.com>\r\n\
@@ -28,11 +30,6 @@ Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
 \r\n\
 One o'clock at the usual place.\r\n";
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
-
 /// The mock record of an accepted submission, copied out of the server lock.
 struct Submission {
     email_id: Id,
@@ -41,41 +38,6 @@ struct Submission {
 }
 
 impl Fixture {
-    fn start() -> Self {
-        Self::started_with(MockServer::builder())
-    }
-
-    fn started_with(builder: jmap_mock::MockServerBuilder) -> Self {
-        let server = builder.start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-
-    fn seed_mailbox(&self, name: &str, role: Option<&str>) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        let account = state.account_mut(&self.account_id).unwrap();
-        account.seed_mailbox(name, role)
-    }
-
-    fn seed_identity(&self, name: &str, email: &str) -> Id {
-        let state = self.server.state();
-        let mut state = state.lock().unwrap();
-        let account = state.account_mut(&self.account_id).unwrap();
-        account.seed_identity(name, email)
-    }
-
-    /// The current contents of the mailbox, as a folder refresh finds them.
-    fn listing(&self, mailbox: &Id) -> Vec<MessageSummary> {
-        let (_, messages) = self.sync().messages(mailbox).expect("the mailbox lists");
-        messages
-    }
-
     /// The single submission that the server accepted, as recorded.
     fn only_submission(&self) -> Submission {
         let state = self.server.state();

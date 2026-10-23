@@ -147,9 +147,9 @@ fn a_fresh_connect_shows_attendees_a_remote_client_put_straight_on_the_server() 
 
     // A second client that writes directly over JMAP, independent of the
     // session under test.
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+    // Always rebase, as the backend does behind the loopback proxy.
     let raw_client = Client::builder()
-        .rebase_urls_to_origin(rebase)
+        .rebase_urls_to_origin(true)
         .connect(&origin, Credentials::basic(user.clone(), password.clone()))
         .expect("could not fetch the session document for the raw second client");
     let account_id = raw_client

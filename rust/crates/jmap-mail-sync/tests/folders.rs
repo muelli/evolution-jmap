@@ -4,29 +4,12 @@
 //! The folder listing against a mock server: the `Mailbox/get` request and
 //! the counts that the server reports.
 
-use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{FolderRole, MailSync};
-use jmap_mock::{EmailSeed, MockServer};
-use jmap_proto::Id;
+use jmap_mail_sync::FolderRole;
+use jmap_mock::EmailSeed;
 use jmap_proto::mail::{keyword, role};
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        Self { server, account_id }
-    }
-
-    fn sync(&self) -> MailSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        MailSync::new(client, self.account_id.clone())
-    }
-}
+mod common;
+use common::Fixture;
 
 #[test]
 fn the_folder_tree_carries_the_mailboxes_the_server_reports() {
