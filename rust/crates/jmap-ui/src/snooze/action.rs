@@ -54,15 +54,14 @@ use evo_sys::{
 #[cfg(not(evolution_eui_manager))]
 use glib_sys::{GError, g_error_free};
 use glib_sys::{GFALSE, GTRUE, gpointer};
-use gobject_sys::{
-    GObject, g_object_get, g_object_get_data, g_object_set_data_full, g_object_unref,
-};
+use gobject_sys::{GObject, g_object_get, g_object_unref};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::{g_object_set, g_signal_connect_data};
 #[cfg(not(evolution_eui_manager))]
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::{read_string, take_string};
+use jmap_backend_core::object_data::ObjectData;
 use jmap_backend_core::trampoline::guard;
 use jmap_proto::Id;
 use jmap_proto::mail::SnoozeDetails;
@@ -75,7 +74,7 @@ use crate::session_cache;
 /// See `vacation::extension` for the reason that this literal is not imported.
 const BACKEND_NAME: &CStr = c"jmap";
 
-const STATE_KEY: &CStr = c"jmap-snooze-state";
+const STATE: ObjectData<RefCell<SnoozeState>> = ObjectData::new(c"jmap-snooze-state");
 
 const NOT_JMAP: &CStr = N_(c"The folder does not belong to a JMAP account");
 const CHECKING: &CStr = N_(c"Checking whether the account’s server offers snooze…");
@@ -113,17 +112,8 @@ struct SnoozeState {
 /// `owner` must be a live extensible that [`install`] decorated.
 /// Do not keep the reference after the main-loop callback ends.
 unsafe fn state<'a>(owner: *mut GObject) -> Option<&'a RefCell<SnoozeState>> {
-    // SAFETY: `install` sets the data one time, with this type.
-    unsafe {
-        g_object_get_data(owner, STATE_KEY.as_ptr())
-            .cast::<RefCell<SnoozeState>>()
-            .as_ref()
-    }
-}
-
-unsafe extern "C" fn drop_state(data: gpointer) {
-    // SAFETY: this takes back the box that `install` leaked, one time only.
-    drop(unsafe { Box::from_raw(data.cast::<RefCell<SnoozeState>>()) });
+    // SAFETY: per the contract. `install` sets the data one time.
+    unsafe { STATE.get(owner) }
 }
 
 /// The `activate` handler of one preset, in the callback shape of the
@@ -254,19 +244,14 @@ pub(crate) unsafe fn install(
     };
 
     tracing::trace!("snooze submenu merged into a JMAP-capable reader window");
-    let snooze = Box::new(RefCell::new(SnoozeState {
+    let snooze = RefCell::new(SnoozeState {
         reader,
         menu_action,
         pending: None,
-    }));
-    // SAFETY: `owner` is live; the ownership of the box goes to the qdata.
+    });
+    // SAFETY: `owner` is live; the ownership of the state goes to the object data.
     unsafe {
-        g_object_set_data_full(
-            owner,
-            STATE_KEY.as_ptr(),
-            Box::into_raw(snooze).cast(),
-            Some(drop_state),
-        );
+        STATE.set(owner, snooze);
         g_object_unref(menu_action.cast());
         update_sensitivity(owner);
     }
@@ -341,22 +326,17 @@ pub(crate) unsafe fn install(
     unsafe { set_action_sensitive(menu_action, false) };
 
     tracing::trace!("snooze submenu merged into a JMAP-capable reader window");
-    let snooze = Box::new(RefCell::new(SnoozeState {
+    let snooze = RefCell::new(SnoozeState {
         reader,
         menu_action,
         pending: None,
-    }));
-    // SAFETY: `owner` is live; the ownership of the box goes to the qdata.
+    });
+    // SAFETY: `owner` is live; the ownership of the state goes to the object data.
     // `menu_action` is a borrowed reference from the group of the manager
     // (`e_ui_action_group_get_action` does not transfer a reference).
     // Thus, unlike the 3.52 path, there is no reference to release here.
     unsafe {
-        g_object_set_data_full(
-            owner,
-            STATE_KEY.as_ptr(),
-            Box::into_raw(snooze).cast(),
-            Some(drop_state),
-        );
+        STATE.set(owner, snooze);
         update_sensitivity(owner);
     }
 }
