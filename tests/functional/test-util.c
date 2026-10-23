@@ -39,3 +39,19 @@ functional_credentials_required_cb (ESource *source,
 
 	(*count)++;
 }
+
+/* Iterate the default main context of this thread for `milliseconds`, so that
+ * queued idles run. ESource applies D-Bus changes only from idles. The wait
+ * always uses the full time, because an observation can be the absence of an
+ * event. */
+void
+functional_settle (guint milliseconds)
+{
+	gint64 deadline = g_get_monotonic_time () + milliseconds * G_TIME_SPAN_MILLISECOND;
+
+	while (g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		/* g_usleep and G_TIME_SPAN_MILLISECOND both use microseconds. */
+		g_usleep (10 * G_TIME_SPAN_MILLISECOND);
+	}
+}

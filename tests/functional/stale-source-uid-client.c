@@ -118,20 +118,6 @@ observe_boolean (const gchar *key,
 	g_print ("%s=%d\n", key, value ? 1 : 0);
 }
 
-/* Iterate the default main context for `milliseconds` (see
- * SETTLE_MILLISECONDS). */
-static void
-settle (guint milliseconds)
-{
-	gint64 deadline = g_get_monotonic_time () + milliseconds * G_TIME_SPAN_MILLISECOND;
-
-	while (g_get_monotonic_time () < deadline) {
-		g_main_context_iteration (NULL, FALSE);
-		/* g_usleep and G_TIME_SPAN_MILLISECOND both use microseconds. */
-		g_usleep (10 * G_TIME_SPAN_MILLISECOND);
-	}
-}
-
 /* All UIDs in the registry, comma-separated. The Rust side compares them with
  * the `.source` files. Use one line: `jmap_functional::observations` is a map
  * and keeps only the last value of a repeated key. */
@@ -250,7 +236,7 @@ run_dconf_only (const gchar *dangling_uid)
 
 	/* Wait the same time as the other mode, so that "no change" is a real
 	 * measurement. */
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 
 	uids = source_uids (registry);
 	functional_observe ("source-uids-after-settling", uids);
@@ -405,7 +391,7 @@ run_collection_child (const gchar *account_uid,
 						       NULL, 0, NULL, NULL, &error))
 		return functional_fail ("invoke-credentials-required", error);
 
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 
 	g_print ("credentials-required=%u\n", credentials_required);
 	g_print ("authenticate=%u\n", authenticate);

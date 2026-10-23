@@ -47,17 +47,6 @@ observe_boolean (const gchar *key,
  * Same value as in `book-stale-token-client.c`. */
 #define SETTLE_MILLISECONDS 1500
 
-static void
-settle (guint milliseconds)
-{
-	gint64 deadline = g_get_monotonic_time () + milliseconds * G_TIME_SPAN_MILLISECOND;
-
-	while (g_get_monotonic_time () < deadline) {
-		g_main_context_iteration (NULL, FALSE);
-		g_usleep (10 * G_TIME_SPAN_MILLISECOND);
-	}
-}
-
 /* Answer with the password, as a real credentials prompter does. With `NULL`,
  * EDS gets the credentials itself, and here (no Shell, no
  * default-credentials-required listener) it gets nothing. */
@@ -124,7 +113,7 @@ main (int argc,
 	 * sends no request. connect-ok is only for diagnosis: EDS gives a client
 	 * and no GError also after a `CredentialsRequired` failure. */
 	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 	observe_boolean ("connect-ok", client != NULL);
 	g_print ("credentials-required-after-connect=%u\n", credentials_required);
 	g_clear_error (&error);
@@ -144,13 +133,13 @@ main (int argc,
 		functional_observe ("reauthenticate-error", error && error->message ? error->message : "(no error set)");
 		g_clear_error (&error);
 	}
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 	g_print ("credentials-required-after-reauthenticate=%u\n", credentials_required);
 
 	/* Wait again with no new request. A count that increases here shows that
 	 * the backend asks for credentials again by itself: the retry storm that
 	 * this test must find. */
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 	g_print ("credentials-required=%u\n", credentials_required);
 	g_print ("done=1\n");
 

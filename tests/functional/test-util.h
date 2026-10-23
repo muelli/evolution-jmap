@@ -22,6 +22,7 @@ void	functional_credentials_required_cb
 					 GTlsCertificateFlags certificate_errors,
 					 const GError *op_error,
 					 gpointer user_data);
+void	functional_settle		(guint milliseconds);
 
 G_END_DECLS
 

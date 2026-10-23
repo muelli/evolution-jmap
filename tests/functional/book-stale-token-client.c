@@ -105,19 +105,6 @@ create_contact (EBookClient *book,
 	return ok;
 }
 
-/* Iterates the default main context of this thread for `milliseconds`, so
- * that queued idles run. ESource applies D-Bus updates only from idles. */
-static void
-settle (guint milliseconds)
-{
-	gint64 deadline = g_get_monotonic_time () + milliseconds * G_TIME_SPAN_MILLISECOND;
-
-	while (g_get_monotonic_time () < deadline) {
-		g_main_context_iteration (NULL, FALSE);
-		g_usleep (10 * G_TIME_SPAN_MILLISECOND);
-	}
-}
-
 static gboolean
 wait_for_file (const gchar *path,
                guint timeout_seconds)
@@ -224,7 +211,7 @@ main (int argc,
 	create_contact (book, "After the rotation",
 			"second-create-ok", "second-create-error");
 
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 
 	g_print ("credentials-required=%u\n", credentials_required);
 	g_print ("done=1\n");

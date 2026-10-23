@@ -170,21 +170,6 @@ create_event (ECalClient *cal,
 	return ok;
 }
 
-/* Iterate the default main context for `milliseconds`, so that queued idles
- * run (ESource applies D-Bus changes only from idles). This always uses the
- * full time, because the observation is the *absence* of an event. */
-static void
-settle (guint milliseconds)
-{
-	gint64 deadline = g_get_monotonic_time () + milliseconds * G_TIME_SPAN_MILLISECOND;
-
-	while (g_get_monotonic_time () < deadline) {
-		g_main_context_iteration (NULL, FALSE);
-		/* g_usleep and G_TIME_SPAN_MILLISECOND both use microseconds. */
-		g_usleep (10 * G_TIME_SPAN_MILLISECOND);
-	}
-}
-
 /* Wait until `path` exists, and iterate the main context so that signals from
  * the registry and factory arrive. Returns FALSE at the timeout. */
 static gboolean
@@ -295,7 +280,7 @@ main (int argc,
 	create_event (cal, "jmap-functional-stale-token-2", "After the rotation",
 		      "second-create-ok", "second-create-error");
 
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 
 	g_print ("credentials-required=%u\n", credentials_required);
 	g_print ("done=1\n");
