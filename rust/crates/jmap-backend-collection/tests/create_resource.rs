@@ -443,10 +443,14 @@ unsafe fn set_display_name(source: *mut ESource, name: *const std::ffi::c_char) 
     unsafe { e_source_set_display_name(source, name) };
 }
 
+/// The race test writes 20,000 display names. It takes about 5 s, and up to 60 s
+/// under ThreadSanitizer.
+const RACE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
 #[test]
 fn requested_of_on_another_thread_copies_a_display_name_the_main_thread_is_replacing() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    with_timeout_duration(std::time::Duration::from_secs(60), || {
+    with_timeout_duration(RACE_TIMEOUT, || {
         let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
         read_while_another_thread_writes(
             scratch.source,
