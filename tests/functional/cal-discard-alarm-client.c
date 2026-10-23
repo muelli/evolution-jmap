@@ -21,20 +21,11 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "test-util.h"
 
 /* The maximum wait for the refresh of the connect to get the event from the
  * server. A long wait costs time only on a failed run. */
 #define FIND_TIMEOUT_SECONDS 10
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
 
 /* The cached event with the summary `summary`, or NULL after the timeout. */
 static ECalComponent *
@@ -128,7 +119,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -139,7 +130,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	cal = E_CAL_CLIENT (client);
 
@@ -147,7 +138,7 @@ main (int argc,
 
 	event = find_event (cal, summary, &error);
 	if (!event)
-		return fail ("find", error);
+		return functional_fail ("find", error);
 
 	uid = e_cal_component_get_uid (event);
 	alarm_uids = e_cal_component_get_alarm_uids (event);

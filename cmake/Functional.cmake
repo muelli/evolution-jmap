@@ -94,9 +94,10 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	#
 	# event-start.c holds the one function that reports the instant of a start.
 	# Thus a difference between two client answers is a difference in the
-	# event, not in the measurement. All five clients compile it, so one loop is
-	# sufficient. cal-client.c, cal-color-client.c and cal-free-busy-client.c
-	# do not call it, and an unused function costs nothing.
+	# event, not in the measurement. It also holds functional_first_vevent. All
+	# five clients compile it, so one loop is sufficient. cal-color-client.c and
+	# cal-free-busy-client.c call neither function, and an unused function
+	# costs nothing.
 	foreach(_client cal cal-edit cal-zone cal-color cal-free-busy)
 		add_executable(functional-${_client}-client
 			tests/functional/${_client}-client.c
@@ -116,7 +117,8 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# them fails the whole run, not only one field. See the client's header.
 	add_executable(functional-cal-live-client
 		tests/functional/cal-live-client.c
-		tests/functional/connection-status.c)
+		tests/functional/connection-status.c
+		tests/functional/event-start.c)
 	target_include_directories(functional-cal-live-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
 	target_compile_options(functional-cal-live-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
 	target_link_libraries(functional-cal-live-client PRIVATE ${LIBECAL_LIBRARIES})
@@ -127,7 +129,8 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# See tests/functional/cal-attendees-client.c.
 	add_executable(functional-cal-attendees-client
 		tests/functional/cal-attendees-client.c
-		tests/functional/connection-status.c)
+		tests/functional/connection-status.c
+		tests/functional/event-start.c)
 	target_include_directories(functional-cal-attendees-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
 	target_compile_options(functional-cal-attendees-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
 	target_link_libraries(functional-cal-attendees-client PRIVATE ${LIBECAL_LIBRARIES})
@@ -421,6 +424,18 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			${CAMEL_CLIENT_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
 		target_link_directories(functional-${_client}-client PRIVATE
 			${CAMEL_CLIENT_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+	endforeach()
+
+	# test-util.c holds the small helpers that these clients use in the same form.
+	foreach(_client
+			book book-stale-token
+			cal cal-attendees cal-attendees-remote cal-changes cal-color
+			cal-discard-alarm cal-edit cal-free-busy cal-live cal-received
+			cal-scheduling cal-scheduling-live cal-stale-token cal-zone
+			config-lookup mail mail-live mail-stale-token
+			oauth2-stale-proxy oauth2-token-collision
+			redirect-credentials-withheld stale-source-uid transport transport-live)
+		target_sources(functional-${_client}-client PRIVATE tests/functional/test-util.c)
 	endforeach()
 
 	# The Rust side builds the scratch EDS installation, runs the client on a

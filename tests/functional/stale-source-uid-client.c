@@ -63,6 +63,8 @@
 
 #include <libedataserver/libedataserver.h>
 
+#include "test-util.h"
+
 /* The schema in which `ESourceRegistry` keeps the default sources. The six
  * keys are written out (not read from the schema), thus a key that upstream
  * removes makes this run fail with its name. From `e-source-registry.c:68`
@@ -109,45 +111,11 @@ contains_bytes (const gchar *haystack,
 	return FALSE;
 }
 
-/* Write one `key=value` line to stdout for `jmap_functional::observations`. */
-static void
-observe (const gchar *key,
-         const gchar *value)
-{
-	g_print ("%s=%s\n", key, value ? value : "(null)");
-}
-
 static void
 observe_boolean (const gchar *key,
                  gboolean value)
 {
 	g_print ("%s=%d\n", key, value ? 1 : 0);
-}
-
-/* Fail the run and name the failed step. Use only for preconditions of this
- * program. Report the behaviour under test, do not judge it here. */
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
-
-/* Iterate the default main context for `milliseconds` (see
- * SETTLE_MILLISECONDS). */
-static void
-settle (guint milliseconds)
-{
-	gint64 deadline = g_get_monotonic_time () + milliseconds * G_TIME_SPAN_MILLISECOND;
-
-	while (g_get_monotonic_time () < deadline) {
-		g_main_context_iteration (NULL, FALSE);
-		/* g_usleep and G_TIME_SPAN_MILLISECOND both use microseconds. */
-		g_usleep (10 * G_TIME_SPAN_MILLISECOND);
-	}
 }
 
 /* All UIDs in the registry, comma-separated. The Rust side compares them with
@@ -246,7 +214,7 @@ run_dconf_only (const gchar *dangling_uid)
 	 * the question is if a new registry does anything with the stale UID. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, dangling_uid);
 	observe_boolean ("dangling-uid-in-registry", source != NULL);
@@ -258,20 +226,20 @@ run_dconf_only (const gchar *dangling_uid)
 	 * it uses the built-in account. If it made a source, EDS changes a stale
 	 * dconf UID into a live source. */
 	default_mail_account = e_source_registry_ref_default_mail_account (registry);
-	observe ("default-mail-account-uid",
+	functional_observe ("default-mail-account-uid",
 		 default_mail_account ? e_source_get_uid (default_mail_account) : "(none)");
 	g_clear_object (&default_mail_account);
 
 	uids = source_uids (registry);
-	observe ("source-uids", uids);
+	functional_observe ("source-uids", uids);
 	g_free (uids);
 
 	/* Wait the same time as the other mode, so that "no change" is a real
 	 * measurement. */
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 
 	uids = source_uids (registry);
-	observe ("source-uids-after-settling", uids);
+	functional_observe ("source-uids-after-settling", uids);
 	g_free (uids);
 
 	observe_boolean ("done", TRUE);
@@ -282,23 +250,8 @@ run_dconf_only (const gchar *dangling_uid)
 
 /* ----------------------------------------------------------- collection-child */
 
-/* Count the signals. In the application, `credentials-required` shows the
- * credentials prompter (for an OAuth2 source, the consent window).
- * `authenticate` is the silent path: the registry found a stored secret and
- * gave it to the backend. */
-static void
-credentials_required_cb (ESource *source,
-                         ESourceCredentialsReason reason,
-                         const gchar *certificate_pem,
-                         GTlsCertificateFlags certificate_errors,
-                         const GError *op_error,
-                         gpointer user_data)
-{
-	guint *count = user_data;
-
-	(*count)++;
-}
-
+/* Count the `authenticate` signal. It is the silent path: the registry found a
+ * stored secret and gave it to the backend. */
 static void
 authenticate_cb (ESource *source,
                  const ENamedParameters *credentials,
@@ -365,7 +318,7 @@ run_collection_child (const gchar *account_uid,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	account = e_source_registry_ref_source (registry, account_uid);
 	if (!account) {
@@ -387,12 +340,12 @@ run_collection_child (const gchar *account_uid,
 	/* Any child: all are in the cache directory. Report its UID, so that the
 	 * Rust side can find the keyfile itself. */
 	child = E_SOURCE (children->data);
-	observe ("child-uid", e_source_get_uid (child));
-	observe ("child-display-name", e_source_get_display_name (child));
+	functional_observe ("child-uid", e_source_get_uid (child));
+	functional_observe ("child-display-name", e_source_get_display_name (child));
 
 	/* Connect before the store below, to count its signals too. */
 	g_signal_connect (child, "credentials-required",
-			  G_CALLBACK (credentials_required_cb), &credentials_required);
+			  G_CALLBACK (functional_credentials_required_cb), &credentials_required);
 	g_signal_connect (child, "authenticate",
 			  G_CALLBACK (authenticate_cb), &authenticate);
 
@@ -412,7 +365,7 @@ run_collection_child (const gchar *account_uid,
 	 * side asserts that the two UIDs are different. */
 	provider = e_source_credentials_provider_new (registry);
 	credentials_source = e_source_credentials_provider_ref_credentials_source (provider, child);
-	observe ("credentials-source-uid",
+	functional_observe ("credentials-source-uid",
 		 e_source_get_uid (credentials_source ? credentials_source : child));
 
 	/* The control: store the password where the lookup reads.
@@ -424,7 +377,7 @@ run_collection_child (const gchar *account_uid,
 	if (password != NULL &&
 	    !e_source_store_password_sync (credentials_source ? credentials_source : child,
 					   password, TRUE, NULL, &error))
-		return fail ("store-password", error);
+		return functional_fail ("store-password", error);
 
 	g_clear_object (&credentials_source);
 	g_object_unref (provider);
@@ -436,9 +389,9 @@ run_collection_child (const gchar *account_uid,
 	if (!e_source_invoke_credentials_required_sync (child,
 						       E_SOURCE_CREDENTIALS_REASON_REQUIRED,
 						       NULL, 0, NULL, NULL, &error))
-		return fail ("invoke-credentials-required", error);
+		return functional_fail ("invoke-credentials-required", error);
 
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 
 	g_print ("credentials-required=%u\n", credentials_required);
 	g_print ("authenticate=%u\n", authenticate);

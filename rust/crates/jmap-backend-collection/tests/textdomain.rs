@@ -26,66 +26,27 @@
 //! Cargo runs each file in `tests/` in its own process. In this file, only one
 //! test calls the entry point, and that gives the isolation.
 
-use std::ffi::CStr;
 use std::ptr;
 
-use glib_sys::{GFALSE, GTRUE, GType, gboolean};
-use gobject_sys::{
-    GTypeModule, GTypeModuleClass, g_object_new, g_type_module_get_type, g_type_module_use,
-};
+use glib_sys::GFALSE;
+use gobject_sys::{GTypeModule, g_object_new, g_type_module_use};
 use jmap_backend_collection::module::{load, unload};
 use jmap_backend_core::i18n::{LOCALE_DIR, bind_to, binding};
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::subclass::register_static;
+use jmap_backend_core::test_module;
 
 mod common;
 use common::{with_timeout, with_timeout_duration};
 
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// A `GTypeModule` in place of the `EModule` that the registry loads.
-#[repr(C)]
-struct TestModule {
-    parent: GTypeModule,
-}
-
-#[repr(C)]
-struct TestModuleClass {
-    parent_class: GTypeModuleClass,
-}
-
-// SAFETY: both structs are #[repr(C)] and lead with the GTypeModule instance
-// and class structs, and GTypeModule derives from GObject.
-unsafe impl ObjectSubclass for TestModule {
-    const NAME: &'static CStr = c"JmapCollectionTextdomainTestModule";
-    type Instance = TestModule;
-    type Class = TestModuleClass;
-
-    fn parent_type() -> GType {
-        // SAFETY: the function takes no arguments, and the type initialises
-        // itself.
-        unsafe { g_type_module_get_type() }
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points to our new class struct. It starts with
-        // GTypeModuleClass, which contains both slots.
-        let vfuncs = unsafe { &mut (*class).parent_class };
-        vfuncs.load = Some(module_load);
-        vfuncs.unload = Some(module_unload);
-    }
-}
-
-unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib passes the module that it loads, as the entry point
-    // requires.
-    unsafe { load(module) };
-    GTRUE
-}
-
-unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
-    // SAFETY: as `module_load`.
-    unsafe { unload(module) };
-}
+// A `GTypeModule` in place of the `EModule` that the registry loads.
+test_module!(
+    TestModule,
+    c"JmapCollectionTextdomainTestModule",
+    load = load,
+    unload = unload
+);
 
 /// The module load changes the binding of the domain to the installed
 /// catalogue directory.

@@ -23,16 +23,7 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
+#include "test-util.h"
 
 int
 main (int argc,
@@ -59,7 +50,7 @@ main (int argc,
 	 * temporary sources directory that the test wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -75,7 +66,7 @@ main (int argc,
 
 		if (seed_password && *seed_password &&
 		    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
-			return fail ("store-password", error);
+			return functional_fail ("store-password", error);
 	}
 
 	/* Starts evolution-calendar-factory, which dlopens
@@ -84,7 +75,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	cal = E_CAL_CLIENT (client);
 
@@ -96,11 +87,11 @@ main (int argc,
 	/* Read over D-Bus, not from the client cache. cal-client.c and
 	 * book-client.c tell why. */
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
-		return fail ("retrieve-properties", error);
+		return functional_fail ("retrieve-properties", error);
 
 	/* "#t" is the S-expression that matches every object. */
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error))
-		return fail ("query", error);
+		return functional_fail ("query", error);
 
 	for (link = components; link; link = link->next) {
 		ICalComponent *component = link->data;
@@ -121,13 +112,13 @@ main (int argc,
 		ICalComponent *event = NULL;
 
 		if (!e_cal_client_get_object_sync (cal, argv[2], NULL, &event, NULL, &error))
-			return fail ("get", error);
+			return functional_fail ("get", error);
 
 		i_cal_component_set_summary (event, argv[3]);
 		if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
 						      E_CAL_OPERATION_FLAG_NONE, NULL, &error)) {
 			g_object_unref (event);
-			return fail ("modify", error);
+			return functional_fail ("modify", error);
 		}
 		g_object_unref (event);
 	}

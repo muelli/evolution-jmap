@@ -23,6 +23,8 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "event-start.h"
+#include "test-util.h"
 
 /* The start of the timed event. A UTC value, so that the scratch session
  * needs no timezone database, and both halves of the test check the same
@@ -247,28 +249,6 @@
 #define TEST_ZONED_MOVED_RECURRENCE_ID "20260312T100000"
 #define TEST_ZONED_MOVED_DTSTART "20260312T080000"
 #define TEST_ZONED_MOVED_DTEND "20260312T090000"
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
-
-/* Return the first VEVENT of what get_object returns: a bare VEVENT for an
- * event with one instance, or a VCALENDAR that contains the instances. Both
- * forms are accepted, so that the form alone does not cause a failure. */
-static ICalComponent *
-first_vevent (ICalComponent *component)
-{
-	if (i_cal_component_isa (component) == I_CAL_VEVENT_COMPONENT)
-		return g_object_ref (component);
-
-	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
-}
 
 /* Whether a component replaces one occurrence of a series and is not the
  * series. Only the RECURRENCE-ID (RFC 5545 §3.8.4.4) tells the two apart. */
@@ -502,7 +482,7 @@ main (int argc,
 	 * scratch sources directory that the harness wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -520,7 +500,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	cal = E_CAL_CLIENT (client);
 
@@ -534,7 +514,7 @@ main (int argc,
 	 * client. D-Bus notifications update that copy on a main context that
 	 * this program does not run; see book-client.c. */
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
-		return fail ("retrieve-properties", error);
+		return functional_fail ("retrieve-properties", error);
 
 	/* Whether the calendar accepts writes. EDS gets this from what the backend
 	 * said during its connect. If the backend connects but does not say that
@@ -545,7 +525,7 @@ main (int argc,
 
 	/* "#t" is the S-expression that matches every object. */
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error))
-		return fail ("query", error);
+		return functional_fail ("query", error);
 
 	g_print ("events-before=%u\n", g_slist_length (components));
 	g_slist_free_full (components, g_object_unref);
@@ -588,7 +568,7 @@ main (int argc,
 	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
 					      &added_uid, NULL, &error)) {
 		g_object_unref (event);
-		return fail ("create", error);
+		return functional_fail ("create", error);
 	}
 
 	g_object_unref (event);
@@ -598,10 +578,10 @@ main (int argc,
 	 * keep what it wrote. */
 	if (!e_cal_client_get_object_sync (cal, added_uid, NULL, &read_back, NULL, &error)) {
 		g_free (added_uid);
-		return fail ("read-back", error);
+		return functional_fail ("read-back", error);
 	}
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
@@ -673,7 +653,7 @@ main (int argc,
 					      &all_day_uid, NULL, &error)) {
 		g_object_unref (event);
 		g_free (added_uid);
-		return fail ("create-all-day", error);
+		return functional_fail ("create-all-day", error);
 	}
 
 	g_object_unref (event);
@@ -709,7 +689,7 @@ main (int argc,
 					      &zoned_uid, NULL, &error)) {
 		g_object_unref (event);
 		g_free (added_uid);
-		return fail ("create-zoned", error);
+		return functional_fail ("create-zoned", error);
 	}
 
 	g_object_unref (event);
@@ -742,7 +722,7 @@ main (int argc,
 					      &recurring_uid, NULL, &error)) {
 		g_object_unref (event);
 		g_free (added_uid);
-		return fail ("create-recurring", error);
+		return functional_fail ("create-recurring", error);
 	}
 
 	g_object_unref (event);
@@ -788,7 +768,7 @@ main (int argc,
 		g_object_unref (event);
 		g_free (recurring_uid);
 		g_free (added_uid);
-		return fail ("modify-occurrence", error);
+		return functional_fail ("modify-occurrence", error);
 	}
 
 	g_object_unref (event);
@@ -802,10 +782,10 @@ main (int argc,
 					   &read_back, NULL, &error)) {
 		g_free (recurring_uid);
 		g_free (added_uid);
-		return fail ("read-back-occurrence", error);
+		return functional_fail ("read-back-occurrence", error);
 	}
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
@@ -855,7 +835,7 @@ main (int argc,
 					      E_CAL_OPERATION_FLAG_NONE, NULL, &error)) {
 		g_free (recurring_uid);
 		g_free (added_uid);
-		return fail ("remove-occurrence", error);
+		return functional_fail ("remove-occurrence", error);
 	}
 
 	/* The series as EDS kept it. A request by UID without RECURRENCE-ID
@@ -863,10 +843,10 @@ main (int argc,
 	if (!e_cal_client_get_object_sync (cal, recurring_uid, NULL, &read_back, NULL, &error)) {
 		g_free (recurring_uid);
 		g_free (added_uid);
-		return fail ("read-back-series", error);
+		return functional_fail ("read-back-series", error);
 	}
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
@@ -913,7 +893,7 @@ main (int argc,
 		g_object_unref (event);
 		g_free (recurring_uid);
 		g_free (added_uid);
-		return fail ("modify-this-and-future", error);
+		return functional_fail ("modify-this-and-future", error);
 	}
 
 	g_object_unref (event);
@@ -925,12 +905,12 @@ main (int argc,
 	if (!e_cal_client_get_object_sync (cal, recurring_uid, NULL, &read_back, NULL, &error)) {
 		g_free (recurring_uid);
 		g_free (added_uid);
-		return fail ("read-back-truncated", error);
+		return functional_fail ("read-back-truncated", error);
 	}
 
 	g_free (recurring_uid);
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
@@ -990,7 +970,7 @@ main (int argc,
 					      &zoned_recurring_uid, NULL, &error)) {
 		g_object_unref (event);
 		g_free (added_uid);
-		return fail ("create-zoned-recurring", error);
+		return functional_fail ("create-zoned-recurring", error);
 	}
 
 	g_object_unref (event);
@@ -1028,7 +1008,7 @@ main (int argc,
 		g_object_unref (event);
 		g_free (zoned_recurring_uid);
 		g_free (added_uid);
-		return fail ("modify-zoned-occurrence", error);
+		return functional_fail ("modify-zoned-occurrence", error);
 	}
 
 	g_object_unref (event);
@@ -1041,12 +1021,12 @@ main (int argc,
 					   &read_back, NULL, &error)) {
 		g_free (zoned_recurring_uid);
 		g_free (added_uid);
-		return fail ("read-back-zoned-occurrence", error);
+		return functional_fail ("read-back-zoned-occurrence", error);
 	}
 
 	g_free (zoned_recurring_uid);
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {
@@ -1074,7 +1054,7 @@ main (int argc,
 
 	if (!e_cal_client_get_object_list_sync (cal, "#t", &components, NULL, &error)) {
 		g_free (added_uid);
-		return fail ("query-after", error);
+		return functional_fail ("query-after", error);
 	}
 
 	g_print ("events-after=%u\n", g_slist_length (components));

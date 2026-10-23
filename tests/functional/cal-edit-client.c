@@ -36,6 +36,7 @@
 
 #include "connection-status.h"
 #include "event-start.h"
+#include "test-util.h"
 
 /* The parameter (jmap-ical X_JMAP_KEY) that tells which entry of the server
  * map a line comes from. A save patches `locations/<key>/name`: if EDS loses
@@ -50,28 +51,6 @@
  * seconds, less than the CTest timeout, thus a missing event fails the test. */
 #define EDIT_WAIT_TRIES 200
 #define EDIT_WAIT_INTERVAL_US 50000
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
-
-/* Return the VEVENT from a get_object result. EDS gives a VEVENT for one
- * instance, or a VCALENDAR with the instances. Accept both forms, so that the
- * form of the result does not cause an unrelated failure. */
-static ICalComponent *
-first_vevent (ICalComponent *component)
-{
-	if (i_cal_component_isa (component) == I_CAL_VEVENT_COMPONENT)
-		return g_object_ref (component);
-
-	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
-}
 
 /* Return the value of one non-standard parameter of a property, or the empty
  * string if there is none.
@@ -492,7 +471,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -508,7 +487,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	/* Report the status before the first request, as cal-client.c does.
 	 * e_cal_client_connect_sync succeeds also when the backend connect_sync
@@ -525,7 +504,7 @@ main (int argc,
 		return 1;
 	}
 
-	event = first_vevent (fetched);
+	event = functional_first_vevent (fetched);
 	if (!event) {
 		g_printerr ("get-seeded: what EDS handed back holds no VEVENT\n");
 		return 1;
@@ -533,8 +512,8 @@ main (int argc,
 
 	g_print ("read-summary=%s\n", i_cal_component_get_summary (event));
 	/* The VEVENT is sufficient: libical finds a TZID in the component *and its
-	 * parents*. first_vevent returns a child of `fetched` with its parent link,
-	 * thus a VTIMEZONE in the VCALENDAR is available. */
+	 * parents*. functional_first_vevent returns a child of `fetched` with its
+	 * parent link, thus a VTIMEZONE in the VCALENDAR is available. */
 	functional_report_start ("read", event);
 	report_places ("read", event);
 	report_resource ("read", event);
@@ -604,15 +583,15 @@ main (int argc,
 
 	if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
 					      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
-		return fail ("modify", error);
+		return functional_fail ("modify", error);
 
 	g_object_unref (event);
 	g_object_unref (fetched);
 
 	if (!e_cal_client_get_object_sync (cal, event_uid, NULL, &read_back, NULL, &error))
-		return fail ("get-after-modify", error);
+		return functional_fail ("get-after-modify", error);
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	if (!read_back_event) {
 		g_printerr ("get-after-modify: what EDS handed back holds no VEVENT\n");
 		return 1;

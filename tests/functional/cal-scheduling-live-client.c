@@ -35,16 +35,7 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
+#include "test-util.h"
 
 static void
 report_capability (EClient *client,
@@ -164,14 +155,14 @@ create (ECalClient *client,
 
 	uid = create_meeting (client, argv[2], organizer, guest, E_CAL_OPERATION_FLAG_NONE, &error);
 	if (!uid)
-		return fail ("create-sent", error);
+		return functional_fail ("create-sent", error);
 	g_print ("created-sent=1\n");
 	g_free (uid);
 
 	uid = create_meeting (client, argv[3], organizer, guest,
 			      E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE, &error);
 	if (!uid)
-		return fail ("create-quiet", error);
+		return functional_fail ("create-quiet", error);
 	g_print ("created-quiet=1\n");
 	g_free (uid);
 
@@ -188,7 +179,7 @@ remove_meeting (ECalClient *client,
 
 	if (!e_cal_client_remove_object_sync (client, i_cal_component_get_uid (component), NULL,
 					      E_CAL_OBJ_MOD_ALL, opflags, NULL, &error))
-		return fail (step, error);
+		return functional_fail (step, error);
 	g_print ("%s=1\n", step);
 
 	return 0;
@@ -207,7 +198,7 @@ settle (ECalClient *client,
 	int status = 0;
 
 	if (!e_cal_client_get_object_list_sync (client, "#t", &components, NULL, &error))
-		return fail ("query", error);
+		return functional_fail ("query", error);
 
 	sent = find_by_summary (components, argv[1]);
 	quiet = find_by_summary (components, argv[2]);
@@ -252,7 +243,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, argv[2]);
 	if (!source) {
@@ -263,12 +254,12 @@ main (int argc,
 	seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
 	if (seed_password && *seed_password &&
 	    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
-		return fail ("store-password", error);
+		return functional_fail ("store-password", error);
 
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	functional_report_connection_status (source, 10);
 

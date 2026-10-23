@@ -27,16 +27,7 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
+#include "test-util.h"
 
 static time_t
 parse_utc (const gchar *text)
@@ -124,7 +115,7 @@ main (int argc,
 	/* Starts evolution-source-registry, which reads the scratch sources. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -139,7 +130,7 @@ main (int argc,
 
 		if (seed_password && *seed_password &&
 		    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
-			return fail ("store-password", error);
+			return functional_fail ("store-password", error);
 	}
 
 	/* Starts evolution-calendar-factory and keeps a backend alive.
@@ -147,7 +138,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	functional_report_connection_status (source, 10);
 
@@ -155,7 +146,7 @@ main (int argc,
 	if (!e_cal_client_get_free_busy_sync (E_CAL_CLIENT (client), window_start, window_end,
 					      users, &out_freebusy, NULL, &error)) {
 		g_slist_free (users);
-		return fail ("get-free-busy", error);
+		return functional_fail ("get-free-busy", error);
 	}
 	g_slist_free (users);
 

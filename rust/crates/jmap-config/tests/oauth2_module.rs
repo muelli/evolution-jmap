@@ -17,16 +17,13 @@
 //! `check_complete`/`insert_widgets` of this crate run. Thus the registration
 //! cannot wait for those calls.
 
-use std::ffi::CStr;
 use std::ptr;
 
 use eds_sys::{ESource, e_source_get_extension, e_source_new_with_uid};
-use glib_sys::{GFALSE, GTRUE, GType, gboolean};
-use gobject_sys::{
-    GTypeModule, GTypeModuleClass, g_object_new, g_object_unref, g_type_module_get_type,
-    g_type_module_use,
-};
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use glib_sys::GFALSE;
+use gobject_sys::{GTypeModule, g_object_new, g_object_unref, g_type_module_use};
+use jmap_backend_core::subclass::register_static;
+use jmap_backend_core::test_module;
 use jmap_config::module::{load, unload};
 use jmap_config::oauth2::EXTENSION_NAME;
 use jmap_config::pending_delete::EXTENSION_NAME as PENDING_DELETE;
@@ -39,50 +36,14 @@ jmap_backend_core::initialise_parents_before_main!(
     jmap_config::source_config::JmapCalConfig,
 );
 
-/// A `GTypeModule` in place of the `EModule` that Evolution loads this crate
-/// as. `tests/textdomain.rs` and `tests/module.rs` use the same substitute.
-#[repr(C)]
-struct TestModule {
-    parent: GTypeModule,
-}
-
-#[repr(C)]
-struct TestModuleClass {
-    parent_class: GTypeModuleClass,
-}
-
-// SAFETY: both structs are #[repr(C)] and lead with the GTypeModule instance
-// and class structs, and GTypeModule derives from GObject.
-unsafe impl ObjectSubclass for TestModule {
-    const NAME: &'static CStr = c"JmapConfigOAuth2ExtensionTestModule";
-    type Instance = TestModule;
-    type Class = TestModuleClass;
-
-    fn parent_type() -> GType {
-        // SAFETY: the function has no arguments, and the type initialises itself.
-        unsafe { g_type_module_get_type() }
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points to a new class struct of this type. It starts
-        // with GTypeModuleClass, which contains the two slots.
-        let vfuncs = unsafe { &mut (*class).parent_class };
-        vfuncs.load = Some(module_load);
-        vfuncs.unload = Some(module_unload);
-    }
-}
-
-unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib supplies the module that loads, and the entry point
-    // requires that module.
-    unsafe { load(module) };
-    GTRUE
-}
-
-unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
-    // SAFETY: the same as `module_load`.
-    unsafe { unload(module) };
-}
+// A `GTypeModule` in place of the `EModule` that Evolution loads this crate
+// as. `tests/textdomain.rs` and `tests/module.rs` use the same substitute.
+test_module!(
+    TestModule,
+    c"JmapConfigOAuth2ExtensionTestModule",
+    load = load,
+    unload = unload
+);
 
 /// A source that `e_source_get_extension` has not examined before. This test
 /// does not call `jmap_config::oauth2::apply`/`read`. It calls only the raw EDS

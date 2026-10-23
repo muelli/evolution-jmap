@@ -21,31 +21,14 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "event-start.h"
+#include "test-util.h"
 
 #define TEST_DTSTART "20260220T100000Z"
 #define TEST_DTEND "20260220T110000Z"
 #define TEST_ORGANIZER "mailto:organizer@example.com"
 #define TEST_ATTENDEE_1 "mailto:attendee1@example.com"
 #define TEST_ATTENDEE_2 "mailto:attendee2@example.com"
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
-
-static ICalComponent *
-first_vevent (ICalComponent *component)
-{
-	if (i_cal_component_isa (component) == I_CAL_VEVENT_COMPONENT)
-		return g_object_ref (component);
-
-	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
-}
 
 /* All values of one property, joined by commas, or an empty string. Copy of
  * the helper in `cal-live-client.c`. */
@@ -103,7 +86,7 @@ main (int argc,
 
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -116,20 +99,20 @@ main (int argc,
 
 		if (seed_password && *seed_password &&
 		    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
-			return fail ("store-password", error);
+			return functional_fail ("store-password", error);
 	}
 
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	cal = E_CAL_CLIENT (client);
 
 	functional_report_connection_status (source, 10);
 
 	if (!e_client_retrieve_properties_sync (client, NULL, &error))
-		return fail ("retrieve-properties", error);
+		return functional_fail ("retrieve-properties", error);
 
 	g_print ("readonly=%d\n", e_client_is_readonly (client) ? 1 : 0);
 
@@ -156,7 +139,7 @@ main (int argc,
 	if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
 					      &added_uid, NULL, &error)) {
 		g_object_unref (event);
-		return fail ("create", error);
+		return functional_fail ("create", error);
 	}
 
 	g_object_unref (event);
@@ -166,10 +149,10 @@ main (int argc,
 	 * the file header). */
 	if (!e_cal_client_get_object_sync (cal, added_uid, NULL, &read_back, NULL, &error)) {
 		g_free (added_uid);
-		return fail ("read-back", error);
+		return functional_fail ("read-back", error);
 	}
 
-	read_back_event = first_vevent (read_back);
+	read_back_event = functional_first_vevent (read_back);
 	g_object_unref (read_back);
 
 	if (!read_back_event) {

@@ -37,22 +37,13 @@
 #include <libecal/libecal.h>
 
 #include "connection-status.h"
+#include "test-util.h"
 
 /* The time that the asynchronous push of the backend gets to reach the mock.
  * When this process exits, its private bus and the backend instance stop.
  * The value is large because it costs time only on a passing run, and the
  * push is one local HTTP round trip to an in-process mock. */
 #define PUSH_SETTLE_SECONDS 3
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
 
 int
 main (int argc,
@@ -79,7 +70,7 @@ main (int argc,
 	 * scratch sources directory that the harness wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -95,7 +86,7 @@ main (int argc,
 	client = e_cal_client_connect_sync (source, E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
 					    (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	functional_report_connection_status (source, 10);
 
@@ -115,7 +106,7 @@ main (int argc,
 	 * in `jmap-backend-collection/src/child_source.rs::apply`. */
 	e_source_selectable_set_color (selectable, color);
 	if (!e_source_write_sync (source, NULL, &error))
-		return fail ("write", error);
+		return functional_fail ("write", error);
 	g_print ("written=1\n");
 
 	/* See PUSH_SETTLE_SECONDS. */

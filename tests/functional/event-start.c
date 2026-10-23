@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * event-start.h tells why this is a shared file and not a static function in
- * each of the two programs that call it.
+ * each program that calls it.
  */
 
 #include "event-start.h"
@@ -52,4 +52,17 @@ functional_report_start (const gchar *prefix,
 	g_free (value);
 	g_clear_object (&utc);
 	g_clear_object (&start);
+}
+
+/* Return the first VEVENT of what get_object returns: a bare VEVENT for an
+ * event with one instance, or a VCALENDAR that contains the instances. Accept
+ * both forms, so that the form of the result does not cause an unrelated
+ * failure. */
+ICalComponent *
+functional_first_vevent (ICalComponent *component)
+{
+	if (i_cal_component_isa (component) == I_CAL_VEVENT_COMPONENT)
+		return g_object_ref (component);
+
+	return i_cal_component_get_first_component (component, I_CAL_VEVENT_COMPONENT);
 }

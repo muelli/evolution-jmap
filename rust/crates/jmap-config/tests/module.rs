@@ -27,7 +27,6 @@
 // does that, one layer up. This test examines what the entry point does when
 // it is called.
 
-use std::ffi::CStr;
 use std::ptr;
 use std::sync::OnceLock;
 
@@ -36,14 +35,14 @@ use evo_sys::{
     EMailConfigServiceBackendClass, e_config_lookup_get_type, e_config_lookup_worker_get_type,
     e_mail_config_service_backend_get_type, e_source_config_backend_get_type,
 };
-use glib_sys::{GFALSE, GTRUE, GType, gboolean};
+use glib_sys::{GFALSE, GType, gboolean};
 use gobject_sys::{
-    GTypeModule, GTypeModuleClass, g_object_new, g_type_class_ref, g_type_class_unref,
-    g_type_from_name, g_type_get_plugin, g_type_is_a, g_type_module_get_type, g_type_module_unuse,
-    g_type_module_use, g_type_name,
+    GTypeModule, g_object_new, g_type_class_ref, g_type_class_unref, g_type_from_name,
+    g_type_get_plugin, g_type_is_a, g_type_module_unuse, g_type_module_use, g_type_name,
 };
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::test_module;
 use jmap_config::backend::JmapConfigServiceBackend;
 use jmap_config::config_lookup::JmapConfigLookup;
 use jmap_config::mail::MAIL_BACKEND_NAME;
@@ -59,49 +58,13 @@ jmap_backend_core::initialise_parents_before_main!(
     jmap_config::source_config::JmapCalConfig,
 );
 
-/// A `GTypeModule` that replaces the `EModule` that Evolution loads this crate as.
-#[repr(C)]
-struct TestModule {
-    parent: GTypeModule,
-}
-
-#[repr(C)]
-struct TestModuleClass {
-    parent_class: GTypeModuleClass,
-}
-
-// SAFETY: both structs are #[repr(C)] and start with the GTypeModule instance
-// and class structs, and GTypeModule derives from GObject.
-unsafe impl ObjectSubclass for TestModule {
-    const NAME: &'static CStr = c"JmapConfigTestModule";
-    type Instance = TestModule;
-    type Class = TestModuleClass;
-
-    fn parent_type() -> GType {
-        // SAFETY: no arguments, and the type initialises itself.
-        unsafe { g_type_module_get_type() }
-    }
-
-    unsafe fn class_init(class: *mut Self::Class) {
-        // SAFETY: `class` points to a newly allocated class struct of this type.
-        // It starts with GTypeModuleClass, which holds both slots.
-        let vfuncs = unsafe { &mut (*class).parent_class };
-        vfuncs.load = Some(module_load);
-        vfuncs.unload = Some(module_unload);
-    }
-}
-
-unsafe extern "C" fn module_load(module: *mut GTypeModule) -> gboolean {
-    // SAFETY: GLib gives the module that it loads, which the entry point
-    // requires.
-    unsafe { load(module) };
-    GTRUE
-}
-
-unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
-    // SAFETY: as `module_load`.
-    unsafe { unload(module) };
-}
+// A `GTypeModule` that replaces the `EModule` that Evolution loads this crate as.
+test_module!(
+    TestModule,
+    c"JmapConfigTestModule",
+    load = load,
+    unload = unload
+);
 
 /// The one module in the process: used, unused, and used again.
 ///

@@ -37,6 +37,7 @@
 #include <libebook/libebook.h>
 
 #include "connection-status.h"
+#include "test-util.h"
 
 /* `cal-stale-token-client.c` tells why this is a string and not an EDS
  * generated accessor. */
@@ -47,42 +48,10 @@
 #define SETTLE_MILLISECONDS 1500
 
 static void
-observe (const gchar *key,
-         const gchar *value)
-{
-	g_print ("%s=%s\n", key, value ? value : "(null)");
-}
-
-static void
 observe_boolean (const gchar *key,
                  gboolean value)
 {
-	observe (key, value ? "1" : "0");
-}
-
-static int
-fail (const gchar *step,
-      GError *error)
-{
-	g_printerr ("%s: %s\n", step, error ? error->message : "(no error set)");
-	g_clear_error (&error);
-
-	return 1;
-}
-
-/* Only count this signal. In Evolution, it shows the credentials prompter (and
- * the consent window for an OAuth2 source) to the user. */
-static void
-credentials_required_cb (ESource *source,
-                         ESourceCredentialsReason reason,
-                         const gchar *certificate_pem,
-                         GTlsCertificateFlags certificate_errors,
-                         const GError *op_error,
-                         gpointer user_data)
-{
-	guint *count = user_data;
-
-	(*count)++;
+	functional_observe (key, value ? "1" : "0");
 }
 
 static gboolean
@@ -128,25 +97,12 @@ create_contact (EBookClient *book,
 
 	observe_boolean (ok_key, ok);
 	if (!ok)
-		observe (error_key, error && error->message ? error->message : "(no error set)");
+		functional_observe (error_key, error && error->message ? error->message : "(no error set)");
 
 	g_free (added_uid);
 	g_clear_error (&error);
 
 	return ok;
-}
-
-/* Iterates the default main context of this thread for `milliseconds`, so
- * that queued idles run. ESource applies D-Bus updates only from idles. */
-static void
-settle (guint milliseconds)
-{
-	gint64 deadline = g_get_monotonic_time () + milliseconds * G_TIME_SPAN_MILLISECOND;
-
-	while (g_get_monotonic_time () < deadline) {
-		g_main_context_iteration (NULL, FALSE);
-		g_usleep (10 * G_TIME_SPAN_MILLISECOND);
-	}
 }
 
 static gboolean
@@ -199,13 +155,13 @@ main (int argc,
 	if (!e_secret_store_store_sync (secret_uid, secret_json,
 					"Evolution Data Source - jmap-functional",
 					TRUE, NULL, &error))
-		return fail ("seed-secret", error);
+		return functional_fail ("seed-secret", error);
 
 	/* Starts evolution-source-registry on the session bus. It reads the
 	 * temporary sources directory that the test wrote. */
 	registry = e_source_registry_new_sync (NULL, &error);
 	if (!registry)
-		return fail ("registry", error);
+		return functional_fail ("registry", error);
 
 	source = e_source_registry_ref_source (registry, source_uid);
 	if (!source) {
@@ -218,14 +174,14 @@ main (int argc,
 	/* Connect the signal before the first connect, to count a consent request
 	 * from the connect too. */
 	g_signal_connect (source, "credentials-required",
-			  G_CALLBACK (credentials_required_cb), &credentials_required);
+			  G_CALLBACK (functional_credentials_required_cb), &credentials_required);
 
 	/* Starts evolution-addressbook-factory, with a backend instance that
 	 * stays for the life of this process. This builds the pooled connection
 	 * and gets its access token once. The test rotates that token later. */
 	client = e_book_client_connect_sync (source, (guint32) -1, NULL, &error);
 	if (!client)
-		return fail ("connect", error);
+		return functional_fail ("connect", error);
 
 	book = E_BOOK_CLIENT (client);
 
@@ -244,7 +200,7 @@ main (int argc,
 	 * endpoint) after the connection exists. The token must become stale
 	 * BETWEEN two calls of this client. */
 	if (!g_file_set_contents (ready_path, "ready", -1, &error))
-		return fail ("write-ready", error);
+		return functional_fail ("write-ready", error);
 
 	if (!wait_for_file (go_path, GO_TIMEOUT_SECONDS)) {
 		g_printerr ("the harness never wrote %s\n", go_path);
@@ -255,7 +211,7 @@ main (int argc,
 	create_contact (book, "After the rotation",
 			"second-create-ok", "second-create-error");
 
-	settle (SETTLE_MILLISECONDS);
+	functional_settle (SETTLE_MILLISECONDS);
 
 	g_print ("credentials-required=%u\n", credentials_required);
 	g_print ("done=1\n");
