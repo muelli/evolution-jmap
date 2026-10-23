@@ -27,7 +27,7 @@
 
 use std::ffi::CStr;
 use std::ptr;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, RwLock};
 
 use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_SUPPORTS_INITIAL_SETUP, CAMEL_STORE_VJUNK,
@@ -43,6 +43,7 @@ use jmap_backend_core::instance::Slot;
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::{checked_borrow_ptr, dispatched_borrow};
 use jmap_backend_core::owned::Owned;
+use jmap_backend_core::poison::{lock, read, write};
 use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_once_after;
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
@@ -265,9 +266,7 @@ impl JmapStore {
     /// Tells if a push subscription is live.
     #[cfg(feature = "testing")]
     pub fn is_pushing(&self) -> bool {
-        self.push
-            .get()
-            .is_some_and(|slot| push_lock(slot).is_some())
+        self.push.get().is_some_and(|slot| lock(slot).is_some())
     }
 
     /// Replaces the `Authorization` header that the live push subscription
@@ -280,7 +279,7 @@ impl JmapStore {
     /// same failure until Camel reconnects.
     pub fn refresh_push_headers(&self, headers: Vec<(String, String)>) {
         if let Some(slot) = self.push.get()
-            && let Some(push) = push_lock(slot).as_ref()
+            && let Some(push) = lock(slot).as_ref()
         {
             push.set_headers(headers);
         }
@@ -292,7 +291,7 @@ impl JmapStore {
     /// worker has its own slot.
     pub fn request_folder_refresh(&self, work: crate::push::Work) {
         if let Some(slot) = self.refresher.get()
-            && let Some(refresher) = refresher_lock(slot).as_ref()
+            && let Some(refresher) = lock(slot).as_ref()
         {
             refresher.request(work);
         }
@@ -304,7 +303,7 @@ impl JmapStore {
     fn replace_push(&self, push: Option<PushRefresh>) -> bool {
         match self.push.get() {
             Some(slot) => {
-                let previous = std::mem::replace(&mut *push_lock(slot), push);
+                let previous = std::mem::replace(&mut *lock(slot), push);
                 previous.is_some()
             }
             None => false,
@@ -313,7 +312,7 @@ impl JmapStore {
 
     fn install_refresher(&self, refresher: Option<FolderRefresh>) {
         if let Some(slot) = self.refresher.get() {
-            *refresher_lock(slot) = refresher;
+            *lock(slot) = refresher;
         }
     }
 
@@ -1394,31 +1393,6 @@ unsafe impl Connected for JmapStore {
     fn holds_connection(&self) -> bool {
         self.is_connected()
     }
-}
-
-/// A poisoned lock means that a different operation panicked while it held
-/// the lock. That does not damage the protected value: a `MailSync` is an
-/// HTTP client and an account id, and a `Listing` is a tree and a state
-/// string. Thus it is better to continue than to stop the store.
-///
-/// This is `pub(crate)` for [`crate::transport`], which holds its own
-/// connection under the same rule. One copy keeps this decision in one place.
-pub(crate) fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    lock.read().unwrap_or_else(PoisonError::into_inner)
-}
-
-pub(crate) fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    lock.write().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The same rule for the two push slots. They are `Mutex`, not `RwLock`,
-/// because no hot path reads them.
-fn push_lock(slot: &Mutex<Option<PushRefresh>>) -> MutexGuard<'_, Option<PushRefresh>> {
-    slot.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn refresher_lock(slot: &Mutex<Option<FolderRefresh>>) -> MutexGuard<'_, Option<FolderRefresh>> {
-    slot.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The class struct, with the same layout rule as the instance struct. It
