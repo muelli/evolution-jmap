@@ -23,7 +23,6 @@
 use std::ffi::{CStr, c_char};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::ptr;
 use std::sync::OnceLock;
 
 use eds_sys::{
@@ -31,13 +30,12 @@ use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION,
     E_SOURCE_EXTENSION_MAIL_ACCOUNT, E_SOURCE_EXTENSION_MAIL_SUBMISSION,
     E_SOURCE_EXTENSION_MAIL_TRANSPORT, ESource, ESourceBackend, ESourceCamel, ESourceMailAccount,
-    ESourceMailSubmission, ESourceRegistryServer, camel_network_settings_get_security_method,
-    e_server_side_source_new, e_source_backend_get_backend_name, e_source_camel_generate_subtype,
+    ESourceMailSubmission, camel_network_settings_get_security_method,
+    e_source_backend_get_backend_name, e_source_camel_generate_subtype,
     e_source_camel_get_extension_name, e_source_camel_get_settings, e_source_collection_get_type,
     e_source_get_extension, e_source_get_parent, e_source_get_uid, e_source_has_extension,
     e_source_mail_account_get_identity_uid, e_source_mail_account_get_type,
     e_source_mail_submission_get_transport_uid, e_source_mail_submission_get_type,
-    e_source_registry_server_new, g_file_new_for_path, g_object_unref,
 };
 use glib_sys::GFALSE;
 use jmap_backend_collection::child_added::follow_collection;
@@ -46,7 +44,7 @@ use jmap_backend_collection::factory::FACTORY_NAME;
 use jmap_backend_collection::mail_child::mail_service_of;
 use jmap_backend_collection::prepare_mail::MAIL_BACKEND_NAME;
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::{ConnectTarget, SourceError};
+use jmap_backend_core::source::{ConnectTarget, RegistrySource, SourceError};
 use jmap_collection_sync::Parts;
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
@@ -121,66 +119,34 @@ fn camel_extension_name() -> *const c_char {
     name as *const c_char
 }
 
-/// A `.source` file loaded as `evolution-source-registry` loads it.
-///
-/// The recipe tests of `jmap-backend-book` and `jmap-backend-cal` have the same
-/// helper. Each integration test is a separate binary, and a support crate for
-/// thirty lines in three test files is not worth it.
-struct RegistrySource {
-    server: *mut gobject_sys::GObject,
-    source: *mut ESource,
-}
+/// A documented `.source` file, loaded as `evolution-source-registry` loads it.
+struct Example(RegistrySource);
 
-impl RegistrySource {
-    /// Parses `path`.
-    ///
-    /// `e_server_side_source_new` needs a registry server, which receives the
-    /// changes of a server-side source. Construction of the server does not own
-    /// a bus name or read the sources of the user; only a running server does.
+impl Example {
     fn load(path: &Path) -> Self {
-        let path_string =
-            std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("no NUL in a path");
-        let mut error = ptr::null_mut();
-        // SAFETY: the constructor takes no arguments. The path is NUL-terminated
-        // and copied. This code owns the GFile and releases it below.
-        let (server, source) = unsafe {
-            // `e_source_registry_server_new` returns its base class,
-            // `EDBusServer *`. C does this downcast implicitly.
-            let server = e_source_registry_server_new().cast::<ESourceRegistryServer>();
-            let file = g_file_new_for_path(path_string.as_ptr());
-            let source = e_server_side_source_new(server, file, &mut error);
-            g_object_unref(file.cast());
-            (server, source)
-        };
-        assert!(
-            !source.is_null(),
-            "the registry could not read {}: {}",
-            path.display(),
-            // SAFETY: a NULL return means the GError was set.
-            unsafe { CStr::from_ptr((*error).message) }.to_string_lossy()
-        );
-        Self {
-            server: server.cast(),
-            source,
-        }
+        Self(RegistrySource::load(path))
+    }
+
+    fn as_ptr(&self) -> *mut ESource {
+        self.0.as_ptr()
     }
 
     /// The uid that the registry gives this file: its name without the
     /// extension. The `Parent=` of a child file must use this string.
     fn uid(&self) -> Option<String> {
         // SAFETY: a live source; the getter returns a string owned by it.
-        unsafe { read_string(e_source_get_uid(self.source)) }
+        unsafe { read_string(e_source_get_uid(self.as_ptr())) }
     }
 
     /// The uid of the parent that this source names.
     fn parent(&self) -> Option<String> {
         // SAFETY: as above.
-        unsafe { read_string(e_source_get_parent(self.source)) }
+        unsafe { read_string(e_source_get_parent(self.as_ptr())) }
     }
 
     fn has(&self, name: &CStr) -> bool {
         // SAFETY: a live source and a header constant.
-        unsafe { e_source_has_extension(self.source, name.as_ptr()) != GFALSE }
+        unsafe { e_source_has_extension(self.as_ptr(), name.as_ptr()) != GFALSE }
     }
 
     /// The `CamelSettings` object that a Camel service gets from this source.
@@ -192,7 +158,7 @@ impl RegistrySource {
         // its settings object.
         unsafe {
             let extension: *mut ESourceCamel =
-                e_source_get_extension(self.source, camel_extension_name()).cast();
+                e_source_get_extension(self.as_ptr(), camel_extension_name()).cast();
             assert!(!extension.is_null(), "the jmap subtype is not registered");
             let settings = e_source_camel_get_settings(extension);
             assert!(!settings.is_null(), "the extension holds no settings");
@@ -226,7 +192,7 @@ impl RegistrySource {
         let name = unsafe {
             e_source_collection_get_type();
             let extension =
-                e_source_get_extension(self.source, E_SOURCE_EXTENSION_COLLECTION.as_ptr())
+                e_source_get_extension(self.as_ptr(), E_SOURCE_EXTENSION_COLLECTION.as_ptr())
                     .cast::<ESourceBackend>();
             e_source_backend_get_backend_name(extension)
         };
@@ -243,24 +209,14 @@ impl RegistrySource {
     }
 }
 
-impl Drop for RegistrySource {
-    fn drop(&mut self) {
-        // SAFETY: this struct holds the only reference to each.
-        unsafe {
-            g_object_unref(self.source.cast());
-            g_object_unref(self.server);
-        }
-    }
-}
-
 #[test]
 fn the_recipes_keyfile_describes_the_mock_server() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let source = RegistrySource::load(&keyfile());
+        let source = Example::load(&keyfile());
         // SAFETY: a source that is alive during each call, which is the only
         // requirement of the `collection_source` functions.
-        let (server, user) = unsafe { (server_of(source.source), user_of(source.source)) };
+        let (server, user) = unsafe { (server_of(source.as_ptr()), user_of(source.as_ptr())) };
 
         // The default port of `jmap-mockd`, without TLS. The shared `origin` rules
         // allow plaintext only for loopback.
@@ -287,9 +243,9 @@ fn the_recipes_keyfile_describes_the_mock_server() {
 fn the_recipes_keyfile_switches_on_the_parts_the_backend_fans_out_to() {
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
-        let source = RegistrySource::load(&keyfile());
+        let source = Example::load(&keyfile());
         // SAFETY: as above.
-        let parts = unsafe { parts_of(source.source) };
+        let parts = unsafe { parts_of(source.as_ptr()) };
 
         assert_eq!(
             parts,
@@ -316,7 +272,7 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
         // A mismatch is silent: `e_source_registry_server_ref_backend_factory`
         // returns NULL and the account has no children.
         assert_eq!(
-            RegistrySource::load(&keyfile()).backend_name().as_deref(),
+            Example::load(&keyfile()).backend_name().as_deref(),
             Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
         );
     });
@@ -358,12 +314,12 @@ fn the_mail_runs_account_switches_on_every_part() {
         // source to the `mail-enabled` of the account. Under an account with mail
         // off, the three hand-written sources load disabled. They are in
         // `~/.config/evolution/sources/`, but not in Evolution, and no error shows.
-        let account = RegistrySource::load(&example(MAIL_COLLECTION));
+        let account = Example::load(&example(MAIL_COLLECTION));
 
         // SAFETY: a source that is alive during the call, which is the only
         // requirement of the `collection_source` functions.
         assert_eq!(
-            unsafe { parts_of(account.source) },
+            unsafe { parts_of(account.as_ptr()) },
             Parts {
                 mail: true,
                 contacts: true,
@@ -375,7 +331,7 @@ fn the_mail_runs_account_switches_on_every_part() {
             Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
         );
         // SAFETY: a source that is alive during each call.
-        let (server, user) = unsafe { (server_of(account.source), user_of(account.source)) };
+        let (server, user) = unsafe { (server_of(account.as_ptr()), user_of(account.as_ptr())) };
         assert_eq!(
             server
                 .expect("the documented account names a server")
@@ -394,14 +350,14 @@ fn the_documented_mail_sources_hang_off_the_documented_account() {
         // `child-added` on the collection whose uid a source names. Here, a uid is
         // a file name. With a typo, Evolution shows the account without the three
         // sources, and logs nothing.
-        let account = RegistrySource::load(&example(MAIL_COLLECTION));
+        let account = Example::load(&example(MAIL_COLLECTION));
         let uid = account
             .uid()
             .expect("a source loaded from a file has a uid");
 
         for name in [MAIL_STORE, MAIL_IDENTITY, MAIL_TRANSPORT] {
             assert_eq!(
-                RegistrySource::load(&example(name)).parent().as_deref(),
+                Example::load(&example(name)).parent().as_deref(),
                 Some(uid.as_str()),
                 "docs/examples/{name} is parented to something else"
             );
@@ -417,9 +373,9 @@ fn the_documented_mail_sources_point_at_each_other() {
         // describes. The receiving account names the identity, and the identity
         // names its transport. The files contain these uids as hand-written text,
         // so the uids can be wrong.
-        let store = RegistrySource::load(&example(MAIL_STORE));
-        let identity = RegistrySource::load(&example(MAIL_IDENTITY));
-        let transport = RegistrySource::load(&example(MAIL_TRANSPORT));
+        let store = Example::load(&example(MAIL_STORE));
+        let identity = Example::load(&example(MAIL_IDENTITY));
+        let transport = Example::load(&example(MAIL_TRANSPORT));
 
         // SAFETY: a reference to the GTypes registers them, so the lookups below
         // can find the extensions. Each extension is present on its source, so
@@ -428,10 +384,10 @@ fn the_documented_mail_sources_point_at_each_other() {
             e_source_mail_account_get_type();
             e_source_mail_submission_get_type();
             let account: *mut ESourceMailAccount =
-                e_source_get_extension(store.source, E_SOURCE_EXTENSION_MAIL_ACCOUNT.as_ptr())
+                e_source_get_extension(store.as_ptr(), E_SOURCE_EXTENSION_MAIL_ACCOUNT.as_ptr())
                     .cast();
             let submission: *mut ESourceMailSubmission = e_source_get_extension(
-                identity.source,
+                identity.as_ptr(),
                 E_SOURCE_EXTENSION_MAIL_SUBMISSION.as_ptr(),
             )
             .cast();
@@ -457,18 +413,18 @@ fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
             (MAIL_STORE, E_SOURCE_EXTENSION_MAIL_ACCOUNT),
             (MAIL_TRANSPORT, E_SOURCE_EXTENSION_MAIL_TRANSPORT),
         ] {
-            let service = RegistrySource::load(&example(name));
+            let service = Example::load(&example(name));
             // SAFETY: a live source.
             assert_eq!(
-                unsafe { mail_service_of(service.source) },
+                unsafe { mail_service_of(service.as_ptr()) },
                 Some(extension),
                 "docs/examples/{name} is not a mail service of this account"
             );
         }
 
-        let identity = RegistrySource::load(&example(MAIL_IDENTITY));
+        let identity = Example::load(&example(MAIL_IDENTITY));
         // SAFETY: a live source.
-        assert_eq!(unsafe { mail_service_of(identity.source) }, None);
+        assert_eq!(unsafe { mail_service_of(identity.as_ptr()) }, None);
     });
 }
 
@@ -479,10 +435,10 @@ fn the_documented_transport_reaches_the_mock_server() {
         // The transport that the reader writes has a provider and no server. After
         // the registry reads it, its Camel settings must name the mock server. The
         // test reads them with the `jmap-mail` reader that `connect_sync` calls.
-        let account = RegistrySource::load(&example(MAIL_COLLECTION));
+        let account = Example::load(&example(MAIL_COLLECTION));
 
         for name in [MAIL_STORE, MAIL_TRANSPORT] {
-            let service = RegistrySource::load(&example(name));
+            let service = Example::load(&example(name));
             assert!(
                 !service.has(E_SOURCE_EXTENSION_AUTHENTICATION),
                 "docs/examples/{name} was written with a server of its own, so this \
@@ -490,7 +446,7 @@ fn the_documented_transport_reaches_the_mock_server() {
             );
 
             // SAFETY: two live sources.
-            unsafe { follow_collection(account.source, service.source) };
+            unsafe { follow_collection(account.as_ptr(), service.as_ptr()) };
 
             assert_eq!(
                 service.server(),
