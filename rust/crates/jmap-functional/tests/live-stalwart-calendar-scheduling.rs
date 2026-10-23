@@ -63,9 +63,9 @@ fn account(user_var: &str, password_var: &str) -> Option<(String, String)> {
 }
 
 fn connect(origin: &str, user: &str, password: &str) -> Client {
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+    // Always rebase, as the backend does behind the loopback proxy.
     Client::builder()
-        .rebase_urls_to_origin(rebase)
+        .rebase_urls_to_origin(true)
         .connect(
             origin,
             Credentials::basic(user.to_owned(), password.to_owned()),

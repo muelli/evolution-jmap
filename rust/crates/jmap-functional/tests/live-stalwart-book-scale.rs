@@ -127,9 +127,8 @@ fn the_addressbook_factorys_first_open_of_a_real_sized_book_is_measured() {
     // the loopback proxy or EDS. It makes the large book before EDS sees it.
     // `rebase_urls_to_origin` is necessary because the session document can
     // name a hostname that this runner cannot reach.
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
     let raw_client = Client::builder()
-        .rebase_urls_to_origin(rebase)
+        .rebase_urls_to_origin(true)
         .connect(&origin, Credentials::basic(user.clone(), password.clone()))
         .expect("could not fetch the session document for the raw seeding client");
     let account_id = raw_client
