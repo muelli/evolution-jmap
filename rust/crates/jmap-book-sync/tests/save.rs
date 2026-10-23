@@ -9,6 +9,7 @@ mod common;
 
 use common::Fixture;
 use jmap_book_sync::{Base, OnConflict};
+use jmap_mock::MockServer;
 use serde_json::json;
 
 /// The vCard that Evolution gives to `save_contact_sync` for a new contact.
@@ -5631,5 +5632,44 @@ fn a_save_with_no_change_since_the_base_writes_nothing() {
     assert_eq!(
         fixture.card(&id).name.unwrap().full.as_deref(),
         Some("Vera Kranz")
+    );
+}
+
+#[test]
+fn a_photo_served_as_a_local_file_is_neither_shown_nor_sent_back() {
+    let fixture = Fixture::start_with(MockServer::builder().contact_photo_uses_file_uri());
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    seed_photo(&fixture, &id);
+    let served = fixture.card(&id).media.expect("media");
+    assert!(
+        served["m1"].uri.starts_with("file:"),
+        "the mock must serve a local-file photo: {served:?}"
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(!vcard.contains("PHOTO"), "{vcard}");
+    assert!(!vcard.contains("file:"), "{vcard}");
+    let edited = vcard.replace("vera@example.com", "vera@example.org");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    // Read the store, because the mock rewrites the photo URI on every `ContactCard/get`.
+    let stored = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&fixture.account_id).unwrap();
+        account
+            .contact_cards
+            .get(&id)
+            .expect("the seeded card")
+            .clone()
+    };
+    assert_eq!(stored.emails.unwrap()["e0"].address, "vera@example.org");
+    let media = stored.media.expect("the save removed the photo");
+    assert_eq!(media.len(), 1, "{media:?}");
+    assert_eq!(
+        media["m1"].uri,
+        format!("data:image/jpeg;base64,{PHOTO}"),
+        "the save wrote the local-file URI back: {media:?}"
     );
 }
