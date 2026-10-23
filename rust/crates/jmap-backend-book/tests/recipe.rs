@@ -5,15 +5,13 @@
 use std::ffi::CStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_ADDRESS_BOOK, ESource, ESourceBackend, ESourceRegistryServer,
-    e_server_side_source_new, e_source_address_book_get_type, e_source_backend_get_backend_name,
-    e_source_get_extension, e_source_registry_server_new, g_file_new_for_path, g_object_unref,
+    E_SOURCE_EXTENSION_ADDRESS_BOOK, ESource, ESourceBackend, e_source_address_book_get_type,
+    e_source_backend_get_backend_name, e_source_get_extension,
 };
 use jmap_backend_book::factory::FACTORY_NAME;
-use jmap_backend_core::source::{ConnectTarget, SourceConfig};
+use jmap_backend_core::source::{ConnectTarget, RegistrySource, SourceConfig};
 
 /// The repository root, from the crate this test lives in.
 fn repository() -> PathBuf {
@@ -59,48 +57,21 @@ fn keyfile() -> PathBuf {
     repository().join("docs/examples/jmap-mock.source")
 }
 
-/// A `.source` file loaded the way `evolution-source-registry` loads one.
-struct RegistrySource {
-    server: *mut gobject_sys::GObject,
-    source: *mut ESource,
-}
+/// A documented `.source` file, loaded as `evolution-source-registry` loads it.
+struct Example(RegistrySource);
 
-impl RegistrySource {
-    /// Parses `path`.
-    ///
-    /// `e_server_side_source_new` requires a registry server to report changes to.
-    /// Constructing one without running it parses keyfiles into an `ESource` without D-Bus.
+impl Example {
     fn load(path: &Path) -> Self {
-        let path_string =
-            std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("no NUL in a path");
-        let mut error = ptr::null_mut();
-        // SAFETY: the constructor takes no arguments; the path is
-        // NUL-terminated and copied; the GFile is owned here and released
-        // below.
-        let (server, source) = unsafe {
-            // SAFETY: e_source_registry_server_new returns a new server instance.
-            let server = e_source_registry_server_new().cast::<ESourceRegistryServer>();
-            let file = g_file_new_for_path(path_string.as_ptr());
-            let source = e_server_side_source_new(server, file, &mut error);
-            g_object_unref(file.cast());
-            (server, source)
-        };
-        assert!(
-            !source.is_null(),
-            "the registry could not read {}: {}",
-            path.display(),
-            // SAFETY: a NULL return means the GError was set.
-            unsafe { CStr::from_ptr((*error).message) }.to_string_lossy()
-        );
-        Self {
-            server: server.cast(),
-            source,
-        }
+        Self(RegistrySource::load(path))
+    }
+
+    fn as_ptr(&self) -> *mut ESource {
+        self.0.as_ptr()
     }
 
     fn config(&self) -> SourceConfig {
         // SAFETY: the source is alive for the duration of the call.
-        unsafe { SourceConfig::from_source(self.source) }
+        unsafe { SourceConfig::from_source(self.as_ptr()) }
             .expect("the documented account is a valid one")
     }
 
@@ -110,7 +81,7 @@ impl RegistrySource {
         let name = unsafe {
             e_source_address_book_get_type();
             let extension =
-                e_source_get_extension(self.source, E_SOURCE_EXTENSION_ADDRESS_BOOK.as_ptr())
+                e_source_get_extension(self.as_ptr(), E_SOURCE_EXTENSION_ADDRESS_BOOK.as_ptr())
                     .cast::<ESourceBackend>();
             e_source_backend_get_backend_name(extension)
         };
@@ -127,19 +98,9 @@ impl RegistrySource {
     }
 }
 
-impl Drop for RegistrySource {
-    fn drop(&mut self) {
-        // SAFETY: Drops the held references.
-        unsafe {
-            g_object_unref(self.source.cast());
-            g_object_unref(self.server);
-        }
-    }
-}
-
 #[test]
 fn the_recipes_keyfile_describes_the_mock_server() {
-    let config = RegistrySource::load(&keyfile()).config();
+    let config = Example::load(&keyfile()).config();
 
     // `jmap-mockd`'s default port, in the clear, which `SourceConfig` allows
     // for loopback and nothing else.
@@ -162,7 +123,7 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
     // silent: no factory claims the source, and the address book simply never
     // opens.
     assert_eq!(
-        RegistrySource::load(&keyfile()).backend_name().as_deref(),
+        Example::load(&keyfile()).backend_name().as_deref(),
         Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
     );
 }
@@ -176,16 +137,16 @@ fn the_keyfile_spelling_that_turns_tls_on_is_method_not_secure() {
 
     let tls = TemporaryKeyfile::holding(&remote.replace("Method=none", "Method=tls"));
     assert_eq!(
-        RegistrySource::load(tls.path()).config().target,
+        Example::load(tls.path()).config().target,
         ConnectTarget::Origin("https://jmap.example.com:8080".into())
     );
 
     let mistake = TemporaryKeyfile::holding(&remote.replace("Method=none", "Secure=true"));
     // SAFETY: the source is alive for the duration of the call.
-    let source = RegistrySource::load(mistake.path());
+    let source = Example::load(mistake.path());
     assert!(
         matches!(
-            unsafe { SourceConfig::from_source(source.source) },
+            unsafe { SourceConfig::from_source(source.as_ptr()) },
             Err(jmap_backend_core::source::SourceError::InsecureTransport(_))
         ),
         "`Secure=true` has to keep being refused, or the day EDS starts \
