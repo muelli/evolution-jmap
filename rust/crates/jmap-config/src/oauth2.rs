@@ -51,15 +51,14 @@ use std::sync::{Mutex, PoisonError};
 use std::{mem, ptr};
 
 use eds_sys::{
-    ESource, ESourceExtension, ESourceExtensionClass, e_source_extension_get_type,
-    e_source_get_extension,
+    E_SOURCE_PARAM_SETTING, ESource, ESourceExtension, ESourceExtensionClass,
+    e_source_extension_get_type, e_source_get_extension,
 };
 use glib_sys::GType;
 use gobject_sys::{
-    G_PARAM_READWRITE, G_PARAM_USER_SHIFT, G_TYPE_STRING, GObject, GObjectClass, GParamFlags,
-    GParamSpec, GValue, g_object_class_install_property, g_object_get_property,
-    g_object_set_property, g_param_spec_string, g_value_get_string, g_value_init,
-    g_value_set_string, g_value_unset,
+    G_PARAM_READWRITE, G_TYPE_STRING, GObject, GObjectClass, GParamSpec, GValue,
+    g_object_class_install_property, g_object_get_property, g_object_set_property,
+    g_param_spec_string, g_value_get_string, g_value_init, g_value_set_string, g_value_unset,
 };
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::instance::Slot;
@@ -92,10 +91,6 @@ pub const EXTENSION_NAME: &CStr = c"JMAP OAuth2";
 /// and it is written again here.
 #[cfg(eds_oauth2_dynamic)]
 pub const EXTENSION_NAME: &CStr = c"OAuth2 Client";
-
-/// `E_SOURCE_PARAM_SETTING`, calculated here. `e-source.h` defines it as a plain
-/// `#define (1 << G_PARAM_USER_SHIFT)`, not a symbol, so bindgen cannot supply it.
-const E_SOURCE_PARAM_SETTING: GParamFlags = 1 << (G_PARAM_USER_SHIFT as u32);
 
 /// The per-account data that the `EOAuth2Service` implementation
 /// ([`crate::oauth2_service`]) needs: the RFC 8414 endpoints, the RFC 7591
