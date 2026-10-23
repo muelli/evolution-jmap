@@ -59,6 +59,7 @@ use gobject_sys::{
     g_object_set, g_object_set_data_full, g_object_unref, g_signal_connect_data, g_type_from_name,
 };
 use jmap_backend_core::callback::gcallback;
+use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, TypeSizes};
 use jmap_backend_core::trampoline::{guard, log_critical};
@@ -183,7 +184,7 @@ unsafe impl InterfaceImpl for PageInterface {
 /// the main thread.
 unsafe fn attach_row(grid: *mut GtkWidget, row: c_int, label: &CStr, input: *mut GtkWidget) {
     let text = translate(label);
-    let text = std::ffi::CString::new(text).unwrap_or_default();
+    let text = cstring_lossy(&text);
     // SAFETY: the label is new; the grid and input are live, per the contract.
     unsafe {
         let label = gtk_label_new_with_mnemonic(text.as_ptr());
@@ -213,7 +214,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         let status = gtk_label_new(ptr::null());
         gtk_label_set_xalign(status.cast(), 0.0);
         gtk_box_pack_start(content.cast(), status, GFALSE, GFALSE, 0);
-        let contacting = std::ffi::CString::new(translate(CONTACTING)).unwrap_or_default();
+        let contacting = cstring_lossy(&translate(CONTACTING));
         gtk_label_set_text(status.cast(), contacting.as_ptr());
 
         let enabled = gtk_check_button_new_with_mnemonic({
@@ -401,14 +402,14 @@ unsafe fn apply_outcome(
             ui.link = Some(link);
         }
         Ok(_) => {
-            let text = std::ffi::CString::new(translate(NOT_OFFERED)).unwrap_or_default();
+            let text = cstring_lossy(&translate(NOT_OFFERED));
             let status = cell.borrow().status;
             // SAFETY: the status label is a live child of the page.
             unsafe { gtk_label_set_text(status.cast(), text.as_ptr()) };
         }
         Err(message) => {
             let text = translate_with(LOAD_FAILED, &[&message]);
-            let text = std::ffi::CString::new(text).unwrap_or_default();
+            let text = cstring_lossy(&text);
             let status = cell.borrow().status;
             // SAFETY: as above.
             unsafe { gtk_label_set_text(status.cast(), text.as_ptr()) };
@@ -443,7 +444,7 @@ unsafe extern "C" fn submit_thread(
             // SAFETY: `task` is the live task of this thread function.
             Ok(()) => unsafe { g_task_return_boolean(task, GTRUE) },
             Err(message) => {
-                let text = std::ffi::CString::new(message).unwrap_or_default();
+                let text = cstring_lossy(&message);
                 // SAFETY: a new GError; the task gets its ownership.
                 unsafe {
                     let error = g_error_new_literal(g_io_error_quark(), 0, text.as_ptr());
@@ -495,7 +496,7 @@ unsafe extern "C" fn submit(
             }
             Some((link, form)) => match form.patch() {
                 Err(reason) => {
-                    let text = std::ffi::CString::new(translate(reason)).unwrap_or_default();
+                    let text = cstring_lossy(&translate(reason));
                     // SAFETY: as above. The task gets the ownership of the error.
                     unsafe {
                         let error = g_error_new_literal(g_io_error_quark(), 0, text.as_ptr());
@@ -652,7 +653,7 @@ unsafe fn get_text(object: *mut GObject) -> String {
 ///
 /// `object` must be a live GObject with a writable string `text` property.
 unsafe fn set_text(object: *mut GObject, text: &str) {
-    let text = std::ffi::CString::new(text).unwrap_or_default();
+    let text = cstring_lossy(text);
     // SAFETY: per the contract. The property system copies the string.
     unsafe {
         g_object_set(
