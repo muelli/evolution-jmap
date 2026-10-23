@@ -599,6 +599,7 @@ fn truncate_octets(text: &str, max_octets: usize) -> String {
 pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<Filter<EmailQueryFilter>> = parse_arguments(arguments)?;
     let page_size = state.query_page_size;
+    let hides_limit = state.query_hides_limit;
     let query_never_terminates = state.query_never_terminates;
     let account = account_mut(state, &request.account_id)?;
 
@@ -668,7 +669,7 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
         position: position as u64,
         ids,
         total: request.calculate_total.then_some(total),
-        limit: capped.then(|| page_size.unwrap_or_default()),
+        limit: (capped && !hides_limit).then(|| page_size.unwrap_or_default()),
     })
 }
 

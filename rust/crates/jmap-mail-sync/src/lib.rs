@@ -34,7 +34,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_client::Client;
 use jmap_proto::mail::{Email, EmailImport, EmailQueryFilter, Mailbox};
-use jmap_proto::methods::{Comparator, Filter};
+use jmap_proto::methods::{Comparator, Filter, QueryRequest, QueryResponse};
+use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
 use jmap_proto::{Id, State, UtcDate};
 
 pub use error::SyncError;
@@ -1131,19 +1132,25 @@ impl MailSync {
 
     /// Gets all pages of `Email/query` for `filter`, oldest first. It stops
     /// when the server does not report a limit, or returns an empty page.
-    /// It fails when the ids go past the id budget of the client.
+    /// It fails when the ids go past the id budget of the client, or do not
+    /// agree with the `total` of the server. EDS removes each cached message
+    /// that a partial list does not have.
     fn paged_query(&self, filter: Filter<EmailQueryFilter>) -> Result<Vec<Id>, SyncError> {
         let mut ids: Vec<Id> = Vec::new();
         let mut budget = self.client.id_budget();
 
         for _ in 0..MAX_QUERY_PAGES {
-            let response = self.client.email_query(
-                &self.account_id,
-                filter.clone(),
-                Some(vec![Comparator::ascending("receivedAt")]),
-                None,
-                ids.len() as i64,
+            let mut request = QueryRequest::new(self.account_id.clone()).filter(filter.clone());
+            request.sort = Some(vec![Comparator::ascending("receivedAt")]);
+            request.position = ids.len() as i64;
+            request.calculate_total = true;
+            let arguments = self.client.single_call(
+                &[CAPABILITY_CORE, CAPABILITY_MAIL],
+                "Email/query",
+                &request,
             )?;
+            let response: QueryResponse =
+                serde_json::from_value(arguments).map_err(jmap_client::Error::from)?;
             let capped = response.limit.is_some();
             let answered = !response.ids.is_empty();
             // Each id costs memory, also when a page repeats it.
@@ -1156,7 +1163,13 @@ impl MailSync {
             // No limit: all remaining ids are in this page. A limited empty
             // page: no ids remain.
             if !capped || !answered {
-                return Ok(ids);
+                return match response.total {
+                    Some(total) if total != ids.len() as u64 => Err(SyncError::protocol(format!(
+                        "Email/query gave {} ids, but reports a total of {total}",
+                        ids.len()
+                    ))),
+                    _ => Ok(ids),
+                };
             }
         }
         Err(SyncError::protocol(

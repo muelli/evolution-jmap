@@ -189,7 +189,7 @@ impl MockServerBuilder {
         self
     }
 
-    /// Omit `limit` from a capped contact or event query page, against RFC 8620 section 5.5.
+    /// Omit `limit` from a capped email, contact or event query page, against RFC 8620 section 5.5.
     pub fn query_hides_limit(mut self) -> Self {
         self.query_hides_limit = true;
         self

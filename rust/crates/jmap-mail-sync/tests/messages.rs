@@ -198,6 +198,21 @@ fn a_server_that_pages_its_query_answer_is_read_to_the_end() {
     );
 }
 
+#[test]
+fn a_query_that_drops_messages_without_a_limit_fails_the_list() {
+    // EDS removes from its cache each message that the list does not have.
+    let fixture =
+        Fixture::started_with(MockServer::builder().query_page_size(2).query_hides_limit());
+    let inbox = fixture.seed_mailbox_with("Inbox", Some(role::INBOX), 5);
+
+    match fixture.sync().messages(&inbox) {
+        Err(jmap_mail_sync::SyncError::Client(jmap_client::Error::Protocol(message))) => {
+            assert!(message.contains("total"), "{message}");
+        }
+        other => panic!("a short list passed as the whole mailbox: {other:?}"),
+    }
+}
+
 /// The listing of `mailbox` by a client with `budget`.
 fn messages_within(
     fixture: &Fixture,
