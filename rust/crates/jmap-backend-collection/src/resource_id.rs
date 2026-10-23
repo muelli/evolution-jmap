@@ -53,10 +53,10 @@ use std::ffi::CStr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_RESOURCE,
-    ESource, ESourceResource, e_source_has_extension, e_source_resource_get_identity,
+    ESource, ESourceResource, e_source_has_extension, e_source_resource_dup_identity,
 };
 use glib_sys::GFALSE;
-use jmap_backend_core::marshal::{extension_if_present, read_string};
+use jmap_backend_core::marshal::{extension_if_present, take_string};
 use jmap_collection_sync::child_source::{EXTENSION_ADDRESS_BOOK, EXTENSION_CALENDAR};
 use jmap_collection_sync::{ChildKind, resource_id_for};
 
@@ -105,10 +105,12 @@ pub unsafe fn resource_id_of(child_source: *mut ESource) -> Option<String> {
     let resource = unsafe {
         extension_if_present::<ESourceResource>(child_source, E_SOURCE_EXTENSION_RESOURCE)
     }?;
+    // Copy the identity: the deferred delete thread calls this function, and the
+    // main loop can free a borrowed string during the read.
     // SAFETY: because of the guard above, `resource` is a live extension that the
-    // source owns. Its identity is NULL or a NUL-terminated string with the same
-    // lifetime.
-    let identity = unsafe { read_string(e_source_resource_get_identity(resource)) }?;
+    // source owns. The duplicate is NULL or a NUL-terminated string that this
+    // function owns and frees.
+    let identity = unsafe { take_string(e_source_resource_dup_identity(resource)) }?;
 
     resource_id_for(extension, &identity)
 }
