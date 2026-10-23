@@ -84,22 +84,6 @@ observe_boolean (const gchar *key,
 	functional_observe (key, value ? "1" : "0");
 }
 
-/* Count the signal. In the application, it shows the credentials prompter
- * (for an OAuth2 source, the consent window). A stale access token must not
- * cause it. */
-static void
-credentials_required_cb (ESource *source,
-                         ESourceCredentialsReason reason,
-                         const gchar *certificate_pem,
-                         GTlsCertificateFlags certificate_errors,
-                         const GError *op_error,
-                         gpointer user_data)
-{
-	guint *count = user_data;
-
-	(*count)++;
-}
-
 /* Return TRUE if the registry exported `Source.OAuth2Support` for this source.
  * This is a necessary precondition, which the Rust side asserts. Without the
  * interface, the token fetch uses the in-process fallback in `e-source.c`. In
@@ -271,9 +255,9 @@ main (int argc,
 
 	/* Connect the signal before the first connect, to count a prompt from the
 	 * connect too. The connect fetches its own token, and a failure there is
-	 * a different bug. */
+	 * a different bug. A stale access token must not cause a prompt. */
 	g_signal_connect (source, "credentials-required",
-			  G_CALLBACK (credentials_required_cb), &credentials_required);
+			  G_CALLBACK (functional_credentials_required_cb), &credentials_required);
 
 	/* This starts evolution-calendar-factory, which keeps a backend for the
 	 * life of this process. Here the backend makes the pooled connection and

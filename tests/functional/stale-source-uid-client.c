@@ -264,23 +264,8 @@ run_dconf_only (const gchar *dangling_uid)
 
 /* ----------------------------------------------------------- collection-child */
 
-/* Count the signals. In the application, `credentials-required` shows the
- * credentials prompter (for an OAuth2 source, the consent window).
- * `authenticate` is the silent path: the registry found a stored secret and
- * gave it to the backend. */
-static void
-credentials_required_cb (ESource *source,
-                         ESourceCredentialsReason reason,
-                         const gchar *certificate_pem,
-                         GTlsCertificateFlags certificate_errors,
-                         const GError *op_error,
-                         gpointer user_data)
-{
-	guint *count = user_data;
-
-	(*count)++;
-}
-
+/* Count the `authenticate` signal. It is the silent path: the registry found a
+ * stored secret and gave it to the backend. */
 static void
 authenticate_cb (ESource *source,
                  const ENamedParameters *credentials,
@@ -374,7 +359,7 @@ run_collection_child (const gchar *account_uid,
 
 	/* Connect before the store below, to count its signals too. */
 	g_signal_connect (child, "credentials-required",
-			  G_CALLBACK (credentials_required_cb), &credentials_required);
+			  G_CALLBACK (functional_credentials_required_cb), &credentials_required);
 	g_signal_connect (child, "authenticate",
 			  G_CALLBACK (authenticate_cb), &authenticate);
 

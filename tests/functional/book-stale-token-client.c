@@ -54,21 +54,6 @@ observe_boolean (const gchar *key,
 	functional_observe (key, value ? "1" : "0");
 }
 
-/* Only count this signal. In Evolution, it shows the credentials prompter (and
- * the consent window for an OAuth2 source) to the user. */
-static void
-credentials_required_cb (ESource *source,
-                         ESourceCredentialsReason reason,
-                         const gchar *certificate_pem,
-                         GTlsCertificateFlags certificate_errors,
-                         const GError *op_error,
-                         gpointer user_data)
-{
-	guint *count = user_data;
-
-	(*count)++;
-}
-
 static gboolean
 oauth2_support_exported (ESource *source)
 {
@@ -202,7 +187,7 @@ main (int argc,
 	/* Connect the signal before the first connect, to count a consent request
 	 * from the connect too. */
 	g_signal_connect (source, "credentials-required",
-			  G_CALLBACK (credentials_required_cb), &credentials_required);
+			  G_CALLBACK (functional_credentials_required_cb), &credentials_required);
 
 	/* Starts evolution-addressbook-factory, with a backend instance that
 	 * stays for the life of this process. This builds the pooled connection

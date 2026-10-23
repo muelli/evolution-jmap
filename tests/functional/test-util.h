@@ -7,7 +7,7 @@
 #ifndef FUNCTIONAL_TEST_UTIL_H
 #define FUNCTIONAL_TEST_UTIL_H
 
-#include <glib.h>
+#include <libedataserver/libedataserver.h>
 
 G_BEGIN_DECLS
 
@@ -15,6 +15,13 @@ int	functional_fail			(const gchar *step,
 					 GError *error);
 void	functional_observe		(const gchar *key,
 					 const gchar *value);
+void	functional_credentials_required_cb
+					(ESource *source,
+					 ESourceCredentialsReason reason,
+					 const gchar *certificate_pem,
+					 GTlsCertificateFlags certificate_errors,
+					 const GError *op_error,
+					 gpointer user_data);
 
 G_END_DECLS
 

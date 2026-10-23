@@ -42,23 +42,6 @@ observe_boolean (const gchar *key,
 	functional_observe (key, value ? "1" : "0");
 }
 
-/* Count the signal, as `book-stale-token-client.c` does. In the application,
- * this signal shows the credentials prompter. The first connect sends it
- * once (no password yet). The 401 on the second attempt must not send it
- * again. */
-static void
-credentials_required_cb (ESource *source,
-                         ESourceCredentialsReason reason,
-                         const gchar *certificate_pem,
-                         GTlsCertificateFlags certificate_errors,
-                         const GError *op_error,
-                         gpointer user_data)
-{
-	guint *count = user_data;
-
-	(*count)++;
-}
-
 /* `e_backend_schedule_credentials_required` sends its signal from an idle
  * callback. Iterate the main context after a sync call, or the count is old.
  * Same value as in `book-stale-token-client.c`. */
@@ -131,8 +114,10 @@ main (int argc,
 	if (!e_source_store_password_sync (source, password, TRUE, NULL, &error))
 		return functional_fail ("store-password", error);
 
+	/* The first connect sends this signal once (no password yet). The 401 on
+	 * the second attempt must not send it again. */
 	g_signal_connect (source, "credentials-required",
-			  G_CALLBACK (credentials_required_cb), &credentials_required);
+			  G_CALLBACK (functional_credentials_required_cb), &credentials_required);
 
 	/* This starts evolution-addressbook-factory, which loads
 	 * libebookbackendjmap.so. The backend connect fails with no password and
