@@ -303,6 +303,7 @@ dependencies = [
  "base64",
  "evolution-jmap-client",
  "evolution-jmap-mock",
+ "evolution-jmap-object-sync",
  "evolution-jmap-proto",
  "evolution-jmap-tracing-capture",
  "evolution-jmap-vcard",
@@ -319,6 +320,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-ical",
  "evolution-jmap-mock",
+ "evolution-jmap-object-sync",
  "evolution-jmap-proto",
  "evolution-jmap-tracing-capture",
  "proptest",
@@ -395,6 +397,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "tiny_http",
+]
+
+[[package]]
+name = "evolution-jmap-object-sync"
+version = "0.5.0"
+dependencies = [
+ "evolution-jmap-client",
+ "evolution-jmap-proto",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

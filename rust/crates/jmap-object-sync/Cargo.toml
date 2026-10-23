@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-object-sync"
+description = "The synchronisation steps that the JMAP address book and calendar backends share"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "jmap_object_sync"
+
+[dependencies]
+evolution-jmap-client = { workspace = true }
+evolution-jmap-proto = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

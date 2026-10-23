@@ -15,8 +15,8 @@ operator-verified against a real JMAP server.**
 | JMAP protocol types | `evolution-jmap-proto` |
 | Blocking JMAP client | `evolution-jmap-client` |
 | Stateful in-memory mock JMAP server (`jmap-mockd`) | `evolution-jmap-mock` |
-| Address book backend (`EBookMetaBackend`) | `jmap-backend-book(-module)`, `jmap-book-sync` |
-| Calendar backend (`ECalMetaBackend`) | `jmap-backend-cal(-module)`, `jmap-cal-sync` |
+| Address book backend (`EBookMetaBackend`) | `jmap-backend-book(-module)`, `jmap-book-sync`, `jmap-object-sync` |
+| Calendar backend (`ECalMetaBackend`) | `jmap-backend-cal(-module)`, `jmap-cal-sync`, `jmap-object-sync` |
 | Mail provider (Camel store/transport) | `jmap-mail(-sync)` |
 | Collection backend (one account, all three above) | `jmap-backend-collection(-module)`, `jmap-collection-sync` |
 | Account-setup UI (`module-jmap-configuration.so`), incl. OAuth2 | `jmap-config(-module)` |
