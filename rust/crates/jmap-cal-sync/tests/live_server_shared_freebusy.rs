@@ -33,21 +33,12 @@
 //! advertise the principals capability. When a `_USER` variable is set, a
 //! missing `_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
-use std::env;
-
 use jmap_cal_sync::CalSync;
-use jmap_client::{Client, Credentials};
 use jmap_proto::calendars::{Calendar, CalendarEvent};
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_PRINCIPALS};
+use jmap_test_support::{connect_owner, connect_recipient_with_user, unique_suffix};
 use serde_json::json;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 /// Returns an hour of the day, `01`..=`20`, from [`unique_suffix`]. A failed
 /// assertion in a prior run skips the cleanup, so that shared busy event stays.
@@ -56,42 +47,6 @@ fn unique_suffix() -> u128 {
 /// UTC day.
 fn distinct_hour(suffix: u128) -> u8 {
     1 + (suffix % 20) as u8
-}
-
-/// Same as `jmap-cal-sync/tests/live_server.rs::connect_for_write`.
-/// This account owns the calendar that the test creates, fills with an event, and shares.
-fn connect_owner() -> Option<(Client, String)> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user.clone(), password))
-        .expect("could not fetch the session document for the write-test account");
-    Some((client, user))
-}
-
-/// Same as `jmap-client/tests/live_server.rs::connect_recipient`, but also
-/// returns the user address. This account calls `free_busy`, as the scheduler
-/// does.
-fn connect_recipient() -> Option<(Client, String)> {
-    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
-    );
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user.clone(), password))
-        .expect("could not fetch the session document for the recipient account");
-    Some((client, user))
 }
 
 /// Creates a new calendar and a one-hour busy event on the owner account. Then
@@ -114,7 +69,7 @@ fn free_busy_of_another_account_reflects_only_what_was_shared() {
         );
         return;
     };
-    let Some((recipient, recipient_address)) = connect_recipient() else {
+    let Some((recipient, recipient_address)) = connect_recipient_with_user() else {
         eprintln!(
             "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the shared free/busy test"
         );

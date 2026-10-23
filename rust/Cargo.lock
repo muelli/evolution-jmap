@@ -323,6 +323,7 @@ dependencies = [
  "evolution-jmap-mock",
  "evolution-jmap-object-sync",
  "evolution-jmap-proto",
+ "evolution-jmap-test-support",
  "evolution-jmap-tracing-capture",
  "proptest",
  "serde_json",

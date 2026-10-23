@@ -39,7 +39,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Like `connect_for_write` in `jmap-cal-sync/tests/live_server.rs`, without the user.
+/// Same as `jmap_test_support::connect_for_write`.
 fn connect_for_write() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")

@@ -37,46 +37,14 @@
 //! The test skips when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
 //! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
-use std::env;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use jmap_client::{Client, Credentials, Error as ClientError};
+use jmap_client::{Client, Error as ClientError};
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::session::CAPABILITY_CALENDARS;
-
-/// Same as `jmap-cal-sync/tests/live_server_scale.rs::connect_for_write`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
-
-/// Returns a value unique to this process, so leftover events from a different
-/// run cannot match.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn batch_size() -> usize {
-    env::var("JMAP_429_REPRO_EVENTS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(900)
-}
+use jmap_test_support::{connect_for_write, env_count, unique_suffix};
 
 /// Returns whether a new `CalendarEvent/query` on the server shows `uid`.
 ///
@@ -183,7 +151,7 @@ fn a_429_during_sustained_sequential_import_is_checked_for_an_early_commit() {
         .id
         .expect("the server named the calendar");
 
-    let n = batch_size();
+    let n = env_count("JMAP_429_REPRO_EVENTS", 900);
     let run = unique_suffix();
     let mut stats = Stats::default();
 

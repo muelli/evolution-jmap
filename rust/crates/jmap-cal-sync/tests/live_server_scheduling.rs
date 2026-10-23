@@ -23,36 +23,15 @@
 //! `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset. When a `_USER` variable is set,
 //! a missing `_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
-use std::env;
 use std::time::{Duration, Instant};
 
 use jmap_cal_sync::{CalSync, Itip};
-use jmap_client::{Client, Credentials};
+use jmap_client::Client;
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::mail::EmailQueryFilter;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_MAIL};
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-fn connect(user_var: &str, password_var: &str) -> Option<(Client, String)> {
-    let user = env::var(user_var).ok()?;
-    let password = env::var(password_var)
-        .unwrap_or_else(|_| panic!("{user_var} is set but {password_var} is not"));
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .unwrap_or_else(|_| panic!("set JMAP_LIVE_SERVER_URL alongside {user_var}"));
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user.clone(), password))
-        .expect("could not fetch the session document");
-    Some((client, user))
-}
+use jmap_test_support::{connect_owner, connect_recipient_with_user, unique_suffix};
 
 fn default_calendar(client: &Client, account_id: &Id) -> Id {
     client
@@ -114,17 +93,11 @@ fn meeting(uid: &str, organizer: &str, guest: &str) -> String {
 #[test]
 #[ignore = "needs a real JMAP server and two accounts; see docs/manual-test-live-server.md"]
 fn with_the_switch_on_the_server_delivers_the_meeting_and_its_cancellation_to_the_guest() {
-    let Some((organizer, organizer_user)) = connect(
-        "JMAP_LIVE_SERVER_WRITE_USER",
-        "JMAP_LIVE_SERVER_WRITE_PASSWORD",
-    ) else {
+    let Some((organizer, organizer_user)) = connect_owner() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER not set; skipping");
         return;
     };
-    let Some((guest, guest_user)) = connect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER",
-        "JMAP_LIVE_SERVER_RECIPIENT_PASSWORD",
-    ) else {
+    let Some((guest, guest_user)) = connect_recipient_with_user() else {
         eprintln!("JMAP_LIVE_SERVER_RECIPIENT_USER not set; skipping");
         return;
     };
@@ -181,17 +154,11 @@ fn with_the_switch_on_the_server_delivers_the_meeting_and_its_cancellation_to_th
 #[test]
 #[ignore = "needs a real JMAP server and two accounts; see docs/manual-test-live-server.md"]
 fn with_the_switch_off_the_guest_hears_nothing_from_the_server() {
-    let Some((organizer, organizer_user)) = connect(
-        "JMAP_LIVE_SERVER_WRITE_USER",
-        "JMAP_LIVE_SERVER_WRITE_PASSWORD",
-    ) else {
+    let Some((organizer, organizer_user)) = connect_owner() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER not set; skipping");
         return;
     };
-    let Some((guest, guest_user)) = connect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER",
-        "JMAP_LIVE_SERVER_RECIPIENT_PASSWORD",
-    ) else {
+    let Some((guest, guest_user)) = connect_recipient_with_user() else {
         eprintln!("JMAP_LIVE_SERVER_RECIPIENT_USER not set; skipping");
         return;
     };
@@ -279,14 +246,8 @@ struct Sent {
 }
 
 fn send_meeting(tag: &str) -> Option<Sent> {
-    let (organizer, organizer_user) = connect(
-        "JMAP_LIVE_SERVER_WRITE_USER",
-        "JMAP_LIVE_SERVER_WRITE_PASSWORD",
-    )?;
-    let (guest, guest_user) = connect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER",
-        "JMAP_LIVE_SERVER_RECIPIENT_PASSWORD",
-    )?;
+    let (organizer, organizer_user) = connect_owner()?;
+    let (guest, guest_user) = connect_recipient_with_user()?;
     let account_id = organizer.primary_account(CAPABILITY_CALENDARS).unwrap();
     let calendar_id = default_calendar(&organizer, &account_id);
     let guest_account = guest.primary_account(CAPABILITY_CALENDARS).unwrap();
@@ -448,17 +409,11 @@ fn guest_mail(guest: &Client, uid: &str) -> Vec<String> {
 #[test]
 #[ignore = "needs a real JMAP server and two accounts; see docs/manual-test-live-server.md"]
 fn dismissing_a_meetings_reminder_sends_the_guest_nothing() {
-    let Some((organizer, organizer_user)) = connect(
-        "JMAP_LIVE_SERVER_WRITE_USER",
-        "JMAP_LIVE_SERVER_WRITE_PASSWORD",
-    ) else {
+    let Some((organizer, organizer_user)) = connect_owner() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER not set; skipping");
         return;
     };
-    let Some((guest, guest_user)) = connect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER",
-        "JMAP_LIVE_SERVER_RECIPIENT_PASSWORD",
-    ) else {
+    let Some((guest, guest_user)) = connect_recipient_with_user() else {
         eprintln!("JMAP_LIVE_SERVER_RECIPIENT_USER not set; skipping");
         return;
     };
@@ -518,18 +473,12 @@ fn dismissing_a_meetings_reminder_sends_the_guest_nothing() {
 #[test]
 #[ignore = "needs a real JMAP server and two accounts; see docs/manual-test-live-server.md"]
 fn a_received_request_that_names_the_user_as_organizer_invites_nobody() {
-    let Some((victim, victim_user)) = connect(
-        "JMAP_LIVE_SERVER_WRITE_USER",
-        "JMAP_LIVE_SERVER_WRITE_PASSWORD",
-    ) else {
+    let Some((victim, victim_user)) = connect_owner() else {
         eprintln!("the live accounts are not set; skipping");
         return;
     };
-    let (stranger, stranger_user) = connect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER",
-        "JMAP_LIVE_SERVER_RECIPIENT_PASSWORD",
-    )
-    .expect("the recipient account is set");
+    let (stranger, stranger_user) =
+        connect_recipient_with_user().expect("the recipient account is set");
     let account_id = victim.primary_account(CAPABILITY_CALENDARS).unwrap();
     let calendar_id = default_calendar(&victim, &account_id);
     let stranger_account = stranger.primary_account(CAPABILITY_CALENDARS).unwrap();

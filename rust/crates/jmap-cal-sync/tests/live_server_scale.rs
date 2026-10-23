@@ -36,13 +36,13 @@
 //! The tests skip when `JMAP_LIVE_SERVER_WRITE_USER` is unset. When that
 //! variable is set, a missing `_WRITE_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
-use std::env;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use jmap_cal_sync::{CalSync, SyncError};
-use jmap_client::{Client, Credentials, Error as ClientError};
+use jmap_client::Error as ClientError;
 use jmap_proto::session::CAPABILITY_CALENDARS;
+use jmap_test_support::{connect_for_write, env_count, unique_suffix};
 
 /// Retries `attempt` after a 5 s sleep on a 429
 /// (`Http.rateLimitAuthenticated`), with at most 20 attempts. Thus a scale run
@@ -61,37 +61,8 @@ fn retrying<T>(mut attempt: impl FnMut() -> Result<T, SyncError>) -> Result<T, S
     unreachable!("the loop above always returns on its last iteration (remaining == 0)")
 }
 
-/// Returns a value unique to this process, so leftover events from a different
-/// run cannot match.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Same as `jmap-cal-sync/tests/live_server.rs::connect_for_write`, but does
-/// not return the account address.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
-
 fn batch_size() -> usize {
-    env::var("JMAP_SCALE_TEST_EVENTS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(500)
+    env_count("JMAP_SCALE_TEST_EVENTS", 500)
 }
 
 /// Returns the peak resident set size of this process from `/proc` (Linux only,
