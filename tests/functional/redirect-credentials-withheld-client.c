@@ -36,17 +36,10 @@
 #include "test-util.h"
 
 static void
-observe (const gchar *key,
-         const gchar *value)
-{
-	g_print ("%s=%s\n", key, value ? value : "(null)");
-}
-
-static void
 observe_boolean (const gchar *key,
                  gboolean value)
 {
-	observe (key, value ? "1" : "0");
+	functional_observe (key, value ? "1" : "0");
 }
 
 /* Count the signal, as `book-stale-token-client.c` does. In the application,
@@ -163,7 +156,7 @@ main (int argc,
 		observe_boolean ("reauthenticate-ok", TRUE);
 	} else {
 		observe_boolean ("reauthenticate-ok", FALSE);
-		observe ("reauthenticate-error", error && error->message ? error->message : "(no error set)");
+		functional_observe ("reauthenticate-error", error && error->message ? error->message : "(no error set)");
 		g_clear_error (&error);
 	}
 	settle (SETTLE_MILLISECONDS);

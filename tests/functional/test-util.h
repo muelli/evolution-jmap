@@ -13,6 +13,8 @@ G_BEGIN_DECLS
 
 int	functional_fail			(const gchar *step,
 					 GError *error);
+void	functional_observe		(const gchar *key,
+					 const gchar *value);
 
 G_END_DECLS
 

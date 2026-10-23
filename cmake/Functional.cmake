@@ -430,6 +430,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			cal-discard-alarm cal-edit cal-free-busy cal-live cal-received
 			cal-scheduling cal-scheduling-live cal-stale-token cal-zone
 			config-lookup mail mail-live mail-stale-token
+			oauth2-stale-proxy oauth2-token-collision
 			redirect-credentials-withheld stale-source-uid transport transport-live)
 		target_sources(functional-${_client}-client PRIVATE tests/functional/test-util.c)
 	endforeach()

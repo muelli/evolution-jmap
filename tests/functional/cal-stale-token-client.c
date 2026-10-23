@@ -77,19 +77,11 @@
  * `connection-status.c`. */
 #define SETTLE_MILLISECONDS 1500
 
-/* Write one `key=value` line to stdout for `jmap_functional::observations`. */
-static void
-observe (const gchar *key,
-         const gchar *value)
-{
-	g_print ("%s=%s\n", key, value ? value : "(null)");
-}
-
 static void
 observe_boolean (const gchar *key,
                  gboolean value)
 {
-	observe (key, value ? "1" : "0");
+	functional_observe (key, value ? "1" : "0");
 }
 
 /* Count the signal. In the application, it shows the credentials prompter
@@ -186,7 +178,7 @@ create_event (ECalClient *cal,
 
 	observe_boolean (ok_key, ok);
 	if (!ok)
-		observe (error_key, error && error->message ? error->message : "(no error set)");
+		functional_observe (error_key, error && error->message ? error->message : "(no error set)");
 
 	g_free (created_uid);
 	g_clear_error (&error);

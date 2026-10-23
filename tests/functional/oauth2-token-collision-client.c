@@ -34,19 +34,13 @@
 
 #include <libedataserver/libedataserver.h>
 
-/* Write one `key=value` line to stdout for `jmap_functional::observations`. */
-static void
-observe (const gchar *key,
-         const gchar *value)
-{
-	g_print ("%s=%s\n", key, value ? value : "(null)");
-}
+#include "test-util.h"
 
 static void
 observe_boolean (const gchar *key,
                  gboolean value)
 {
-	observe (key, value ? "1" : "0");
+	functional_observe (key, value ? "1" : "0");
 }
 
 static void G_GNUC_NORETURN
@@ -120,13 +114,13 @@ main (int argc,
 
 	observe_boolean ("fetched", fetched);
 	if (fetched) {
-		observe ("access-token", access_token);
+		functional_observe ("access-token", access_token);
 		gchar *expires = g_strdup_printf ("%d", expires_in);
-		observe ("expires-in", expires);
+		functional_observe ("expires-in", expires);
 		g_free (expires);
 	} else if (error) {
-		observe ("error-domain", g_quark_to_string (error->domain));
-		observe ("error-message", error->message);
+		functional_observe ("error-domain", g_quark_to_string (error->domain));
+		functional_observe ("error-message", error->message);
 	}
 
 	g_print ("done=1\n");

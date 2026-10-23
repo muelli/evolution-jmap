@@ -48,17 +48,10 @@
 #define SETTLE_MILLISECONDS 1500
 
 static void
-observe (const gchar *key,
-         const gchar *value)
-{
-	g_print ("%s=%s\n", key, value ? value : "(null)");
-}
-
-static void
 observe_boolean (const gchar *key,
                  gboolean value)
 {
-	observe (key, value ? "1" : "0");
+	functional_observe (key, value ? "1" : "0");
 }
 
 /* Only count this signal. In Evolution, it shows the credentials prompter (and
@@ -119,7 +112,7 @@ create_contact (EBookClient *book,
 
 	observe_boolean (ok_key, ok);
 	if (!ok)
-		observe (error_key, error && error->message ? error->message : "(no error set)");
+		functional_observe (error_key, error && error->message ? error->message : "(no error set)");
 
 	g_free (added_uid);
 	g_clear_error (&error);

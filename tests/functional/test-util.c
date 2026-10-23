@@ -15,3 +15,11 @@ functional_fail (const gchar *step,
 
 	return 1;
 }
+
+/* Write one `key=value` line to stdout for `jmap_functional::observations`. */
+void
+functional_observe (const gchar *key,
+		    const gchar *value)
+{
+	g_print ("%s=%s\n", key, value ? value : "(null)");
+}

@@ -55,6 +55,8 @@
 #include <signal.h>
 #include <string.h>
 
+#include "test-util.h"
+
 /* The interface that `e_server_side_source_set_oauth2_support` exports. The
  * generated `EDBusSourceOAuth2Support` accessors are in the private header
  * `src/private/e-dbus-source.h`, which EDS does not install. Thus use the
@@ -68,19 +70,11 @@
  * does not stop, the limit makes the run fail and not hang. */
 #define NAME_GONE_TIMEOUT_SECONDS 10
 
-/* Write one `key=value` line to stdout for `jmap_functional::observations`. */
-static void
-observe (const gchar *key,
-         const gchar *value)
-{
-	g_print ("%s=%s\n", key, value ? value : "(null)");
-}
-
 static void
 observe_boolean (const gchar *key,
                  gboolean value)
 {
-	observe (key, value ? "1" : "0");
+	functional_observe (key, value ? "1" : "0");
 }
 
 /* Fail the run and name the failed step. Use only for preconditions of this
@@ -229,7 +223,7 @@ main (int argc,
 	}
 
 	peer = g_strdup (g_dbus_proxy_get_name (G_DBUS_PROXY (dbus_interface)));
-	observe ("oauth2-support-peer", peer);
+	functional_observe ("oauth2-support-peer", peer);
 	observe_boolean ("oauth2-support-peer-is-unique-name", g_dbus_is_unique_name (peer));
 
 	connection = g_dbus_proxy_get_connection (G_DBUS_PROXY (dbus_interface));
@@ -242,7 +236,7 @@ main (int argc,
 	fetched = e_source_get_oauth2_access_token_sync (
 		source, NULL, &access_token, &expires_in, &error);
 	observe_boolean ("token-before-kill-succeeded", fetched);
-	observe ("token-before-kill-error-domain",
+	functional_observe ("token-before-kill-error-domain",
 		error != NULL ? g_quark_to_string (error->domain) : "");
 	observe_boolean ("token-before-kill-was-bus-error",
 		error != NULL && error->domain == G_DBUS_ERROR);
@@ -283,12 +277,12 @@ main (int argc,
 	if (error != NULL) {
 		gchar *code = g_strdup_printf ("%d", error->code);
 
-		observe ("token-after-kill-error-domain", g_quark_to_string (error->domain));
-		observe ("token-after-kill-error-code", code);
+		functional_observe ("token-after-kill-error-domain", g_quark_to_string (error->domain));
+		functional_observe ("token-after-kill-error-code", code);
 		/* e-source.c already applied g_dbus_error_strip_remote_error. Thus
 		 * this is the message that jmap_backend_core::oauth2 classifies and
 		 * that the user sees. */
-		observe ("token-after-kill-error-message", error->message);
+		functional_observe ("token-after-kill-error-message", error->message);
 		observe_boolean ("token-after-kill-is-service-unknown",
 			g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN));
 		observe_boolean ("token-after-kill-names-dead-peer",

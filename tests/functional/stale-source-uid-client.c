@@ -111,14 +111,6 @@ contains_bytes (const gchar *haystack,
 	return FALSE;
 }
 
-/* Write one `key=value` line to stdout for `jmap_functional::observations`. */
-static void
-observe (const gchar *key,
-         const gchar *value)
-{
-	g_print ("%s=%s\n", key, value ? value : "(null)");
-}
-
 static void
 observe_boolean (const gchar *key,
                  gboolean value)
@@ -248,12 +240,12 @@ run_dconf_only (const gchar *dangling_uid)
 	 * it uses the built-in account. If it made a source, EDS changes a stale
 	 * dconf UID into a live source. */
 	default_mail_account = e_source_registry_ref_default_mail_account (registry);
-	observe ("default-mail-account-uid",
+	functional_observe ("default-mail-account-uid",
 		 default_mail_account ? e_source_get_uid (default_mail_account) : "(none)");
 	g_clear_object (&default_mail_account);
 
 	uids = source_uids (registry);
-	observe ("source-uids", uids);
+	functional_observe ("source-uids", uids);
 	g_free (uids);
 
 	/* Wait the same time as the other mode, so that "no change" is a real
@@ -261,7 +253,7 @@ run_dconf_only (const gchar *dangling_uid)
 	settle (SETTLE_MILLISECONDS);
 
 	uids = source_uids (registry);
-	observe ("source-uids-after-settling", uids);
+	functional_observe ("source-uids-after-settling", uids);
 	g_free (uids);
 
 	observe_boolean ("done", TRUE);
@@ -377,8 +369,8 @@ run_collection_child (const gchar *account_uid,
 	/* Any child: all are in the cache directory. Report its UID, so that the
 	 * Rust side can find the keyfile itself. */
 	child = E_SOURCE (children->data);
-	observe ("child-uid", e_source_get_uid (child));
-	observe ("child-display-name", e_source_get_display_name (child));
+	functional_observe ("child-uid", e_source_get_uid (child));
+	functional_observe ("child-display-name", e_source_get_display_name (child));
 
 	/* Connect before the store below, to count its signals too. */
 	g_signal_connect (child, "credentials-required",
@@ -402,7 +394,7 @@ run_collection_child (const gchar *account_uid,
 	 * side asserts that the two UIDs are different. */
 	provider = e_source_credentials_provider_new (registry);
 	credentials_source = e_source_credentials_provider_ref_credentials_source (provider, child);
-	observe ("credentials-source-uid",
+	functional_observe ("credentials-source-uid",
 		 e_source_get_uid (credentials_source ? credentials_source : child));
 
 	/* The control: store the password where the lookup reads.
