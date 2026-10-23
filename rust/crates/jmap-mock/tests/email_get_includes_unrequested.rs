@@ -79,27 +79,23 @@ fn email_ids(method_response: &Value) -> Vec<String> {
 }
 
 fn seed_two_emails(server: &MockServer) {
-    let state = server.state();
-    let mut state = state.lock().expect("lock state");
-    let account = state
-        .account_mut(&server.account_id())
-        .expect("default account exists");
-
-    let inbox = account.seed_mailbox("Inbox", Some(jmap_proto::mail::role::INBOX));
-    account.seed_email(EmailSeed::new(
-        inbox.clone(),
-        ("Bob", "bob@example.com"),
-        "First",
-        "First body",
-        "2026-08-01T10:00:00Z",
-    ));
-    account.seed_email(EmailSeed::new(
-        inbox,
-        ("Carol", "carol@example.com"),
-        "Second",
-        "Second body",
-        "2026-08-02T10:00:00Z",
-    ));
+    server.with_account_mut(server.account_id(), |account| {
+        let inbox = account.seed_mailbox("Inbox", Some(jmap_proto::mail::role::INBOX));
+        account.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "First",
+            "First body",
+            "2026-08-01T10:00:00Z",
+        ));
+        account.seed_email(EmailSeed::new(
+            inbox,
+            ("Carol", "carol@example.com"),
+            "Second",
+            "Second body",
+            "2026-08-02T10:00:00Z",
+        ));
+    });
 }
 
 #[test]

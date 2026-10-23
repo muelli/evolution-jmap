@@ -496,6 +496,42 @@ impl MockServer {
         Arc::clone(&self.state)
     }
 
+    /// Run `f` with an immutable account handle from the shared state.
+    /// Panic if `account_id` does not exist in the state.
+    pub fn with_account<T>(
+        &self,
+        account_id: impl Into<jmap_proto::Id>,
+        f: impl FnOnce(&crate::state::AccountState) -> T,
+    ) -> T {
+        let account_id = account_id.into();
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let account = state
+            .account(&account_id)
+            .unwrap_or_else(|| panic!("mock account {} not found", account_id));
+        f(account)
+    }
+
+    /// Run `f` with a mutable account handle from the shared state.
+    /// Panic if `account_id` does not exist in the state.
+    pub fn with_account_mut<T>(
+        &self,
+        account_id: impl Into<jmap_proto::Id>,
+        f: impl FnOnce(&mut crate::state::AccountState) -> T,
+    ) -> T {
+        let account_id = account_id.into();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let account = state
+            .account_mut(&account_id)
+            .unwrap_or_else(|| panic!("mock account {} not found", account_id));
+        f(account)
+    }
+
     /// Replace accepted bearer tokens with only `token`.
     pub fn set_bearer_token(&self, token: &str) {
         self.auth

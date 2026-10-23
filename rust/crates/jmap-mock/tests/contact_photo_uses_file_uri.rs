@@ -50,30 +50,26 @@ fn api(server: &MockServer, body: Value) -> Value {
 }
 
 fn seed_contact_card_with_photo(server: &MockServer) -> String {
-    let state = server.state();
-    let mut state = state.lock().expect("state lock");
-    let account = state
-        .account_mut(&server.account_id())
-        .expect("default account exists");
+    server.with_account_mut(server.account_id(), |account| {
+        let book_id = account.seed_address_book("Personal", true);
+        let card_id = account.contact_cards.alloc_id();
 
-    let book_id = account.seed_address_book("Personal", true);
-    let card_id = account.contact_cards.alloc_id();
+        let mut media = BTreeMap::new();
+        media.insert(
+            "m1".to_owned(),
+            Media::new(SAFE_PHOTO_URI).with_kind("photo"),
+        );
 
-    let mut media = BTreeMap::new();
-    media.insert(
-        "m1".to_owned(),
-        Media::new(SAFE_PHOTO_URI).with_kind("photo"),
-    );
+        let card = ContactCard {
+            id: Some(card_id.clone()),
+            address_book_ids: Some(BTreeMap::from([(book_id, true)])),
+            media: Some(media),
+            ..ContactCard::default()
+        };
+        account.contact_cards.seed_with_id(card_id.clone(), card);
 
-    let card = ContactCard {
-        id: Some(card_id.clone()),
-        address_book_ids: Some(BTreeMap::from([(book_id, true)])),
-        media: Some(media),
-        ..ContactCard::default()
-    };
-    account.contact_cards.seed_with_id(card_id.clone(), card);
-
-    card_id.to_string()
+        card_id.to_string()
+    })
 }
 
 fn contact_photo_uri(server: &MockServer, card_id: &str) -> String {

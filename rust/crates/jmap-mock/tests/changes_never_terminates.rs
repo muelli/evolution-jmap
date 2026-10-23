@@ -61,13 +61,10 @@ fn mailbox_changes(server: &MockServer, since_state: &str) -> Value {
 }
 
 fn seed_two_mailbox_changes(server: &MockServer) {
-    let state = server.state();
-    let mut state = state.lock().expect("lock state");
-    let account = state
-        .account_mut(&server.account_id())
-        .expect("default account exists");
-    account.create_mailbox("One", None, None);
-    account.create_mailbox("Two", None, None);
+    server.with_account_mut(server.account_id(), |account| {
+        account.create_mailbox("One", None, None);
+        account.create_mailbox("Two", None, None);
+    });
 }
 
 #[test]
