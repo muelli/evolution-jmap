@@ -25,6 +25,7 @@ image=${THREAD_EDS_IMAGE:-evolution-jmap-tsan}
 DEFAULT_PACKAGES=(
     eds-sys
     jmap-backend-book
+    jmap-backend-collection
     jmap-backend-core
     jmap-config
     jmap-mail
