@@ -54,6 +54,52 @@ struct OAuthHandlers {
     token: Option<Arc<TokenFn>>,
 }
 
+/// Hostile and edge-case behavior toggles for the mock server.
+///
+/// These modes model non-ideal servers and protocol corner cases.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct Faults {
+    /// Keep paginated `/changes` responses non-terminating.
+    pub changes_never_terminates: bool,
+    /// Return Stalwart style invalid `sinceState` errors on `/changes`.
+    pub stalwart_shaped_unrecognized_changes_state: bool,
+    /// Include unrequested objects in `Email/get` responses.
+    pub email_get_includes_unrequested: bool,
+    /// Rewrite `ContactCard/get` photo media URIs to a local `file:` URI.
+    pub contact_photo_uses_file_uri: bool,
+    /// Rewrite `CalendarEvent/get` link `href` values to a local `file:` URI.
+    pub calendar_event_link_uses_file_uri: bool,
+    /// Keep paginated `Email/query` responses non-terminating.
+    pub query_never_terminates: bool,
+    /// Omit `limit` from capped query pages.
+    pub query_hides_limit: bool,
+    /// Route `/.well-known/jmap` to `/jmap/session` in auth redirect tests.
+    pub session_via_redirect: bool,
+    /// Make shared-account session names copy the user account name.
+    pub shared_account_name_copies_user: bool,
+    /// Return `406` for download requests with `Accept: application/json`.
+    pub reject_download_accept_json: bool,
+    /// Return terse `EmailSubmission/set` creates without `identityId` or `emailId`.
+    pub terse_submission_create: bool,
+    /// Return terse `ContactCard/set` creates with only `id` in `created`.
+    pub terse_contact_create: bool,
+    /// Default new `AddressBook` and `Calendar` objects to `isSubscribed: false`.
+    pub new_collections_default_unsubscribed: bool,
+    /// Return terse `CalendarEvent/set` creates with only `id` in `created`.
+    pub terse_calendar_event_create: bool,
+    /// Simulate a server that sends no scheduling messages.
+    pub without_scheduling: bool,
+    /// Omit `name` from created `AddressBook` and `Calendar` responses.
+    pub terse_collection_create: bool,
+    /// Omit `id` from created collection responses.
+    pub id_omitting_collection_create: bool,
+    /// Reject `AddressBook` and `Calendar` creates as `forbidden`.
+    pub reject_collection_create: bool,
+    /// Advertise the Cyrus mail extension and accept `Email.snoozed`.
+    pub snooze_extension: bool,
+}
+
 pub struct MockServerBuilder {
     auth: AuthConfig,
     port: u16,
@@ -64,34 +110,16 @@ pub struct MockServerBuilder {
     omit_primary_accounts: bool,
     calls_in_request: Option<u64>,
     changes_page_size: Option<u64>,
-    changes_never_terminates: bool,
-    stalwart_shaped_unrecognized_changes_state: bool,
     objects_in_get: Option<u64>,
-    email_get_includes_unrequested: bool,
-    contact_photo_uses_file_uri: bool,
-    calendar_event_link_uses_file_uri: bool,
     query_page_size: Option<u64>,
-    query_never_terminates: bool,
-    query_hides_limit: bool,
     size_request: Option<u64>,
     size_upload: Option<u64>,
-    session_via_redirect: bool,
     well_known_redirect_to: Option<String>,
     advertise_origin: Option<String>,
-    shared_account_name_copies_user: bool,
     download_via_redirect_to: Option<String>,
-    reject_download_accept_json: bool,
-    terse_submission_create: bool,
-    terse_contact_create: bool,
     max_contact_size: Option<u64>,
-    new_collections_default_unsubscribed: bool,
-    terse_calendar_event_create: bool,
-    without_scheduling: bool,
-    terse_collection_create: bool,
-    id_omitting_collection_create: bool,
-    reject_collection_create: bool,
     max_delayed_send: Option<u64>,
-    snooze_extension: bool,
+    faults: Faults,
 }
 
 impl MockServerBuilder {
@@ -143,13 +171,13 @@ impl MockServerBuilder {
 
     /// Keep paginated `/changes` responses non-terminating.
     pub fn changes_never_terminates(mut self) -> Self {
-        self.changes_never_terminates = true;
+        self.faults.changes_never_terminates = true;
         self
     }
 
     /// Return Stalwart style invalid `sinceState` errors on `/changes`.
     pub fn stalwart_shaped_unrecognized_changes_state(mut self) -> Self {
-        self.stalwart_shaped_unrecognized_changes_state = true;
+        self.faults.stalwart_shaped_unrecognized_changes_state = true;
         self
     }
 
@@ -160,19 +188,19 @@ impl MockServerBuilder {
 
     /// Include unrequested objects in `Email/get` responses.
     pub fn email_get_includes_unrequested(mut self) -> Self {
-        self.email_get_includes_unrequested = true;
+        self.faults.email_get_includes_unrequested = true;
         self
     }
 
     /// Rewrite `ContactCard/get` photo media URIs to a local `file:` URI.
     pub fn contact_photo_uses_file_uri(mut self) -> Self {
-        self.contact_photo_uses_file_uri = true;
+        self.faults.contact_photo_uses_file_uri = true;
         self
     }
 
     /// Rewrite `CalendarEvent/get` link `href` values to a local `file:` URI.
     pub fn calendar_event_link_uses_file_uri(mut self) -> Self {
-        self.calendar_event_link_uses_file_uri = true;
+        self.faults.calendar_event_link_uses_file_uri = true;
         self
     }
 
@@ -185,13 +213,13 @@ impl MockServerBuilder {
 
     /// Keep paginated `Email/query` responses non-terminating.
     pub fn query_never_terminates(mut self) -> Self {
-        self.query_never_terminates = true;
+        self.faults.query_never_terminates = true;
         self
     }
 
     /// Omit `limit` from a capped email, contact or event query page, against RFC 8620 section 5.5.
     pub fn query_hides_limit(mut self) -> Self {
-        self.query_hides_limit = true;
+        self.faults.query_hides_limit = true;
         self
     }
 
@@ -244,6 +272,12 @@ impl MockServerBuilder {
         self
     }
 
+    /// Replace grouped fault toggles.
+    pub fn faults(mut self, faults: Faults) -> Self {
+        self.faults = faults;
+        self
+    }
+
     /// Bind to a fixed localhost port instead of an ephemeral port.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
@@ -252,7 +286,7 @@ impl MockServerBuilder {
 
     /// Serve discovery through a redirect flow.
     pub fn session_via_redirect(mut self) -> Self {
-        self.session_via_redirect = true;
+        self.faults.session_via_redirect = true;
         self
     }
 
@@ -270,7 +304,7 @@ impl MockServerBuilder {
 
     /// Make shared-account session names copy the user account name.
     pub fn shared_account_name_copies_user(mut self) -> Self {
-        self.shared_account_name_copies_user = true;
+        self.faults.shared_account_name_copies_user = true;
         self
     }
 
@@ -282,19 +316,19 @@ impl MockServerBuilder {
 
     /// Return `406` for download requests with `Accept: application/json`.
     pub fn reject_download_accept_json(mut self) -> Self {
-        self.reject_download_accept_json = true;
+        self.faults.reject_download_accept_json = true;
         self
     }
 
     /// Return terse `EmailSubmission/set` creates without `identityId` or `emailId`.
     pub fn terse_submission_create(mut self) -> Self {
-        self.terse_submission_create = true;
+        self.faults.terse_submission_create = true;
         self
     }
 
     /// Return terse `ContactCard/set` creates with only `id` in `created`.
     pub fn terse_contact_create(mut self) -> Self {
-        self.terse_contact_create = true;
+        self.faults.terse_contact_create = true;
         self
     }
 
@@ -307,13 +341,13 @@ impl MockServerBuilder {
 
     /// Default new `AddressBook` and `Calendar` objects to `isSubscribed: false`.
     pub fn new_collections_default_unsubscribed(mut self) -> Self {
-        self.new_collections_default_unsubscribed = true;
+        self.faults.new_collections_default_unsubscribed = true;
         self
     }
 
     /// Return terse `CalendarEvent/set` creates with only `id` in `created`.
     pub fn terse_calendar_event_create(mut self) -> Self {
-        self.terse_calendar_event_create = true;
+        self.faults.terse_calendar_event_create = true;
         self
     }
 
@@ -321,25 +355,25 @@ impl MockServerBuilder {
     /// Reject `CalendarEvent/set` with `sendSchedulingMessages` as
     /// `invalidArguments` (RFC 8620 section 3.9), and apply nothing.
     pub fn without_scheduling(mut self) -> Self {
-        self.without_scheduling = true;
+        self.faults.without_scheduling = true;
         self
     }
 
     /// Omit `name` from created `AddressBook` and `Calendar` responses.
     pub fn terse_collection_create(mut self) -> Self {
-        self.terse_collection_create = true;
+        self.faults.terse_collection_create = true;
         self
     }
 
     /// Omit `id` from created collection responses.
     pub fn id_omitting_collection_create(mut self) -> Self {
-        self.id_omitting_collection_create = true;
+        self.faults.id_omitting_collection_create = true;
         self
     }
 
     /// Reject `AddressBook` and `Calendar` creates as `forbidden`.
     pub fn reject_collection_create(mut self) -> Self {
-        self.reject_collection_create = true;
+        self.faults.reject_collection_create = true;
         self
     }
 
@@ -351,7 +385,7 @@ impl MockServerBuilder {
 
     /// Advertise the Cyrus mail extension and accept `Email.snoozed`.
     pub fn snooze_extension(mut self) -> Self {
-        self.snooze_extension = true;
+        self.faults.snooze_extension = true;
         self
     }
 
@@ -363,35 +397,36 @@ impl MockServerBuilder {
         state.omit_primary_accounts = self.omit_primary_accounts;
         state.calls_in_request = self.calls_in_request;
         state.changes_page_size = self.changes_page_size;
-        state.changes_never_terminates = self.changes_never_terminates;
+        state.changes_never_terminates = self.faults.changes_never_terminates;
         state.stalwart_shaped_unrecognized_changes_state =
-            self.stalwart_shaped_unrecognized_changes_state;
+            self.faults.stalwart_shaped_unrecognized_changes_state;
         state.objects_in_get = self.objects_in_get;
-        state.email_get_includes_unrequested = self.email_get_includes_unrequested;
-        state.contact_photo_uses_file_uri = self.contact_photo_uses_file_uri;
-        state.calendar_event_link_uses_file_uri = self.calendar_event_link_uses_file_uri;
+        state.email_get_includes_unrequested = self.faults.email_get_includes_unrequested;
+        state.contact_photo_uses_file_uri = self.faults.contact_photo_uses_file_uri;
+        state.calendar_event_link_uses_file_uri = self.faults.calendar_event_link_uses_file_uri;
         state.query_page_size = self.query_page_size;
-        state.query_never_terminates = self.query_never_terminates;
-        state.query_hides_limit = self.query_hides_limit;
+        state.query_never_terminates = self.faults.query_never_terminates;
+        state.query_hides_limit = self.faults.query_hides_limit;
         state.size_request = self.size_request;
         state.size_upload = self.size_upload;
-        state.session_via_redirect = self.session_via_redirect;
+        state.session_via_redirect = self.faults.session_via_redirect;
         state.well_known_redirect_to = self.well_known_redirect_to.clone();
         state.advertise_origin = self.advertise_origin.clone();
-        state.shared_account_name_copies_user = self.shared_account_name_copies_user;
+        state.shared_account_name_copies_user = self.faults.shared_account_name_copies_user;
         state.download_via_redirect_to = self.download_via_redirect_to.clone();
-        state.reject_download_accept_json = self.reject_download_accept_json;
-        state.terse_submission_create = self.terse_submission_create;
-        state.terse_contact_create = self.terse_contact_create;
+        state.reject_download_accept_json = self.faults.reject_download_accept_json;
+        state.terse_submission_create = self.faults.terse_submission_create;
+        state.terse_contact_create = self.faults.terse_contact_create;
         state.max_contact_size = self.max_contact_size;
-        state.new_collections_default_unsubscribed = self.new_collections_default_unsubscribed;
-        state.terse_calendar_event_create = self.terse_calendar_event_create;
-        state.without_scheduling = self.without_scheduling;
-        state.terse_collection_create = self.terse_collection_create;
-        state.id_omitting_collection_create = self.id_omitting_collection_create;
-        state.reject_collection_create = self.reject_collection_create;
+        state.new_collections_default_unsubscribed =
+            self.faults.new_collections_default_unsubscribed;
+        state.terse_calendar_event_create = self.faults.terse_calendar_event_create;
+        state.without_scheduling = self.faults.without_scheduling;
+        state.terse_collection_create = self.faults.terse_collection_create;
+        state.id_omitting_collection_create = self.faults.id_omitting_collection_create;
+        state.reject_collection_create = self.faults.reject_collection_create;
         state.max_delayed_send = self.max_delayed_send;
-        state.snooze_extension = self.snooze_extension;
+        state.snooze_extension = self.faults.snooze_extension;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -450,34 +485,16 @@ impl MockServer {
             omit_primary_accounts: false,
             calls_in_request: Some(DEFAULT_CALLS_IN_REQUEST),
             changes_page_size: None,
-            changes_never_terminates: false,
-            stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
-            email_get_includes_unrequested: false,
-            contact_photo_uses_file_uri: false,
-            calendar_event_link_uses_file_uri: false,
             query_page_size: None,
-            query_never_terminates: false,
-            query_hides_limit: false,
             size_request: Some(DEFAULT_SIZE_REQUEST),
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
-            session_via_redirect: false,
             well_known_redirect_to: None,
             advertise_origin: None,
-            shared_account_name_copies_user: false,
             download_via_redirect_to: None,
-            reject_download_accept_json: false,
-            terse_submission_create: false,
-            terse_contact_create: false,
             max_contact_size: None,
-            new_collections_default_unsubscribed: false,
-            terse_calendar_event_create: false,
-            without_scheduling: false,
-            terse_collection_create: false,
-            id_omitting_collection_create: false,
-            reject_collection_create: false,
             max_delayed_send: None,
-            snooze_extension: false,
+            faults: Faults::default(),
         }
     }
 

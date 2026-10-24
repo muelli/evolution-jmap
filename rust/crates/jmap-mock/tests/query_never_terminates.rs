@@ -6,7 +6,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mock::{EmailSeed, Faults, MockServer};
 use serde_json::{Value, json};
 
 /// Send one API request and return the JSON response body.
@@ -100,6 +100,26 @@ fn hostile_mode_keeps_query_paging_non_terminating() {
     let server = MockServer::builder()
         .query_page_size(1)
         .query_never_terminates()
+        .start();
+    seed_two_emails(&server);
+
+    let first = email_query(&server, 0);
+    assert_eq!(first["limit"], json!(1));
+    assert_eq!(first["ids"].as_array().map(Vec::len), Some(1));
+
+    let second = email_query(&server, 1);
+    assert_eq!(second["limit"], json!(1));
+    assert_eq!(second["ids"].as_array().map(Vec::len), Some(1));
+    assert_eq!(second["ids"], first["ids"]);
+}
+
+#[test]
+fn grouped_faults_enable_the_same_non_terminating_query_mode() {
+    let mut faults = Faults::default();
+    faults.query_never_terminates = true;
+    let server = MockServer::builder()
+        .query_page_size(1)
+        .faults(faults)
         .start();
     seed_two_emails(&server);
 
