@@ -67,25 +67,21 @@
 //! both crates.
 
 use gobject_sys::GTypeModule;
-use jmap_backend_core::i18n::bind;
+use jmap_backend_core::module;
 use jmap_backend_core::subclass::register_dynamic;
-use jmap_backend_core::trampoline::guard;
 
 use crate::backend::JmapCollectionBackend;
 use crate::factory::{JmapCollectionFactory, remember_backend_type};
 
-/// Sets up the `tracing` dispatcher and the gettext domain of this project.
-/// Registers the backend, its factory and the OAuth2 service against
-/// `type_module`.
+/// Sets up the `tracing` dispatcher and the gettext domain of this project
+/// through [`module::load`]. Registers the backend, its factory and the OAuth2
+/// service against `type_module`.
 ///
 /// The registry calls this for each use of the module, not one time for each
 /// process. When the last backend of a module goes away, the registry stops
 /// the use of the module, and all its types become unloaded. The registry
 /// calls this again when the next account needs a backend. Thus each call
 /// registers the types, and `register_dynamic` is idempotent for that reason.
-/// [`jmap_backend_core::logging::init`] and [`bind`] are also idempotent,
-/// because a process can load more than one module of this repository. Each
-/// module must operate as if it is the first.
 ///
 /// The binding comes first because it must exist before a request for a
 /// translated string. The registry always runs this code. This module needs the
@@ -109,9 +105,7 @@ use crate::factory::{JmapCollectionFactory, remember_backend_type};
 /// `type_module` must be the `GTypeModule *` that the registry gave to
 /// `e_module_load`. It must stay alive for the duration of the call.
 pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
-    guard("e_module_load", (), || {
-        jmap_backend_core::logging::init();
-        bind();
+    module::load("e_module_load", || {
         // SAFETY: the contract of this function makes the module the module of
         // the registry.
         unsafe {
