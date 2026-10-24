@@ -58,6 +58,7 @@ evolution-jmap-mock = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 serde_json = { workspace = true }
 evolution-jmap-tracing-capture = { workspace = true }
+evolution-jmap-test-support = { workspace = true }
 # The Camel provider that reads the mail sources this backend writes. It is
 # deliberately a dev-dependency, as in `jmap-config`. The library writes
 # `ESource` groups. The tests need the provider only for the

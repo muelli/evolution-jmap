@@ -34,34 +34,12 @@ use jmap_backend_collection::collection_source::Server;
 use jmap_backend_collection::fan_out::fan_out;
 use jmap_backend_collection::resource_id::resource_id_of;
 use jmap_backend_core::source::ConnectTarget;
-use jmap_client::{Client, Credentials};
+use jmap_client::Credentials;
 use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{
     ChildKind, Doomed, Parts, Requested, create_collection, delete_collection,
 };
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Mirrors `jmap-collection-sync/tests/live_server.rs::connect_for_write`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
+use jmap_test_support::{connect_for_write, unique_suffix};
 
 /// A live `ESource` that this test holds one reference to.
 struct Source(*mut ESource);
