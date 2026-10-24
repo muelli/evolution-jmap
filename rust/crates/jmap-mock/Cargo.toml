@@ -4,6 +4,11 @@
 [package]
 name = "evolution-jmap-mock"
 description = "Stateful in-memory mock JMAP server for testing"
+repository = "https://gitlab.gnome.org/GNOME/evolution-jmap"
+readme = "README.md"
+documentation = "https://docs.rs/evolution-jmap-mock"
+keywords = ["jmap", "mock", "test", "email", "calendar"]
+categories = ["development-tools::testing", "email", "network-programming"]
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -34,3 +39,6 @@ tiny_http = { workspace = true }
 percent-encoding = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
+
+[dev-dependencies]
+evolution-jmap-client = { workspace = true }

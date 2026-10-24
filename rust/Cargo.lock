@@ -393,6 +393,7 @@ name = "evolution-jmap-mock"
 version = "0.5.0"
 dependencies = [
  "base64",
+ "evolution-jmap-client",
  "evolution-jmap-ical",
  "evolution-jmap-proto",
  "evolution-jmap-vcard",
