@@ -157,6 +157,32 @@ a `jmap-mockd` that has it.
 The mock has a fixed clock. Thus the scenario compares `sendAt` with the
 time of the mock, not with the local time.
 
+### `snooze`
+
+One standalone mail account. The mock offers the snooze extension of Cyrus
+and has no mailbox with the role `snoozed`. The scenario does these steps and
+checks:
+
+1. In the inbox, open the context menu of a message (the Menu key) and do
+   **Snooze > For One Hour**. The server must have a new mailbox with the
+   role `snoozed`. The message must be only in that mailbox, and its
+   `snoozed.until` must be one hour after the click. The Snoozed folder
+   appears in the folder tree, the inbox stays selected, and the message
+   leaves the message list.
+2. Do **Snooze > Until Next Monday Morning** on the other message. Its
+   `snoozed.until` must be a Monday at 09:00 local time, in the next seven
+   days.
+
+The log must show no error of evolution-jmap.
+
+The scenario starts the mock with `--snooze-extension`. Use a `jmap-mockd`
+that has this option, as for `send-later`. The client calculates the times
+from the local clock, so the scenario compares them with the local time.
+
+A right-click does not open the context menu of a message: the AT-SPI
+extents of an ETable cell point at the column header. The scenario uses the
+Menu key instead (`popup_menu()`).
+
 ## Write a scenario
 
 A scenario is a Python file in `ci/gui-scenario/scenarios/`. It calls

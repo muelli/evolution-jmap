@@ -22,6 +22,8 @@ MOCK_PORT = os.environ.get("GUI_SCENARIO_MOCK_PORT", "8090")
 SOURCES = os.environ.get("GUI_SCENARIO_SOURCES", ".")
 DEFAULT_TIMEOUT = 60
 POLL_SECONDS = 0.5
+# The X keysym of the Menu key.
+MENU_KEY = 0xFF67
 
 CORE_CAPABILITY = "urn:ietf:params:jmap:core"
 MAIL_CAPABILITY = "urn:ietf:params:jmap:mail"
@@ -187,8 +189,11 @@ class Jmap:
         with urllib.request.urlopen(f"{self.url}/.well-known/jmap", timeout=5) as response:
             return json.load(response)
 
-    def call(self, method, arguments):
-        """Send one method call and return its response arguments."""
+    def call(self, method, arguments, extra_using=()):
+        """Send one method call and return its response arguments.
+
+        `extra_using` adds capabilities to the standard ones of the request.
+        """
         arguments = {"accountId": self.account_id, **arguments}
         body = json.dumps(
             {
@@ -198,6 +203,7 @@ class Jmap:
                     CONTACTS_CAPABILITY,
                     CALENDARS_CAPABILITY,
                     SUBMISSION_CAPABILITY,
+                    *extra_using,
                 ],
                 "methodCalls": [[method, arguments, "0"]],
             }
@@ -239,11 +245,18 @@ class Jmap:
         mailboxes = self.call("Mailbox/get", {"ids": None})["list"]
         return {mailbox["name"]: mailbox for mailbox in mailboxes}
 
-    def mailbox_id(self, role):
+    def mailbox_id_or_none(self, role):
+        """Return the id of the mailbox with `role`, or None."""
         for mailbox in self.mailboxes().values():
             if mailbox.get("role") == role:
                 return mailbox["id"]
-        raise ScenarioFailure(f"the server has no mailbox with the role {role!r}")
+        return None
+
+    def mailbox_id(self, role):
+        mailbox_id = self.mailbox_id_or_none(role)
+        if mailbox_id is None:
+            raise ScenarioFailure(f"the server has no mailbox with the role {role!r}")
+        return mailbox_id
 
     def create_mailbox(self, name, role=None):
         created = self.call("Mailbox/set", {"create": {"m": {"name": name, "role": role}}})
@@ -608,6 +621,17 @@ def _title_shows(folder):
 
 def message_list():
     return wait_find("tree table", "Messages", showing=True)
+
+
+def popup_menu(subject):
+    """Open the context menu of the message with `subject` with the Menu key.
+
+    A right-click does not work: the AT-SPI extents of an ETable cell point
+    at the column header.
+    """
+    select_message(subject)
+    pyatspi.Registry.generateKeyboardEvent(MENU_KEY, None, pyatspi.KEY_SYM)
+    say(f"opened the context menu of {subject!r}")
 
 
 def select_message(subject):
