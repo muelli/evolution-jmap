@@ -1038,19 +1038,16 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     );
                 }
             }
+            let name = if state.shared_account_name_copies_user && !account.is_personal {
+                owner_name.clone().unwrap_or_else(|| account.name.clone())
+            } else {
+                account.name.clone()
+            };
             accounts.insert(
                 id.clone(),
-                Account {
-                    name: if state.shared_account_name_copies_user && !account.is_personal {
-                        owner_name.clone().unwrap_or_else(|| account.name.clone())
-                    } else {
-                        account.name.clone()
-                    },
-                    is_personal: account.is_personal,
-                    is_read_only: false,
-                    account_capabilities,
-                    extra: Default::default(),
-                },
+                Account::new(name)
+                    .is_personal(account.is_personal)
+                    .with_capabilities(account_capabilities),
             );
         }
     }
@@ -1109,20 +1106,20 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
         capabilities.insert(CAPABILITY_CYRUS_MAIL.to_owned(), json!({}));
     }
 
-    Session {
-        capabilities,
-        accounts,
-        primary_accounts,
-        username: first_account
-            .map(|(_, account)| account.name.clone())
-            .unwrap_or_default(),
-        api_url: format!("{advertised}/jmap"),
-        download_url: format!("{advertised}/download/{{accountId}}/{{blobId}}/{{name}}"),
-        upload_url: format!("{advertised}/upload/{{accountId}}"),
-        event_source_url: format!("{advertised}/eventsource"),
-        state: state.session_state(),
-        extra: Default::default(),
-    }
+    let username = first_account
+        .map(|(_, account)| account.name.clone())
+        .unwrap_or_default();
+    Session::new(
+        username,
+        format!("{advertised}/jmap"),
+        format!("{advertised}/download/{{accountId}}/{{blobId}}/{{name}}"),
+        format!("{advertised}/upload/{{accountId}}"),
+        state.session_state(),
+    )
+    .with_event_source_url(format!("{advertised}/eventsource"))
+    .with_capabilities(capabilities)
+    .with_primary_accounts(primary_accounts)
+    .with_accounts(accounts)
 }
 
 #[cfg(test)]

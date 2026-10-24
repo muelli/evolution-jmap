@@ -953,17 +953,15 @@ fn blob_copy_and_core_capabilities_roundtrip_covers_rfc8620() {
     let round_resp: BlobCopyResponse = serde_json::from_value(resp_val).unwrap();
     assert_eq!(round_resp, resp);
 
-    let cap = CoreCapability {
-        max_size_upload: 10_000_000,
-        max_concurrent_upload: 4,
-        max_size_request: 5_000_000,
-        max_concurrent_requests: 8,
-        max_calls_in_request: 16,
-        max_objects_in_get: 256,
-        max_objects_in_set: 128,
-        collation_algorithms: vec!["i;ascii-casemap".to_owned(), "i;octet".to_owned()],
-        extra: BTreeMap::new(),
-    };
+    let cap = CoreCapability::new()
+        .with_max_size_upload(10_000_000)
+        .with_max_concurrent_upload(4)
+        .with_max_size_request(5_000_000)
+        .with_max_concurrent_requests(8)
+        .with_max_calls_in_request(16)
+        .with_max_objects_in_get(256)
+        .with_max_objects_in_set(128)
+        .with_collation_algorithms(["i;ascii-casemap", "i;octet"]);
     let cap_val = serde_json::to_value(&cap).unwrap();
     assert_eq!(cap_val["maxSizeUpload"], 10_000_000);
     assert_eq!(cap_val["maxConcurrentUpload"], 4);

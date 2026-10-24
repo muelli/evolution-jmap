@@ -39,6 +39,7 @@ pub const CAPABILITY_CYRUS_MAIL: &str = "https://cyrusimap.org/ns/jmap/mail";
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Session {
     pub capabilities: BTreeMap<String, Value>,
     pub accounts: BTreeMap<Id, Account>,
@@ -82,6 +83,11 @@ impl Session {
         self
     }
 
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+
     pub fn with_capability(mut self, uri: impl Into<String>, value: Value) -> Self {
         self.capabilities.insert(uri.into(), value);
         self
@@ -97,12 +103,22 @@ impl Session {
         self
     }
 
+    pub fn with_accounts(mut self, accounts: BTreeMap<Id, Account>) -> Self {
+        self.accounts = accounts;
+        self
+    }
+
     pub fn with_primary_account(
         mut self,
         capability: impl Into<String>,
         id: impl Into<Id>,
     ) -> Self {
         self.primary_accounts.insert(capability.into(), id.into());
+        self
+    }
+
+    pub fn with_primary_accounts(mut self, primary_accounts: BTreeMap<String, Id>) -> Self {
+        self.primary_accounts = primary_accounts;
         self
     }
 
@@ -366,6 +382,7 @@ impl Session {
 /// RefPlus capability properties (draft-ietf-jmap-refplus §1.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RefPlusCapability {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub json_path: Option<bool>,
@@ -406,6 +423,7 @@ impl RefPlusCapability {
 /// WebSocket capability properties (RFC 8887 §2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct WebSocketCapability {
     pub url: String,
     #[serde(default)]
@@ -437,6 +455,7 @@ impl WebSocketCapability {
 /// Core capability properties (RFC 8620 §2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CoreCapability {
     #[serde(default)]
     pub max_size_upload: u64,
@@ -515,6 +534,7 @@ impl CoreCapability {
 /// One account the user has access to (RFC 8620 §1.6.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Account {
     pub name: String,
     #[serde(default)]
