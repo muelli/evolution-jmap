@@ -9,9 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use jmap_proto::Id;
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
-    CalendarEventParseRequest, CalendarEventQueryFilter, CalendarEventSetRequest, CalendarRights,
-    ParticipantIdentity, ParticipantIdentitySetRequest, calendar_event_notification_type,
-    calendar_event_set_error, participant_identity_set_error,
+    CalendarEventQueryFilter, CalendarEventSetRequest, CalendarRights, ParticipantIdentity,
+    ParticipantIdentitySetRequest, calendar_event_notification_type, calendar_event_set_error,
+    participant_identity_set_error,
 };
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{
@@ -20,7 +20,9 @@ use jmap_proto::methods::{
 use jmap_proto::state::UtcDate;
 use serde_json::Value;
 
-use crate::dispatch::{account_mut, parse_arguments, project_properties, to_result};
+#[cfg(feature = "parse")]
+use crate::dispatch::project_properties;
+use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::patch::apply_patch;
 use crate::scheduling::EventChange;
 use crate::setops::{simple_set, simple_set_with_validation};
@@ -490,38 +492,48 @@ pub fn calendar_event_parse(
     state: &mut ServerState,
     arguments: Value,
 ) -> Result<Value, MethodError> {
-    let request: CalendarEventParseRequest = parse_arguments(arguments)?;
-    let account = account_mut(state, &request.account_id)?;
-
-    let mut parsed = serde_json::Map::new();
-    let mut not_found = Vec::new();
-    let mut not_parsable = Vec::new();
-    for id in &request.blob_ids {
-        let Some(blob) = account.blobs.get(id) else {
-            not_found.push(id.clone());
-            continue;
-        };
-        let Ok(text) = std::str::from_utf8(&blob.data) else {
-            not_parsable.push(id.clone());
-            continue;
-        };
-        match jmap_ical::ical_to_event(text) {
-            Ok(event) => {
-                parsed.insert(
-                    id.to_string(),
-                    project_properties(&event, request.properties.as_deref())?,
-                );
-            }
-            Err(_) => not_parsable.push(id.clone()),
-        }
+    #[cfg(not(feature = "parse"))]
+    {
+        let _ = state;
+        let _ = arguments;
+        Err(MethodError::new(error::method::UNKNOWN_METHOD))
     }
 
-    to_result(&serde_json::json!({
-        "accountId": request.account_id,
-        "parsed": (!parsed.is_empty()).then_some(Value::Object(parsed)),
-        "notParsable": (!not_parsable.is_empty()).then_some(not_parsable),
-        "notFound": (!not_found.is_empty()).then_some(not_found),
-    }))
+    #[cfg(feature = "parse")]
+    {
+        let request: jmap_proto::calendars::CalendarEventParseRequest = parse_arguments(arguments)?;
+        let account = account_mut(state, &request.account_id)?;
+
+        let mut parsed = serde_json::Map::new();
+        let mut not_found = Vec::new();
+        let mut not_parsable = Vec::new();
+        for id in &request.blob_ids {
+            let Some(blob) = account.blobs.get(id) else {
+                not_found.push(id.clone());
+                continue;
+            };
+            let Ok(text) = std::str::from_utf8(&blob.data) else {
+                not_parsable.push(id.clone());
+                continue;
+            };
+            match jmap_ical::ical_to_event(text) {
+                Ok(event) => {
+                    parsed.insert(
+                        id.to_string(),
+                        project_properties(&event, request.properties.as_deref())?,
+                    );
+                }
+                Err(_) => not_parsable.push(id.clone()),
+            }
+        }
+
+        to_result(&serde_json::json!({
+            "accountId": request.account_id,
+            "parsed": (!parsed.is_empty()).then_some(Value::Object(parsed)),
+            "notParsable": (!not_parsable.is_empty()).then_some(not_parsable),
+            "notFound": (!not_found.is_empty()).then_some(not_found),
+        }))
+    }
 }
 
 pub fn calendar_event_query(

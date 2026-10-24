@@ -20,10 +20,14 @@ name = "jmap_mock"
 name = "jmap-mockd"
 path = "src/bin/jmap-mockd.rs"
 
+[features]
+default = []
+parse = ["dep:evolution-jmap-ical", "dep:evolution-jmap-vcard"]
+
 [dependencies]
 evolution-jmap-proto = { workspace = true }
-evolution-jmap-ical = { workspace = true }
-evolution-jmap-vcard = { workspace = true }
+evolution-jmap-ical = { workspace = true, optional = true }
+evolution-jmap-vcard = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tiny_http = { workspace = true }

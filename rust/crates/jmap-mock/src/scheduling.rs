@@ -8,11 +8,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::Id;
+#[cfg(feature = "parse")]
+use jmap_proto::calendars::participant_role;
 use jmap_proto::calendars::{
-    CalendarEvent, PER_USER_PROPERTIES, participant_participation_status, participant_role,
-    scheduling_method,
+    CalendarEvent, PER_USER_PROPERTIES, participant_participation_status, scheduling_method,
 };
-use serde_json::{Map, Value, json};
+#[cfg(feature = "parse")]
+use serde_json::json;
+use serde_json::{Map, Value};
 
 use crate::patch::apply_patch;
 use crate::state::{AccountState, RecordedSchedulingMessage};
@@ -101,16 +104,17 @@ fn origin_messages(
     let sender = subject.organizer_calendar_address.clone();
     let mut messages = Vec::new();
     let mut send = |method: &str, recipient: &str, recurrence_id: Scope| {
-        let ical = build_ical(subject, method, &recurrence_id, recipient);
-        messages.push(RecordedSchedulingMessage {
-            method: method.to_owned(),
-            event_id: change.id.clone(),
-            uid: subject.uid.clone(),
-            sender: sender.clone(),
-            recipient: recipient.to_owned(),
-            recurrence_id,
-            ical,
-        });
+        if let Some(ical) = build_ical(subject, method, &recurrence_id, recipient) {
+            messages.push(RecordedSchedulingMessage {
+                method: method.to_owned(),
+                event_id: change.id.clone(),
+                uid: subject.uid.clone(),
+                sender: sender.clone(),
+                recipient: recipient.to_owned(),
+                recurrence_id,
+                ical,
+            });
+        }
     };
 
     match (&change.before, &change.after) {
@@ -238,16 +242,17 @@ fn reply_messages(
         if answer.is_none_or(|status| status == participant_participation_status::NEEDS_ACTION) {
             continue;
         }
-        let ical = build_ical(subject, scheduling_method::REPLY, &None, &organizer);
-        messages.push(RecordedSchedulingMessage {
-            method: scheduling_method::REPLY.to_owned(),
-            event_id: change.id.clone(),
-            uid: subject.uid.clone(),
-            sender: Some(address.to_owned()),
-            recipient: organizer.clone(),
-            recurrence_id: None,
-            ical,
-        });
+        if let Some(ical) = build_ical(subject, scheduling_method::REPLY, &None, &organizer) {
+            messages.push(RecordedSchedulingMessage {
+                method: scheduling_method::REPLY.to_owned(),
+                event_id: change.id.clone(),
+                uid: subject.uid.clone(),
+                sender: Some(address.to_owned()),
+                recipient: organizer.clone(),
+                recurrence_id: None,
+                ical,
+            });
+        }
     }
 
     // Send override-scoped replies only when the override pins a status.
@@ -275,16 +280,17 @@ fn reply_messages(
                 continue;
             }
             let scope = Some(recurrence_id.clone());
-            let ical = build_ical(subject, scheduling_method::REPLY, &scope, &organizer);
-            messages.push(RecordedSchedulingMessage {
-                method: scheduling_method::REPLY.to_owned(),
-                event_id: change.id.clone(),
-                uid: subject.uid.clone(),
-                sender: Some(address.to_owned()),
-                recipient: organizer.clone(),
-                recurrence_id: scope,
-                ical,
-            });
+            if let Some(ical) = build_ical(subject, scheduling_method::REPLY, &scope, &organizer) {
+                messages.push(RecordedSchedulingMessage {
+                    method: scheduling_method::REPLY.to_owned(),
+                    event_id: change.id.clone(),
+                    uid: subject.uid.clone(),
+                    sender: Some(address.to_owned()),
+                    recipient: organizer.clone(),
+                    recurrence_id: scope,
+                    ical,
+                });
+            }
         }
     }
     messages
@@ -368,27 +374,48 @@ fn participants_at(event: &CalendarEvent, recurrence_id: &str) -> Map<String, Va
 }
 
 /// Build the iCalendar payload for one scheduling message.
+#[cfg(feature = "parse")]
 fn build_ical(
     event: &CalendarEvent,
     method: &str,
     recurrence_id: &Scope,
     recipient: &str,
-) -> String {
+) -> Option<String> {
     match recurrence_id {
         None => {
             let event = occurrences_excluded_for(event, recipient);
             let event = attendees_shown_to(&event, recipient);
-            jmap_ical::scheduling_ical(&event, method, None)
+            Some(jmap_ical::scheduling_ical(&event, method, None))
         }
         Some(recurrence_id) => {
             let instance = instance_event(event, recurrence_id);
             let instance = attendees_shown_to(&instance, recipient);
-            jmap_ical::scheduling_ical(&instance, method, Some(recurrence_id))
+            Some(jmap_ical::scheduling_ical(
+                &instance,
+                method,
+                Some(recurrence_id),
+            ))
         }
     }
 }
 
+/// Skip iTIP output when parse support is disabled.
+#[cfg(not(feature = "parse"))]
+fn build_ical(
+    event: &CalendarEvent,
+    method: &str,
+    recurrence_id: &Scope,
+    recipient: &str,
+) -> Option<String> {
+    let _ = event;
+    let _ = method;
+    let _ = recurrence_id;
+    let _ = recipient;
+    None
+}
+
 /// Rewrite overrides so instances without the recipient become `excluded`.
+#[cfg(feature = "parse")]
 fn occurrences_excluded_for(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
     let recipient = normalize_uri(recipient);
     let in_series = participants(event).values().any(|participant| {
@@ -419,6 +446,7 @@ fn occurrences_excluded_for(event: &CalendarEvent, recipient: &str) -> CalendarE
 }
 
 /// Apply `hideAttendees` visibility rules for one recipient.
+#[cfg(feature = "parse")]
 fn attendees_shown_to(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
     if event.hide_attendees != Some(true) {
         return event.clone();
@@ -441,6 +469,7 @@ fn attendees_shown_to(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
 }
 
 /// Return whether `participant.roles[role]` is `true`.
+#[cfg(feature = "parse")]
 fn holds_role(participant: &Value, role: &str) -> bool {
     participant
         .get("roles")
@@ -449,6 +478,7 @@ fn holds_role(participant: &Value, role: &str) -> bool {
 }
 
 /// Build one occurrence event by patching series data with its override.
+#[cfg(feature = "parse")]
 fn instance_event(event: &CalendarEvent, recurrence_id: &str) -> CalendarEvent {
     let mut value = serde_json::to_value(event).unwrap_or(Value::Null);
     if let Value::Object(map) = &mut value {
@@ -638,7 +668,35 @@ fn is_unreserved(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{CalendarEvent, Map, instance_participants, normalize_uri, pinned_status};
+    #[cfg(not(feature = "parse"))]
+    use super::{EventChange, record_scheduling_messages};
+    #[cfg(not(feature = "parse"))]
+    use crate::state::AccountState;
     use serde_json::json;
+
+    #[cfg(not(feature = "parse"))]
+    #[test]
+    fn scheduling_messages_are_skipped_when_parse_feature_is_disabled() {
+        let mut account = AccountState::new("test");
+        let event = CalendarEvent {
+            participants: Some(
+                [(
+                    "carol".to_owned(),
+                    json!({"calendarAddress": "mailto:carol@example.org"}),
+                )]
+                .into(),
+            ),
+            ..CalendarEvent::default()
+        };
+        let change = EventChange {
+            id: jmap_proto::Id::new("E1"),
+            before: None,
+            after: Some(event),
+        };
+
+        record_scheduling_messages(&mut account, &[change]);
+        assert!(account.scheduling_outbox.is_empty());
+    }
 
     fn series_of_one() -> Map<String, serde_json::Value> {
         json!({"carol": {"calendarAddress": "mailto:carol@example.org"}})

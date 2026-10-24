@@ -874,6 +874,7 @@ mod tests {
         assert_eq!(response["methodResponses"][0][2], json!("c1"));
     }
 
+    #[cfg(feature = "parse")]
     #[test]
     fn calendar_event_parse_dispatches_through_calendar_event_parse_handler() {
         let mut state = ServerState::new();
@@ -971,6 +972,7 @@ mod tests {
         assert_eq!(response["methodResponses"][0][2], json!("c1"));
     }
 
+    #[cfg(feature = "parse")]
     #[test]
     fn contact_card_parse_dispatches_through_contact_card_parse_handler() {
         let mut state = ServerState::new();
@@ -990,6 +992,59 @@ mod tests {
         assert_eq!(
             response["methodResponses"][0][0],
             json!("ContactCard/parse")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[cfg(not(feature = "parse"))]
+    #[test]
+    fn calendar_event_parse_returns_unknown_method_when_parse_feature_is_disabled() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call(
+            "CalendarEvent/parse",
+            &json!({"accountId": "A1", "blobIds": []}),
+            "c1",
+        )
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("error"));
+        assert_eq!(
+            response["methodResponses"][0][1]["type"],
+            json!("unknownMethod")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[cfg(not(feature = "parse"))]
+    #[test]
+    fn contact_card_parse_returns_unknown_method_when_parse_feature_is_disabled() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:contacts"])
+            .call(
+                "ContactCard/parse",
+                &json!({"accountId": "A1", "blobIds": []}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("error"));
+        assert_eq!(
+            response["methodResponses"][0][1]["type"],
+            json!("unknownMethod")
         );
         assert_eq!(response["methodResponses"][0][2], json!("c1"));
     }
