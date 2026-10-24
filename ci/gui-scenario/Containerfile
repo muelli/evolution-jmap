@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This image runs the GUI scenarios (ci/gui-scenario/run.sh). It holds the
+# Evolution 3.52 of Ubuntu 24.04, Xvfb, openbox, AT-SPI and the tools for
+# screenshots. It does not hold evolution-jmap: run.sh installs the host build
+# into each new container.
+#
+# Build (rootless podman, from the top of the repository):
+#   podman build -f ci/gui-scenario/Containerfile -t evolution-jmap-gui-scenario ci
+# run.sh builds the image when it is missing. Build the image one time and keep it.
+
+ARG UBUNTU=docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+
+FROM ${UBUNTU}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY install-deps-functional.sh install-deps-gui-smoke.sh /tmp/deps/
+
+RUN /tmp/deps/install-deps-functional.sh \
+    && /tmp/deps/install-deps-gui-smoke.sh \
+    && apt-get install -y --no-install-recommends at-spi2-core dbus-x11 libglib2.0-bin \
+    && rm -rf /var/lib/apt/lists/* /tmp/deps
