@@ -39,7 +39,7 @@ use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
 use jmap_proto::{Id, State, UtcDate};
 
 pub use error::SyncError;
-pub use folder::{FolderInfo, FolderRole, FolderTree};
+pub use folder::{FolderDelta, FolderInfo, FolderListChange, FolderRole, FolderTree};
 pub use keywords::{KeywordChange, Keywords};
 pub use mailboxes::Filing;
 pub use message::{

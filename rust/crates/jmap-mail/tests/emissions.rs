@@ -58,9 +58,9 @@ use jmap_proto::mail::role;
 /// third folder gives a rename descendants to carry, the one thing that makes
 /// `folder-renamed` more than `folder-created` with an extra string.
 struct Mail {
-    /// Held for the account's sake. The store connects to this server.
-    /// Dropping it would take the port down under the vfunc.
-    _server: MockServer,
+    /// The store connects to this server. Dropping it would take the port
+    /// down under the vfunc. The push tests change the account on it.
+    server: MockServer,
     account: Account,
 }
 
@@ -78,16 +78,31 @@ fn connected() -> Mail {
 
     let account = Account::open();
     account.connect(sync_against(&server));
+    // The server pushes a state change after each write, and the push handler
+    // can announce the same folder again. Without the subscription, each signal
+    // comes from the call under test. The push tests call the handler directly.
+    account.jmap().stop_push();
     // The listing every vfunc below resolves its paths against. Taken here so
     // a test does not need to account for its cost.
     account.jmap().folders(0).expect("a listing");
-    Mail {
-        _server: server,
-        account,
-    }
+    Mail { server, account }
 }
 
 impl Mail {
+    /// Changes the account on the server, as another client does.
+    fn on_server<R>(&self, edit: impl FnOnce(&mut jmap_mock::AccountState) -> R) -> R {
+        let account_id = self.server.account_id();
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        edit(state.account_mut(&account_id).unwrap())
+    }
+
+    /// The folder-list half of a pushed `Mailbox` change.
+    fn pushed_mailbox_change(&self) {
+        // SAFETY: a live store of ours, made through a `CamelSession`.
+        unsafe { jmap_mail::push::refresh_folder_list_if_structural(self.account.store) };
+    }
+
     fn create(&self, parent: Option<&str>, name: &str) {
         // Bound to a variable, not converted inline. `as_ptr` on a temporary
         // `CString` would hand Camel a pointer freed at the end of the
@@ -423,4 +438,145 @@ fn a_rename_of_an_unsubscribed_folder_with_a_subscribed_child_is_announced() {
 
     let event = one(events(&context), "folder-renamed");
     assert_eq!(event.paths(), ["Archive", "Archive/Nineteen"]);
+}
+
+/// The signals of a test, as (signal, paths) pairs.
+fn signals_and_paths(events: Vec<FolderEvent>) -> Vec<(String, Vec<String>)> {
+    events
+        .into_iter()
+        .map(|event| {
+            let paths = event.paths().into_iter().map(str::to_owned).collect();
+            (event.signal, paths)
+        })
+        .collect()
+}
+
+fn pair(signal: &str, path: &str) -> (String, Vec<String>) {
+    (signal.to_owned(), vec![path.to_owned()])
+}
+
+/// A mailbox that another client made comes to the tree as one new row.
+///
+/// `folder-info-stale` makes Evolution build the full tree of the account
+/// again, and that loses the folder that the user has open. The snooze of a
+/// message makes a Snoozed mailbox in this way.
+#[test]
+fn a_mailbox_that_another_client_made_is_announced_alone() {
+    let context = Context::push();
+    let mail = connected();
+    watch_store(mail.account.store);
+
+    mail.on_server(|account| account.create_mailbox("Receipts", None, None));
+    mail.pushed_mailbox_change();
+
+    assert_eq!(
+        signals_and_paths(events(&context)),
+        [
+            pair("folder-created", "Receipts"),
+            pair("folder-subscribed", "Receipts"),
+        ]
+    );
+}
+
+/// A mailbox that another client destroyed leaves the tree as one row. The
+/// child goes before its parent, so that each signal finds its row.
+#[test]
+fn a_mailbox_that_another_client_destroyed_is_announced_alone() {
+    let context = Context::push();
+    let mail = connected();
+    watch_store(mail.account.store);
+
+    mail.on_server(|account| {
+        let ids: Vec<_> = account
+            .mailboxes
+            .iter()
+            .filter(|(_, mailbox)| mailbox.name != "Inbox")
+            .map(|(id, _)| id.clone())
+            .collect();
+        account.mailboxes.transaction(|transaction| {
+            for id in &ids {
+                transaction.destroy(id);
+            }
+        });
+    });
+    mail.pushed_mailbox_change();
+
+    assert_eq!(
+        signals_and_paths(events(&context)),
+        [
+            pair("folder-unsubscribed", "Projects/Nineteen"),
+            pair("folder-deleted", "Projects/Nineteen"),
+            pair("folder-unsubscribed", "Projects"),
+            pair("folder-deleted", "Projects"),
+        ]
+    );
+}
+
+/// A subscription that another client changed moves the tick of one row.
+#[test]
+fn a_subscription_that_another_client_changed_is_announced_alone() {
+    let context = Context::push();
+    let mail = connected();
+    watch_store(mail.account.store);
+
+    mail.on_server(|account| {
+        let (id, mailbox) = account
+            .mailboxes
+            .iter()
+            .find(|(_, mailbox)| mailbox.name == "Projects")
+            .map(|(id, mailbox)| (id.clone(), mailbox.clone()))
+            .expect("Projects seeded");
+        let unsubscribed = jmap_proto::mail::Mailbox {
+            is_subscribed: Some(false),
+            ..mailbox
+        };
+        account
+            .mailboxes
+            .transaction(|transaction| transaction.update(&id, unsubscribed));
+    });
+    mail.pushed_mailbox_change();
+
+    assert_eq!(
+        signals_and_paths(events(&context)),
+        [pair("folder-unsubscribed", "Projects")]
+    );
+}
+
+/// A rename changes the path of the folder and of each descendant. The store
+/// does not know the old path that `folder-renamed` needs for each of them in
+/// all cases, so it still tells Camel that the full list is stale.
+#[test]
+fn a_mailbox_that_another_client_renamed_makes_the_list_stale() {
+    let context = Context::push();
+    let mail = connected();
+    watch_store(mail.account.store);
+
+    mail.on_server(|account| {
+        let id = account
+            .mailboxes
+            .iter()
+            .find(|(_, mailbox)| mailbox.name == "Projects")
+            .map(|(id, _)| id.clone())
+            .expect("Projects seeded");
+        account.rename_mailbox(&id, "Plans")
+    });
+    mail.pushed_mailbox_change();
+
+    let events = events(&context);
+    assert_eq!(
+        signals_and_paths(events),
+        [("folder-info-stale".to_owned(), Vec::new())]
+    );
+}
+
+/// A push that changed only counts announces nothing.
+#[test]
+fn a_mailbox_change_of_counts_only_is_announced_by_nothing() {
+    let context = Context::push();
+    let mail = connected();
+    watch_store(mail.account.store);
+
+    mail.pushed_mailbox_change();
+
+    assert_eq!(signals_and_paths(events(&context)), []);
 }

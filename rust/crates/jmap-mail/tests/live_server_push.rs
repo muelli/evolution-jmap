@@ -160,7 +160,7 @@ fn importing_a_message_pushes_an_email_state_change() {
 
 /// Creating a mailbox pushes a `StateChange` naming `Mailbox`. This is the
 /// type that `jmap_mail::push::FOLDER_LIST_TYPES` watches, to decide whether
-/// Camel's folder tree needs a `camel_store_folder_info_stale` call.
+/// the folder list of Camel changed.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn creating_a_mailbox_pushes_a_mailbox_state_change() {

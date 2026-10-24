@@ -5,7 +5,7 @@
 //! main context that makes listening work.
 //!
 //! Camel does not emit its notifications at the point where they are reported.
-//! A folder's `changed` signal and all five of a store's folder signals are
+//! A folder's `changed` signal and all six of a store's folder signals are
 //! *queued* onto the context that the relevant `CamelSession` captured at
 //! construction. `camel_folder_changed` and the store's signals
 //! both schedule through `camel_session_idle_add`. That call always attaches
@@ -18,7 +18,7 @@
 //! Every test here holds a [`Context`] and reads through [`emissions`] or
 //! [`events`], which pump before they read. This pattern started in
 //! `tests/refresh.rs` for the folder's `changed` signal alone. It lives here
-//! because the store's five signals have the same problem and the same
+//! because the store's six signals have the same problem and the same
 //! ordering rule: see [`Context`].
 
 use std::cell::RefCell;
@@ -158,11 +158,11 @@ pub fn emissions(context: &Context) -> Vec<Emission> {
 }
 
 // ---------------------------------------------------------------------------
-// a store's five folder signals
+// a store's six folder signals
 
 /// One folder as an announcement described it.
 ///
-/// The flags field is here because for two of the five signals, the flags are
+/// The flags field is here because for two of the six signals, the flags are
 /// half of what the signal announces: an info that says a folder was
 /// subscribed, but does not carry `CAMEL_FOLDER_SUBSCRIBED`, is one that
 /// Evolution would draw without a tick.
@@ -176,7 +176,7 @@ pub struct Announced {
 /// What one emission of a store's folder signals carried.
 #[derive(Debug, PartialEq, Eq)]
 pub struct FolderEvent {
-    /// Which of the five signals this was, named by the name it is connected
+    /// Which of the six signals this was, named by the name it is connected
     /// under.
     pub signal: String,
     /// The path the folder had before. Only `folder-renamed` carries this.
@@ -198,7 +198,7 @@ impl FolderEvent {
 }
 
 thread_local! {
-    /// Every folder signal the store made, in order. All five signals share
+    /// Every folder signal the store made, in order. All six signals share
     /// one list, because a test that asserts a subscribe was announced is
     /// also asserting that nothing else was.
     static EVENTS: RefCell<Vec<FolderEvent>> = const { RefCell::new(Vec::new()) };
@@ -232,6 +232,15 @@ pub fn watch_store(store: *mut CamelStore) {
             )
         };
     }
+    // SAFETY: as above, for the signal that passes no info. The user data
+    // is its static name.
+    unsafe {
+        connect_with(
+            store.cast(),
+            c"folder-info-stale",
+            on_folder_info_stale as unsafe extern "C" fn(*mut CamelStore, gpointer),
+        )
+    };
     // SAFETY: as above, for the one signal whose marshaller passes the old
     // path before the info.
     unsafe {
@@ -263,6 +272,12 @@ unsafe extern "C" fn on_folder_info(
     // static names above. `info` is a live forest for the duration of the
     // emission.
     unsafe { record(data.cast::<gchar>(), None, info) };
+}
+
+/// Evolution rebuilds the full tree of the account for this signal.
+unsafe extern "C" fn on_folder_info_stale(_store: *mut CamelStore, data: gpointer) {
+    // SAFETY: as in `on_folder_info`. A NULL info is an empty forest.
+    unsafe { record(data.cast::<gchar>(), None, ptr::null_mut()) };
 }
 
 unsafe extern "C" fn on_folder_renamed(

@@ -60,7 +60,7 @@ use jmap_mail::folder_info::FolderInfoChain;
 use jmap_mail::folders::Request;
 use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail::subscribe;
-use jmap_mail_sync::{FolderInfo, FolderTree, MailSync};
+use jmap_mail_sync::{FolderInfo, FolderListChange, FolderTree, MailSync};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{Mailbox, role};
@@ -217,15 +217,15 @@ fn a_rebuilt_listing_is_what_the_next_refresh_is_measured_against() {
 }
 
 /// `jmap_mail::push` checks a pushed `Mailbox` change against
-/// `JmapStore::folder_list_changed_structurally` before it tells Camel the
-/// folder list is stale. See that module's own docs for details. With
+/// `JmapStore::pushed_folder_list_change` before it tells Camel about the
+/// folders. See that module's own docs for details. With
 /// nothing listed yet, there is nothing to compare against, so this reports
 /// no change instead of forcing a listing of its own.
 #[test]
 fn with_no_cached_listing_nothing_is_reported_as_structural() {
     let (_server, store) = connected();
 
-    assert!(!store.folder_list_changed_structurally());
+    assert_eq!(store.pushed_folder_list_change(), FolderListChange::Same);
 }
 
 /// RFC 8621 puts `totalEmails` and `unreadEmails` on the `Mailbox` object
@@ -266,9 +266,10 @@ fn a_delivery_that_only_moves_counts_is_not_structural() {
         });
     });
 
-    assert!(
-        !store.folder_list_changed_structurally(),
-        "a delivery's count bump alone must not be reported as structural"
+    assert_eq!(
+        store.pushed_folder_list_change(),
+        FolderListChange::Same,
+        "a delivery's count bump alone must not be reported as a folder change"
     );
 }
 
@@ -283,7 +284,10 @@ fn a_new_mailbox_is_structural() {
         account.create_mailbox("Receipts", None, None)
     });
 
-    assert!(store.folder_list_changed_structurally());
+    assert!(matches!(
+        store.pushed_folder_list_change(),
+        FolderListChange::Delta(delta) if delta.created.len() == 1
+    ));
 }
 
 /// A listing belongs to the connection it was read over. Camel reconnects a
