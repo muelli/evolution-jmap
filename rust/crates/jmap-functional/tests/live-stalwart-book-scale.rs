@@ -45,15 +45,7 @@ use jmap_functional::{
 };
 use jmap_proto::contacts::ContactCard;
 use jmap_proto::session::CAPABILITY_CONTACTS;
-
-/// A value that is unique to this process. Thus a new run on the same
-/// throwaway account does not read a card from an earlier run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
+use jmap_test_support::unique_suffix;
 
 fn batch_size() -> usize {
     env::var("JMAP_SCALE_TEST_CARDS")

@@ -41,18 +41,10 @@ use jmap_functional::{
 };
 use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::session::CAPABILITY_CALENDARS;
+use jmap_test_support::unique_suffix;
 
 const START: &str = "2026-01-15T13:00:00";
 const DURATION: &str = "PT30M";
-
-/// A value that is unique to this process. Thus a new run on the same
-/// throwaway account does not read an event from an earlier run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 /// `(origin, user, password)`, or `None` to skip. The same as
 /// `live_server_params` in `live-stalwart-calendar.rs`.

@@ -42,14 +42,8 @@ use jmap_proto::calendars::Calendar;
 use jmap_proto::contacts::AddressBook;
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_PRINCIPALS};
+use jmap_test_support::unique_suffix;
 use serde_json::json;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 /// `(origin, user, password)` for the account named by `prefix`, or `None`
 /// to skip.

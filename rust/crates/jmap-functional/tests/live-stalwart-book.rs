@@ -32,6 +32,7 @@ use std::env;
 use jmap_functional::{
     Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
 };
+use jmap_test_support::unique_suffix;
 
 const EMAIL: &str = "dana@example.com";
 const NICKNAME: &str = "Vee, the tall one";
@@ -56,15 +57,6 @@ const BIRTHDAY: &str = "1964-03-27";
 /// The same 1x1 PNG as in `address-book.rs`.
 const PHOTO_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
-
-/// A value that is unique to this process. Thus a new run on the same
-/// throwaway account does not read a contact from an earlier run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 /// `(origin, user, password)`, or `None` to skip. This is the same as
 /// `connect_for_write` in the live-server tests of the other crates.

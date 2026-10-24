@@ -36,6 +36,7 @@ use std::env;
 use jmap_functional::{
     Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
 };
+use jmap_test_support::unique_suffix;
 
 const LOCATION: &str = "Room 42";
 const CATEGORIES: &str = "offsite,planning";
@@ -43,15 +44,6 @@ const TRANSP: &str = "TRANSPARENT";
 const PRIORITY: &str = "1";
 const CLASS: &str = "CONFIDENTIAL";
 const ALARM_TRIGGER: &str = "-PT15M";
-
-/// A value that is unique to this process. Thus a new run on the same
-/// throwaway account does not read an event from an earlier run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 /// `(origin, user, password)`, or `None` to skip. The same as
 /// `live_server_params` in `live-stalwart-book.rs`.

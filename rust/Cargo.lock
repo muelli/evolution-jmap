@@ -833,6 +833,7 @@ dependencies = [
  "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-test-support",
  "libc",
  "serde_json",
 ]
