@@ -76,6 +76,7 @@ use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, g_free, gpointer};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::g_object_set;
 use gobject_sys::{GObject, GParamSpec, g_object_unref, g_signal_connect_data};
+use jmap_backend_core::BACKEND_NAME;
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
@@ -89,9 +90,6 @@ use crate::dispatch;
 use crate::link::{self, AccountLink, SendSource};
 use crate::send_later::schedule::{self, Preset};
 use crate::send_later::submit;
-
-/// `vacation::extension` tells why the code does not import this literal.
-const BACKEND_NAME: &CStr = c"jmap";
 
 const STATE: ObjectData<RefCell<SendState>> = ObjectData::new(c"jmap-send-later-state");
 
