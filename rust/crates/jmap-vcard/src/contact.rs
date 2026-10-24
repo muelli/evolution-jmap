@@ -2656,24 +2656,18 @@ fn value_text(value: &VCardValue) -> Option<String> {
 }
 
 fn entry_text(entry: &VCardEntry) -> String {
-    entry
-        .values
-        .iter()
-        .filter_map(value_text)
-        .collect::<Vec<_>>()
-        .join(";")
+    entry_items(entry).join(";")
 }
 
 fn entry_text_list(entry: &VCardEntry) -> String {
-    entry
-        .values
-        .iter()
-        .filter_map(value_text)
-        .collect::<Vec<_>>()
-        .join(",")
+    entry_items(entry).join(",")
 }
 
 fn entry_components(entry: &VCardEntry) -> Vec<String> {
+    entry_items(entry)
+}
+
+fn entry_items(entry: &VCardEntry) -> Vec<String> {
     entry.values.iter().filter_map(value_text).collect()
 }
 
@@ -2715,8 +2709,9 @@ fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_LINE_OCTETS, VCardEntry, VCardProperty, data_uri, entry_key, fold_overlong_lines,
-        normalize_vcard_dates, service_of, split_vcard_property_line, states_unsupported_photo_uri,
+        MAX_LINE_OCTETS, VCardEntry, VCardProperty, data_uri, entry_key, entry_text,
+        entry_text_list, fold_overlong_lines, normalize_vcard_dates, service_of,
+        split_vcard_property_line, states_unsupported_photo_uri,
     };
     use calcard::common::CalendarScale;
     use calcard::vcard::{
@@ -2980,6 +2975,17 @@ mod tests {
         let taken = BTreeMap::from([("e1".to_owned(), ())]);
 
         assert_eq!(entry_key(&entry, "e", &taken), "e2");
+    }
+
+    #[test]
+    fn entry_text_join_modes_keep_item_order() {
+        let entry = VCardEntry::new(VCardProperty::N).with_values(vec![
+            VCardValue::Text("Doe".to_owned()),
+            VCardValue::Text("Jane".to_owned()),
+        ]);
+
+        assert_eq!(entry_text(&entry), "Doe;Jane");
+        assert_eq!(entry_text_list(&entry), "Doe,Jane");
     }
 
     #[test]
