@@ -258,6 +258,7 @@ impl ClientBuilder {
     /// Queries `_jmap._tcp` records and falls back to `https://<domain>`.
     pub fn connect_domain(self, domain: &str, credentials: Credentials) -> Result<Client, Error> {
         let origin = match self.resolver.lookup_srv(domain) {
+            Some(target) if target.port == 443 => format!("https://{}", target.host),
             Some(target) => format!("https://{}:{}", target.host, target.port),
             None => format!("https://{domain}"),
         };

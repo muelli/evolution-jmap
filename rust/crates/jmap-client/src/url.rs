@@ -53,73 +53,90 @@ pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
     format!("{}{path_and_beyond}", origin.trim_end_matches('/'))
 }
 
+/// The scheme, host and port of `url`, in lower case, with no user part, no
+/// default port (80 for http, 443 for https) and no trailing root dot on the host.
+/// A value that is not an absolute URL comes back unchanged.
+pub fn origin(url: &str) -> Cow<'_, str> {
+    let Some(scheme_end) = url.find("://") else {
+        return Cow::Borrowed(url);
+    };
+    let scheme = &url[..scheme_end];
+    let after_scheme = scheme_end + 3;
+    let authority_end = match url[after_scheme..].find(['/', '?', '#']) {
+        Some(pos) => after_scheme + pos,
+        None => url.len(),
+    };
+    let authority = &url[after_scheme..authority_end];
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, rest)| rest);
+
+    let (host, port) = if host_port.starts_with('[') {
+        match host_port.find(']') {
+            Some(end) => {
+                let host = &host_port[..=end];
+                let rest = &host_port[end + 1..];
+                (host, rest.strip_prefix(':'))
+            }
+            None => return Cow::Borrowed(url),
+        }
+    } else {
+        match host_port.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (host_port, None),
+        }
+    };
+
+    if host.is_empty() {
+        return Cow::Borrowed(url);
+    }
+
+    let normalized_host = if host.len() > 1 && host.ends_with('.') && !host.ends_with("..") {
+        &host[..host.len() - 1]
+    } else {
+        host
+    };
+
+    let default_port = if scheme.eq_ignore_ascii_case("http") {
+        Some("80")
+    } else if scheme.eq_ignore_ascii_case("https") {
+        Some("443")
+    } else {
+        None
+    };
+
+    let normalized_port = port.filter(|p| !p.is_empty() && default_port != Some(*p));
+
+    let scheme_needs_lower = scheme.bytes().any(|b| b.is_ascii_uppercase());
+    let host_needs_lower = normalized_host.bytes().any(|b| b.is_ascii_uppercase());
+    let host_changed = normalized_host != host;
+    let port_changed = port != normalized_port;
+    let had_userinfo = host_port.len() != authority.len();
+
+    if !scheme_needs_lower && !host_needs_lower && !host_changed && !port_changed && !had_userinfo {
+        Cow::Borrowed(&url[..authority_end])
+    } else {
+        let scheme = scheme.to_ascii_lowercase();
+        let host = normalized_host.to_ascii_lowercase();
+        match normalized_port {
+            Some(p) => Cow::Owned(format!("{scheme}://{host}:{p}")),
+            None => Cow::Owned(format!("{scheme}://{host}")),
+        }
+    }
+}
+
 /// Scheme and authority prefix of `url`.
 ///
-/// Treats a host with a trailing dot as equivalent to one without.
-/// This prevents DNS root label differences from causing origin mismatches.
-pub(crate) fn origin_of(url: &str) -> Cow<'_, str> {
-    match url.find("://") {
-        Some(scheme_end) => {
-            let after_scheme = scheme_end + 3;
-            let authority_end = match url[after_scheme..].find('/') {
-                Some(slash) => after_scheme + slash,
-                None => url.len(),
-            };
-            let authority = &url[after_scheme..authority_end];
-            let host_port = match authority.find('@') {
-                Some(at) => &authority[at + 1..],
-                None => authority,
-            };
-            let userinfo = match authority.find('@') {
-                Some(at) => &authority[..=at],
-                None => "",
-            };
-
-            let (host, port) = if host_port.starts_with('[') {
-                match host_port.find(']') {
-                    Some(end) => {
-                        let host = &host_port[..=end];
-                        let rest = &host_port[end + 1..];
-                        let port = rest.strip_prefix(':');
-                        (host, port)
-                    }
-                    None => (host_port, None),
-                }
-            } else {
-                match host_port.rfind(':') {
-                    Some(colon) => (&host_port[..colon], Some(&host_port[colon + 1..])),
-                    None => (host_port, None),
-                }
-            };
-
-            let normalized_host = if host.len() > 1 && host.ends_with('.') && !host.ends_with("..")
-            {
-                &host[..host.len() - 1]
-            } else {
-                host
-            };
-
-            if normalized_host == host {
-                Cow::Borrowed(&url[..authority_end])
-            } else if port.is_none() && userinfo.is_empty() {
-                Cow::Borrowed(&url[..after_scheme + normalized_host.len()])
-            } else {
-                let scheme = &url[..scheme_end];
-                match port {
-                    Some(p) => Cow::Owned(format!("{scheme}://{userinfo}{normalized_host}:{p}")),
-                    None => Cow::Owned(format!("{scheme}://{userinfo}{normalized_host}")),
-                }
-            }
-        }
-        None => Cow::Borrowed(url),
-    }
+/// Delegates to [`origin`].
+pub fn origin_of(url: &str) -> Cow<'_, str> {
+    origin(url)
 }
 
 /// Checks whether two URLs have the same scheme, host, and port.
 ///
-/// Normalizes trailing root dots before comparing hosts.
-pub(crate) fn same_origin(a: &str, b: &str) -> bool {
-    origin_of(a) == origin_of(b)
+/// Normalizes scheme case, host case, default ports, and trailing root dots before comparing.
+pub fn same_origin(a: &str, b: &str) -> bool {
+    origin(a) == origin(b)
 }
 
 /// Whether a redirect from `current` to `next` leaves TLS behind.
@@ -215,7 +232,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        downgrades, encode_template_value, is_loopback, may_carry_credentials, origin_of,
+        downgrades, encode_template_value, is_loopback, may_carry_credentials, origin, origin_of,
         rebase_origin, resolve_redirect, same_origin,
     };
 
@@ -455,23 +472,51 @@ mod tests {
     }
 
     #[test]
-    fn origin_of_handles_userinfo_in_authority() {
+    fn origin_of_strips_userinfo_in_authority() {
         assert_eq!(
             origin_of("https://user:pass@example.com/path"),
-            "https://user:pass@example.com"
+            "https://example.com"
         );
         assert_eq!(
             origin_of("https://user:pass@example.com:8080/path"),
-            "https://user:pass@example.com:8080"
+            "https://example.com:8080"
         );
         assert_eq!(
             origin_of("https://user:pass@example.com.:8080/path"),
-            "https://user:pass@example.com:8080"
+            "https://example.com:8080"
         );
         assert_eq!(
             origin_of("https://user@example.com/path"),
-            "https://user@example.com"
+            "https://example.com"
         );
+    }
+
+    #[test]
+    fn origin_drops_default_ports_and_lowercases_scheme_and_host() {
+        assert_eq!(
+            origin("https://mail.example:443/jmap"),
+            "https://mail.example"
+        );
+        assert_eq!(origin("http://mail.example:80/jmap"), "http://mail.example");
+        assert_eq!(
+            origin("HTTPS://Mail.Example:443/jmap"),
+            "https://mail.example"
+        );
+        assert_eq!(origin("HTTP://Mail.Example:80/jmap"), "http://mail.example");
+        assert_eq!(
+            origin("https://mail.example.:443/jmap"),
+            "https://mail.example"
+        );
+        assert_eq!(
+            origin("https://mail.example:8443/jmap"),
+            "https://mail.example:8443"
+        );
+        assert_eq!(
+            origin("http://mail.example:8080/jmap"),
+            "http://mail.example:8080"
+        );
+        assert_eq!(origin("http://[::1]:8080/jmap"), "http://[::1]:8080");
+        assert_eq!(origin("https://[::1]:443/jmap"), "https://[::1]");
     }
 
     #[test]
