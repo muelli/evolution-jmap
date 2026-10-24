@@ -229,15 +229,25 @@ where
         }
     });
 
-    Ok(SetResponse {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: Some(store.state()),
-        created: (!created.is_empty()).then_some(created),
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: (!destroyed.is_empty()).then_some(destroyed),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response =
+        SetResponse::new(request.account_id, store.state()).with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !destroyed.is_empty() {
+        response = response.with_destroyed(destroyed);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    Ok(response)
 }

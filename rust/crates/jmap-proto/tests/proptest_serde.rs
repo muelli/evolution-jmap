@@ -943,11 +943,10 @@ where
         prop::collection::vec(make_item(), 0..3),
         prop::collection::vec(arb_id(), 0..2),
     )
-        .prop_map(|(account_id, state, list, not_found)| GetResponse {
-            account_id,
-            state,
-            list,
-            not_found,
+        .prop_map(|(account_id, state, list, not_found)| {
+            let mut response = GetResponse::new(account_id, state, list);
+            response.not_found = not_found;
+            response
         })
 }
 
@@ -1043,17 +1042,17 @@ where
                 not_updated,
                 not_destroyed,
             )| {
-                SetResponse {
-                    account_id,
-                    old_state,
-                    new_state,
-                    created,
-                    updated,
-                    destroyed,
-                    not_created,
-                    not_updated,
-                    not_destroyed,
-                }
+                let mut response =
+                    SetResponse::new(account_id, new_state.clone().unwrap_or_default());
+                response.old_state = old_state;
+                response.new_state = new_state;
+                response.created = created;
+                response.updated = updated;
+                response.destroyed = destroyed;
+                response.not_created = not_created;
+                response.not_updated = not_updated;
+                response.not_destroyed = not_destroyed;
+                response
             },
         )
 }

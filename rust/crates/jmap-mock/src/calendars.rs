@@ -76,12 +76,10 @@ pub fn calendar_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.calendars.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.calendars.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// The rights `calendar.share_with` grants `principal`, if any.
@@ -234,12 +232,10 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.calendar_events.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.calendar_events.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 fn rewrite_event_link_href_to_file_scheme(event: &mut CalendarEvent) {
@@ -547,15 +543,15 @@ pub fn calendar_event_query(
         request.limit,
     );
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.calendar_events.state(),
-        can_calculate_changes: false,
-        position: request.position.max(0) as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit,
-    })
+    let mut response = QueryResponse::new(request.account_id, account.calendar_events.state(), ids)
+        .with_position(request.position.max(0) as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    if let Some(limit) = limit {
+        response = response.with_limit(limit);
+    }
+    to_result(&response)
 }
 
 /// Mock simplification: compare local `start` textually. This is correct for `Etc/UTC` test data.
@@ -684,12 +680,14 @@ pub fn calendar_event_notification_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.calendar_event_notifications.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(
+            request.account_id,
+            account.calendar_event_notifications.state(),
+            list,
+        )
+        .with_not_found(not_found),
+    )
 }
 
 /// `CalendarEventNotification/query` (draft §8) reuses `get` visibility and filters.
@@ -722,15 +720,16 @@ pub fn calendar_event_notification_query(
         .filter(|(_, (recipient, notification))| visible(recipient, notification))
         .count() as u64;
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.calendar_event_notifications.state(),
-        can_calculate_changes: false,
-        position: request.position.max(0) as u64,
+    let mut response = QueryResponse::new(
+        request.account_id,
+        account.calendar_event_notifications.state(),
         ids,
-        total: request.calculate_total.then_some(total),
-        limit: None,
-    })
+    )
+    .with_position(request.position.max(0) as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    to_result(&response)
 }
 
 fn notification_matches(
@@ -809,17 +808,24 @@ pub fn calendar_event_notification_set(
         }
     });
 
-    to_result(&SetResponse::<CalendarEventNotification> {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.calendar_event_notifications.state()),
-        created: None,
-        updated: None,
-        destroyed: (!destroyed.is_empty()).then_some(destroyed),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response = SetResponse::<CalendarEventNotification>::new(
+        request.account_id,
+        account.calendar_event_notifications.state(),
+    )
+    .with_old_state(old_state);
+    if !destroyed.is_empty() {
+        response = response.with_destroyed(destroyed);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 impl AccountState {
@@ -882,12 +888,14 @@ pub fn participant_identity_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.participant_identities.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(
+            request.account_id,
+            account.participant_identities.state(),
+            list,
+        )
+        .with_not_found(not_found),
+    )
 }
 
 /// `ParticipantIdentity/set` keeps server-set `id` and `isDefault` values.
@@ -1041,17 +1049,27 @@ pub fn participant_identity_set(
         }
     }
 
-    to_result(&SetResponse {
-        account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.participant_identities.state()),
-        created: (!created.is_empty()).then_some(created),
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: (!destroyed.is_empty()).then_some(destroyed),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response = SetResponse::new(account_id, account.participant_identities.state())
+        .with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !destroyed.is_empty() {
+        response = response.with_destroyed(destroyed);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 /// Make `target` the sole default identity (`onSuccessSetIsDefault`).

@@ -63,6 +63,7 @@ impl GetRequest {
 /// `Foo/get` response (RFC 8620 §5.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GetResponse<T> {
     pub account_id: Id,
     pub state: State,
@@ -166,6 +167,7 @@ impl<T> SetRequest<T> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: serde::Deserialize<'de>"))]
+#[non_exhaustive]
 pub struct SetResponse<T> {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -429,6 +431,7 @@ impl<F> From<F> for Filter<F> {
 /// `Foo/query` response (RFC 8620 §5.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct QueryResponse {
     pub account_id: Id,
     pub query_state: State,

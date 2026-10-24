@@ -50,12 +50,10 @@ pub fn principal_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.principals.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.principals.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 pub fn principal_query(
@@ -81,15 +79,12 @@ pub fn principal_query(
         .filter(|(_, principal)| principal_matches(principal, &filter))
         .count() as u64;
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.principals.state(),
-        can_calculate_changes: false,
-        position: request.position.max(0) as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit: None,
-    })
+    let mut response = QueryResponse::new(request.account_id, account.principals.state(), ids)
+        .with_position(request.position.max(0) as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    to_result(&response)
 }
 
 /// Handle `Principal/getAvailability` over seeded `CalendarEvent` values.
@@ -244,12 +239,14 @@ pub fn share_notification_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.share_notifications.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(
+            request.account_id,
+            account.share_notifications.state(),
+            list,
+        )
+        .with_not_found(not_found),
+    )
 }
 
 /// Handle `ShareNotification/query` with [`share_notification_get`] visibility.
@@ -283,15 +280,13 @@ pub fn share_notification_query(
         .filter(|(_, (recipient, notification))| visible(recipient, notification))
         .count() as u64;
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.share_notifications.state(),
-        can_calculate_changes: false,
-        position: request.position.max(0) as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit: None,
-    })
+    let mut response =
+        QueryResponse::new(request.account_id, account.share_notifications.state(), ids)
+            .with_position(request.position.max(0) as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    to_result(&response)
 }
 
 fn share_notification_matches(

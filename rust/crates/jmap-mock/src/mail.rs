@@ -105,12 +105,10 @@ pub fn mailbox_get(
         }
     };
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.mailboxes.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.mailboxes.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// Return rights from `mailbox.share_with` for `principal`, if present.
@@ -277,17 +275,27 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
         }
     });
 
-    to_result(&SetResponse {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.mailboxes.state()),
-        created: (!created.is_empty()).then_some(created),
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: (!destroyed.is_empty()).then_some(destroyed),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response =
+        SetResponse::new(request.account_id, account.mailboxes.state()).with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !destroyed.is_empty() {
+        response = response.with_destroyed(destroyed);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 /// Validate RFC 8621 §2 mailbox placement rules for `of` (`None` on create).
@@ -406,12 +414,10 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.emails.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.emails.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// Assign the `threadId` for this one-email-per-thread mock.
@@ -457,12 +463,10 @@ pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, Me
         list.push(Thread::new(thread_id, email_ids));
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.emails.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.emails.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// Handle `SearchSnippet/get` (RFC 8621 §5.1).
@@ -662,15 +666,15 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     };
     let capped = never_terminates || page_size.is_some_and(|page_size| page_size < asked);
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.emails.state(),
-        can_calculate_changes: false,
-        position: position as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit: (capped && !hides_limit).then(|| page_size.unwrap_or_default()),
-    })
+    let mut response = QueryResponse::new(request.account_id, account.emails.state(), ids)
+        .with_position(position as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    if capped && !hides_limit {
+        response = response.with_limit(page_size.unwrap_or_default());
+    }
+    to_result(&response)
 }
 
 /// Evaluate a `Filter<EmailQueryFilter>` tree per RFC 8620 §5.5.
@@ -849,12 +853,10 @@ pub fn identity_get(state: &mut ServerState, arguments: Value) -> Result<Value, 
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.identities.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.identities.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// `VacationResponse/get` (RFC 8621 §8.1): singleton always exists.
@@ -884,12 +886,10 @@ pub fn vacation_response_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.vacation_response.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.vacation_response.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// `VacationResponse/set` (RFC 8621 §8.1): only `update` mutates state.
@@ -977,17 +977,21 @@ pub fn vacation_response_set(
         }
     });
 
-    to_result(&SetResponse {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.vacation_response.state()),
-        created: None,
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: None,
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response = SetResponse::new(request.account_id, account.vacation_response.state())
+        .with_old_state(old_state);
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 /// Validate `Email.snoozed`: requires the snooze extension and snoozed mailbox.
@@ -1166,17 +1170,27 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         }
     });
 
-    to_result(&SetResponse {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.emails.state()),
-        created: (!created.is_empty()).then_some(created),
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: (!destroyed.is_empty()).then_some(destroyed),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response =
+        SetResponse::new(request.account_id, account.emails.state()).with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !destroyed.is_empty() {
+        response = response.with_destroyed(destroyed);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 /// Whether `email` is in at least one existing mailbox in this account.
@@ -1629,17 +1643,21 @@ pub fn email_submission_set(
         }
     });
 
-    let mut result = to_result(&SetResponse {
-        account_id: request.set.account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.submissions.state()),
-        created: (!created.is_empty()).then_some(created),
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: None,
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: None,
-    })?;
+    let mut response = SetResponse::new(request.set.account_id, account.submissions.state())
+        .with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    let mut result = to_result(&response)?;
 
     // RFC 8620 §5.3: `created` omits properties already sent by the client.
     if terse_submission_create
@@ -1678,12 +1696,10 @@ pub fn email_submission_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.submissions.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.submissions.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// `EmailSubmission/query` (RFC 8621 §7.3): filter by ids, `undoStatus`, or `sendAt` range.
@@ -1747,15 +1763,12 @@ pub fn email_submission_query(
         .filter(|(_, submission)| matches(submission))
         .count() as u64;
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.submissions.state(),
-        can_calculate_changes: false,
-        position: request.position.max(0) as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit: None,
-    })
+    let mut response = QueryResponse::new(request.account_id, account.submissions.state(), ids)
+        .with_position(request.position.max(0) as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    to_result(&response)
 }
 
 /// Everything needed to seed one email into an account.
