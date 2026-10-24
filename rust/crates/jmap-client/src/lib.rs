@@ -101,7 +101,7 @@ pub(crate) mod set;
 mod sieve;
 mod snooze;
 pub mod transport;
-mod url;
+pub mod url;
 
 pub use changes::ChangeSet;
 pub use client::{Client, ClientBuilder, Credentials, rebase_urls_from_env};
@@ -113,3 +113,4 @@ pub use jmap_proto as proto;
 pub use jmap_proto;
 pub use jmap_proto::{Id, State};
 pub use transport::CancelFlag;
+pub use url::{origin, origin_of};
