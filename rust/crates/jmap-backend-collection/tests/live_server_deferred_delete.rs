@@ -38,16 +38,10 @@ use jmap_proto::Id;
 use jmap_proto::calendars::Calendar;
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_PRINCIPALS};
+use jmap_test_support::unique_suffix;
 use serde_json::json;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
-
-fn unique_suffix() -> u128 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 /// The login of one account, from the environment.
 struct Account {
