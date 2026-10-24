@@ -62,6 +62,7 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
         set,
         on_success_activate_script,
         on_success_deactivate_script,
+        ..
     } = request;
     let account_id = set.account_id.clone();
     let account = account_mut(state, &account_id)?;
