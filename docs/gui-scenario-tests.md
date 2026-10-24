@@ -211,6 +211,30 @@ must still have its photo entry.
 
 The log must show no error of evolution-jmap.
 
+### `vacation`
+
+One mail account in a collection, as the account assistant makes it. The
+server has an autoresponder that is on, with two dates, a subject and a
+message. The scenario does these steps and checks:
+
+1. Open the account editor (the Menu key on the account in the folder tree,
+   then **Properties**) and go to **Vacation Responder**. The check box
+   **Send automatic replies** is on, and the page shows the subject and the
+   message of the server.
+2. Change the subject and click **OK**. The server must have the new
+   subject. The other fields must not change, also the two dates.
+3. Open the editor again and click **OK** with no change. The state of the
+   `VacationResponse` on the server must not change.
+4. Open the editor again, clear the check box and click **OK**. The fields
+   become insensitive. The server must have `isEnabled` false, with the
+   same subject and message.
+
+Before steps 3 and 4, the scenario opens the inbox again. Evolution
+disconnects the store after each save in the account editor. The store must
+connect again when it opens a folder.
+
+The log must show no error of evolution-jmap.
+
 ## Write a scenario
 
 A scenario is a Python file in `ci/gui-scenario/scenarios/`. It calls
@@ -235,6 +259,9 @@ Obey these rules:
   window, for example of a composer.
 - To write more than one mail account, give each account its own `key` in
   `write_standalone_mail_account()`.
+- To open the account editor, use `write_collection_mail_account()`. On
+  **OK**, the editor writes the server of a standalone account again from
+  the address of the account. This is a known problem.
 - In the composer, find the **To** field by its name `"To:"`. Find the
   **Subject** field with `labelled_field()`.
 - Use `confirm()` for a confirmation dialog.

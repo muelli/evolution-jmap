@@ -142,6 +142,78 @@ BackendName=jmap
     return name
 
 
+def write_collection_mail_account(name="JMAP scenario mail", identity=("Alice", "alice@example.com")):
+    """Write a mail account in a collection, as the account assistant makes it.
+
+    The collection holds the server and the address. The mail account, the
+    identity and the transport are its children, without a server of their
+    own. The identity
+    has the account name: the account editor names the account after it.
+    Return the display name.
+    """
+    write_source(
+        "collection-mail",
+        f"""[Data Source]
+DisplayName={name}
+Enabled=true
+
+[Collection]
+BackendName=jmap
+Identity={identity[1]}
+ContactsEnabled=false
+CalendarEnabled=false
+MailEnabled=true
+
+[Authentication]
+Host=127.0.0.1
+Port={MOCK_PORT}
+
+[Security]
+Method=none
+""",
+    )
+    sender, address = identity
+    write_source(
+        "collection-mail-account",
+        f"""[Data Source]
+DisplayName={name}
+Enabled=true
+Parent=collection-mail
+
+[Mail Account]
+BackendName=jmap
+IdentityUid=collection-mail-identity
+""",
+    )
+    write_source(
+        "collection-mail-identity",
+        f"""[Data Source]
+DisplayName={name}
+Enabled=true
+Parent=collection-mail
+
+[Mail Identity]
+Name={sender}
+Address={address}
+
+[Mail Submission]
+TransportUid=collection-mail-transport
+""",
+    )
+    write_source(
+        "collection-mail-transport",
+        f"""[Data Source]
+DisplayName={name}
+Enabled=true
+Parent=collection-mail
+
+[Mail Transport]
+BackendName=jmap
+""",
+    )
+    return name
+
+
 def write_collection_account(name="JMAP scenario collection"):
     """Write a collection account with contacts and calendars, without mail.
 
@@ -606,7 +678,11 @@ def select_folder(account, folder):
     # Evolution then disables the folder actions. Focus moves the tree cursor,
     # and the cursor selects the row.
     cell.queryComponent().grabFocus()
-    wait_for(lambda: _title_shows(folder), f"the main window shows {folder!r}")
+    # A store that connects again asks for the password again.
+    wait_for(
+        lambda: (dismiss_first_run_dialogs(), _title_shows(folder))[1],
+        f"the main window shows {folder!r}",
+    )
     say(f"selected folder {folder!r}")
 
 
