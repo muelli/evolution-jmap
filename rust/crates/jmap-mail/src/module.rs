@@ -14,19 +14,17 @@
 //! provider module — the provider struct it keeps names types that must stay
 //! instantiable — so this is the whole of the C surface.
 
-use jmap_backend_core::i18n::bind;
-use jmap_backend_core::trampoline::guard;
+use jmap_backend_core::module;
 
 /// Sets up this project's `tracing` dispatcher, registers the JMAP provider
 /// with Camel, and binds the domain its strings are translated in.
 ///
 /// Called once per process in the field, but written to tolerate being reached
 /// again: [`crate::provider::register`] is idempotent, and the alternative is a
-/// second provider struct for the same protocol. [`jmap_backend_core::logging::init`]
-/// and [`bind`] are idempotent for the same reason and one more — a process
-/// can hold several of this repository's modules at once.
+/// second provider struct for the same protocol. [`module::load`] supplies
+/// the guard, logging and the binding, and is idempotent too.
 ///
-/// The binding comes first because the provider registered by the line after it
+/// The binding comes first because the provider that `register` registers
 /// is immediately visible to Camel, and the provider's name and description are
 /// looked up in that domain by Camel rather than by us. There is no later point
 /// at which we are called and could still get in front of the first lookup.
@@ -43,9 +41,7 @@ use jmap_backend_core::trampoline::guard;
 /// the two are the same function.
 #[unsafe(no_mangle)]
 pub extern "C" fn camel_provider_module_init() {
-    guard("camel_provider_module_init", (), || {
-        jmap_backend_core::logging::init();
-        bind();
+    module::load("camel_provider_module_init", || {
         crate::provider::register();
     });
 }

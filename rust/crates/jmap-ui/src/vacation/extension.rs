@@ -27,17 +27,11 @@ use evo_sys::{
     e_mail_config_notebook_get_type,
 };
 use glib_sys::GType;
+use jmap_backend_core::BACKEND_NAME;
 use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::marshal::{extension_if_present, read_string};
 
 use crate::vacation::page;
-
-/// The only backend name that this module accepts. It is the protocol of the
-/// Camel provider and also the factory name of the collection backend.
-/// `account::BACKEND_NAME` in jmap-config has the same value. This crate does
-/// not import it, because a dependency for one literal costs more than the
-/// literal.
-const BACKEND_NAME: &CStr = c"jmap";
 
 /// The vacation page of the account editor.
 pub struct Vacation;

@@ -46,16 +46,8 @@ use jmap_functional::{
     Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
 };
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
+use jmap_test_support::unique_suffix;
 use serde_json::{Map, Value, json};
-
-/// A value that is unique to this process. Thus a new run on the same
-/// throwaway account does not count the messages of an earlier run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 fn inbox_size() -> usize {
     env::var("JMAP_SCALE_TEST_MESSAGES")

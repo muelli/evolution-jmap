@@ -75,25 +75,21 @@
 //! definitions became one entry point for both crates.
 
 use gobject_sys::GTypeModule;
-use jmap_backend_core::i18n::bind;
+use jmap_backend_core::module;
 use jmap_backend_core::subclass::register_dynamic;
-use jmap_backend_core::trampoline::guard;
 
 use crate::backend::JmapConfigServiceBackend;
 use crate::config_lookup::JmapConfigLookup;
 use crate::source_config::{JmapBookConfig, JmapCalConfig};
 
-/// Configures the `tracing` dispatcher and gettext domain of this project, and
-/// registers the types of this module against `type_module`.
+/// Configures the `tracing` dispatcher and gettext domain of this project
+/// through [`module::load`], and registers the types of this module against
+/// `type_module`.
 ///
 /// GLib calls this once per use of the module, not once per process. When the
 /// last user of the module stops, GLib marks each type that it registered as
 /// unloaded, and calls this function again for the next user. Thus each call
 /// registers again, and for this reason [`register_dynamic`] is idempotent.
-/// [`jmap_backend_core::logging::init`] and [`bind`] are idempotent too, for one
-/// more reason: a process can hold more than one module of this repository at
-/// the same time. Evolution loads this one and uses the Camel provider in the
-/// same address space, and each must assume that it can be the first.
 ///
 /// The binding comes first because it must exist before code asks for a
 /// translated string. This is the only code of this project that the Evolution
@@ -120,9 +116,7 @@ use crate::source_config::{JmapBookConfig, JmapCalConfig};
 /// `type_module` must be the `GTypeModule *` that Evolution gave to
 /// `e_module_load`. It must stay alive for the duration of the call.
 pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
-    guard("e_module_load", (), || {
-        jmap_backend_core::logging::init();
-        bind();
+    module::load("e_module_load", || {
         // SAFETY: by the contract of this function, the module is Evolution's.
         unsafe {
             register_dynamic::<JmapConfigServiceBackend>(type_module);

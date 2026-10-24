@@ -42,7 +42,7 @@ use crate::prepare_mail::prepare_mail_trampoline;
 /// The spelling is intentionally the same as `FACTORY_NAME` of
 /// `jmap-backend-book` and `jmap-backend-cal` and the Camel protocol name.
 /// They are four different namespaces, and one account uses all four.
-pub const FACTORY_NAME: &CStr = c"jmap";
+pub const FACTORY_NAME: &CStr = jmap_backend_core::BACKEND_NAME;
 
 /// The factory from which the registry gets a [`JmapCollectionBackend`].
 #[repr(C)]

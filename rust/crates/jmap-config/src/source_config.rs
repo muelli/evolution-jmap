@@ -103,7 +103,7 @@ use jmap_backend_core::trampoline::guard;
 ///
 /// The class field needs a `'static` pointer: Evolution keeps the class for the
 /// life of the process and never frees it.
-pub const BACKEND_NAME: &CStr = c"jmap";
+pub const BACKEND_NAME: &CStr = jmap_backend_core::BACKEND_NAME;
 
 /// The instance struct of both subclasses: Evolution's, with no extension.
 ///

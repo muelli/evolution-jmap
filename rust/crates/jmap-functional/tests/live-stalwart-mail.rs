@@ -72,6 +72,7 @@ use std::sync::{Mutex, MutexGuard};
 use jmap_functional::{
     Keyfile, Session, SourceKind, observations, required_path, spawn_loopback_proxy,
 };
+use jmap_test_support::unique_suffix;
 
 /// The body of the message that this test puts into the inbox. One line with
 /// no MIME structure: the test checks that a blob from a real server decodes
@@ -124,15 +125,6 @@ const RECIPIENT_UID: &str = "jmap-functional-recipient";
 /// The name of the sender. The server matches `Identity/get` only on the
 /// address, but the name goes into the `From` header.
 const SENDER_NAME: &str = "Agent Sender";
-
-/// A value that is unique to this process. Thus a new run on the same
-/// throwaway account does not read a message from an earlier run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 /// `(origin, user, password)`, or `None` to skip. The same as
 /// `live_server_params` in `live-stalwart-calendar.rs`.

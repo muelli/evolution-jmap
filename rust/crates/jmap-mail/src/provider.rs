@@ -41,7 +41,7 @@ use crate::transport::transport_type;
 /// to dlopen this module in the first place, and the `BackendName` an account's
 /// `.source` file names. `tests/provider.rs` checks the file against this
 /// constant so the two cannot drift.
-pub const PROTOCOL: &CStr = c"jmap";
+pub const PROTOCOL: &CStr = jmap_backend_core::BACKEND_NAME;
 
 /// What the account type is called in the list Evolution offers.
 ///

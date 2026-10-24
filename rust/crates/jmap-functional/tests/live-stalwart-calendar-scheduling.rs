@@ -47,14 +47,8 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
 use jmap_proto::mail::EmailQueryFilter;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_MAIL};
+use jmap_test_support::unique_suffix;
 use serde_json::json;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 /// `(user, password)`, or `None` to skip.
 fn account(user_var: &str, password_var: &str) -> Option<(String, String)> {

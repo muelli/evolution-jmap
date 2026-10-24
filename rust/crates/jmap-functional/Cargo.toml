@@ -20,4 +20,5 @@ libc = "0.2.189"
 [dev-dependencies]
 evolution-jmap-client = { workspace = true }
 evolution-jmap-proto = { workspace = true }
+evolution-jmap-test-support = { workspace = true }
 serde_json = { workspace = true }

@@ -48,6 +48,7 @@ use jmap_functional::{
 };
 use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::session::CAPABILITY_CALENDARS;
+use jmap_test_support::unique_suffix;
 
 /// The date in compact form (no dashes), for the FREEBUSY period text and the
 /// `<window-start>`/`<window-end>` arguments of the client. See the module
@@ -55,15 +56,6 @@ use jmap_proto::session::CAPABILITY_CALENDARS;
 const DATE_COMPACT: &str = "20270601";
 /// The same date with dashes, for the `start` of `CalendarEvent::simple`.
 const DATE_ISO: &str = "2027-06-01";
-
-/// A value that is unique to this process. It selects the hour slot of this
-/// run.
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
 
 /// `(origin, user, password)`, or `None` to skip. The same as
 /// `live_server_params` in `live-stalwart-calendar.rs`.
