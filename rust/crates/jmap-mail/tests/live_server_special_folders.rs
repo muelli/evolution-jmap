@@ -28,7 +28,6 @@
 
 mod common;
 
-use std::env;
 use std::ptr;
 
 use common::Account;
@@ -37,28 +36,11 @@ use eds_sys::{
     camel_store_get_junk_folder_sync, camel_store_get_trash_folder_sync,
 };
 use glib_sys::GError;
-use jmap_client::{Client, Credentials};
 use jmap_mail::folder::JmapFolder;
 use jmap_mail_sync::{FolderRole, MailSync};
 use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_MAIL;
-
-/// Mirrors `jmap-mail-sync/tests/live_server_folder.rs::connect_for_write`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    Some(
-        Client::builder()
-            .rebase_urls_to_origin(rebase)
-            .connect(&origin, Credentials::basic(user, password))
-            .expect("could not fetch the session document for the write-test account"),
-    )
-}
+use jmap_test_support::connect_for_write;
 
 /// One "open the folder for this purpose" call, owned the way Camel owns it.
 struct Purpose {

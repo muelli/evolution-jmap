@@ -31,29 +31,12 @@
 //! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
 //! unset.
 
-use std::env;
 use std::time::{Duration, Instant};
 
 use jmap_backend_core::push::PushRefresh;
 use jmap_client::eventsource::expand_url;
-use jmap_client::{Client, Credentials};
 use jmap_proto::session::CAPABILITY_MAIL;
-
-/// Mirrors `live_server_push.rs::connect_for_write` exactly.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
+use jmap_test_support::connect_for_write;
 
 /// No ping requested (`pingSeconds` of `0` below): nothing at all should
 /// arrive on this stream for the length of the test. That is the point.

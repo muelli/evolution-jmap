@@ -51,3 +51,4 @@ evolution-jmap-tracing-capture = { workspace = true }
 # The disconnect-window test builds its own session document for a fake
 # Transport, rather than a real MockServer.
 serde_json = { workspace = true }
+evolution-jmap-test-support = { workspace = true }

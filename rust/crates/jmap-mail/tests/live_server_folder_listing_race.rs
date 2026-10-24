@@ -31,42 +31,23 @@
 
 mod common;
 
-use std::env;
 use std::sync::Arc;
 use std::thread;
 
 use common::race::DelayedDeliveryTransport;
 use common::race::Gate;
 use common::race::StorePtr;
-use jmap_client::{Client, Credentials};
+use jmap_client::Client;
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
 use jmap_proto::session::CAPABILITY_MAIL;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
+use jmap_test_support::{LiveAccount, unique_suffix};
 
 /// Mirrors `live_server_folder.rs::connect_for_write`, but installs the
 /// delayed-delivery transport rather than the default one.
 fn connect_for_write_with_gate(gate: Arc<Gate>) -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
     let transport = DelayedDeliveryTransport::new(gate, "Mailbox/changes");
-    let client = Client::builder()
-        .transport(transport)
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
+    Some(LiveAccount::write()?.connect_with(Client::builder().transport(transport)))
 }
 
 /// Same scenario as `folder_listing_race.rs`, against real Stalwart. A

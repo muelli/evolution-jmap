@@ -32,7 +32,6 @@
 
 mod common;
 
-use std::env;
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
@@ -50,33 +49,11 @@ use eds_sys::{
 };
 use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_free};
 use gobject_sys::g_object_unref;
-use jmap_client::{Client, Credentials};
+use jmap_client::Client;
 use jmap_mail::folder::new_folder;
 use jmap_mail_sync::{Keywords, MailSync};
 use jmap_proto::session::CAPABILITY_MAIL;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Mirrors `jmap-mail/tests/live_server_synchronize.rs::connect_for_write`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
+use jmap_test_support::{LiveAccount, connect_for_write, unique_suffix};
 
 /// A raw folder pointer, sent to a background thread. Copy of
 /// `transfer_race.rs`'s `FolderPtr`.
@@ -88,20 +65,10 @@ unsafe impl Send for FolderPtr {}
 
 /// Mirrors `live_server_folder_listing_race.rs::connect_for_write_with_gate`.
 fn connect_for_write_with_gate(gate: Arc<Gate>) -> Client {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER")
-        .expect("connect_for_write already confirmed this is set");
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("connect_for_write already confirmed this is set");
-    let origin =
-        env::var("JMAP_LIVE_SERVER_URL").expect("connect_for_write already confirmed this is set");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
     let transport = DelayedDeliveryTransport::new(gate, "Email/query");
-    Client::builder()
-        .transport(transport)
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account")
+    LiveAccount::write()
+        .expect("connect_for_write already confirmed this is set")
+        .connect_with(Client::builder().transport(transport))
 }
 
 /// Imports a message into a real source folder, then races a transfer of it
