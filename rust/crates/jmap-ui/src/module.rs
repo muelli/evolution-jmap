@@ -13,30 +13,23 @@
 //! Evolution constructs the extensible *is* the connection.
 //!
 use gobject_sys::GTypeModule;
-use jmap_backend_core::i18n::bind;
+use jmap_backend_core::module;
 use jmap_backend_core::subclass::register_dynamic;
-use jmap_backend_core::trampoline::guard;
 
 use crate::{send_later, snooze, undo_delete, vacation};
 
 /// Register the types of this crate against `type_module`.
 ///
-/// A panic guard wraps this function, as it wraps all entry points that
-/// Evolution calls.
-///
-/// `logging::init` and [`bind`] are idempotent, and
-/// `jmap_config::module::load` also calls them. This function calls them
-/// again because each load path must operate correctly when it is the first.
-/// This also keeps the load correct if the two crates become separate again.
+/// [`module::load`] supplies the panic guard, logging and the gettext binding.
+/// `jmap_config::module::load` also calls it. This load calls it again, so
+/// that each load path operates correctly when it is the first.
 ///
 /// # Safety
 ///
 /// `type_module` must be the `GTypeModule *` that Evolution gave to
 /// `e_module_load`. It must stay alive for the duration of the call.
 pub unsafe fn load(type_module: *mut GTypeModule) {
-    guard("e_module_load (jmap-ui)", (), || {
-        jmap_backend_core::logging::init();
-        bind();
+    module::load("e_module_load (jmap-ui)", || {
         // SAFETY: the module is the module of Evolution, by the contract of this function.
         unsafe {
             // Register the page type before the extension that makes pages.
