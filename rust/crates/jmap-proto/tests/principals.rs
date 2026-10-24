@@ -80,28 +80,21 @@ fn principal_secret_and_send_to_cover_rfc9670() {
 fn share_notification_roundtrip_covers_rfc9670() {
     use jmap_proto::principals::{Principal, ShareNotification, share_notification_object_type};
     use jmap_proto::state::UtcDate;
-    use std::collections::BTreeMap;
 
     assert_eq!(share_notification_object_type::ADDRESS_BOOK, "AddressBook");
     assert_eq!(share_notification_object_type::CALENDAR, "Calendar");
     assert_eq!(share_notification_object_type::MAILBOX, "Mailbox");
 
-    let notif = ShareNotification {
-        id: Some("sn_1".into()),
-        created: UtcDate::new("2026-09-01T14:00:00Z"),
-        changed_by: Some(Principal {
-            name: "Alice Admin".to_owned(),
-            email: Some("alice@example.com".to_owned()),
-            ..Principal::default()
-        }),
-        object_type: share_notification_object_type::CALENDAR.to_owned(),
-        object_id: "cal_123".into(),
-        object_account_id: "A1".into(),
-        name: None,
-        old_rights: Some(serde_json::json!({"mayReadItems": true})),
-        new_rights: Some(serde_json::json!({"mayReadItems": true, "mayAddItems": true})),
-        extra: BTreeMap::new(),
-    };
+    let notif = ShareNotification::new(
+        UtcDate::new("2026-09-01T14:00:00Z"),
+        share_notification_object_type::CALENDAR,
+        "cal_123",
+        "A1",
+    )
+    .with_id("sn_1")
+    .with_changed_by(Principal::new("Alice Admin").with_email("alice@example.com"))
+    .with_old_rights(serde_json::json!({"mayReadItems": true}))
+    .with_new_rights(serde_json::json!({"mayReadItems": true, "mayAddItems": true}));
 
     let n_val = serde_json::to_value(&notif).unwrap();
     assert_eq!(n_val["id"], "sn_1");
@@ -119,7 +112,6 @@ fn share_notification_roundtrip_covers_rfc9670() {
 #[test]
 fn principals_capabilities_and_set_error_roundtrip_covers_rfc9670() {
     use jmap_proto::principals::{PrincipalsCapability, principal_set_error};
-    use std::collections::BTreeMap;
 
     assert_eq!(principal_set_error::FORBIDDEN, "forbidden");
     assert_eq!(
@@ -127,10 +119,7 @@ fn principals_capabilities_and_set_error_roundtrip_covers_rfc9670() {
         "principalAlreadyExists"
     );
 
-    let cap = PrincipalsCapability {
-        max_principals_per_get: Some(100),
-        extra: BTreeMap::new(),
-    };
+    let cap = PrincipalsCapability::new().with_max_principals_per_get(100);
     let cap_val = serde_json::to_value(&cap).unwrap();
     assert_eq!(cap_val["maxPrincipalsPerGet"], 100);
 

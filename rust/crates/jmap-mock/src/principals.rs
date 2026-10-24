@@ -116,7 +116,7 @@ pub fn principal_get_availability(
         .collect();
     list.sort_by(|a, b| a.utc_start.cmp(&b.utc_start));
 
-    to_result(&GetAvailabilityResponse { list })
+    to_result(&GetAvailabilityResponse::new(list))
 }
 
 /// Return `true` when `mayGetAvailability` is absent.

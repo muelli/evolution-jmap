@@ -116,6 +116,7 @@ impl Principal {
 /// or free text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PrincipalQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -148,6 +149,7 @@ impl PrincipalQueryFilter {
 /// Bespoke request shape specifying principal ID and time range.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GetAvailabilityRequest {
     pub account_id: Id,
     pub id: Id,
@@ -202,6 +204,7 @@ pub mod busy_status {
 /// requested window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GetAvailabilityResponse {
     #[serde(default)]
     pub list: Vec<BusyPeriod>,
@@ -251,6 +254,7 @@ impl BusyPeriod {
 /// A notification that a share was created, updated, or removed (RFC 9670 §4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ShareNotification {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -335,6 +339,7 @@ pub mod share_notification_object_type {
 /// Filter for `ShareNotification/query` (RFC 9670 §4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ShareNotificationQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<UtcDate>,
@@ -375,6 +380,7 @@ impl ShareNotificationQueryFilter {
 /// Principals capability properties (RFC 9670 §1.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PrincipalsCapability {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_principals_per_get: Option<u64>,
@@ -401,6 +407,7 @@ impl PrincipalsCapability {
 /// Principals owner capability properties (RFC 9670 §1.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PrincipalsOwnerCapability {
     pub account_id_for_principal: Id,
     pub principal_id: Id,
@@ -443,6 +450,7 @@ pub mod principal_set_error {
 /// Principal availability calculation capability properties (draft-ietf-jmap-calendars-28 §1.5.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PrincipalAvailabilityCapability {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_availability_duration: Option<String>,
