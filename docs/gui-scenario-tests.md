@@ -83,10 +83,35 @@ steps and checks:
 The log must show each move and each destroy. The log must show no error of
 evolution-jmap.
 
+### `shared-calendar-delete` and `shared-book-delete`
+
+A collection account shows a calendar (or an address book) that a different
+account shares with the user. The scenario does these steps and checks:
+
+1. Delete the shared collection. An info bar with **Undo** shows. The text
+   tells that the delete is for all users who share the collection. The
+   collection disappears from the source selector. The server still has it.
+2. Click **Undo**. The collection shows again in the source selector.
+3. Delete the collection again. A new info bar shows. The server still has
+   the collection after the end of the first undo window, and also just
+   before the end of the second window.
+4. Wait. At the end of the second window, the server destroys the
+   collection. The collections of the user's own account do not change.
+
+Each scenario takes about 2 minutes, because the undo window is 60 seconds.
+The registry log in `dbus.log` must show the destroy. No log must show an
+error of evolution-jmap.
+
+The mock has no plain shared account. These scenarios start the mock with
+`--shared-account-name-copies-user`, so the shared account has the name of
+the user, and the collection shows as "alice@example.com: Team calendar".
+
 ## Write a scenario
 
 A scenario is a Python file in `ci/gui-scenario/scenarios/`. It calls
-`main(setup, run)` from `ci/gui-scenario/scenario.py`.
+`main(setup, run)` from `ci/gui-scenario/scenario.py`. Two optional arguments
+of `main()` change the start: `component` is the Evolution view to open
+(default `mail`), and `mock_args` are more arguments for `jmap-mockd`.
 
 - `setup()` runs before Evolution starts. Write the source files and the
   server state here (for example `write_standalone_mail_account()` and
@@ -104,4 +129,8 @@ Obey these rules:
 - Use `select_folder()` to select a folder. The AT-SPI action "activate"
   opens the folder but does not select the row. Evolution then disables the
   folder commands, for example **Expunge**.
+- Use `select_source()` to select a calendar or an address book. It moves
+  the cursor of the source selector, as `select_folder()` does.
+- The registry and the factories log to `dbus.log`. Give `log="dbus.log"` to
+  `expect_log()` and `expect_no_errors()` to check that log.
 - Call `screenshot()` at each step that a human must see.

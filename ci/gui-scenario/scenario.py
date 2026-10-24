@@ -23,7 +23,10 @@ SOURCES = os.environ.get("GUI_SCENARIO_SOURCES", ".")
 DEFAULT_TIMEOUT = 60
 POLL_SECONDS = 0.5
 
+CORE_CAPABILITY = "urn:ietf:params:jmap:core"
 MAIL_CAPABILITY = "urn:ietf:params:jmap:mail"
+CONTACTS_CAPABILITY = "urn:ietf:params:jmap:contacts"
+CALENDARS_CAPABILITY = "urn:ietf:params:jmap:calendars"
 
 
 class ScenarioFailure(Exception):
@@ -129,17 +132,48 @@ BackendName=jmap
     return name
 
 
+def write_collection_account(name="JMAP scenario collection"):
+    """Write a collection account with contacts and calendars, without mail.
+
+    The account uses the mock without credentials. Return the display name.
+    """
+    write_source(
+        "scenario-collection",
+        f"""[Data Source]
+DisplayName={name}
+Enabled=true
+
+[Collection]
+BackendName=jmap
+ContactsEnabled=true
+CalendarEnabled=true
+MailEnabled=false
+
+[Authentication]
+Host=127.0.0.1
+Port={MOCK_PORT}
+
+[Security]
+Method=none
+""",
+    )
+    return name
+
+
 # JMAP.
 
 
 class Jmap:
-    """A minimal JMAP client for server-state checks. It sends no credentials."""
+    """A minimal JMAP client for server-state checks. It sends no credentials.
 
-    def __init__(self, url=JMAP_URL):
+    The calls go to `account_id`, by default the primary mail account.
+    """
+
+    def __init__(self, url=JMAP_URL, account_id=None):
         self.url = url
         session = wait_for(self._session, f"JMAP session at {url}", timeout=30)
         self.api_url = session["apiUrl"]
-        self.account_id = session["primaryAccounts"][MAIL_CAPABILITY]
+        self.account_id = account_id or session["primaryAccounts"][MAIL_CAPABILITY]
 
     def _session(self):
         with urllib.request.urlopen(f"{self.url}/.well-known/jmap", timeout=5) as response:
@@ -150,7 +184,12 @@ class Jmap:
         arguments = {"accountId": self.account_id, **arguments}
         body = json.dumps(
             {
-                "using": ["urn:ietf:params:jmap:core", MAIL_CAPABILITY],
+                "using": [
+                    CORE_CAPABILITY,
+                    MAIL_CAPABILITY,
+                    CONTACTS_CAPABILITY,
+                    CALENDARS_CAPABILITY,
+                ],
                 "methodCalls": [[method, arguments, "0"]],
             }
         ).encode()
@@ -162,6 +201,18 @@ class Jmap:
         if name == "error":
             raise ScenarioFailure(f"{method} failed: {result}")
         return result
+
+    def create(self, type_name, properties):
+        """Create one object of `type_name` ("Calendar", ...) and return its id."""
+        created = self.call(f"{type_name}/set", {"create": {"c": properties}})
+        if "c" not in (created.get("created") or {}):
+            raise ScenarioFailure(f"{type_name}/set did not create {properties}: {created}")
+        return created["created"]["c"]["id"]
+
+    def names(self, type_name):
+        """Return {id: name} of all objects of `type_name` ("Calendar", ...)."""
+        found = self.call(f"{type_name}/get", {"ids": None})["list"]
+        return {item["id"]: item.get("name") for item in found}
 
     def mailboxes(self):
         """Return {name: mailbox} of all mailboxes."""
@@ -436,9 +487,43 @@ def select_message(subject):
     say(f"selected message {subject!r}")
 
 
-def evolution_log():
-    """Return the Evolution log (EVOLUTION_JMAP_LOG=trace) without colour codes."""
-    path = os.path.join(ARTIFACTS, "evolution.log")
+# The calendar and contacts views.
+
+
+def source_cell(name):
+    """Return the showing cell of the source `name` in a source selector, or None.
+
+    A source selector lists only enabled sources, so a disabled calendar or
+    address book has no cell.
+    """
+    return find(evolution(), "table cell", name, showing=True)
+
+
+def select_source(name):
+    """Select the calendar or address book `name` in the source selector."""
+    cell = wait_for(lambda: source_cell(name), f"{name!r} in the source selector")
+    # As in the folder tree: focus moves the cursor, and the cursor selects the
+    # row. The delete actions act on the selected source.
+    cell.queryComponent().grabFocus()
+    say(f"selected source {name!r}")
+
+
+def info_bar(prefix):
+    """Return the showing info bar whose text starts with `prefix`, or None."""
+    for bar in descendants(evolution(), "info bar"):
+        if is_showing(bar) and find(bar, None, prefix=prefix):
+            return bar
+    return None
+
+
+def info_bar_texts(bar):
+    """Return the texts of the labels of an info bar, in tree order."""
+    return [_name(label) for label in descendants(bar, "label") if _name(label)]
+
+
+def evolution_log(log="evolution.log"):
+    """Return a log of the scenario (EVOLUTION_JMAP_LOG=trace) without colour codes."""
+    path = os.path.join(ARTIFACTS, log)
     try:
         with open(path, encoding="utf-8", errors="replace") as log:
             return re.sub(r"\x1b\[[0-9;]*m", "", log.read())
@@ -446,24 +531,36 @@ def evolution_log():
         return ""
 
 
-def expect_log(pattern, what):
-    """Wait until a line of the Evolution log matches the regular expression."""
+def expect_log(pattern, what, log="evolution.log"):
+    """Wait until a line of `log` matches the regular expression.
+
+    The registry and the address book and calendar factories write to
+    "dbus.log", because D-Bus starts them.
+    """
     regex = re.compile(pattern, re.MULTILINE)
-    wait_for(lambda: regex.search(evolution_log()), f"the log shows {what}", timeout=10)
+    wait_for(lambda: regex.search(evolution_log(log)), f"the log shows {what}", timeout=10)
     say(f"log: {what}")
 
 
-def expect_no_errors():
-    """Fail if a crate of evolution-jmap logged an error."""
-    errors = re.findall(r"^.* ERROR jmap_.*$", evolution_log(), re.MULTILINE)
+def expect_no_errors(log="evolution.log"):
+    """Fail if a crate of evolution-jmap logged an error in `log`."""
+    errors = re.findall(r"^.* ERROR jmap_.*$", evolution_log(log), re.MULTILINE)
     if errors:
         raise ScenarioFailure("the log shows errors:\n" + "\n".join(errors[:5]))
-    say("log: no errors")
+    say(f"log: no errors in {log}")
 
 
-def main(setup, run):
-    """Dispatch "setup" or "run" from the command line to the scenario."""
+def main(setup, run, component="mail", mock_args=()):
+    """Dispatch a step from the command line to the scenario.
+
+    The steps are "setup" and "run". The step "config" prints the Evolution
+    component to start on the first line, then one argument of jmap-mockd per
+    line. ci/gui-scenario/run.sh reads it.
+    """
     step = sys.argv[1] if len(sys.argv) > 1 else "run"
+    if step == "config":
+        print("\n".join([component, *mock_args]))
+        return
     try:
         if step == "setup":
             setup()

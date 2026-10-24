@@ -149,7 +149,13 @@ run_scenario() {
 		GUI_SCENARIO_JMAP_URL="http://127.0.0.1:$MOCK_PORT"
 	)
 
-	"$MOCK_BIN" --port "$MOCK_PORT" >"$out/mock.log" 2>&1 &
+	# The scenario names the Evolution component to start and the arguments of
+	# the mock.
+	local config component
+	mapfile -t config < <("${session_env[@]}" python3 "$SCENARIOS/$name.py" config)
+	component="${config[0]:-mail}"
+
+	"$MOCK_BIN" --port "$MOCK_PORT" "${config[@]:1}" >"$out/mock.log" 2>&1 &
 	PIDS+=($!)
 	Xvfb "$DISPLAY_NUM" -screen 0 1280x1024x24 >"$run_dir/xvfb.log" 2>&1 &
 	PIDS+=($!)
@@ -191,7 +197,7 @@ run_scenario() {
 			-y "$recording" >"$run_dir/ffmpeg.log" 2>&1 &
 		local rec_pid=$!
 
-		"${session_env[@]}" evolution -c mail --force-online >"$out/evolution.log" 2>&1 &
+		"${session_env[@]}" evolution -c "$component" --force-online >"$out/evolution.log" 2>&1 &
 		PIDS+=($!)
 
 		"${session_env[@]}" python3 "$SCENARIOS/$name.py" run \
