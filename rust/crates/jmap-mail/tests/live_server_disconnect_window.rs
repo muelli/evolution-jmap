@@ -31,7 +31,6 @@
 
 mod common;
 
-use std::env;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
@@ -40,36 +39,18 @@ use std::time::{Duration, Instant};
 use common::race::DelayedDeliveryTransport;
 use common::race::Gate;
 use common::race::StorePtr;
-use jmap_client::{Client, Credentials};
+use jmap_client::Client;
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
 use jmap_proto::session::CAPABILITY_MAIL;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
+use jmap_test_support::{LiveAccount, connect_for_write, unique_suffix};
 
 /// Mirrors `live_server_folder_listing_race.rs`'s `connect_for_write_with_gate`.
 fn connect_for_write_with_gate(gate: Arc<Gate>) -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
     // `messages()` sends `Email/get` just after it clones the connection's `Arc` and drops the
     // read guard. A hold on that response opens the window that `drop_connection` races.
     let transport = DelayedDeliveryTransport::new(gate, "Email/get");
-    let client = Client::builder()
-        .transport(transport)
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
+    Some(LiveAccount::write()?.connect_with(Client::builder().transport(transport)))
 }
 
 /// Same scenario as `disconnect_window.rs`, against real Stalwart. A
@@ -142,17 +123,7 @@ fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight_on_the_
 
     // Cleanup needs its own connection: `drop_connection` above already took
     // this store's.
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(
-            &env::var("JMAP_LIVE_SERVER_URL").unwrap(),
-            Credentials::basic(
-                env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap(),
-                env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD").unwrap(),
-            ),
-        )
-        .expect("could not reconnect for cleanup");
+    let client = connect_for_write().expect("the write-test account was already confirmed above");
     let account_id = client
         .primary_account(CAPABILITY_MAIL)
         .expect("the write-test account needs the mail capability");

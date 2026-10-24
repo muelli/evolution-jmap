@@ -41,52 +41,8 @@ use eds_sys::{
 };
 use glib_sys::{GError, GFALSE, GTRUE, g_clear_error, gboolean, gssize};
 use gobject_sys::g_object_unref;
-use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{FolderRole, MailSync};
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Mirrors `jmap-mail-sync/tests/live_server_send.rs::connect_for_write`
-/// exactly.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    Some(
-        Client::builder()
-            .rebase_urls_to_origin(rebase)
-            .connect(&origin, Credentials::basic(user, password))
-            .expect("could not fetch the session document for the write-test account"),
-    )
-}
-
-/// Mirrors `jmap-mail-sync/tests/live_server_send.rs::connect_recipient`
-/// exactly.
-fn connect_recipient() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
-        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
-    );
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    Some(
-        Client::builder()
-            .rebase_urls_to_origin(rebase)
-            .connect(&origin, Credentials::basic(user, password))
-            .expect("could not fetch the session document for the recipient account"),
-    )
-}
+use jmap_test_support::{connect_for_write, connect_recipient, unique_suffix};
 
 /// The `CamelMimeMessage` that `send_to_sync` receives, parsed from bytes.
 /// Mirrors `tests/send.rs::Message`.

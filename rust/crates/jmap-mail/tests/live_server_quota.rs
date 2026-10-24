@@ -33,7 +33,6 @@
 
 mod common;
 
-use std::env;
 use std::ptr;
 
 use common::Account;
@@ -43,33 +42,10 @@ use eds_sys::{
 use gio_sys::{G_IO_ERROR_NOT_SUPPORTED, g_io_error_quark};
 use glib_sys::GError;
 use gobject_sys::g_object_unref;
-use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
 use jmap_mail_sync::MailSync;
 use jmap_proto::session::CAPABILITY_MAIL;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Mirrors `jmap-mail-sync/tests/live_server_quota.rs::connect_for_write`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
+use jmap_test_support::{connect_for_write, unique_suffix};
 
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]

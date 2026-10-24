@@ -30,7 +30,6 @@
 
 mod common;
 
-use std::env;
 use std::ffi::CStr;
 use std::ptr;
 
@@ -38,34 +37,11 @@ use common::Account;
 use common::array::StringArray;
 use eds_sys::CamelFolder;
 use glib_sys::{GError, GPtrArray, g_ptr_array_unref};
-use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
 use jmap_mail::search_body::search_body_sync;
 use jmap_mail_sync::{Keywords, MailSync};
 use jmap_proto::session::CAPABILITY_MAIL;
-
-fn unique_suffix() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-}
-
-/// Mirrors `jmap-mail/tests/live_server_search.rs::connect_for_write`.
-fn connect_for_write() -> Option<Client> {
-    let user = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
-    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
-        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
-    let origin = env::var("JMAP_LIVE_SERVER_URL")
-        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
-    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
-
-    let client = Client::builder()
-        .rebase_urls_to_origin(rebase)
-        .connect(&origin, Credentials::basic(user, password))
-        .expect("could not fetch the session document for the write-test account");
-    Some(client)
-}
+use jmap_test_support::{connect_for_write, unique_suffix};
 
 /// Calls `search_body_sync` for `words` against `folder` and collects the
 /// uids it answers with.
