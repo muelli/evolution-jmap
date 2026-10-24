@@ -20,7 +20,7 @@ use glib_sys::{
 };
 use jmap_backend_book::marshal;
 use jmap_backend_book::ops::{self, Outcome};
-use jmap_book_sync::{BookSync, OnConflict, SyncError};
+use jmap_book_sync::{BookSync, OnConflict, SyncError, edit_base};
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -277,6 +277,7 @@ fn load_contact_yields_an_econtact_keyed_by_the_jmap_id() {
         let ok = ops::load_contact(
             &fixture.sync(),
             uid.as_ptr(),
+            ptr::null(),
             &mut contact,
             &mut extra,
             &mut error,
@@ -288,6 +289,11 @@ fn load_contact_yields_an_econtact_keyed_by_the_jmap_id() {
         assert_eq!(marshal::contact_uid(contact).as_deref(), Some(id.as_str()));
         let vcard = marshal::vcard_from_contact(contact).expect("rendered");
         assert!(vcard.contains("FN:Vera Oldenburg"), "{vcard}");
+        let revision = fixture.sync().load_contact(id.as_str()).unwrap().revision;
+        assert!(
+            vcard.contains(&format!("X-JMAP-BASE:{revision}")),
+            "the contact carries no stamp of its base: {vcard}"
+        );
         marshal::contact_unref(contact);
     }
 }
@@ -305,6 +311,7 @@ fn loading_an_unknown_contact_reports_contact_not_found_and_writes_nothing() {
         let ok = ops::load_contact(
             &fixture.sync(),
             uid.as_ptr(),
+            ptr::null(),
             &mut contact,
             ptr::null_mut(),
             &mut error,
@@ -720,11 +727,24 @@ unsafe fn nth_extra(list: *mut GSList, n: u32) -> String {
 
 /// Loads `uid` through `ops::load_contact` and returns the extra it stores.
 fn loaded_extra(sync: &BookSync, uid: &Id) -> String {
+    reloaded_extra(sync, uid, None)
+}
+
+/// [`loaded_extra`] for a refresh over the cached extra `previous`.
+fn reloaded_extra(sync: &BookSync, uid: &Id, previous: Option<&str>) -> String {
     let uid = CString::new(uid.as_str()).unwrap();
+    let previous = previous.map(|text| CString::new(text).unwrap());
     let mut extra: *mut gchar = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
     unsafe {
-        let ok = ops::load_contact(sync, uid.as_ptr(), ptr::null_mut(), &mut extra, &mut error);
+        let ok = ops::load_contact(
+            sync,
+            uid.as_ptr(),
+            previous.as_ref().map_or(ptr::null(), |text| text.as_ptr()),
+            ptr::null_mut(),
+            &mut extra,
+            &mut error,
+        );
         assert_eq!(ok, GTRUE);
         take_string(&mut extra)
     }
@@ -777,9 +797,13 @@ fn every_listed_node_carries_its_vcard_as_the_extra() {
     unsafe {
         let ok = ops::list_existing(&fixture.sync(), &mut sync_tag, &mut existing, &mut error);
         assert_eq!(ok, GTRUE);
-        let (_, _, object) = nth_info(existing, 0);
+        let (_, revision, object) = nth_info(existing, 0);
         assert!(object.contains("FN:Vera Oldenburg"), "{object}");
-        assert_eq!(nth_extra(existing, 0), object);
+        // The object carries the stamp of its base; the extra does not.
+        assert_eq!(
+            edit_base::stamp(&nth_extra(existing, 0), "VCARD", &revision),
+            object
+        );
         g_free(sync_tag.cast());
         g_slist_free_full(existing, Some(e_book_meta_backend_info_free));
     }
@@ -824,7 +848,81 @@ fn an_edit_with_its_extra_keeps_a_remote_edit_of_another_property() {
         stored.contains("vera@remote.example"),
         "the remote edit was reverted: {stored}"
     );
-    assert_eq!(new_extra, stored, "the new extra is not the stored vCard");
+    assert_eq!(
+        edit_base::versions_of(&new_extra),
+        [stored, extra],
+        "the new extra is not the stored vCard, then the base"
+    );
+}
+
+/// The E1 finding: a refresh replaced the extra while an editor kept the old copy open.
+#[test]
+fn a_stale_copy_keeps_a_remote_edit_after_a_refresh_replaced_the_extra() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+    let extra = loaded_extra(&sync, &id);
+    fixture
+        .client()
+        .contact_update(
+            &fixture.account_id,
+            &id,
+            json!({"emails/e0/address": "vera@remote.example"}),
+        )
+        .unwrap();
+    let refreshed = reloaded_extra(&sync, &id, Some(&extra));
+
+    let copy = edit_base::stamp(&extra, "VCARD", &edit_base::revision_of(&extra));
+    let edited = copy.replace("FN:Vera Oldenburg", "FN:Vera Local");
+    let (ok, error, _) = save_edit(&sync, &edited, &refreshed, E_CONFLICT_RESOLUTION_KEEP_LOCAL);
+
+    assert_eq!(ok, GTRUE);
+    assert!(error.is_null());
+    let stored = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(stored.contains("FN:Vera Local"), "{stored}");
+    assert!(
+        stored.contains("vera@remote.example"),
+        "the stale copy reverted the remote edit: {stored}"
+    );
+    assert!(
+        !stored.contains("X-JMAP-BASE"),
+        "the stamp reached the server: {stored}"
+    );
+}
+
+/// A copy older than every version that the extra keeps has no base, so it must not overwrite.
+#[test]
+fn a_stamp_that_the_extra_no_longer_keeps_is_out_of_sync() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+    let extra = loaded_extra(&sync, &id);
+    fixture
+        .client()
+        .contact_update(
+            &fixture.account_id,
+            &id,
+            json!({"emails/e0/address": "vera@remote.example"}),
+        )
+        .unwrap();
+    let refreshed = loaded_extra(&sync, &id);
+
+    let copy = edit_base::stamp(&extra, "VCARD", &edit_base::revision_of(&extra));
+    let edited = copy.replace("FN:Vera Oldenburg", "FN:Vera Local");
+    let (ok, mut error, _) =
+        save_edit(&sync, &edited, &refreshed, E_CONFLICT_RESOLUTION_KEEP_LOCAL);
+
+    assert_eq!(ok, GFALSE);
+    unsafe {
+        assert_error(
+            &mut error,
+            e_client_error_quark(),
+            E_CLIENT_ERROR_OUT_OF_SYNC as i32,
+        );
+    }
+    let stored = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(stored.contains("FN:Vera Oldenburg"), "{stored}");
+    assert!(stored.contains("vera@remote.example"), "{stored}");
 }
 
 #[test]

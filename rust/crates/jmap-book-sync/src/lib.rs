@@ -29,7 +29,7 @@ use jmap_vcard::{card_to_vcard, vcard_to_card};
 use serde_json::{Map, Value};
 
 pub use error::SyncError;
-pub use jmap_object_sync::OnConflict;
+pub use jmap_object_sync::{OnConflict, edit_base};
 
 /// One contact for the meta backend: an identifier, a change token and the vCard.
 ///

@@ -51,17 +51,18 @@ use eds_sys::{
     E_CONTACT_VIDEO_URL, EBackend, EBookBackend, EBookMetaBackend, EBookMetaBackendClass,
     EConflictResolution, EContact, EContactField, ENamedParameters, ESourceAuthenticationResult,
     GTlsCertificateFlags, e_backend_get_source, e_book_backend_set_writable,
-    e_book_meta_backend_get_type, e_book_meta_backend_schedule_refresh, e_client_error_create,
-    e_contact_field_name,
+    e_book_cache_get_contact_extra, e_book_meta_backend_get_type, e_book_meta_backend_ref_cache,
+    e_book_meta_backend_schedule_refresh, e_client_error_create, e_contact_field_name,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar, guint16, guint32};
+use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, g_free, gboolean, gchar, guint16, guint32};
+use gobject_sys::g_object_unref;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
-use jmap_backend_core::marshal::dup_string;
+use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
 use jmap_backend_core::poison::{lock, read, write};
 use jmap_backend_core::push::{self, PushRefresh};
@@ -73,6 +74,7 @@ use jmap_book_sync::BookSync;
 use jmap_client::Credentials;
 
 use crate::connect::{self, ACCEPTED_AUTH_RESULT, write_auth_result};
+use crate::marshal;
 use crate::ops::{self, Outcome};
 
 /// The JMAP address book backend type.
@@ -334,7 +336,14 @@ unsafe extern "C" fn list_existing_sync(
             meta_backend,
             cancellable,
             error,
-            |sync, error| ops::list_existing(sync, out_new_sync_tag, out_existing_objects, error),
+            |sync, error| {
+                let listed =
+                    ops::list_existing(sync, out_new_sync_tag, out_existing_objects, error);
+                if listed != GFALSE && !out_existing_objects.is_null() {
+                    keep_cached_versions(meta_backend, *out_existing_objects, cancellable);
+                }
+                listed
+            },
         )
     }
 }
@@ -370,7 +379,12 @@ unsafe extern "C" fn get_changes_sync(
                     out_removed_objects,
                     error,
                 ) {
-                    Outcome::Reported => GTRUE,
+                    Outcome::Reported => {
+                        if !out_modified_objects.is_null() {
+                            keep_cached_versions(meta_backend, *out_modified_objects, cancellable);
+                        }
+                        GTRUE
+                    }
                     Outcome::Failed => GFALSE,
                     // Fall back to parent EBookMetaBackend implementation when changes cannot be calculated.
                     Outcome::ListInstead => {
@@ -399,7 +413,7 @@ unsafe extern "C" fn get_changes_sync(
 unsafe extern "C" fn load_contact_sync(
     meta_backend: *mut EBookMetaBackend,
     uid: *const gchar,
-    _extra: *const gchar,
+    extra: *const gchar,
     out_contact: *mut *mut EContact,
     out_extra: *mut *mut gchar,
     cancellable: *mut GCancellable,
@@ -412,7 +426,7 @@ unsafe extern "C" fn load_contact_sync(
             meta_backend,
             cancellable,
             error,
-            |sync, error| ops::load_contact(sync, uid, out_contact, out_extra, error),
+            |sync, error| ops::load_contact(sync, uid, extra, out_contact, out_extra, error),
         )
     }
 }
@@ -599,6 +613,46 @@ unsafe fn refresh_credentials(
 /// same one every `G_DEFINE_TYPE` backend makes.
 unsafe fn instance<'a>(meta_backend: *mut EBookMetaBackend) -> Option<&'a JmapBookBackend> {
     unsafe { meta_backend.cast::<JmapBookBackend>().as_ref() }
+}
+
+/// Adds the server versions in the cached extras to the infos of `list`.
+///
+/// # Safety
+///
+/// `backend` must point to a valid instance, `list` must be null or a list that
+/// `marshal::info_list` made, and `cancellable` must be valid or null.
+unsafe fn keep_cached_versions(
+    backend: *mut EBookMetaBackend,
+    list: *mut GSList,
+    cancellable: *mut GCancellable,
+) {
+    if list.is_null() {
+        return;
+    }
+    // SAFETY: `backend` is a valid instance. Returned cache is a new reference or null.
+    let cache = unsafe { e_book_meta_backend_ref_cache(backend) };
+    if cache.is_null() {
+        return;
+    }
+    let cached = |uid: *const gchar| {
+        let mut extra: *mut gchar = ptr::null_mut();
+        // SAFETY: the cache reference and `uid` are valid; the call gives an owned string.
+        unsafe {
+            if e_book_cache_get_contact_extra(cache, uid, &mut extra, cancellable, ptr::null_mut())
+                == GFALSE
+            {
+                g_free(extra.cast());
+                return None;
+            }
+            let text = read_string(extra);
+            g_free(extra.cast());
+            text
+        }
+    };
+    // SAFETY: the caller guarantees the list shape.
+    unsafe { marshal::keep_versions(list, cached) };
+    // SAFETY: Drops the referenced cache object.
+    unsafe { g_object_unref(cache.cast()) };
 }
 
 /// Sets `E_CLIENT_ERROR_REPOSITORY_OFFLINE` when backend is disconnected.

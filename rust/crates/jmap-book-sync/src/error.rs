@@ -29,7 +29,9 @@ pub enum SyncError {
         photo_octets: u64,
     },
     /// The server and the user changed the same property after the base copy,
-    /// and the caller asked for [`crate::OnConflict::Fail`]. The value is the card id.
+    /// and the caller asked for [`crate::OnConflict::Fail`]. The backend also
+    /// uses it for an edited copy whose base the cache no longer keeps. The
+    /// value is the card id.
     OutOfSync(String),
 }
 

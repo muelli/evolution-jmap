@@ -9,37 +9,70 @@ use std::ptr;
 
 use eds_sys::compat::e_vcard_to_string_vcard_30;
 use eds_sys::{
-    E_CONTACT_UID, EContact, EVCard, e_book_meta_backend_info_new, e_contact_get_const,
-    e_contact_new_from_vcard,
+    E_CONTACT_UID, EBookMetaBackendInfo, EContact, EVCard, e_book_meta_backend_info_new,
+    e_contact_get_const, e_contact_new_from_vcard,
 };
 use glib_sys::{GSList, g_free, g_slist_prepend, gchar};
 use gobject_sys::g_object_unref;
 use jmap_backend_core::error::cstring_lossy;
+use jmap_backend_core::marshal::{dup_string, read_string};
 
-use jmap_book_sync::ContactInfo;
+use jmap_book_sync::{ContactInfo, edit_base};
 
 /// Wraps `infos` as an allocated `GSList` of `EBookMetaBackendInfo`. The extra of
 /// each node is its vCard: EDS stores it with the contact as the base of an edit.
+/// The object carries the stamp of that base (see [`edit_base`]).
 pub fn info_list(infos: &[ContactInfo]) -> *mut GSList {
     let mut list = ptr::null_mut();
     // Prepending is O(1); iterate in reverse order to preserve input sequence.
     for info in infos.iter().rev() {
         let uid = cstring_lossy(&info.uid);
         let revision = cstring_lossy(&info.revision);
-        let object = cstring_lossy(&info.vcard);
+        let object = cstring_lossy(&stamped(info));
+        let extra = cstring_lossy(&info.vcard);
         // SAFETY: Pointers are valid for the call, which copies them.
         let node = unsafe {
             e_book_meta_backend_info_new(
                 uid.as_ptr(),
                 revision.as_ptr(),
                 object.as_ptr(),
-                object.as_ptr(),
+                extra.as_ptr(),
             )
         };
         // SAFETY: `list` is a valid GSList and `node` is a fresh allocation.
         list = unsafe { g_slist_prepend(list, node.cast()) };
     }
     list
+}
+
+/// The vCard of `info` with the stamp of its revision.
+pub fn stamped(info: &ContactInfo) -> String {
+    edit_base::stamp(&info.vcard, "VCARD", &info.revision)
+}
+
+/// Adds the server versions that the cache keeps to the extra of each node of `list`.
+///
+/// `cached` gives the cached extra for a UID. Without it, an editor that is open
+/// across this refresh has no base for its save.
+///
+/// # Safety
+///
+/// `list` must be null or a valid `GSList` of `EBookMetaBackendInfo` that [`info_list`] made.
+pub unsafe fn keep_versions(list: *mut GSList, cached: impl Fn(*const gchar) -> Option<String>) {
+    let mut link = list;
+    while !link.is_null() {
+        // SAFETY: the caller guarantees a valid list of infos with GLib-allocated strings.
+        unsafe {
+            if let Some(info) = (*link).data.cast::<EBookMetaBackendInfo>().as_mut()
+                && let Some(current) = read_string(info.extra)
+                && let Some(previous) = cached(info.uid)
+            {
+                g_free(info.extra.cast());
+                info.extra = dup_string(&edit_base::extra(&current, Some(&previous)));
+            }
+            link = (*link).next;
+        }
+    }
 }
 
 /// Wraps removed `uids` as a `GSList` of `EBookMetaBackendInfo` with only the `uid` set.
