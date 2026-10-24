@@ -13,6 +13,7 @@
 # Evolution 3.52 of Ubuntu 24.04 (ci/gui-scenario/Containerfile). It installs
 # the components of the host build tree ($GUI_SCENARIO_BUILD, default
 # build/) into the container. Build that tree first, on Ubuntu 24.04.
+# $GUI_SCENARIO_MOCKD selects a different jmap-mockd binary.
 # With --host, the script runs on this machine. Use --host only in a
 # throwaway machine or container: it needs the components installed as root.
 #
@@ -47,7 +48,7 @@ for scenario in "$@"; do
 done
 
 if [ "$host" -eq 0 ]; then
-	mock="$BUILD/cargo-target/release/jmap-mockd"
+	mock="${GUI_SCENARIO_MOCKD:-$BUILD/cargo-target/release/jmap-mockd}"
 	if [ ! -x "$mock" ]; then
 		echo "gui-scenario: no jmap-mockd at $mock. Build the tree first." >&2
 		exit 2
@@ -67,12 +68,13 @@ if [ "$host" -eq 0 ]; then
 	podman run --rm --userns=keep-id -u 0 \
 		-v "$ROOT:$ROOT:Z" \
 		-v "$stage:/stage:Z" \
+		-v "$mock:/usr/local/bin/jmap-mockd:ro" \
 		-v "$ARTIFACTS:$ARTIFACTS:Z" \
 		-w "$ROOT" \
 		-e HOST_UID="$(id -u)" \
 		-e HOST_GID="$(id -g)" \
 		-e GUI_SCENARIO_ARTIFACTS="$ARTIFACTS" \
-		-e JMAP_MOCKD="$mock" \
+		-e JMAP_MOCKD=/usr/local/bin/jmap-mockd \
 		"$IMAGE" \
 		bash -c '
 			trap '\''chown -R "$HOST_UID:$HOST_GID" "$GUI_SCENARIO_ARTIFACTS"'\'' EXIT

@@ -27,6 +27,7 @@ CORE_CAPABILITY = "urn:ietf:params:jmap:core"
 MAIL_CAPABILITY = "urn:ietf:params:jmap:mail"
 CONTACTS_CAPABILITY = "urn:ietf:params:jmap:contacts"
 CALENDARS_CAPABILITY = "urn:ietf:params:jmap:calendars"
+SUBMISSION_CAPABILITY = "urn:ietf:params:jmap:submission"
 
 
 class ScenarioFailure(Exception):
@@ -82,52 +83,59 @@ def write_source(uid, text):
         out.write(text)
 
 
-def write_standalone_mail_account(name="JMAP scenario mail"):
+def write_standalone_mail_account(
+    name="JMAP scenario mail", key="scenario", identity=("Alice", "alice@example.com")
+):
     """Write a standalone mail account, its identity and its transport.
 
-    The account uses the mock without credentials. Return the display name.
+    The account uses the mock without credentials. `key` makes the source
+    uids unique, so that a scenario can write more than one account.
+    `identity` is the (name, address) of the sender. Return the display name.
     """
+    connection = f"""[Authentication]
+Host=127.0.0.1
+Port={MOCK_PORT}
+
+[Security]
+Method=none
+"""
     write_source(
-        "scenario-mail",
+        f"{key}-mail",
         f"""[Data Source]
 DisplayName={name}
 Enabled=true
 
 [Mail Account]
 BackendName=jmap
-IdentityUid=scenario-identity
+IdentityUid={key}-identity
 
-[Authentication]
-Host=127.0.0.1
-Port={MOCK_PORT}
-
-[Security]
-Method=none
-""",
+{connection}""",
     )
+    sender, address = identity
     write_source(
-        "scenario-identity",
-        """[Data Source]
-DisplayName=Alice
+        f"{key}-identity",
+        f"""[Data Source]
+DisplayName={sender}
 Enabled=true
 
 [Mail Identity]
-Name=Alice
-Address=alice@example.com
+Name={sender}
+Address={address}
 
 [Mail Submission]
-TransportUid=scenario-transport
+TransportUid={key}-transport
 """,
     )
     write_source(
-        "scenario-transport",
-        """[Data Source]
-DisplayName=JMAP scenario transport
+        f"{key}-transport",
+        f"""[Data Source]
+DisplayName={name} transport
 Enabled=true
 
 [Mail Transport]
 BackendName=jmap
-""",
+
+{connection}""",
     )
     return name
 
@@ -189,6 +197,7 @@ class Jmap:
                     MAIL_CAPABILITY,
                     CONTACTS_CAPABILITY,
                     CALENDARS_CAPABILITY,
+                    SUBMISSION_CAPABILITY,
                 ],
                 "methodCalls": [[method, arguments, "0"]],
             }
@@ -249,6 +258,15 @@ class Jmap:
             return {}
         found = self.call("Email/get", {"ids": ids, "properties": ["subject", "mailboxIds"]})
         return {email["subject"]: email for email in found["list"]}
+
+    def submissions(self):
+        """Return all EmailSubmission objects of the account."""
+        return self.call("EmailSubmission/get", {"ids": None})["list"]
+
+    def identities(self):
+        """Return {email: identity} of all identities of the account."""
+        found = self.call("Identity/get", {"ids": None})["list"]
+        return {identity["email"]: identity for identity in found}
 
     def mailbox_of(self, subject):
         """Return the set of mailbox ids of a message, or None if it is gone."""
@@ -387,6 +405,22 @@ def text_field(root, content):
     return None
 
 
+def labelled_field(root, label):
+    """Return the widget that comes just before the label `label` under `root`, or None.
+
+    The composer header table has no label relations for some fields, but each
+    field is the sibling just before its label.
+    """
+    for node in descendants(root, "label"):
+        if _name(node) != label:
+            continue
+        parent = node.parent
+        index = node.getIndexInParent()
+        if parent is not None and index > 0:
+            return parent.getChildAtIndex(index - 1)
+    return None
+
+
 def set_text(node, content):
     """Replace the text of an editable text node through the keyboard.
 
@@ -400,27 +434,48 @@ def set_text(node, content):
     say(f"typed {content!r}")
 
 
-def menu_item(path):
-    """Activate a menu item of the main window. `path` is like "Folder/Expunge".
+def _menu_entry(root, path):
+    """Return the menu item at `path` ("File/Send Later/In One Hour") under `root`, or None.
 
-    The item is found by name inside its top-level menu, so the menus need not
-    open. Return after the action starts, not after its effect.
+    A menu bar can have two menus with the same name (the composer has an
+    empty "File" menu first), so each match is tried.
     """
-    top, item = path.split("/", 1)
-    menu = wait_find("menu", top)
-    entry = wait_for(lambda: find(menu, "menu item", item), f"menu item {path!r}")
+    first, _, rest = path.partition("/")
+    if not rest:
+        return find(root, "menu item", first)
+    for menu in descendants(root, "menu"):
+        if _name(menu) == first:
+            entry = _menu_entry(menu, rest)
+            if entry is not None:
+                return entry
+    return None
+
+
+def menu_item(path, window_prefix=None):
+    """Activate a menu item. `path` is like "Folder/Expunge" or "File/New/Mail Message".
+
+    The menu bar is the one of the main window, or of the window whose name
+    starts with `window_prefix`. The item is found by name inside its menus,
+    so the menus need not open. Return after the action starts, not after its
+    effect.
+    """
+
+    def root():
+        return window(window_prefix) if window_prefix else evolution()
+
+    entry = wait_for(lambda: _menu_entry(root(), path), f"menu item {path!r}")
     wait_for(lambda: entry.getState().contains(pyatspi.STATE_SENSITIVE), f"{path!r} sensitive")
     # Some actions run a modal dialog inside the doAction call, and the call
     # then returns only when the dialog closes. A child process makes the call,
     # so that this process can operate the dialog.
-    subprocess.Popen([sys.executable, __file__, "menu-item", top, item])
+    subprocess.Popen([sys.executable, __file__, "menu-item", path, window_prefix or ""])
     say(f"menu {path}")
 
 
-def _activate_menu_item(top, item):
+def _activate_menu_item(path, window_prefix):
     """The child process of menu_item."""
-    menu = find(evolution(), "menu", top)
-    do_action(find(menu, "menu item", item))
+    root = window(window_prefix) if window_prefix else evolution()
+    do_action(_menu_entry(root, path))
 
 
 def click_button(root, name, timeout=DEFAULT_TIMEOUT):
@@ -489,14 +544,31 @@ def folder_cells(account):
     """Return the folder tree cells of `account`, in tree order.
 
     AT-SPI gives no parent link between the cells of a tree table. This
-    function returns all cells after the cell of the account, so the first
-    match for a folder name is the folder of this account.
+    function returns the cells between the cell of the account and the cell
+    of the next account.
     """
     cells = [cell for cell in descendants(folder_tree(), "table cell") if _name(cell)]
     names = [_name(cell) for cell in cells]
     if account not in names:
         return []
-    return cells[names.index(account) + 1 :]
+    start = names.index(account) + 1
+    # Stop at the next account. Its folders must not match while this account
+    # still loads.
+    others = _account_names() - {account}
+    end = next((i for i in range(start, len(names)) if names[i] in others), len(names))
+    return cells[start:end]
+
+
+def _account_names():
+    """Return the names of the mail accounts in the folder tree."""
+    names = {"On This Computer", "Search Folders", "News and Blogs"}
+    for entry in os.listdir(SOURCES):
+        with open(os.path.join(SOURCES, entry), encoding="utf-8") as source:
+            text = source.read()
+        match = re.search(r"^DisplayName=(.*)$", text, re.MULTILINE)
+        if match and "[Mail Account]" in text:
+            names.add(match.group(1))
+    return names
 
 
 def folder_cell(account, folder):
