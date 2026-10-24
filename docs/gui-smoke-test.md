@@ -5,8 +5,8 @@ API. They never use Evolution itself. The GUI smoke test starts the real
 Evolution under `Xvfb` against `jmap-mockd`. It checks that a JMAP account
 appears in the mail view with mail in it.
 
-The test is a canary. It is not coverage. A full scripted GUI suite is out of
-scope.
+The test is a canary. It is not coverage. For scripted user tasks, see
+`docs/gui-scenario-tests.md`.
 
 ## What `ci/gui-smoke.sh` does
 
