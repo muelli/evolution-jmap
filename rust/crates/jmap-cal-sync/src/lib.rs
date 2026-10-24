@@ -41,7 +41,7 @@ use serde_json::{Map, Value};
 
 pub use error::{SyncError, Unscheduled, Unsendable};
 pub use freebusy::FreeBusy;
-pub use jmap_object_sync::OnConflict;
+pub use jmap_object_sync::{OnConflict, edit_base};
 
 /// One event in the form that the meta backend uses: an identifier, a change
 /// token and the object.

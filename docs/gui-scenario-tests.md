@@ -120,9 +120,12 @@ these steps and checks:
    editor, and save.
 4. The server must have the new value of each field.
 
-Today the save puts the old value of the server field back on the server, so
-both scenarios fail at step 4. The edit uses the refreshed cache as the base,
-not the version that the editor opened.
+The calendar backend puts a stamp (`X-JMAP-BASE`) in each event that it gives
+to Evolution, and keeps the recent server versions in the cache. A save uses
+the version that the stamp names as the base, so the event scenario passes.
+The address book does not do this yet. Its save uses the refreshed cache as
+the base and puts the old note back on the server, so the contact scenario
+fails at step 4.
 
 Evolution 3.52 has two limits here. **File > Work Offline** does not take the
 address books and calendars offline, so a scenario cannot make an offline

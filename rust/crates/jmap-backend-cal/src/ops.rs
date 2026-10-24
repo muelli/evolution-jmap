@@ -16,7 +16,9 @@ use jmap_backend_core::error::{
 };
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{dup_string, read_string, set_out_list, set_out_string};
-use jmap_cal_sync::{Base, CalSync, Itip, OnConflict, SyncError, Unscheduled, Unsendable};
+use jmap_cal_sync::{
+    Base, CalSync, Itip, OnConflict, SyncError, Unscheduled, Unsendable, edit_base,
+};
 use jmap_proto::State;
 
 use crate::marshal;
@@ -189,12 +191,16 @@ pub unsafe fn get_changes(
 
 /// Loads a component by UID for `load_component_sync`.
 ///
+/// The component carries the stamp of its server version. The new extra keeps the
+/// versions of `extra`, the cached one, for an editor that is still open.
+///
 /// # Safety
 ///
-/// Follows safety requirements of [`list_existing`]. `uid` must be null or point to a valid NUL-terminated string.
+/// Follows safety requirements of [`list_existing`]. `uid` and `extra` must be null or point to a valid NUL-terminated string.
 pub unsafe fn load_component(
     sync: &CalSync,
     uid: *const gchar,
+    extra: *const gchar,
     out_component: *mut *mut ICalComponent,
     out_extra: *mut *mut gchar,
     error: *mut *mut GError,
@@ -234,7 +240,7 @@ pub unsafe fn load_component(
         }
     };
 
-    let component = marshal::component_from_ical(&info.icalendar);
+    let component = marshal::component_from_ical(&marshal::stamped(&info));
     if component.is_null() {
         tracing::debug!(
             account_id,
@@ -267,7 +273,11 @@ pub unsafe fn load_component(
             *out_component = component;
         }
         // EDS stores the extra with the component and gives it back as the base of an edit.
-        set_out_string(out_extra, &info.icalendar);
+        let previous = read_string(extra);
+        set_out_string(
+            out_extra,
+            &edit_base::extra(&info.icalendar, previous.as_deref()),
+        );
     }
     GTRUE
 }
@@ -275,9 +285,10 @@ pub unsafe fn load_component(
 /// Creates or updates a component for `save_component_sync`.
 ///
 /// `itip` controls server meeting invitation dispatch. An edit with `extra` (the
-/// iCalendar that [`load_component`] stored) patches only the properties that the
-/// user changed, and resolves a conflict as `conflict_resolution` asks. A received
-/// change has no base: it replaces the event.
+/// versions that [`load_component`] stored) patches only the properties that the
+/// user changed since the version that the stamp of the edit names. It resolves a
+/// conflict as `conflict_resolution` asks. A received change has no base: it
+/// replaces the event.
 ///
 /// # Safety
 ///
@@ -316,6 +327,9 @@ pub unsafe fn save_component(
         };
     };
 
+    // The stamp never goes to the server.
+    let (icalendar, stamp) = edit_base::unstamp(&saved.icalendar);
+
     let existing_uid = if !is_overwrite {
         // Local UID is ignored on create; server assigns identifier.
         None
@@ -337,11 +351,25 @@ pub unsafe fn save_component(
         }
     };
 
+    // SAFETY: the caller guarantees a valid string or NULL.
+    let extra = unsafe { read_string(extra) };
     // A create and a received change have no base.
     let base_icalendar = match (&existing_uid, itip) {
         (_, Itip::Received { .. }) | (None, _) => None,
-        // SAFETY: the caller guarantees a valid string or NULL.
-        (Some(_), _) => unsafe { read_string(extra) },
+        (Some(uid), _) => match edit_base::base_for(extra.as_deref(), stamp.as_deref()) {
+            Ok(base) => base,
+            Err(_) => {
+                tracing::debug!(
+                    account_id,
+                    calendar_id,
+                    uid = uid.as_str(),
+                    stamp = stamp.as_deref(),
+                    "the edited copy names a version that the cache no longer keeps"
+                );
+                // SAFETY: `error` satisfies fail_bool contract.
+                return unsafe { fail_bool(error, &SyncError::OutOfSync(uid.clone()), to_gerror) };
+            }
+        },
     };
     let base = base_icalendar.as_deref().map(|icalendar| Base {
         icalendar,
@@ -358,22 +386,21 @@ pub unsafe fn save_component(
         "saving component"
     );
 
-    let info =
-        match sync.save_component_since(base, &saved.icalendar, existing_uid.as_deref(), itip) {
-            Ok(info) => info,
-            // SAFETY: `error` satisfies fail_bool contract.
-            Err(failure) => {
-                tracing::debug!(
-                    account_id,
-                    calendar_id,
-                    overwrite_existing = is_overwrite,
-                    existing_uid = existing_uid.as_deref(),
-                    ?failure,
-                    "saving component failed"
-                );
-                return unsafe { fail_bool(error, &failure, to_gerror) };
-            }
-        };
+    let info = match sync.save_component_since(base, &icalendar, existing_uid.as_deref(), itip) {
+        Ok(info) => info,
+        // SAFETY: `error` satisfies fail_bool contract.
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                overwrite_existing = is_overwrite,
+                existing_uid = existing_uid.as_deref(),
+                ?failure,
+                "saving component failed"
+            );
+            return unsafe { fail_bool(error, &failure, to_gerror) };
+        }
+    };
 
     tracing::debug!(
         account_id,
@@ -386,7 +413,10 @@ pub unsafe fn save_component(
     // SAFETY: the out-parameters receive ownership of the allocated strings.
     unsafe {
         set_out_string(out_new_uid, &info.uid);
-        set_out_string(out_new_extra, &info.icalendar);
+        set_out_string(
+            out_new_extra,
+            &edit_base::extra(&info.icalendar, extra.as_deref()),
+        );
     }
     GTRUE
 }

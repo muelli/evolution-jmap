@@ -18,7 +18,7 @@ use glib_sys::{GError, GSList, g_slist_length, g_slist_nth_data};
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 use jmap_backend_core::source::OwnedSource;
-use jmap_cal_sync::ComponentInfo;
+use jmap_cal_sync::{ComponentInfo, edit_base};
 
 /// Event fixture in a `VCALENDAR` envelope.
 const OBJECT: &str = "BEGIN:VCALENDAR\r\n\
@@ -92,6 +92,11 @@ fn instance_list(components: &[*mut ECalComponent]) -> *mut GSList {
     list
 }
 
+/// `text` as [`marshal::info_list`] hands it over: with the stamp of `revision`.
+fn stamped(text: &str, revision: &str) -> String {
+    edit_base::stamp(text, "VEVENT", revision)
+}
+
 const MASTER: &str = "BEGIN:VEVENT\r\nUID:K1\r\nSUMMARY:Standup\r\nDTSTART:20260810T070000Z\r\n\
                       RRULE:FREQ=DAILY\r\nEND:VEVENT\r\n";
 const OVERRIDE: &str = "BEGIN:VEVENT\r\nUID:K1\r\nRECURRENCE-ID:20260812T070000Z\r\n\
@@ -112,7 +117,8 @@ fn an_info_list_carries_one_node_per_event_in_order() {
             (
                 "K1".to_owned(),
                 Some("r1".to_owned()),
-                Some(UNZONED_OBJECT.to_owned()),
+                // The object carries the stamp of its base; the extra does not.
+                Some(stamped(UNZONED_OBJECT, "r1")),
                 // EDS stores the extra as the base of a later edit.
                 Some(UNZONED_OBJECT.to_owned())
             )
@@ -775,7 +781,7 @@ fn an_object_that_names_no_zone_is_handed_over_as_it_stands() {
     let list = marshal::info_list(&infos);
 
     unsafe {
-        assert_eq!(nth_info(list, 0).2.as_deref(), Some(UNZONED_OBJECT));
+        assert_eq!(nth_info(list, 0).2, Some(stamped(UNZONED_OBJECT, "r1")));
         glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
     }
 }
@@ -794,7 +800,11 @@ fn a_zone_no_database_knows_is_left_undefined_on_the_way_out() {
             0,
             "a zone was invented for an identifier nothing resolves: {object}"
         );
-        assert_eq!(object, text, "the object was rebuilt for nothing");
+        assert_eq!(
+            object,
+            stamped(&text, "r1"),
+            "the object was rebuilt for nothing"
+        );
         glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
     }
 }
@@ -846,7 +856,11 @@ fn a_zone_the_object_already_defines_is_not_defined_twice() {
             1,
             "the zone was defined twice: {object}"
         );
-        assert_eq!(object, text, "the object was rebuilt for nothing");
+        assert_eq!(
+            object,
+            stamped(&text, "r1"),
+            "the object was rebuilt for nothing"
+        );
         glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
     }
 }
@@ -939,7 +953,11 @@ fn the_zone_only_the_server_could_name_reaches_eds_and_resolves() {
             "the zone is defined more than once, or not at all: {object}"
         );
         // Defined zones pass through unchanged without object reconstruction.
-        assert_eq!(object, text, "the object was rebuilt for nothing");
+        assert_eq!(
+            object,
+            stamped(&text, "r1"),
+            "the object was rebuilt for nothing"
+        );
         glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
     }
 }

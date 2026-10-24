@@ -14,9 +14,9 @@ use eds_sys::{
     ECalMetaBackend, ECalMetaBackendClass, ECalOperationFlags, EConflictResolution, EDataCal,
     ENamedParameters, ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent,
     e_backend_get_source, e_cal_backend_set_writable, e_cal_backend_sync_modify_objects,
-    e_cal_cache_get_component, e_cal_client_error_create, e_cal_component_get_as_string,
-    e_cal_meta_backend_ensure_connected_sync, e_cal_meta_backend_get_type,
-    e_cal_meta_backend_ref_cache, e_cal_meta_backend_schedule_refresh,
+    e_cal_cache_get_component, e_cal_cache_get_component_extra, e_cal_client_error_create,
+    e_cal_component_get_as_string, e_cal_meta_backend_ensure_connected_sync,
+    e_cal_meta_backend_get_type, e_cal_meta_backend_ref_cache, e_cal_meta_backend_schedule_refresh,
     e_cal_util_set_alarm_acknowledged, e_client_error_create, e_util_free_nullable_object_slist,
     time_t,
 };
@@ -327,7 +327,14 @@ unsafe extern "C" fn list_existing_sync(
             meta_backend,
             cancellable,
             error,
-            |sync, error| ops::list_existing(sync, out_new_sync_tag, out_existing_objects, error),
+            |sync, error| {
+                let listed =
+                    ops::list_existing(sync, out_new_sync_tag, out_existing_objects, error);
+                if listed != GFALSE && !out_existing_objects.is_null() {
+                    keep_cached_versions(meta_backend, *out_existing_objects, cancellable);
+                }
+                listed
+            },
         )
     }
 }
@@ -364,7 +371,12 @@ unsafe extern "C" fn get_changes_sync(
                     out_removed_objects,
                     error,
                 ) {
-                    Outcome::Reported => GTRUE,
+                    Outcome::Reported => {
+                        if !out_modified_objects.is_null() {
+                            keep_cached_versions(meta_backend, *out_modified_objects, cancellable);
+                        }
+                        GTRUE
+                    }
                     Outcome::Failed => GFALSE,
                     // Chain up to parent list implementation when delta sync cannot be calculated.
                     Outcome::ListInstead => {
@@ -394,7 +406,7 @@ unsafe extern "C" fn get_changes_sync(
 unsafe extern "C" fn load_component_sync(
     meta_backend: *mut ECalMetaBackend,
     uid: *const gchar,
-    _extra: *const gchar,
+    extra: *const gchar,
     out_component: *mut *mut ICalComponent,
     out_extra: *mut *mut gchar,
     cancellable: *mut GCancellable,
@@ -407,7 +419,7 @@ unsafe extern "C" fn load_component_sync(
             meta_backend,
             cancellable,
             error,
-            |sync, error| ops::load_component(sync, uid, out_component, out_extra, error),
+            |sync, error| ops::load_component(sync, uid, extra, out_component, out_extra, error),
         )
     }
 }
@@ -688,6 +700,52 @@ unsafe fn cached_component(
     // SAFETY: Drops the referenced cache object.
     unsafe { g_object_unref(cache.cast()) };
     found
+}
+
+/// Adds the server versions in the cached extras to the infos of `list`.
+///
+/// # Safety
+///
+/// `backend` must point to a valid instance, `list` must be null or a list that
+/// `marshal::info_list` made, and `cancellable` must be valid or null.
+unsafe fn keep_cached_versions(
+    backend: *mut ECalMetaBackend,
+    list: *mut GSList,
+    cancellable: *mut GCancellable,
+) {
+    if list.is_null() {
+        return;
+    }
+    // SAFETY: `backend` is a valid instance. Returned cache is a new reference or null.
+    let cache = unsafe { e_cal_meta_backend_ref_cache(backend) };
+    if cache.is_null() {
+        return;
+    }
+    let cached = |uid: *const gchar| {
+        let mut extra: *mut gchar = ptr::null_mut();
+        // SAFETY: the cache reference and `uid` are valid; the call gives an owned string.
+        unsafe {
+            if e_cal_cache_get_component_extra(
+                cache,
+                uid,
+                ptr::null(),
+                &mut extra,
+                cancellable,
+                ptr::null_mut(),
+            ) == GFALSE
+            {
+                g_free(extra.cast());
+                return None;
+            }
+            let text = read_string(extra);
+            g_free(extra.cast());
+            text
+        }
+    };
+    // SAFETY: the caller guarantees the list shape.
+    unsafe { marshal::keep_versions(list, cached) };
+    // SAFETY: Drops the referenced cache object.
+    unsafe { g_object_unref(cache.cast()) };
 }
 
 /// Sets `E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND` on `error`.

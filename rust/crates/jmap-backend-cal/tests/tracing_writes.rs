@@ -351,6 +351,7 @@ fn save_load_and_remove_component_trace_structured_fields() {
             ops::load_component(
                 &sync,
                 new_uid,
+                ptr::null(),
                 &mut loaded_component,
                 &mut extra,
                 &mut error,
