@@ -602,7 +602,7 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
 
             camel_message_info_set_size(info, message.size);
             camel_message_info_set_date_received(info, message.received_at.unwrap_or(0));
-            camel_message_info_set_date_sent(info, message.sent_at.unwrap_or(0));
+            camel_message_info_set_date_sent(info, date_sent(message));
 
             if let Some(id) = &message.message_id {
                 camel_message_info_set_message_id(info, message_id_digest(id));
@@ -616,6 +616,15 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
     }
 
     info
+}
+
+/// The Date column. With no `sentAt`, Camel uses the received date, then the current time.
+fn date_sent(message: &MessageSummary) -> i64 {
+    message.sent_at.or(message.received_at).unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs() as i64)
+    })
 }
 
 /// Writes the columns that a later listing of the same message can change.
