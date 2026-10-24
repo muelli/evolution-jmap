@@ -44,10 +44,11 @@ use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 use jmap_config::account::{Account, BACKEND_NAME, apply, read};
 use jmap_config::backend::{
-    JmapConfigServiceBackend, JmapConfigServiceBackendClass, commit, is_complete, setup,
+    JmapConfigServiceBackend, JmapConfigServiceBackendClass, commit, is_complete, seed_existing,
+    setup,
 };
 use jmap_config::complete::{Incomplete, check};
-use jmap_config::mail::MAIL_BACKEND_NAME;
+use jmap_config::mail::{MAIL_BACKEND_NAME, apply_server};
 use jmap_config::oauth2;
 
 // Initialise the parent classes of the Evolution types before the tests start threads.
@@ -262,6 +263,17 @@ impl MailSource {
         let source = unsafe { e_source_new(ptr::null_mut(), ptr::null_mut(), &mut error) };
         assert!(!source.is_null(), "e_source_new failed");
         Self(source)
+    }
+
+    /// A mail source that already has a real server, as the editor's scratch
+    /// copy of an existing standalone account does (`docs/examples/jmap-mock-
+    /// standalone-mail.source`): `[Authentication]`/`[Security]` straight on
+    /// the mail source, no `[Collection]` anywhere.
+    fn configured(connection: &Connection) -> Self {
+        let source = Self::blank();
+        // SAFETY: a live source, just created above.
+        unsafe { apply_server(source.0, connection) };
+        source
     }
 
     /// Asks for the extension, but does not read through it, as in
@@ -567,12 +579,85 @@ fn a_corrected_address_is_derived_from_again() {
 }
 
 #[test]
+fn an_existing_standalone_account_keeps_its_server_on_a_no_op_save() {
+    // Item 144: the editor's backend for a standalone account (no collection in
+    // the registry) always gets a fresh `collection` from `new_collection`, with
+    // no server. Only `source`, the scratch copy of the real mail account, has
+    // the real `[Authentication]`/`[Security]`. `check_complete`'s narrow must
+    // seed `collection` from `source`, not from the address, or OK with no
+    // change overwrites the real server with an autodiscovery guess.
+    let collection = Class::get().new_collection();
+    let source = MailSource::configured(&Connection {
+        host: "127.0.0.1".to_owned(),
+        port: Some(8090),
+        user: None,
+        auth_method: None,
+        secure: false,
+    });
+
+    // SAFETY: both are live sources from this test.
+    assert!(unsafe { seed_existing(collection.0, source.0, "vera@example.com") });
+
+    assert_eq!(collection.identity().as_deref(), Some("vera@example.com"));
+    assert_eq!(
+        collection.server(),
+        Ok(ConnectTarget::Origin("http://127.0.0.1:8090".into())),
+        "the real server from `source`, not example.com's autodiscovery guess"
+    );
+
+    // What `check_complete` actually calls: `seed_existing` first, `setup` only
+    // if it did nothing. On a second narrow with the same address (a keystroke
+    // elsewhere on the page, or OK itself), the real server must survive.
+    if !unsafe { seed_existing(collection.0, source.0, "vera@example.com") } {
+        unsafe { setup(collection.0, "vera@example.com") };
+    }
+    assert_eq!(
+        collection.server(),
+        Ok(ConnectTarget::Origin("http://127.0.0.1:8090".into()))
+    );
+}
+
+#[test]
+fn a_new_account_with_no_configured_source_still_gets_the_address_default() {
+    // The opposite case, so the fix does not regress the assistant: a blank
+    // scratch mail source (no `[Authentication]` yet) means there is nothing
+    // real to copy, and `seed_existing` must defer to `setup`'s address-derived
+    // default, exactly as before this fix.
+    let collection = Class::get().new_collection();
+    let source = MailSource::blank();
+
+    // SAFETY: both are live sources from this test.
+    assert!(!unsafe { seed_existing(collection.0, source.0, "vera@example.com") });
+    assert!(unsafe { setup(collection.0, "vera@example.com") });
+    assert_eq!(
+        collection.server(),
+        Ok(ConnectTarget::Domain("example.com".into()))
+    );
+}
+
+#[test]
 fn a_backend_with_no_collection_source_has_no_defaults_to_write() {
     // The NULL from a failed `new_collection`, through the same vfuncs. It is
     // silent: the failure was logged where it occurred, and this runs on each
     // visit to the page.
     // SAFETY: this function documents that it accepts NULL.
     assert!(!unsafe { setup(ptr::null_mut(), "vera@example.com") });
+}
+
+#[test]
+fn seed_existing_accepts_a_missing_collection_or_source() {
+    let collection = Class::get().new_collection();
+    let source = MailSource::configured(&Connection {
+        host: "127.0.0.1".to_owned(),
+        port: Some(8090),
+        user: None,
+        auth_method: None,
+        secure: false,
+    });
+    // SAFETY: this function documents that it accepts NULL for either source.
+    assert!(!unsafe { seed_existing(ptr::null_mut(), source.0, "vera@example.com") });
+    // SAFETY: as above.
+    assert!(!unsafe { seed_existing(collection.0, ptr::null_mut(), "vera@example.com") });
 }
 
 #[test]
