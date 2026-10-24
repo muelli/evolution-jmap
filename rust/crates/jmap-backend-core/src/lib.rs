@@ -72,3 +72,8 @@ pub mod source;
 pub mod subclass;
 pub mod trampoline;
 pub mod weak;
+
+/// The one word that names this backend in four namespaces: the collection,
+/// address book and calendar factory names, and the Camel protocol. One
+/// account uses all four, so they must have the same spelling.
+pub const BACKEND_NAME: &std::ffi::CStr = c"jmap";
