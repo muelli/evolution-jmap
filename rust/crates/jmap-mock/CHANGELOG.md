@@ -18,6 +18,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Crate `README.md` with mode overview and `jmap-mockd` usage from shell and Python.
 - `examples/client_smoke.rs` with a minimal `evolution-jmap-client` smoke test against
   a `MockServer` instance.
+- `ci/package-check.sh` to verify `cargo package`, unpacked tarball build and tests,
+  and rustdoc with warnings denied.
 
 ## [0.5.0] - 2026-10-24
 

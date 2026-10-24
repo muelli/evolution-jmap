@@ -30,9 +30,9 @@ default = []
 parse = ["dep:evolution-jmap-ical", "dep:evolution-jmap-vcard"]
 
 [dependencies]
-evolution-jmap-proto = { workspace = true }
-evolution-jmap-ical = { workspace = true, optional = true }
-evolution-jmap-vcard = { workspace = true, optional = true }
+evolution-jmap-proto = { path = "../jmap-proto", version = "0.5.0" }
+evolution-jmap-ical = { path = "../jmap-ical", version = "0.5.0", optional = true }
+evolution-jmap-vcard = { path = "../jmap-vcard", version = "0.5.0", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tiny_http = { workspace = true }
@@ -41,5 +41,5 @@ base64 = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
-evolution-jmap-client = { workspace = true }
+evolution-jmap-client = { path = "../jmap-client", version = "0.5.0" }
 proptest = { workspace = true }

@@ -105,6 +105,14 @@ Run it with:
 cargo run -p evolution-jmap-mock --example client_smoke
 ```
 
+## Publication gate
+
+Run the package readiness gate from the workspace root:
+
+```sh
+./rust/crates/jmap-mock/ci/package-check.sh
+```
+
 ## Feature Flags
 
 - `parse` (off by default): enables `ContactCard/parse` and `CalendarEvent/parse` via
