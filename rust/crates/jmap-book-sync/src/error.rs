@@ -110,11 +110,10 @@ mod tests {
     #[test]
     fn a_client_invalid_arguments_about_an_unrecognized_state_cannot_calculate_changes_too() {
         assert!(
-            SyncError::Client(jmap_client::Error::Method(jmap_proto::error::MethodError {
-                error_type: "invalidArguments".into(),
-                description: Some("invalid JMAP State at line 1 column 1".into()),
-                extra: Default::default(),
-            }))
+            SyncError::Client(jmap_client::Error::Method(
+                jmap_proto::error::MethodError::new("invalidArguments")
+                    .with_description("invalid JMAP State at line 1 column 1")
+            ))
             .is_cannot_calculate_changes(),
             "real Stalwart answers an unrecognized sinceState this way, not with cannotCalculateChanges"
         );

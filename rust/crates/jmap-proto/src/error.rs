@@ -13,6 +13,7 @@ use serde_json::Value;
 /// `application/problem+json`. Extension members (e.g. `limit`) are kept in
 /// `extra` so nothing is lost on a round-trip.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RequestError {
     #[serde(rename = "type")]
     pub error_type: String,
@@ -43,10 +44,16 @@ impl RequestError {
         self.detail = Some(detail.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Arguments of a method-level `error` response (RFC 8620 §3.6.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MethodError {
     #[serde(rename = "type")]
     pub error_type: String,
@@ -69,10 +76,16 @@ impl MethodError {
         self.description = Some(description.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// A per-record failure inside a `/set` response (RFC 8620 §5.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SetError {
     #[serde(rename = "type")]
     pub error_type: String,
@@ -104,6 +117,11 @@ impl SetError {
         properties: impl IntoIterator<Item = P>,
     ) -> Self {
         self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

@@ -319,12 +319,10 @@ mod tests {
 
     #[test]
     fn a_set_error_display_names_the_offending_properties() {
-        let error = Error::Set(jmap_proto::error::SetError {
-            error_type: "invalidProperties".into(),
-            description: None,
-            properties: Some(vec!["start".into(), "duration".into()]),
-            extra: Default::default(),
-        });
+        let error = Error::Set(
+            jmap_proto::error::SetError::new("invalidProperties")
+                .with_properties(["start", "duration"]),
+        );
         assert_eq!(
             error.to_string(),
             "set error: invalidProperties (no description) [properties: start, duration]"
@@ -333,23 +331,18 @@ mod tests {
 
     #[test]
     fn a_set_error_without_properties_reads_as_before() {
-        let error = Error::Set(jmap_proto::error::SetError {
-            error_type: "forbidden".into(),
-            description: Some("nope".into()),
-            properties: None,
-            extra: Default::default(),
-        });
+        let error =
+            Error::Set(jmap_proto::error::SetError::new("forbidden").with_description("nope"));
         assert_eq!(error.to_string(), "set error: forbidden (nope)");
     }
 
     #[test]
     fn invalid_arguments_mentioning_state_is_an_unrecognized_changes_state() {
         assert!(
-            Error::Method(jmap_proto::error::MethodError {
-                error_type: "invalidArguments".into(),
-                description: Some("invalid JMAP State at line 1 column 42".into()),
-                extra: Default::default(),
-            })
+            Error::Method(
+                jmap_proto::error::MethodError::new("invalidArguments")
+                    .with_description("invalid JMAP State at line 1 column 42")
+            )
             .is_unrecognized_changes_state(),
             "this is the exact shape real Stalwart answers an unrecognized sinceState with"
         );
@@ -358,21 +351,16 @@ mod tests {
     #[test]
     fn invalid_arguments_about_something_else_is_not_an_unrecognized_changes_state() {
         assert!(
-            !Error::Method(jmap_proto::error::MethodError {
-                error_type: "invalidArguments".into(),
-                description: Some("accountId is not a valid id".into()),
-                extra: Default::default(),
-            })
+            !Error::Method(
+                jmap_proto::error::MethodError::new("invalidArguments")
+                    .with_description("accountId is not a valid id")
+            )
             .is_unrecognized_changes_state(),
             "an invalidArguments about a different argument must not be swallowed"
         );
         assert!(
-            !Error::Method(jmap_proto::error::MethodError {
-                error_type: "invalidArguments".into(),
-                description: None,
-                extra: Default::default(),
-            })
-            .is_unrecognized_changes_state(),
+            !Error::Method(jmap_proto::error::MethodError::new("invalidArguments"))
+                .is_unrecognized_changes_state(),
             "no description at all gives nothing to recognize the state-shaped case by"
         );
     }
@@ -380,11 +368,9 @@ mod tests {
     #[test]
     fn cannot_calculate_changes_is_not_also_an_unrecognized_changes_state() {
         assert!(
-            !Error::Method(jmap_proto::error::MethodError {
-                error_type: "cannotCalculateChanges".into(),
-                description: None,
-                extra: Default::default(),
-            })
+            !Error::Method(jmap_proto::error::MethodError::new(
+                "cannotCalculateChanges"
+            ))
             .is_unrecognized_changes_state(),
             "the two predicates stay disjoint so a caller can tell which server shape it saw"
         );
@@ -411,18 +397,14 @@ mod tests {
 
     #[test]
     fn cannot_calculate_changes_predicate_exactness() {
-        let cannot_calc = Error::Method(jmap_proto::error::MethodError {
-            error_type: jmap_proto::error::method::CANNOT_CALCULATE_CHANGES.into(),
-            description: None,
-            extra: Default::default(),
-        });
+        let cannot_calc = Error::Method(jmap_proto::error::MethodError::new(
+            jmap_proto::error::method::CANNOT_CALCULATE_CHANGES,
+        ));
         assert!(cannot_calc.is_cannot_calculate_changes());
 
-        let invalid_args = Error::Method(jmap_proto::error::MethodError {
-            error_type: jmap_proto::error::method::INVALID_ARGUMENTS.into(),
-            description: None,
-            extra: Default::default(),
-        });
+        let invalid_args = Error::Method(jmap_proto::error::MethodError::new(
+            jmap_proto::error::method::INVALID_ARGUMENTS,
+        ));
         assert!(!invalid_args.is_cannot_calculate_changes());
 
         let http = Error::Http {
@@ -477,11 +459,7 @@ mod tests {
         };
         assert!(http.source().is_none());
 
-        let method = Error::Method(jmap_proto::error::MethodError {
-            error_type: "unknown".into(),
-            description: None,
-            extra: Default::default(),
-        });
+        let method = Error::Method(jmap_proto::error::MethodError::new("unknown"));
         assert!(method.source().is_none());
     }
 

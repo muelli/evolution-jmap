@@ -12,11 +12,9 @@ use jmap_proto::error::{MethodError, RequestError, SetError};
 
 #[test]
 fn error_predicates_and_conversions() {
-    let cannot_calc = Error::Method(MethodError {
-        error_type: jmap_proto::error::method::CANNOT_CALCULATE_CHANGES.into(),
-        description: None,
-        extra: Default::default(),
-    });
+    let cannot_calc = Error::Method(MethodError::new(
+        jmap_proto::error::method::CANNOT_CALCULATE_CHANGES,
+    ));
     assert!(cannot_calc.is_cannot_calculate_changes());
     assert!(!cannot_calc.is_unauthorized());
     assert!(!cannot_calc.is_redirect_credentials_withheld());
@@ -40,11 +38,10 @@ fn error_predicates_and_conversions() {
     assert!(!withheld.is_cannot_calculate_changes());
     assert!(!withheld.is_unrecognized_changes_state());
 
-    let invalid_state = Error::Method(MethodError {
-        error_type: jmap_proto::error::method::INVALID_ARGUMENTS.into(),
-        description: Some("invalid state parameter".into()),
-        extra: Default::default(),
-    });
+    let invalid_state = Error::Method(
+        MethodError::new(jmap_proto::error::method::INVALID_ARGUMENTS)
+            .with_description("invalid state parameter"),
+    );
     assert!(invalid_state.is_unrecognized_changes_state());
     assert!(!invalid_state.is_cannot_calculate_changes());
     assert!(!invalid_state.is_unauthorized());
@@ -66,19 +63,10 @@ fn error_source_returns_some_only_for_json_variant() {
     };
     assert!(http.source().is_none());
 
-    let method = Error::Method(MethodError {
-        error_type: "unknown".into(),
-        description: None,
-        extra: Default::default(),
-    });
+    let method = Error::Method(MethodError::new("unknown"));
     assert!(method.source().is_none());
 
-    let set = Error::Set(SetError {
-        error_type: "invalidProperties".into(),
-        description: None,
-        properties: None,
-        extra: Default::default(),
-    });
+    let set = Error::Set(SetError::new("invalidProperties"));
     assert!(set.source().is_none());
 
     let protocol = Error::Protocol("broken".into());
@@ -141,12 +129,11 @@ fn error_display_formats_all_variants_comprehensively() {
     assert_eq!(
         Error::Http {
             status: 400,
-            problem: Some(RequestError {
-                error_type: "urn:ietf:params:jmap:error:notJSON".into(),
-                status: Some(400),
-                detail: Some("syntax error".into()),
-                extra: Default::default(),
-            }),
+            problem: Some(
+                RequestError::new("urn:ietf:params:jmap:error:notJSON")
+                    .with_status(400)
+                    .with_detail("syntax error"),
+            ),
         }
         .to_string(),
         "HTTP 400: urn:ietf:params:jmap:error:notJSON (syntax error)"
@@ -155,67 +142,42 @@ fn error_display_formats_all_variants_comprehensively() {
     assert_eq!(
         Error::Http {
             status: 400,
-            problem: Some(RequestError {
-                error_type: "urn:ietf:params:jmap:error:notJSON".into(),
-                status: Some(400),
-                detail: None,
-                extra: Default::default(),
-            }),
+            problem: Some(
+                RequestError::new("urn:ietf:params:jmap:error:notJSON").with_status(400),
+            ),
         }
         .to_string(),
         "HTTP 400: urn:ietf:params:jmap:error:notJSON (no detail)"
     );
 
     assert_eq!(
-        Error::Method(MethodError {
-            error_type: "unknownMethod".into(),
-            description: Some("method not found".into()),
-            extra: Default::default(),
-        })
-        .to_string(),
+        Error::Method(MethodError::new("unknownMethod").with_description("method not found"))
+            .to_string(),
         "method error: unknownMethod (method not found)"
     );
 
     assert_eq!(
-        Error::Method(MethodError {
-            error_type: "unknownMethod".into(),
-            description: None,
-            extra: Default::default(),
-        })
-        .to_string(),
+        Error::Method(MethodError::new("unknownMethod")).to_string(),
         "method error: unknownMethod (no description)"
     );
 
     assert_eq!(
-        Error::Set(SetError {
-            error_type: "invalidProperties".into(),
-            description: Some("invalid date".into()),
-            properties: Some(vec!["start".into(), "duration".into()]),
-            extra: Default::default(),
-        })
+        Error::Set(
+            SetError::new("invalidProperties")
+                .with_description("invalid date")
+                .with_properties(["start", "duration"])
+        )
         .to_string(),
         "set error: invalidProperties (invalid date) [properties: start, duration]"
     );
 
     assert_eq!(
-        Error::Set(SetError {
-            error_type: "forbidden".into(),
-            description: None,
-            properties: None,
-            extra: Default::default(),
-        })
-        .to_string(),
+        Error::Set(SetError::new("forbidden")).to_string(),
         "set error: forbidden (no description)"
     );
 
     assert_eq!(
-        Error::Set(SetError {
-            error_type: "notFound".into(),
-            description: None,
-            properties: Some(vec![]),
-            extra: Default::default(),
-        })
-        .to_string(),
+        Error::Set(SetError::new("notFound").with_properties(Vec::<String>::new())).to_string(),
         "set error: notFound (no description)"
     );
 
