@@ -94,7 +94,7 @@ use jmap_backend_core::trampoline::{guard, log_critical};
 /// and calendar backends: four namespaces, one account, one word. Here it is
 /// the protocol that `camel_provider_get` gets. Of the four, only this one is
 /// not an EDS factory name.
-pub const MAIL_BACKEND_NAME: &CStr = c"jmap";
+pub const MAIL_BACKEND_NAME: &CStr = jmap_backend_core::BACKEND_NAME;
 
 /// The two of the three sources that name a service, each with the extension
 /// that holds the name.
