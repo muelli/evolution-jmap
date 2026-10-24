@@ -14,6 +14,7 @@ use crate::id::Id;
 /// A Quota object (RFC 9425 §4.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Quota {
     pub id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,6 +97,7 @@ impl Quota {
 /// Matches `name` and `type` by substring, and `scope` and `resourceType` exactly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct QuotaQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -143,6 +145,7 @@ impl QuotaQueryFilter {
 /// Quota capability properties (RFC 9425 §2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct QuotaCapability {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
