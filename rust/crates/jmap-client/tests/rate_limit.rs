@@ -17,6 +17,7 @@ use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::calendars::CalendarEvent;
+use jmap_proto::contacts::ContactCard;
 use serde_json::json;
 
 /// Intercepting transport that can simulate rate limits and commit-then-429 behavior.
@@ -27,6 +28,7 @@ struct RateLimitInterceptor {
     inject_429_for_session: Arc<AtomicUsize>,
     inject_429_for_upload: Arc<AtomicUsize>,
     inject_429_for_download: Arc<AtomicUsize>,
+    inject_method_limit_for_contact_get: Arc<AtomicUsize>,
     retry_after_seconds: u64,
     total_jmap_requests: Arc<AtomicUsize>,
     total_session_requests: Arc<AtomicUsize>,
@@ -42,12 +44,18 @@ impl RateLimitInterceptor {
             inject_429_for_session: Arc::new(AtomicUsize::new(0)),
             inject_429_for_upload: Arc::new(AtomicUsize::new(0)),
             inject_429_for_download: Arc::new(AtomicUsize::new(0)),
+            inject_method_limit_for_contact_get: Arc::new(AtomicUsize::new(0)),
             retry_after_seconds,
             total_jmap_requests: Arc::new(AtomicUsize::new(0)),
             total_session_requests: Arc::new(AtomicUsize::new(0)),
             total_upload_requests: Arc::new(AtomicUsize::new(0)),
             total_download_requests: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    fn set_contact_get_method_limit_count(&self, count: usize) {
+        self.inject_method_limit_for_contact_get
+            .store(count, Ordering::SeqCst);
     }
 
     fn set_jmap_429_count(&self, count: usize) {
@@ -162,6 +170,36 @@ impl Transport for RateLimitInterceptor {
         if is_jmap {
             self.total_jmap_requests.fetch_add(1, Ordering::SeqCst);
 
+            let method_limit_remaining = self
+                .inject_method_limit_for_contact_get
+                .load(Ordering::SeqCst);
+            let contact_card_req = if method_limit_remaining > 0 {
+                serde_json::from_slice::<jmap_proto::request::Request>(
+                    request.body.unwrap_or_default(),
+                )
+                .ok()
+                .filter(|req| req.method_calls.iter().any(|c| c.name == "ContactCard/get"))
+            } else {
+                None
+            };
+            if let Some(req) = contact_card_req {
+                self.inject_method_limit_for_contact_get
+                    .fetch_sub(1, Ordering::SeqCst);
+                let call_id = req.method_calls[0].call_id.clone();
+                let body = serde_json::json!({
+                    "sessionState": "state-1",
+                    "methodResponses": [
+                        ["error", { "type": "limit", "description": "rate limited" }, call_id]
+                    ]
+                });
+                return Ok(HttpResponse {
+                    status: 200,
+                    content_type: Some("application/json".to_owned()),
+                    body: serde_json::to_vec(&body).unwrap(),
+                    final_url: request.url.to_string(),
+                });
+            }
+
             // Execute the request on the real mock server first.
             // This ensures writes are committed to the mock server state.
             let response = self.inner.execute(request)?;
@@ -205,6 +243,47 @@ fn server_with_calendar() -> (MockServer, Id, Id) {
             .seed_calendar("Personal", true)
     };
     (server, account_id, calendar)
+}
+
+/// Helper building a test server with a seeded address book.
+fn server_with_address_book() -> (MockServer, Id, Id) {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let book = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_address_book("Personal", true)
+    };
+    (server, account_id, book)
+}
+
+#[test]
+fn method_level_limit_on_contact_get_is_retried_and_succeeds() {
+    let (server, account_id, book) = server_with_address_book();
+    let interceptor = RateLimitInterceptor::new(0);
+
+    let client = Client::builder()
+        .transport(interceptor.clone())
+        .connect(server.origin(), Credentials::bearer("test"))
+        .expect("connect succeeds");
+
+    let card = ContactCard::simple(book, "Test User", "test@example.com");
+    let created = client
+        .contact_create(&account_id, &card)
+        .expect("initial contact create succeeds");
+
+    interceptor.set_contact_get_method_limit_count(1);
+    let requests_before = interceptor.jmap_requests();
+
+    let fetched = client
+        .contact_get(&account_id, &[created.id.unwrap()])
+        .expect("contact_get succeeds after retry");
+
+    assert_eq!(fetched.list.len(), 1);
+    assert_eq!(interceptor.jmap_requests() - requests_before, 2);
 }
 
 #[test]

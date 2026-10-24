@@ -10,10 +10,13 @@ use std::time::Duration;
 
 use jmap_proto::Id;
 use jmap_proto::error::{MethodError, RequestError, SetError};
-use jmap_proto::methods::{SetRequest, SetResponse};
+use jmap_proto::methods::{GetRequest, GetResponse, SetRequest, SetResponse};
 use jmap_proto::request::{Invocation, Request};
 use jmap_proto::response::Response;
 use jmap_proto::session::{self, Session};
+use jmap_proto::state::State;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::Error;
@@ -713,6 +716,138 @@ impl Client {
             Some(id) => requested.contains(id),
             None => !std::mem::replace(&mut kept_one_without_id, true),
         });
+    }
+
+    /// Calculate how many identifiers fit into the request size limit.
+    ///
+    /// Computes the exact byte length of the serialized request envelope.
+    /// Returns [`Error::RequestTooLarge`] when even the first identifier does not fit.
+    pub(crate) fn ids_that_fit(
+        &self,
+        using: &[&str],
+        method: &str,
+        empty_req: &impl Serialize,
+        ids: &[Id],
+        call_id: &str,
+        limit: u64,
+    ) -> Result<usize, Error> {
+        let empty = Request::new(using.iter().copied()).call(method, empty_req, call_id)?;
+        let mut used = serde_json::to_vec(&empty)?.len() as u64;
+        if used > limit {
+            return Err(Error::RequestTooLarge { size: used, limit });
+        }
+
+        for (taken, id) in ids.iter().enumerate() {
+            let cost = serde_json::to_string(id)?.len() as u64 + u64::from(taken > 0);
+            if used + cost > limit {
+                if taken == 0 {
+                    return Err(Error::RequestTooLarge {
+                        size: used + cost,
+                        limit,
+                    });
+                }
+                return Ok(taken);
+            }
+            used += cost;
+        }
+        Ok(ids.len())
+    }
+
+    /// Execute a chunked `/get` method call with custom request and response shapes.
+    ///
+    /// Splits requests when identifiers exceed `maxSizeRequest` or `maxObjectsInGet`.
+    /// Executes at least one call when `ids` is empty to fetch current state.
+    pub(crate) fn chunked_get_custom<Req: Serialize, Resp: DeserializeOwned, Item>(
+        &self,
+        using: &[&str],
+        method: &str,
+        ids: &[Id],
+        make_req: impl Fn(&[Id]) -> Req,
+        extract: impl Fn(Resp) -> (Vec<Item>, Vec<Id>, Option<State>, Id),
+        id_of: impl Fn(&Item) -> Option<&Id>,
+    ) -> Result<GetResponse<Item>, Error> {
+        let empty_req = make_req(&[]);
+        let limit = self.session().max_size_request();
+        let max_objects = self
+            .session()
+            .max_objects_in_get()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|&limit| limit > 0);
+
+        let mut combined: Option<GetResponse<Item>> = None;
+        let mut rest = ids;
+        loop {
+            let call_id = format!("c{}", self.next_call_id.load(Ordering::Relaxed));
+            let mut take = match limit {
+                Some(limit) => {
+                    self.ids_that_fit(using, method, &empty_req, rest, &call_id, limit)?
+                }
+                None => rest.len(),
+            };
+            if let Some(max_objects) = max_objects {
+                take = take.min(max_objects);
+            }
+            let (chunk, remaining) = rest.split_at(take);
+            let request = make_req(chunk);
+            let arguments = self.single_call(using, method, &request)?;
+            let response: Resp = serde_json::from_value(arguments)?;
+            let (mut list, mut not_found, state, account_id) = extract(response);
+            Self::keep_requested(&mut list, chunk, &id_of);
+            Self::keep_requested(&mut not_found, chunk, |id| Some(id));
+
+            match &mut combined {
+                None => {
+                    combined = Some(GetResponse {
+                        account_id,
+                        state: state.unwrap_or_default(),
+                        list,
+                        not_found,
+                    });
+                }
+                Some(combined) => {
+                    combined.list.extend(list);
+                    combined.not_found.extend(not_found);
+                    if let Some(state) = state {
+                        combined.state = state;
+                    }
+                }
+            }
+
+            rest = remaining;
+            if rest.is_empty() {
+                return Ok(combined.expect("the loop always sets combined on its first iteration"));
+            }
+        }
+    }
+
+    /// Execute a standard `Foo/get` method call in chunks.
+    ///
+    /// Splits requests into chunks when identifiers exceed `maxSizeRequest` or `maxObjectsInGet`.
+    /// When `ids` is empty, executes at least one call to read the current state.
+    pub fn get_chunked<T: DeserializeOwned + Default>(
+        &self,
+        using: &[&str],
+        method: &str,
+        account_id: &Id,
+        ids: &[Id],
+        properties: Option<&[&str]>,
+        id_of: impl Fn(&T) -> Option<&Id>,
+    ) -> Result<GetResponse<T>, Error> {
+        self.chunked_get_custom(
+            using,
+            method,
+            ids,
+            |chunk| Self::get_request(account_id, chunk, properties),
+            |resp: GetResponse<T>| (resp.list, resp.not_found, Some(resp.state), resp.account_id),
+            id_of,
+        )
+    }
+
+    /// Build a standard `GetRequest` for `account_id`, `ids`, and optional `properties`.
+    fn get_request(account_id: &Id, ids: &[Id], properties: Option<&[&str]>) -> GetRequest {
+        let mut request = GetRequest::ids(account_id.clone(), ids.iter().cloned());
+        request.properties = properties.map(|props| props.iter().map(|s| s.to_string()).collect());
+        request
     }
 
     /// Extract arguments from an invocation, mapping `error` responses to

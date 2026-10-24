@@ -12,6 +12,7 @@ use jmap_client::transport::{HttpMethod, HttpRequest, Transport, UreqTransport};
 use jmap_client::{Client, Credentials, Error, limits};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
+use jmap_proto::calendars::CalendarEvent;
 use jmap_proto::mail::role;
 use jmap_proto::request::Request;
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
@@ -116,6 +117,54 @@ fn a_long_email_get_is_sent_as_several_requests() {
         gets,
         "one request per call — the split is across requests, not within one"
     );
+}
+
+/// Seeds a calendar with [`SEEDED`] events and returns their identifiers in order.
+fn seed_calendar(server: &MockServer) -> Vec<Id> {
+    let account_id = server.account_id();
+    let state = server.state();
+    let mut state = state.lock().unwrap();
+    let account = state.account_mut(&account_id).unwrap();
+    let cal_id = account.seed_calendar("Personal", true);
+    (0..SEEDED)
+        .map(|n| {
+            let event_id = account.calendar_events.alloc_id();
+            let mut event = CalendarEvent::simple(
+                cal_id.clone(),
+                &format!("Event {n}"),
+                "2026-10-24T10:00:00",
+                "PT1H",
+            );
+            event.id = Some(event_id.clone());
+            account
+                .calendar_events
+                .seed_with_id(event_id.clone(), event);
+            event_id
+        })
+        .collect()
+}
+
+/// Verifies that an event identifier list exceeding the limit splits into multiple requests.
+#[test]
+fn a_long_event_get_is_sent_as_several_requests() {
+    let server = MockServer::builder().size_request(SMALL_REQUEST).start();
+    let account_id = server.account_id();
+    let ids = seed_calendar(&server);
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let response = client.event_get(&account_id, &ids).unwrap();
+
+    assert_eq!(response.list.len(), SEEDED, "every event comes back");
+    let gets = server
+        .method_calls()
+        .iter()
+        .filter(|name| *name == "CalendarEvent/get")
+        .count();
+    assert!(
+        gets > 1,
+        "expected several CalendarEvent/get calls, got {gets}"
+    );
+    assert_eq!(server.api_requests(), gets);
 }
 
 /// Sends the full list in one request when limits allow.

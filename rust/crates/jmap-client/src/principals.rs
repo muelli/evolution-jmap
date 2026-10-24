@@ -33,35 +33,20 @@ impl Client {
 
     /// Fetch principals by id (`Principal/get` with `ids`).
     ///
-    /// Splits requests into chunks when IDs exceed `maxObjectsInGet`.
+    /// Splits requests into chunks when IDs exceed `maxSizeRequest` or `maxObjectsInGet`.
     /// When a server advertises an account ID for `currentUserPrincipalId`, `Principal/get` fails with `notFound`.
     /// In this case, the method falls back to resolving the owner principal by username or email.
     pub fn principal_get(&self, account_id: &Id, ids: &[Id]) -> Result<Vec<Principal>, Error> {
-        let max_objects = self
-            .session()
-            .max_objects_in_get()
-            .and_then(|limit| usize::try_from(limit).ok())
-            .filter(|&limit| limit > 0)
-            .unwrap_or(ids.len().max(1));
-
-        let mut fetched = Vec::with_capacity(ids.len());
-        let mut not_found_list = Vec::new();
-        let mut rest = ids;
-        loop {
-            let take = rest.len().min(max_objects);
-            let (chunk, remaining) = rest.split_at(take);
-            let request = GetRequest::ids(account_id.clone(), chunk.to_vec());
-            let arguments = self.single_call(USING, "Principal/get", &request)?;
-            let mut response: GetResponse<Principal> = serde_json::from_value(arguments)?;
-            Self::keep_requested(&mut response.list, chunk, |principal| principal.id.as_ref());
-            Self::keep_requested(&mut response.not_found, chunk, |id| Some(id));
-            fetched.extend(response.list);
-            not_found_list.extend(response.not_found);
-            rest = remaining;
-            if rest.is_empty() {
-                break;
-            }
-        }
+        let response = self.get_chunked(
+            USING,
+            "Principal/get",
+            account_id,
+            ids,
+            None,
+            |principal: &Principal| principal.id.as_ref(),
+        )?;
+        let fetched = response.list;
+        let not_found_list = response.not_found;
 
         if ids.len() == 1 && fetched.is_empty() && not_found_list.contains(&ids[0]) {
             let requested_id = &ids[0];
