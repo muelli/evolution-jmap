@@ -142,6 +142,7 @@ run_scenario() {
 		NO_AT_BRIDGE=0
 		EVOLUTION_JMAP_LOG=trace
 		PYTHONPATH="$ROOT/ci/gui-scenario"
+		PYTHONDONTWRITEBYTECODE=1
 		GUI_SCENARIO_ARTIFACTS="$out"
 		GUI_SCENARIO_SOURCES="$run_dir/config/evolution/sources"
 		GUI_SCENARIO_MOCK_PORT="$MOCK_PORT"
