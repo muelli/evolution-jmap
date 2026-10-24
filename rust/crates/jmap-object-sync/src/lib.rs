@@ -10,6 +10,8 @@
 //! and their own rules (photo size, iTIP). An [`ObjectKind`] names the object
 //! type, and the functions here do the steps that are the same for both.
 
+pub mod edit_base;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
