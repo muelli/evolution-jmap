@@ -94,9 +94,11 @@ use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH,
     CAMEL_STORE_FOLDER_INFO_SUBSCRIBED, CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST,
     CAMEL_STORE_SETUP_DRAFTS_FOLDER, CAMEL_STORE_SETUP_SENT_FOLDER, CamelFolder, CamelFolderInfo,
-    CamelFolderInfoFlags, CamelStore, CamelStoreClass, CamelStoreGetFolderFlags,
-    CamelStoreGetFolderInfoFlags, GHashTable, camel_folder_get_folder_summary,
-    camel_store_get_folder_sync, g_hash_table_insert,
+    CamelFolderInfoFlags, CamelOfflineStore, CamelService, CamelStore, CamelStoreClass,
+    CamelStoreGetFolderFlags, CamelStoreGetFolderInfoFlags, GHashTable,
+    camel_folder_get_folder_summary, camel_offline_store_get_online, camel_service_connect_sync,
+    camel_service_ref_session, camel_session_get_online, camel_store_get_folder_sync,
+    g_hash_table_insert,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, g_strdup, gboolean, gchar};
@@ -463,6 +465,9 @@ unsafe extern "C" fn get_folder_sync(
             let Some(instance) = JmapStore::borrow(store) else {
                 return fail(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
+            if !reconnect_if_dropped(store, instance, cancellable, error) {
+                return ptr::null_mut();
+            }
             // Borrowed from Camel and NUL-terminated; `read_string` copies. A
             // NULL or empty name becomes the empty path. No mailbox has that
             // path, because a path always has a component.
@@ -721,6 +726,9 @@ unsafe fn open_by_role(
         // SAFETY: Camel keeps its cancellable alive for the duration of the call.
         let _cancel = observe(cancellable);
 
+        if !reconnect_if_dropped(store, instance, cancellable, error) {
+            return ptr::null_mut();
+        }
         let tree = match tree_holding(instance, |tree| tree.role(role).is_some()) {
             Ok(tree) => tree,
             Err(failure) => return fail(error, &failure, StoreError::to_gerror),
@@ -731,6 +739,46 @@ unsafe fn open_by_role(
         let path = c_string(&folder.path);
 
         camel_store_get_folder_sync(store, path.as_ptr(), 0, cancellable, error)
+    }
+}
+
+/// Connects the store again before it opens a folder, if the store has no
+/// connection and the session and the store are online. Returns false with
+/// `error` set if the connection fails.
+///
+/// Evolution disconnects the store after each save in the account editor, but
+/// the session stays online. Camel connects again before a folder listing and
+/// before each folder operation, but not before `camel_store_get_folder_sync`
+/// (3.52). Without this step, each folder fails to open after a save.
+///
+/// # Safety
+///
+/// `store` must be the live store of `instance`. `cancellable` must be NULL or
+/// valid, and `error` must be NULL or a writable location that holds NULL.
+unsafe fn reconnect_if_dropped(
+    store: *mut CamelStore,
+    instance: &JmapStore,
+    cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> bool {
+    if instance.is_connected() {
+        return true;
+    }
+    let service = store.cast::<CamelService>();
+    // SAFETY: `store` is a live `CamelOfflineStore`, per the contract. The
+    // session reference drops at the end of the block.
+    unsafe {
+        let session = Owned::from_raw(camel_service_ref_session(service));
+        let online = session
+            .as_ref()
+            .is_some_and(|session| camel_session_get_online(session.as_ptr()) != GFALSE)
+            && camel_offline_store_get_online(store.cast::<CamelOfflineStore>()) != GFALSE;
+        if !online {
+            // Offline: the open fails with `Disconnected`, as before.
+            return true;
+        }
+        tracing::debug!("connecting the store again to open a folder");
+        camel_service_connect_sync(service, cancellable, error) != GFALSE
     }
 }
 

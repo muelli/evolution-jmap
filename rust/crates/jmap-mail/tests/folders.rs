@@ -1186,11 +1186,13 @@ fn a_mailbox_created_since_the_listing_is_found_by_looking_again() {
 }
 
 /// The other NULL, told apart from the one above by the error alone.
-/// `NOT_CONNECTED` is what makes Camel connect and ask again, instead of
-/// showing the account as broken.
+/// `NOT_CONNECTED` does not show the account as broken. Online, the store
+/// connects first (`tests/reconnect.rs`).
 #[test]
 fn a_disconnected_store_has_no_folder_to_open() {
     let account = Account::open();
+    // Offline, so the store does not try to connect.
+    account.set_online(false);
 
     let opened = Opened::of(account.store, "Inbox");
 
@@ -1471,6 +1473,8 @@ fn an_inbox_that_appeared_since_the_listing_is_found_by_looking_again() {
 #[test]
 fn a_disconnected_store_has_no_inbox_to_open() {
     let account = Account::open();
+    // Offline, so the store does not try to connect.
+    account.set_online(false);
 
     let opened = Purpose::inbox(account.store);
 
@@ -1663,6 +1667,8 @@ fn a_trash_that_appeared_since_the_listing_is_found_by_looking_again() {
 #[test]
 fn a_disconnected_store_has_no_trash_or_junk_to_open() {
     let account = Account::open();
+    // Offline, so the store does not try to connect.
+    account.set_online(false);
 
     for opened in [Purpose::trash(account.store), Purpose::junk(account.store)] {
         assert!(opened.folder.is_null(), "a disconnected store opened one");
