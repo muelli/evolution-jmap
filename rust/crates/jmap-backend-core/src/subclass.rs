@@ -419,7 +419,19 @@ macro_rules! initialise_parents_before_main {
 #[doc(hidden)]
 pub mod __test_module {
     pub use glib_sys::{GTRUE, GType, gboolean};
-    pub use gobject_sys::{GTypeModule, GTypeModuleClass, g_type_module_get_type};
+    pub use gobject_sys::{GTypeModule, GTypeModuleClass};
+
+    /// `G_TYPE_TYPE_MODULE`, resolved one time for the process.
+    ///
+    /// GLib's `g_type_module_get_type` is not thread-safe on its first call. It
+    /// registers the type, then adds `GTypePlugin` in a second step. Tests run
+    /// on parallel threads. Without the `OnceLock`, a second thread can derive a
+    /// module before the interface is there, and its reload then fails.
+    pub fn type_module_type() -> GType {
+        static TYPE: std::sync::OnceLock<GType> = std::sync::OnceLock::new();
+        // SAFETY: no arguments.
+        *TYPE.get_or_init(|| unsafe { gobject_sys::g_type_module_get_type() })
+    }
 }
 
 /// Defines `$name`, a `GTypeModule` stand-in for the `EModule` that EDS loads.
@@ -438,7 +450,7 @@ macro_rules! test_module {
 
         const _: () = {
             use $crate::subclass::__test_module::{
-                GTRUE, GType, GTypeModule, GTypeModuleClass, g_type_module_get_type, gboolean,
+                GTRUE, GType, GTypeModule, GTypeModuleClass, gboolean, type_module_type,
             };
 
             #[repr(C)]
@@ -454,8 +466,7 @@ macro_rules! test_module {
                 type Class = Class;
 
                 fn parent_type() -> GType {
-                    // SAFETY: no arguments, and the type initialises itself.
-                    unsafe { g_type_module_get_type() }
+                    type_module_type()
                 }
 
                 unsafe fn class_init(class: *mut Self::Class) {

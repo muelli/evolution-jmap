@@ -21,49 +21,18 @@
 
 use std::ptr;
 
-use glib_sys::{G_PRIORITY_DEFAULT, GFALSE, g_main_context_invoke_full, gboolean, gpointer};
 use gobject_sys::GObject;
+use jmap_backend_core::invoke::invoke_in;
 use jmap_backend_core::trampoline::guard;
 use jmap_backend_core::weak::WeakBackend;
-
-/// The data that goes to GLib: the closure, boxed so that it has one
-/// address. The `Option` lets the dispatch take the closure while the destroy
-/// notify keeps sole ownership of the box.
-type Payload = Option<Box<dyn FnOnce() + Send>>;
 
 /// Run `f` once on the global main context, panic-guarded.
 pub fn on_main<F>(f: F)
 where
     F: FnOnce() + Send + 'static,
 {
-    unsafe extern "C" fn call(data: gpointer) -> gboolean {
-        // SAFETY: `data` is the `Payload` box that `on_main` leaked. Borrowed,
-        // not reclaimed: GLib still owns it and frees it through `drop_payload`.
-        let payload = unsafe { &mut *data.cast::<Payload>() };
-        if let Some(f) = payload.take() {
-            guard("jmap-ui main-loop dispatch", (), f);
-        }
-        GFALSE // G_SOURCE_REMOVE: run one time
-    }
-    unsafe extern "C" fn drop_payload(data: gpointer) {
-        // SAFETY: this reclaims the box that `on_main` leaked, one time only.
-        // GLib calls the destroy notify after the source dispatched, or when
-        // it frees the context with the source still in the queue.
-        drop(unsafe { Box::from_raw(data.cast::<Payload>()) });
-    }
-
-    let payload: Box<Payload> = Box::new(Some(Box::new(f)));
-    // SAFETY: NULL identifies the global main context. GLib owns the payload
-    // from here, so the payload stays alive until `drop_payload`.
-    unsafe {
-        g_main_context_invoke_full(
-            ptr::null_mut(),
-            G_PRIORITY_DEFAULT,
-            Some(call),
-            Box::into_raw(payload).cast(),
-            Some(drop_payload),
-        );
-    }
+    // SAFETY: NULL identifies the global main context.
+    unsafe { invoke_in(ptr::null_mut(), "jmap-ui main-loop dispatch", f) };
 }
 
 /// Run `work` on its own thread, then run `finish(object, answer)` on the
@@ -104,7 +73,9 @@ mod tests {
     use std::sync::{Arc, Mutex, MutexGuard};
     use std::time::{Duration, Instant};
 
-    use glib_sys::{g_main_context_acquire, g_main_context_iteration, g_main_context_release};
+    use glib_sys::{
+        GFALSE, g_main_context_acquire, g_main_context_iteration, g_main_context_release,
+    };
     use gobject_sys::{G_TYPE_OBJECT, g_object_new_with_properties, g_object_unref};
 
     use super::*;

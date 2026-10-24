@@ -53,6 +53,7 @@ pub mod extension;
 pub mod forever;
 pub mod i18n;
 pub mod instance;
+pub mod invoke;
 pub mod logging;
 pub mod marshal;
 pub mod mime;
