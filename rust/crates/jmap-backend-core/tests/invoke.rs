@@ -13,7 +13,7 @@ use glib_sys::{
     GFALSE, GMainContext, g_main_context_acquire, g_main_context_iteration, g_main_context_new,
     g_main_context_release, g_main_context_unref,
 };
-use jmap_backend_core::invoke::invoke_in;
+use jmap_backend_core::invoke::{invoke_in, wait_for_queued};
 
 struct Context(*mut GMainContext);
 
@@ -138,4 +138,40 @@ fn a_destroyed_context_drops_the_closure_without_running_it() {
 
     assert!(dropped.load(Ordering::SeqCst), "the closure must be freed");
     assert!(!ran.load(Ordering::SeqCst), "the closure must not run");
+}
+
+#[test]
+fn the_wait_ends_after_the_sources_that_were_queued_before_it() {
+    let context = Context::owned();
+    let earlier = Arc::new(AtomicBool::new(false));
+    let seen = earlier.clone();
+    context.invoke_from_thread(move || seen.store(true, Ordering::SeqCst));
+
+    let waiter = {
+        let (context, earlier) = (Context(context.0), earlier.clone());
+        thread::spawn(move || {
+            let context = context;
+            // SAFETY: the test keeps the context alive until it joins this thread.
+            let ran = unsafe { wait_for_queued(context.0, Duration::from_secs(5)) };
+            (ran, earlier.load(Ordering::SeqCst))
+        })
+    };
+    context.iterate_until(|| waiter.is_finished());
+    assert_eq!(waiter.join().unwrap(), (true, true));
+    context.destroy();
+}
+
+#[test]
+fn the_wait_gives_up_when_the_owner_does_not_iterate() {
+    let context = Context::owned();
+    let waiter = {
+        let context = Context(context.0);
+        thread::spawn(move || {
+            let context = context;
+            // SAFETY: the test keeps the context alive until it joins this thread.
+            unsafe { wait_for_queued(context.0, Duration::from_millis(100)) }
+        })
+    };
+    assert!(!waiter.join().unwrap(), "nothing iterated the context");
+    context.destroy();
 }

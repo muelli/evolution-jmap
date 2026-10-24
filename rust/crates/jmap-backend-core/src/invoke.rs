@@ -3,10 +3,15 @@
 
 //! Run a closure one time on a `GMainContext`, panic-guarded.
 
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::Duration;
+
 use glib_sys::{
-    G_PRIORITY_DEFAULT, GFALSE, GMainContext, g_main_context_invoke_full, gboolean, gpointer,
+    G_PRIORITY_DEFAULT, G_PRIORITY_DEFAULT_IDLE, GFALSE, GMainContext, g_main_context_invoke_full,
+    gboolean, gpointer,
 };
 
+use crate::poison::lock;
 use crate::trampoline::guard;
 
 /// The closure and the guard label, boxed so that they have one address. The
@@ -47,6 +52,46 @@ pub unsafe fn invoke_in<F>(context: *mut GMainContext, label: &'static str, f: F
 where
     F: FnOnce() + Send + 'static,
 {
+    // SAFETY: the contract of this function.
+    unsafe { invoke_at(context, G_PRIORITY_DEFAULT, label, f) };
+}
+
+/// Wait until `context` dispatches the sources that are ready before this
+/// call, or until `timeout` ends. Returns whether `context` got that far.
+///
+/// The wait source has idle priority, so the sources of a higher priority go
+/// first. Do not call this from the thread that iterates `context`.
+///
+/// # Safety
+///
+/// As [`invoke_in`].
+pub unsafe fn wait_for_queued(context: *mut GMainContext, timeout: Duration) -> bool {
+    let done = Arc::new((Mutex::new(false), Condvar::new()));
+    let signal = Arc::clone(&done);
+    // SAFETY: the contract of this function.
+    unsafe {
+        invoke_at(
+            context,
+            G_PRIORITY_DEFAULT_IDLE,
+            "wait_for_queued",
+            move || {
+                *lock(&signal.0) = true;
+                signal.1.notify_all();
+            },
+        );
+    }
+    let (ran, _) = done
+        .1
+        .wait_timeout_while(lock(&done.0), timeout, |ran| !*ran)
+        .unwrap_or_else(PoisonError::into_inner);
+    *ran
+}
+
+/// [`invoke_in`] with the source priority `priority`.
+unsafe fn invoke_at<F>(context: *mut GMainContext, priority: i32, label: &'static str, f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
     let job = Box::new(Job {
         label,
         f: Some(Box::new(f)),
@@ -56,7 +101,7 @@ where
     unsafe {
         g_main_context_invoke_full(
             context,
-            G_PRIORITY_DEFAULT,
+            priority,
             Some(call),
             Box::into_raw(job).cast(),
             Some(drop_job),
