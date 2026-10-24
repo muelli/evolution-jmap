@@ -193,6 +193,7 @@ pub fn blob_copy(
         from_account_id,
         account_id,
         blob_ids,
+        ..
     } = request;
 
     let source = state

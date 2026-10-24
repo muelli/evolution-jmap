@@ -106,12 +106,7 @@ fn main() {
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS],
             "Principal/get",
-            &GetRequest {
-                account_id: alice_account.clone(),
-                ids: Some(vec![bob_principal_id.clone()]),
-                ids_ref: None,
-                properties: None,
-            },
+            &GetRequest::ids(alice_account.clone(), vec![bob_principal_id.clone()]),
         )
         .expect("Principal/get");
     print_raw("Principal/get(bob) raw response", &principal_get);

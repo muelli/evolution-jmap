@@ -915,15 +915,12 @@ fn blob_copy_and_core_capabilities_roundtrip_covers_rfc8620() {
     let round_req: BlobCopyRequest = serde_json::from_value(req_val).unwrap();
     assert_eq!(round_req, req);
 
-    let resp = BlobCopyResponse {
-        from_account_id: Id::new("acc_source"),
-        account_id: Id::new("acc_target"),
-        copied: Some(BTreeMap::from([(Id::new("blob_1"), Id::new("blob_1_new"))])),
-        not_copied: Some(BTreeMap::from([(
+    let resp = BlobCopyResponse::new("acc_source", "acc_target")
+        .with_copied(BTreeMap::from([(Id::new("blob_1"), Id::new("blob_1_new"))]))
+        .with_not_copied(BTreeMap::from([(
             Id::new("blob_2"),
             jmap_proto::error::SetError::new("notFound"),
-        )])),
-    };
+        )]));
     let resp_val = serde_json::to_value(&resp).unwrap();
     assert_eq!(resp_val["copied"]["blob_1"], "blob_1_new");
     assert_eq!(resp_val["notCopied"]["blob_2"]["type"], "notFound");

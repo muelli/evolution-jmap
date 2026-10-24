@@ -74,15 +74,15 @@ pub(crate) fn store_changes<T>(
         }
     }
 
-    Ok(jmap_proto::methods::ChangesResponse {
-        account_id: request.account_id,
-        old_state: request.since_state,
-        new_state: jmap_proto::State::new(window_end.to_string()),
-        has_more_changes,
-        created,
-        updated,
-        destroyed,
-    })
+    Ok(jmap_proto::methods::ChangesResponse::new(
+        request.account_id,
+        request.since_state,
+        jmap_proto::State::new(window_end.to_string()),
+    )
+    .with_created(created)
+    .with_updated(updated)
+    .with_destroyed(destroyed)
+    .has_more_changes(has_more_changes))
 }
 
 /// Return the last included state and whether more changes remain.

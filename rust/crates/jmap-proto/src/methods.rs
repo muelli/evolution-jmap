@@ -20,6 +20,7 @@ use crate::state::State;
 /// `Foo/get` arguments (RFC 8620 §5.1). `ids: None` means "all objects".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GetRequest {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,6 +98,7 @@ impl<T> GetResponse<T> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: serde::Deserialize<'de>"))]
+#[non_exhaustive]
 pub struct SetRequest<T> {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -241,6 +243,7 @@ impl<T> SetResponse<T> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(bound(serialize = "F: Serialize", deserialize = "F: serde::Deserialize<'de>"))]
+#[non_exhaustive]
 pub struct QueryRequest<F> {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -332,6 +335,7 @@ fn default_true() -> bool {
 /// A sort key for `/query` (RFC 8620 §5.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Comparator {
     pub property: String,
     #[serde(default = "default_true")]
@@ -376,6 +380,7 @@ pub enum Filter<F> {
 /// module constants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct FilterOperator<F> {
     pub operator: String,
     pub conditions: Vec<Filter<F>>,
@@ -480,6 +485,7 @@ impl QueryResponse {
 /// `Foo/changes` arguments (RFC 8620 §5.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ChangesRequest {
     pub account_id: Id,
     pub since_state: State,
@@ -505,6 +511,7 @@ impl ChangesRequest {
 /// Response of a binary upload (RFC 8620 §6.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UploadResponse {
     pub account_id: Id,
     pub blob_id: Id,
@@ -545,6 +552,7 @@ impl<T> Echo<T> {
 /// `Foo/changes` response (RFC 8620 §5.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ChangesResponse {
     pub account_id: Id,
     pub old_state: State,
@@ -608,6 +616,7 @@ pub mod filter_operator {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(bound(serialize = "F: Serialize", deserialize = "F: serde::Deserialize<'de>"))]
+#[non_exhaustive]
 pub struct QueryChangesRequest<F> {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -673,6 +682,7 @@ impl<F> QueryChangesRequest<F> {
 /// An item added to query results in `/queryChanges` (RFC 8620 §5.6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AddedItem {
     pub id: Id,
     pub index: u64,
@@ -690,6 +700,7 @@ impl AddedItem {
 /// `Foo/queryChanges` response (RFC 8620 §5.6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct QueryChangesResponse {
     pub account_id: Id,
     pub old_query_state: State,
@@ -738,6 +749,7 @@ impl QueryChangesResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: serde::Deserialize<'de>"))]
+#[non_exhaustive]
 pub struct CopyRequest<T> {
     pub from_account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -795,6 +807,7 @@ impl<T> CopyRequest<T> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: serde::Deserialize<'de>"))]
+#[non_exhaustive]
 pub struct CopyResponse<T> {
     pub from_account_id: Id,
     pub account_id: Id,
@@ -842,6 +855,7 @@ impl<T> CopyResponse<T> {
 /// `Blob/copy` arguments (RFC 8620 §5.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobCopyRequest {
     pub from_account_id: Id,
     pub account_id: Id,
@@ -865,6 +879,7 @@ impl BlobCopyRequest {
 /// `Blob/copy` response (RFC 8620 §5.7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobCopyResponse {
     pub from_account_id: Id,
     pub account_id: Id,

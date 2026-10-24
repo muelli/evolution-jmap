@@ -924,12 +924,11 @@ prop_compose! {
         ids_ref in prop::option::of(arb_result_reference()),
         properties in prop::option::of(prop::collection::vec("[a-z]{1,10}", 0..3)),
     ) -> GetRequest {
-        GetRequest {
-            account_id,
-            ids,
-            ids_ref,
-            properties,
-        }
+        let mut request = GetRequest::all(account_id);
+        request.ids = ids;
+        request.ids_ref = ids_ref;
+        request.properties = properties;
+        request
     }
 }
 
@@ -972,15 +971,14 @@ where
         )),
         prop::option::of(prop::collection::vec(arb_id(), 0..2)),
     )
-        .prop_map(
-            |(account_id, if_in_state, create, update, destroy)| SetRequest {
-                account_id,
-                if_in_state,
-                create,
-                update,
-                destroy,
-            },
-        )
+        .prop_map(|(account_id, if_in_state, create, update, destroy)| {
+            let mut request = SetRequest::new(account_id);
+            request.if_in_state = if_in_state;
+            request.create = create;
+            request.update = update;
+            request.destroy = destroy;
+            request
+        })
 }
 
 prop_compose! {

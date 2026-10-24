@@ -37,11 +37,7 @@ impl Client {
                 )));
             }
         };
-        let request = ChangesRequest {
-            account_id: account_id.clone(),
-            since_state: since_state.clone(),
-            max_changes: None,
-        };
+        let request = ChangesRequest::new(account_id.clone(), since_state.clone());
         let arguments = self.single_call(
             &[CAPABILITY_CORE, capability],
             &format!("{type_name}/changes"),

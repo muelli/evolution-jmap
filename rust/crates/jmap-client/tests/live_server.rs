@@ -4870,11 +4870,8 @@ fn changes_paging_and_resumption_through_the_real_api() {
         .state;
 
     // Page 1: request maxChanges: 1
-    let changes_req1 = ChangesRequest {
-        account_id: account_id.clone(),
-        since_state: initial_state.clone(),
-        max_changes: Some(1),
-    };
+    let changes_req1 =
+        ChangesRequest::new(account_id.clone(), initial_state.clone()).max_changes(1);
     let page1_val = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CONTACTS],
@@ -4898,11 +4895,8 @@ fn changes_paging_and_resumption_through_the_real_api() {
     assert_ne!(page1.new_state, final_state);
 
     // Page 2: resume from page 1's newState
-    let changes_req2 = ChangesRequest {
-        account_id: account_id.clone(),
-        since_state: page1.new_state.clone(),
-        max_changes: Some(1),
-    };
+    let changes_req2 =
+        ChangesRequest::new(account_id.clone(), page1.new_state.clone()).max_changes(1);
     let page2_val = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CONTACTS],
