@@ -108,6 +108,7 @@ comment of each file explains what the file asserts and why.
 | --- | --- |
 | `functional-book` | The factory loads the book backend. The source reaches `connected`. The book is writable. A contact that is added through EDS reaches the server and reads back. More legs edit server-seeded cards. They check that data which a vCard cannot carry survives (name components, photos, calendaring addresses, related persons, notes, URI-only handles). They also check that the removal of a contact reaches the server. |
 | `functional-book-changes` | A second connect on the same cache reaches `get_changes_sync`. |
+| `functional-book-save-during-push` | The client saves one contact 300 times with a manual-query view open. The mock pushes after each write. Each save gets an answer. |
 | `functional-cal` | The calendar counterpart of `functional-book`: writable calendar, events, recurrences and exceptions, an edit of a server-seeded event, and time zones that only the server or only the client can name. |
 | `functional-cal-changes` | A second connect on the same cache reaches `get_changes_sync`. |
 | `functional-cal-color` | A change of the colour of a calendar in EDS reaches the server. |
