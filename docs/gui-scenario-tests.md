@@ -51,6 +51,7 @@ These variables change the defaults:
 | `GUI_SCENARIO_IMAGE` | `localhost/evolution-jmap-gui-scenario` | The image |
 | `GUI_SCENARIO_PORT` | `8090` | The port of the mock |
 | `GUI_SCENARIO_DISPLAY` | `:96` | The display of `Xvfb` |
+| `GUI_SCENARIO_MOCKD` | `build/cargo-target/release/jmap-mockd` | The `jmap-mockd` binary |
 
 ## The output
 
@@ -129,6 +130,33 @@ address books and calendars offline, so a scenario cannot make an offline
 edit with it. The contact editor does not enable **Save** after a change of
 the nickname only.
 
+### `send-later`
+
+Two standalone mail accounts use the same mock account. The server has an
+identity for the address of the first account (`alice@example.com`). It has
+no identity for the address of the second account (`mallory@example.com`).
+The scenario does these steps and checks:
+
+1. In the first account, write a message and do **File > Send Later > In One
+   Hour**. The server must have one `EmailSubmission` for the message, with
+   the identity of Alice, the undo status `pending` and a hold of one hour.
+   The message must be in Sent and must not be a draft. The composer closes,
+   and the Sent folder of the account shows the message.
+2. In the second account, write a message and do the same. A dialog tells
+   that the account cannot send mail as `mallory@example.com`. The server
+   must have no new submission and no copy of the message. The composer
+   stays open.
+
+The log must show no error of evolution-jmap.
+
+The scenario starts the mock with `--max-delayed-send 86400`, so the server
+offers scheduled send. Use a `jmap-mockd` that has this option. If the
+`jmap-mockd` of your build tree does not have it, set `GUI_SCENARIO_MOCKD` to
+a `jmap-mockd` that has it.
+
+The mock has a fixed clock. Thus the scenario compares `sendAt` with the
+time of the mock, not with the local time.
+
 ## Write a scenario
 
 A scenario is a Python file in `ci/gui-scenario/scenarios/`. It calls
@@ -148,6 +176,13 @@ Obey these rules:
   seconds after the user action.
 - Use `menu_item()` for menu commands. It does the action from a child
   process, because some actions run a modal dialog before they return.
+  A path can name submenus, for example `"File/New/Mail Message"`. Give the
+  title of a window as the second argument to use the menu bar of that
+  window, for example of a composer.
+- To write more than one mail account, give each account its own `key` in
+  `write_standalone_mail_account()`.
+- In the composer, find the **To** field by its name `"To:"`. Find the
+  **Subject** field with `labelled_field()`.
 - Use `confirm()` for a confirmation dialog.
 - Use `select_folder()` to select a folder. The AT-SPI action "activate"
   opens the folder but does not select the row. Evolution then disables the
