@@ -209,6 +209,17 @@ class Jmap:
             raise ScenarioFailure(f"{type_name}/set did not create {properties}: {created}")
         return created["created"]["c"]["id"]
 
+    def update(self, type_name, object_id, patch):
+        """Patch one object of `type_name` with `patch` (RFC 8620 §5.3)."""
+        updated = self.call(f"{type_name}/set", {"update": {object_id: patch}})
+        if object_id not in (updated.get("updated") or {}):
+            raise ScenarioFailure(f"{type_name}/set did not update {object_id}: {updated}")
+
+    def get(self, type_name, object_id):
+        """Return one object of `type_name`, or None if the server has no such object."""
+        found = self.call(f"{type_name}/get", {"ids": [object_id]})["list"]
+        return found[0] if found else None
+
     def names(self, type_name):
         """Return {id: name} of all objects of `type_name` ("Calendar", ...)."""
         found = self.call(f"{type_name}/get", {"ids": None})["list"]
@@ -336,6 +347,57 @@ def do_action(node, action_name=None):
             raise ScenarioFailure(f"{_name(node)!r} has no action {action_name!r}: {names}")
         index = names.index(action_name)
     action.doAction(index)
+
+
+def window(prefix):
+    """Return the showing top-level window of Evolution whose name starts with `prefix`, or None."""
+    app = evolution()
+    for i in range(app.childCount):
+        candidate = app.getChildAtIndex(i)
+        if _name(candidate).startswith(prefix) and is_showing(candidate):
+            return candidate
+    return None
+
+
+def double_click(node):
+    """Double-click the centre of `node` with the synthetic mouse."""
+    extents = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    x = extents.x + extents.width // 2
+    y = extents.y + extents.height // 2
+    pyatspi.Registry.generateMouseEvent(x, y, "b1d")
+
+
+def text_of(node):
+    """Return the full text of a text node."""
+    text = node.queryText()
+    return text.getText(0, text.characterCount)
+
+
+def text_field(root, content):
+    """Return the text node under `root` that holds exactly `content`, or None.
+
+    The fields of the editors have no accessible name, so find them by content.
+    """
+    for candidate in descendants(root, "text"):
+        try:
+            if text_of(candidate) == content:
+                return candidate
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def set_text(node, content):
+    """Replace the text of an editable text node through the keyboard.
+
+    The contact editor ignores a text that AT-SPI sets: its Save stays
+    disabled. Key events count as an edit in each editor.
+    """
+    node.queryComponent().grabFocus()
+    node.queryEditableText().deleteText(0, len(text_of(node)))
+    pyatspi.Registry.generateKeyboardEvent(0, content, pyatspi.KEY_STRING)
+    wait_for(lambda: text_of(node) == content, f"the field shows {content!r}")
+    say(f"typed {content!r}")
 
 
 def menu_item(path):
@@ -540,6 +602,11 @@ def expect_log(pattern, what, log="evolution.log"):
     regex = re.compile(pattern, re.MULTILINE)
     wait_for(lambda: regex.search(evolution_log(log)), f"the log shows {what}", timeout=10)
     say(f"log: {what}")
+
+
+def log_count(pattern, log="evolution.log"):
+    """Return the number of lines of `log` that match the regular expression."""
+    return len(re.findall(pattern, evolution_log(log), re.MULTILINE))
 
 
 def expect_no_errors(log="evolution.log"):
