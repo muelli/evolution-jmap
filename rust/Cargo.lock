@@ -398,6 +398,7 @@ dependencies = [
  "evolution-jmap-proto",
  "evolution-jmap-vcard",
  "percent-encoding",
+ "proptest",
  "serde",
  "serde_json",
  "sha2",

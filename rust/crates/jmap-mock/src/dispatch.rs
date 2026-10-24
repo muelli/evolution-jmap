@@ -453,7 +453,89 @@ mod tests {
     use super::{eval_pointer, resolve_references};
     use crate::state::ServerState;
     use jmap_proto::request::{Invocation, Request};
+    use proptest::prelude::*;
+    use serde_json::Value;
     use serde_json::json;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    fn json_value() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i64>().prop_map(|n| Value::Number(n.into())),
+            ".{0,16}".prop_map(Value::String),
+        ];
+        leaf.prop_recursive(4, 64, 8, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
+                prop::collection::btree_map(".{0,8}", inner, 0..8)
+                    .prop_map(|map| Value::Object(map.into_iter().collect())),
+            ]
+        })
+    }
+
+    fn method_name() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("Core/echo".to_owned()),
+            Just("Mailbox/get".to_owned()),
+            Just("Mailbox/set".to_owned()),
+            Just("Email/get".to_owned()),
+            Just("Email/query".to_owned()),
+            Just("Email/set".to_owned()),
+            Just("Email/import".to_owned()),
+            Just("EmailSubmission/set".to_owned()),
+            Just("AddressBook/get".to_owned()),
+            Just("AddressBook/set".to_owned()),
+            Just("ContactCard/get".to_owned()),
+            Just("ContactCard/query".to_owned()),
+            Just("Calendar/get".to_owned()),
+            Just("Calendar/set".to_owned()),
+            Just("CalendarEvent/get".to_owned()),
+            Just("CalendarEvent/set".to_owned()),
+            Just("Blob/upload".to_owned()),
+            Just("Quota/get".to_owned()),
+            ".{0,24}",
+        ]
+    }
+
+    fn structured_request_body() -> impl Strategy<Value = Vec<u8>> {
+        prop::collection::vec((method_name(), json_value(), ".{0,8}"), 0..4).prop_map(|calls| {
+            let method_calls: Vec<Value> = calls
+                .into_iter()
+                .map(|(name, arguments, call_id)| {
+                    Value::Array(vec![Value::String(name), arguments, Value::String(call_id)])
+                })
+                .collect();
+            serde_json::to_vec(&json!({
+                "using": ["urn:ietf:params:jmap:core"],
+                "methodCalls": method_calls,
+            }))
+            .expect("generated request body serializes")
+        })
+    }
+
+    fn arbitrary_request_body() -> impl Strategy<Value = Vec<u8>> {
+        prop_oneof![
+            prop::collection::vec(any::<u8>(), 0..512),
+            structured_request_body(),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn dispatcher_never_panics_on_bad_request_body(body in arbitrary_request_body()) {
+            let mut state = ServerState::new();
+            state.add_account("A1", "test");
+
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                super::handle_api(&mut state, &body, None)
+            }));
+
+            prop_assert!(result.is_ok());
+        }
+    }
 
     #[test]
     fn pointer_object_and_array() {

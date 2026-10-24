@@ -42,3 +42,4 @@ sha2 = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-client = { workspace = true }
+proptest = { workspace = true }
