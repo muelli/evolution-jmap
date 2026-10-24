@@ -183,6 +183,34 @@ A right-click does not open the context menu of a message: the AT-SPI
 extents of an ETable cell point at the column header. The scenario uses the
 Menu key instead (`popup_menu()`).
 
+### `contact-photos` and `contact-photo-file`
+
+One collection account with an address book. The server has contacts with a
+photo. For each contact, the scenario does these steps and checks:
+
+1. The contact shows in the address book. The scenario reads the vCard of
+   the contact from the cache of Evolution (`cache.db`) and checks its
+   `PHOTO` line.
+2. Select the contact. The preview shows the contact.
+3. Change the full name in the contact editor and save. The server must have
+   the new name, and the photo on the server must not change.
+
+`contact-photos` has two contacts:
+
+- A photo with an `http:` URI. The cache must have the same URI. The
+  scenario serves the image on port 8091 of the local host. The preview must
+  not get the image: Evolution 3.52 shows a broken image for it.
+- A photo with a `data:` URI. EDS keeps the image in a file of the cache, so
+  the cache must have a `file:` URI of a file with the same bytes. The
+  preview shows the image.
+
+`contact-photo-file` starts the mock with `--contact-photo-uses-file-uri`, so
+the server gives the photo as a `file:` URI. The cache must have no `PHOTO`
+line, so Evolution never reads the local file. After the save, the server
+must still have its photo entry.
+
+The log must show no error of evolution-jmap.
+
 ## Write a scenario
 
 A scenario is a Python file in `ci/gui-scenario/scenarios/`. It calls
