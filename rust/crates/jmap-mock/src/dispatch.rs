@@ -875,6 +875,84 @@ mod tests {
     }
 
     #[test]
+    fn calendar_event_parse_dispatches_through_calendar_event_parse_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call(
+            "CalendarEvent/parse",
+            &json!({"accountId": "A1", "blobIds": []}),
+            "c1",
+        )
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("CalendarEvent/parse")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn calendar_event_notification_get_dispatches_through_notification_get_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call(
+            "CalendarEventNotification/get",
+            &json!({"accountId": "A1"}),
+            "c1",
+        )
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("CalendarEventNotification/get")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn calendar_event_notification_query_dispatches_through_notification_query_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call(
+            "CalendarEventNotification/query",
+            &json!({"accountId": "A1"}),
+            "c1",
+        )
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("CalendarEventNotification/query")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
     fn contact_card_query_dispatches_through_contact_card_query_handler() {
         let mut state = ServerState::new();
         state.add_account("A1", "test");
