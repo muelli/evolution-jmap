@@ -81,11 +81,7 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
                 match handle_method(state, &call.name, arguments, &created_ids, caller) {
                     Ok(result) => {
                         record_created_ids(&call.name, &result, &mut created_ids);
-                        Invocation {
-                            name: call.name.clone(),
-                            arguments: result,
-                            call_id: call.call_id.clone(),
-                        }
+                        Invocation::from_value(call.name.clone(), result, call.call_id.clone())
                     }
                     Err(method_error) => error_invocation(method_error, &call.call_id),
                 }
@@ -99,11 +95,7 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
         state.event_source.broadcast(&change);
     }
 
-    let response = Response {
-        method_responses: responses,
-        created_ids: None,
-        session_state: state.session_state(),
-    };
+    let response = Response::new(state.session_state()).with_method_responses(responses);
 
     let response_value = serde_json::to_value(&response).expect("response serializes");
     println!(
@@ -115,11 +107,11 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
 }
 
 fn error_invocation(error: MethodError, call_id: &str) -> Invocation {
-    Invocation {
-        name: "error".to_owned(),
-        arguments: serde_json::to_value(&error).expect("error serializes"),
-        call_id: call_id.to_owned(),
-    }
+    Invocation::from_value(
+        "error",
+        serde_json::to_value(&error).expect("error serializes"),
+        call_id,
+    )
 }
 
 /// Resolve `#argument` result references from earlier responses in this request.

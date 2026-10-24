@@ -344,11 +344,11 @@ impl Client {
         let get_call_id = self.next_call_id();
 
         let mut get = GetRequest::all(account_id.clone());
-        get.ids_ref = Some(ResultReference {
-            result_of: query_call_id.clone(),
-            name: "Email/query".to_owned(),
-            path: "/ids".to_owned(),
-        });
+        get.ids_ref = Some(ResultReference::new(
+            query_call_id.clone(),
+            "Email/query",
+            "/ids",
+        ));
         get.properties =
             properties.map(|properties| properties.iter().map(|s| s.to_string()).collect());
 

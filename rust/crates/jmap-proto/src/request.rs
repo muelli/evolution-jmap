@@ -15,6 +15,7 @@ use crate::id::Id;
 /// calls (RFC 8620 §3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Request {
     pub using: Vec<String>,
     pub method_calls: Vec<Invocation>,
@@ -52,6 +53,7 @@ impl Request {
 /// One method call or response: on the wire a three-element array of
 /// `[name, arguments, callId]` (RFC 8620 §3.2).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Invocation {
     pub name: String,
     pub arguments: Value,
@@ -115,6 +117,7 @@ impl<'de> Deserialize<'de> for Invocation {
 /// appears under a `#`-prefixed argument name (RFC 8620 §3.7, draft-ietf-jmap-refplus).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ResultReference {
     pub result_of: String,
     pub name: String,

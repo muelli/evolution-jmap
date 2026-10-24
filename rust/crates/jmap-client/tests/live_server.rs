@@ -4752,11 +4752,7 @@ fn protocol_edges_optimistic_locking_and_backreference_failures_through_the_real
 
     // 2. Back-reference failure when referenced call fails.
     let mut get_failed = GetRequest::all(account_id.clone());
-    get_failed.ids_ref = Some(ResultReference {
-        result_of: "c0".to_owned(),
-        name: "ContactCard/query".to_owned(),
-        path: "/ids".to_owned(),
-    });
+    get_failed.ids_ref = Some(ResultReference::new("c0", "ContactCard/query", "/ids"));
     let req_failed = Request::new([CAPABILITY_CORE, CAPABILITY_CONTACTS])
         .call("ContactCard/nonexistentQuery", &json!({}), "c0")
         .unwrap()
@@ -4777,11 +4773,7 @@ fn protocol_edges_optimistic_locking_and_backreference_failures_through_the_real
 
     // 3. Back-reference failure when referenced call succeeds but property path is missing.
     let mut get_bad_path = GetRequest::all(account_id.clone());
-    get_bad_path.ids_ref = Some(ResultReference {
-        result_of: "c0".to_owned(),
-        name: "Core/echo".to_owned(),
-        path: "/nonexistentPath".to_owned(),
-    });
+    get_bad_path.ids_ref = Some(ResultReference::new("c0", "Core/echo", "/nonexistentPath"));
     let req_bad_path = Request::new([CAPABILITY_CORE, CAPABILITY_CONTACTS])
         .call("Core/echo", &json!({"greeting": "hello"}), "c0")
         .unwrap()
@@ -4799,11 +4791,7 @@ fn protocol_edges_optimistic_locking_and_backreference_failures_through_the_real
 
     // 4. Successful back-reference resolution chaining Principal/query -> Principal/get.
     let mut get_success = GetRequest::all(account_id.clone());
-    get_success.ids_ref = Some(ResultReference {
-        result_of: "q0".to_owned(),
-        name: "Principal/query".to_owned(),
-        path: "/ids".to_owned(),
-    });
+    get_success.ids_ref = Some(ResultReference::new("q0", "Principal/query", "/ids"));
     let req_success = Request::new([CAPABILITY_CORE, CAPABILITY_PRINCIPALS])
         .call("Principal/query", &json!({"accountId": account_id}), "q0")
         .unwrap()
