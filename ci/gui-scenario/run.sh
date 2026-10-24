@@ -161,10 +161,17 @@ run_scenario() {
 		>"$out/transcript.txt" 2>&1 || verdict=$?
 
 	if [ "$verdict" -eq 0 ]; then
-		"${session_env[@]}" dbus-daemon --session --fork \
-			--print-address=3 --print-pid=4 \
-			3>"$run_dir/dbus-address" 4>"$run_dir/dbus-pid" 2>"$out/dbus.log"
-		PIDS+=("$(cat "$run_dir/dbus-pid")")
+		# Without --fork, the services that D-Bus starts (the registry and the
+		# factories) keep the standard error of the daemon, so their log goes
+		# to dbus.log.
+		"${session_env[@]}" dbus-daemon --session --nofork --print-address=3 \
+			3>"$run_dir/dbus-address" >"$out/dbus.log" 2>&1 &
+		PIDS+=($!)
+		local tries
+		for tries in $(seq 100); do
+			[ -s "$run_dir/dbus-address" ] && break
+			sleep 0.1
+		done
 		session_env+=(DBUS_SESSION_BUS_ADDRESS="$(cat "$run_dir/dbus-address")")
 
 		# at-spi2-registryd synthesizes input on the display, so the
