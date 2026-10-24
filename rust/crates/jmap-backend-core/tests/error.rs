@@ -16,7 +16,6 @@ use glib_sys::{GError, g_error_free};
 use jmap_backend_core::error::set_gerror;
 use jmap_client::Error;
 use jmap_proto::error::{MethodError, RequestError};
-use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::ptr;
 
@@ -93,12 +92,11 @@ fn protocol_level_failures_carry_their_description_into_the_message() {
 fn http_problem_details_reach_the_message() {
     let (_, code, message) = mapped(&Error::Http {
         status: 500,
-        problem: Some(RequestError {
-            error_type: "urn:ietf:params:jmap:error:serverFail".into(),
-            status: Some(500),
-            detail: Some("backend exploded".into()),
-            extra: BTreeMap::new(),
-        }),
+        problem: Some(
+            RequestError::new("urn:ietf:params:jmap:error:serverFail")
+                .with_status(500)
+                .with_detail("backend exploded"),
+        ),
     });
     assert_eq!(code, E_CLIENT_ERROR_OTHER_ERROR as i32);
     assert!(message.contains("backend exploded"), "{message}");

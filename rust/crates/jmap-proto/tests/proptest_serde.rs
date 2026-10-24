@@ -994,12 +994,14 @@ prop_compose! {
         properties in prop::option::of(prop::collection::vec("[a-z]{1,10}", 0..2)),
         extra in arb_extra(),
     ) -> SetError {
-        SetError {
-            error_type,
-            description,
-            properties,
-            extra,
+        let mut error = SetError::new(error_type).with_extra(extra);
+        if let Some(description) = description {
+            error = error.with_description(description);
         }
+        if let Some(properties) = properties {
+            error = error.with_properties(properties);
+        }
+        error
     }
 }
 
