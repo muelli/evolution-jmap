@@ -13,7 +13,6 @@ use jmap_proto::error::SetError;
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
-use jmap_proto::request::Request;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CORE};
 use serde::Deserialize;
 use serde_json::Value;
@@ -126,55 +125,21 @@ impl Client {
 
     /// Fetch calendar events by ID (RFC 8620 §2).
     ///
-    /// Splits requests into chunks when IDs exceed `maxObjectsInGet`.
+    /// Splits requests into chunks when IDs exceed `maxSizeRequest` or `maxObjectsInGet`.
     /// Executes at least one call when `ids` is empty.
     pub fn event_get(
         &self,
         account_id: &Id,
         ids: &[Id],
     ) -> Result<GetResponse<CalendarEvent>, Error> {
-        let max_objects = self
-            .session()
-            .max_objects_in_get()
-            .and_then(|limit| usize::try_from(limit).ok())
-            .filter(|&limit| limit > 0)
-            .unwrap_or(ids.len().max(1));
-
-        let mut combined: Option<GetResponse<CalendarEvent>> = None;
-        let mut rest = ids;
-        loop {
-            let take = rest.len().min(max_objects);
-            let (chunk, remaining) = rest.split_at(take);
-
-            let call_id = self.next_call_id();
-            let request = Request::new([CAPABILITY_CORE, CAPABILITY_CALENDARS]).call(
-                "CalendarEvent/get",
-                &GetRequest::ids(account_id.clone(), chunk.iter().cloned()),
-                &call_id,
-            )?;
-            let response = self.api_call(&request)?;
-            let invocation = response
-                .responses_for(&call_id)
-                .next()
-                .ok_or_else(|| Error::Protocol("no CalendarEvent/get response".to_owned()))?;
-            let arguments = Self::unwrap_invocation(invocation, "CalendarEvent/get")?;
-            let mut chunk_response: GetResponse<CalendarEvent> = serde_json::from_value(arguments)?;
-            Self::keep_requested(&mut chunk_response.list, chunk, |event| event.id.as_ref());
-            Self::keep_requested(&mut chunk_response.not_found, chunk, |id| Some(id));
-            match &mut combined {
-                None => combined = Some(chunk_response),
-                Some(combined) => {
-                    combined.list.extend(chunk_response.list);
-                    combined.not_found.extend(chunk_response.not_found);
-                    combined.state = chunk_response.state;
-                }
-            }
-
-            rest = remaining;
-            if rest.is_empty() {
-                return Ok(combined.expect("the loop always sets combined on its first iteration"));
-            }
-        }
+        self.get_chunked(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "CalendarEvent/get",
+            account_id,
+            ids,
+            None,
+            |event: &CalendarEvent| event.id.as_ref(),
+        )
     }
 
     /// Apply a patch to a calendar event (RFC 8620 PatchObject).

@@ -309,91 +309,15 @@ impl Client {
         ids: &[Id],
         properties: Option<&[&str]>,
     ) -> Result<Vec<Email>, Error> {
-        let limit = self.session().max_size_request();
-        let max_objects = self
-            .session()
-            .max_objects_in_get()
-            .and_then(|limit| usize::try_from(limit).ok())
-            .filter(|&limit| limit > 0);
-        let mut fetched: Vec<Email> = Vec::with_capacity(ids.len());
-        let mut rest = ids;
-        loop {
-            let call_id = self.next_call_id();
-            let mut take = match limit {
-                Some(limit) => self.ids_that_fit(account_id, rest, properties, &call_id, limit)?,
-                None => rest.len(),
-            };
-            if let Some(max_objects) = max_objects {
-                take = take.min(max_objects);
-            }
-            let (chunk, remaining) = rest.split_at(take);
-            let request = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL]).call(
-                "Email/get",
-                &Self::email_get_arguments(account_id, chunk, properties),
-                &call_id,
-            )?;
-            let response = self.api_call(&request)?;
-            let invocation = response
-                .responses_for(&call_id)
-                .next()
-                .ok_or_else(|| Error::Protocol("no Email/get response".to_owned()))?;
-            let arguments = Self::unwrap_invocation(invocation, "Email/get")?;
-            let mut get_response: GetResponse<Email> = serde_json::from_value(arguments)?;
-            Self::keep_requested(&mut get_response.list, chunk, |email| email.id.as_ref());
-            fetched.extend(get_response.list);
-
-            rest = remaining;
-            if rest.is_empty() {
-                return Ok(fetched);
-            }
-        }
-    }
-
-    /// The arguments of an `Email/get` naming `ids`.
-    fn email_get_arguments(account_id: &Id, ids: &[Id], properties: Option<&[&str]>) -> GetRequest {
-        let mut request = GetRequest::ids(account_id.clone(), ids.iter().cloned());
-        request.properties =
-            properties.map(|properties| properties.iter().map(|s| s.to_string()).collect());
-        request
-    }
-
-    /// How many of `ids`, from the front, an `Email/get` under `call_id` may
-    /// name before the request goes over `limit` octets.
-    ///
-    /// One serialization places boundaries on the exact byte count
-    /// [`Client::api_call`] will transmit.
-    ///
-    /// Returns [`Error::RequestTooLarge`] when even the first id does not fit.
-    fn ids_that_fit(
-        &self,
-        account_id: &Id,
-        ids: &[Id],
-        properties: Option<&[&str]>,
-        call_id: &str,
-        limit: u64,
-    ) -> Result<usize, Error> {
-        let empty = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL]).call(
+        let response = self.get_chunked(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
             "Email/get",
-            &Self::email_get_arguments(account_id, &[], properties),
-            call_id,
+            account_id,
+            ids,
+            properties,
+            |email: &Email| email.id.as_ref(),
         )?;
-        let mut used = serde_json::to_vec(&empty)?.len() as u64;
-
-        for (taken, id) in ids.iter().enumerate() {
-            // The comma that separates this id from the one before it.
-            let cost = serde_json::to_string(id)?.len() as u64 + u64::from(taken > 0);
-            if used + cost > limit {
-                if taken == 0 {
-                    return Err(Error::RequestTooLarge {
-                        size: used + cost,
-                        limit,
-                    });
-                }
-                return Ok(taken);
-            }
-            used += cost;
-        }
-        Ok(ids.len())
+        Ok(response.list)
     }
 
     /// `Email/query` chained to `Email/get` through a `#ids` back-reference in
@@ -583,34 +507,20 @@ impl Client {
         ids: impl IntoIterator<Item = impl Into<Id>>,
     ) -> Result<Vec<Thread>, Error> {
         let all_ids: Vec<Id> = ids.into_iter().map(Into::into).collect();
-        let max_objects = self
-            .session()
-            .max_objects_in_get()
-            .and_then(|limit| usize::try_from(limit).ok())
-            .filter(|&limit| limit > 0)
-            .unwrap_or(all_ids.len().max(1));
-
-        let mut fetched = Vec::with_capacity(all_ids.len());
-        let mut rest = all_ids.as_slice();
-        loop {
-            let take = rest.len().min(max_objects);
-            let (chunk, remaining) = rest.split_at(take);
-            let request = GetRequest::ids(account_id.clone(), chunk.iter().cloned());
-            let arguments =
-                self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Thread/get", &request)?;
-            let mut response: GetResponse<Thread> = serde_json::from_value(arguments)?;
-            Self::keep_requested(&mut response.list, chunk, |thread| thread.id.as_ref());
-            fetched.extend(response.list);
-            rest = remaining;
-            if rest.is_empty() {
-                return Ok(fetched);
-            }
-        }
+        let response = self.get_chunked(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "Thread/get",
+            account_id,
+            &all_ids,
+            None,
+            |thread: &Thread| thread.id.as_ref(),
+        )?;
+        Ok(response.list)
     }
 
     /// Fetch search snippets for email IDs (`SearchSnippet/get`, RFC 8621 Section 5.1).
     ///
-    /// Splits requests into chunks when IDs exceed `maxObjectsInGet`.
+    /// Splits requests into chunks when IDs exceed `maxSizeRequest` or `maxObjectsInGet`.
     /// Snippets contain matching text wrapped in HTML `<mark>` tags.
     /// `filter` specifies the query criteria used to locate matching text.
     /// Omitted or invalid IDs do not produce snippet entries.
@@ -621,37 +531,30 @@ impl Client {
         filter: Option<impl Into<Filter<EmailQueryFilter>>>,
     ) -> Result<Vec<SearchSnippet>, Error> {
         let all_ids: Vec<Id> = email_ids.into_iter().map(Into::into).collect();
-        let max_objects = self
-            .session()
-            .max_objects_in_get()
-            .and_then(|limit| usize::try_from(limit).ok())
-            .filter(|&limit| limit > 0)
-            .unwrap_or(all_ids.len().max(1));
-
         let filter_val: Option<Filter<EmailQueryFilter>> = filter.map(Into::into);
-        let mut fetched = Vec::with_capacity(all_ids.len());
-        let mut rest = all_ids.as_slice();
-        loop {
-            let take = rest.len().min(max_objects);
-            let (chunk, remaining) = rest.split_at(take);
-            let mut request =
-                SearchSnippetGetRequest::new(account_id.clone(), chunk.iter().cloned());
-            if let Some(f) = &filter_val {
-                request = request.with_filter(f.clone());
-            }
-            let arguments = self.single_call(
-                &[CAPABILITY_CORE, CAPABILITY_MAIL],
-                "SearchSnippet/get",
-                &request,
-            )?;
-            let mut response: SearchSnippetGetResponse = serde_json::from_value(arguments)?;
-            Self::keep_requested(&mut response.list, chunk, |snippet| Some(&snippet.email_id));
-            fetched.extend(response.list);
-            rest = remaining;
-            if rest.is_empty() {
-                return Ok(fetched);
-            }
-        }
+        let response = self.chunked_get_custom(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "SearchSnippet/get",
+            &all_ids,
+            |chunk| {
+                let mut req =
+                    SearchSnippetGetRequest::new(account_id.clone(), chunk.iter().cloned());
+                if let Some(f) = &filter_val {
+                    req = req.with_filter(f.clone());
+                }
+                req
+            },
+            |resp: SearchSnippetGetResponse| {
+                (
+                    resp.list,
+                    resp.not_found.unwrap_or_default(),
+                    None,
+                    resp.account_id,
+                )
+            },
+            |snippet: &SearchSnippet| Some(&snippet.email_id),
+        )?;
+        Ok(response.list)
     }
 
     /// Fetch the account's sending identities (`Identity/get`).
@@ -873,7 +776,7 @@ impl Client {
 
     /// Fetch EmailSubmissions by id (`EmailSubmission/get`, RFC 8621 §7.4).
     ///
-    /// Splits requests into chunks when IDs exceed `maxObjectsInGet`.
+    /// Splits requests into chunks when IDs exceed `maxSizeRequest` or `maxObjectsInGet`.
     /// An ID naming no submission is silently absent from the result.
     pub fn email_submission_get(
         &self,
@@ -881,34 +784,15 @@ impl Client {
         ids: impl IntoIterator<Item = impl Into<Id>>,
     ) -> Result<Vec<EmailSubmission>, Error> {
         let all_ids: Vec<Id> = ids.into_iter().map(Into::into).collect();
-        let max_objects = self
-            .session()
-            .max_objects_in_get()
-            .and_then(|limit| usize::try_from(limit).ok())
-            .filter(|&limit| limit > 0)
-            .unwrap_or(all_ids.len().max(1));
-
-        let mut fetched = Vec::with_capacity(all_ids.len());
-        let mut rest = all_ids.as_slice();
-        loop {
-            let take = rest.len().min(max_objects);
-            let (chunk, remaining) = rest.split_at(take);
-            let request = GetRequest::ids(account_id.clone(), chunk.iter().cloned());
-            let arguments = self.single_call(
-                &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
-                "EmailSubmission/get",
-                &request,
-            )?;
-            let mut response: GetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
-            Self::keep_requested(&mut response.list, chunk, |submission| {
-                submission.id.as_ref()
-            });
-            fetched.extend(response.list);
-            rest = remaining;
-            if rest.is_empty() {
-                return Ok(fetched);
-            }
-        }
+        let response = self.get_chunked(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/get",
+            account_id,
+            &all_ids,
+            None,
+            |submission: &EmailSubmission| submission.id.as_ref(),
+        )?;
+        Ok(response.list)
     }
 
     /// Resolve submission ids matching `filter` (`EmailSubmission/query`, RFC
@@ -1211,12 +1095,9 @@ mod tests {
         let ids = vec![Id::new("id_one"), Id::new("id_two"), Id::new("id_three")];
         let call_id = "c1";
 
+        let empty_req = GetRequest::ids(account_id, std::iter::empty::<Id>());
         let empty = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL])
-            .call(
-                "Email/get",
-                &Client::email_get_arguments(&account_id, &[], None),
-                call_id,
-            )
+            .call("Email/get", &empty_req, call_id)
             .unwrap();
         let base_used = serde_json::to_vec(&empty).unwrap().len() as u64;
 
@@ -1225,7 +1106,14 @@ mod tests {
         let cost2 = serde_json::to_string(&ids[2]).unwrap().len() as u64 + 1;
 
         let under_first = base_used + cost0 - 1;
-        let res = client.ids_that_fit(&account_id, &ids, None, call_id, under_first);
+        let res = client.ids_that_fit(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "Email/get",
+            &empty_req,
+            &ids,
+            call_id,
+            under_first,
+        );
         match res {
             Err(Error::RequestTooLarge { size, limit }) => {
                 assert_eq!(size, base_used + cost0);
@@ -1236,25 +1124,53 @@ mod tests {
 
         let exact_first = base_used + cost0;
         let res = client
-            .ids_that_fit(&account_id, &ids, None, call_id, exact_first)
+            .ids_that_fit(
+                &[CAPABILITY_CORE, CAPABILITY_MAIL],
+                "Email/get",
+                &empty_req,
+                &ids,
+                call_id,
+                exact_first,
+            )
             .unwrap();
         assert_eq!(res, 1);
 
         let under_second = base_used + cost0 + cost1 - 1;
         let res = client
-            .ids_that_fit(&account_id, &ids, None, call_id, under_second)
+            .ids_that_fit(
+                &[CAPABILITY_CORE, CAPABILITY_MAIL],
+                "Email/get",
+                &empty_req,
+                &ids,
+                call_id,
+                under_second,
+            )
             .unwrap();
         assert_eq!(res, 1);
 
         let exact_second = base_used + cost0 + cost1;
         let res = client
-            .ids_that_fit(&account_id, &ids, None, call_id, exact_second)
+            .ids_that_fit(
+                &[CAPABILITY_CORE, CAPABILITY_MAIL],
+                "Email/get",
+                &empty_req,
+                &ids,
+                call_id,
+                exact_second,
+            )
             .unwrap();
         assert_eq!(res, 2);
 
         let all_fit = base_used + cost0 + cost1 + cost2;
         let res = client
-            .ids_that_fit(&account_id, &ids, None, call_id, all_fit)
+            .ids_that_fit(
+                &[CAPABILITY_CORE, CAPABILITY_MAIL],
+                "Email/get",
+                &empty_req,
+                &ids,
+                call_id,
+                all_fit,
+            )
             .unwrap();
         assert_eq!(res, 3);
     }

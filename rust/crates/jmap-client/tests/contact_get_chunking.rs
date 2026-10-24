@@ -109,3 +109,41 @@ fn contact_get_with_no_ids_still_reaches_the_server_for_the_real_state() {
         "state must advance after a create, proving the empty-ids call reached the server"
     );
 }
+
+/// `Client::contact_get` naming more ids than `maxSizeRequest` splits across
+/// requests so every card is still fetched.
+#[test]
+fn contact_get_splits_across_max_size_request() {
+    let server = MockServer::builder().size_request(220).start();
+    let (account_id, ids) = {
+        let account_id = server.account_id();
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let book = account.seed_address_book("Personal", true);
+        let ids: Vec<Id> = (0..20)
+            .map(|i| {
+                let card_id = account.contact_cards.alloc_id();
+                let mut card = ContactCard::simple(
+                    book.clone(),
+                    &format!("Card {i}"),
+                    &format!("c{i}@example.com"),
+                );
+                card.id = Some(card_id.clone());
+                account.contact_cards.seed_with_id(card_id.clone(), card);
+                card_id
+            })
+            .collect();
+        (account_id, ids)
+    };
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let before = server.api_requests();
+    let response = client.contact_get(&account_id, &ids).unwrap();
+
+    assert_eq!(response.list.len(), 20);
+    assert!(
+        server.api_requests() - before > 1,
+        "expected several requests"
+    );
+}
