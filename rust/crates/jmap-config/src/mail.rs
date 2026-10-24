@@ -120,7 +120,7 @@ use crate::account::{Account, as_ptr};
 /// is no second service, as `smtp` is beside `imapx`.
 ///
 /// [prepare_mail]: ../../jmap_backend_collection/prepare_mail/constant.MAIL_BACKEND_NAME.html
-pub const MAIL_BACKEND_NAME: &CStr = c"jmap";
+pub const MAIL_BACKEND_NAME: &CStr = jmap_backend_core::BACKEND_NAME;
 
 /// The `[Security] Method` of a mail source when the connection is encrypted.
 ///

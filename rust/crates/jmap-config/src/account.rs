@@ -151,7 +151,10 @@ use jmap_collection_sync::child_source::Connection;
 /// entry. `tests/account.rs` compares it with
 /// [the `FACTORY_NAME` of the collection factory](../../jmap_backend_collection/factory/constant.FACTORY_NAME.html),
 /// which is the name that the module registers.
-pub const BACKEND_NAME: &str = "jmap";
+pub const BACKEND_NAME: &str = match jmap_backend_core::BACKEND_NAME.to_str() {
+    Ok(name) => name,
+    Err(_) => panic!("the backend name is UTF-8"),
+};
 
 /// An account, in the shape that the setup has before it is a source.
 ///
