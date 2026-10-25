@@ -120,7 +120,7 @@ impl JmapCollectionBackend {
     ///
     /// Reads one field of the half of the instance struct that this crate
     /// owns, and touches no parent bytes. Thus, with `dup_resource_id`, it is
-    /// safe to call on a [`detached`](Self::detached) instance.
+    /// safe to call on a `detached` instance.
     pub fn watch(&self) -> &AccountWatch {
         &self.watch
     }

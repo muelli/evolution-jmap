@@ -390,7 +390,7 @@ pub fn kind_noun(kind: ChildKind) -> &'static str {
 /// caller, the two cases are the same: this operation has no password, and in
 /// both cases the prompt is the useful message for the user.
 ///
-/// **[`classify_lookup_failure`] selects the log channel for that line**, and this
+/// **`classify_lookup_failure` selects the log channel for that line**, and this
 /// is important. Most failures of that call are not real failures. An OAuth 2.0
 /// account returns `G_IO_ERROR_NOT_SUPPORTED`, and then the token path works
 /// correctly. A keyring that is still empty returns `G_IO_ERROR_NOT_FOUND`, and
