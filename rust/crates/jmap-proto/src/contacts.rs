@@ -18,6 +18,7 @@ use crate::state::UtcDate;
 /// An address book (RFC 9610 §2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AddressBook {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -51,6 +52,11 @@ impl AddressBook {
         }
     }
 
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
@@ -68,6 +74,21 @@ impl AddressBook {
 
     pub fn is_subscribed(mut self, is_subscribed: bool) -> Self {
         self.is_subscribed = Some(is_subscribed);
+        self
+    }
+
+    pub fn with_my_rights(mut self, my_rights: AddressBookRights) -> Self {
+        self.my_rights = Some(my_rights);
+        self
+    }
+
+    pub fn with_share_with(mut self, share_with: BTreeMap<Id, AddressBookRights>) -> Self {
+        self.share_with = Some(share_with);
+        self
+    }
+
+    pub fn with_may_delete(mut self, may_delete: bool) -> Self {
+        self.may_delete = Some(may_delete);
         self
     }
 

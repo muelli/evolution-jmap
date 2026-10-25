@@ -407,18 +407,18 @@ prop_compose! {
         share_with in prop::option::of(prop::collection::btree_map(arb_id(), arb_address_book_rights(), 0..2)),
         extra in arb_extra(),
     ) -> AddressBook {
-        AddressBook {
-            id,
-            name,
-            description,
-            sort_order,
-            is_default,
-            is_subscribed,
-            my_rights,
-            share_with,
-            may_delete: None,
-            extra,
-        }
+        let mut book = AddressBook::default();
+        book.id = id;
+        book.name = name;
+        book.description = description;
+        book.sort_order = sort_order;
+        book.is_default = is_default;
+        book.is_subscribed = is_subscribed;
+        book.my_rights = my_rights;
+        book.share_with = share_with;
+        book.may_delete = None;
+        book.extra = extra;
+        book
     }
 }
 

@@ -433,13 +433,10 @@ impl AccountState {
     /// Seed an address book and return its id without bumping state.
     pub fn seed_address_book(&mut self, name: &str, is_default: bool) -> Id {
         let id = self.address_books.alloc_id();
-        let book = AddressBook {
-            id: Some(id.clone()),
-            name: name.to_owned(),
-            is_default: Some(is_default),
-            is_subscribed: Some(true),
-            ..AddressBook::default()
-        };
+        let book = AddressBook::new(name)
+            .with_id(id.clone())
+            .is_default(is_default)
+            .is_subscribed(true);
         self.address_books.seed_with_id(id.clone(), book);
         id
     }

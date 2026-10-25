@@ -455,10 +455,7 @@ fn address_book_create_then_destroy_round_trips_through_the_real_api() {
         .expect("the write-test account needs the contacts capability");
 
     let name = format!("agent-livewrite-{}", unique_suffix());
-    let book = AddressBook {
-        name: name.clone(),
-        ..AddressBook::default()
-    };
+    let book = AddressBook::new(name.clone());
 
     let created = client
         .address_book_create(&account_id, &book)

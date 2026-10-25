@@ -439,13 +439,10 @@ fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
         .with_may_share(true)
         .with_may_delete(false);
 
-    let book = AddressBook {
-        id: Some("ab1".into()),
-        name: "Shared Team Contacts".to_owned(),
-        share_with: Some(BTreeMap::from([("usr_alice".into(), rights.clone())])),
-        my_rights: Some(rights.clone()),
-        ..AddressBook::default()
-    };
+    let book = AddressBook::new("Shared Team Contacts")
+        .with_id("ab1")
+        .with_share_with(BTreeMap::from([("usr_alice".into(), rights.clone())]))
+        .with_my_rights(rights.clone());
 
     let b_val = serde_json::to_value(&book).unwrap();
     assert_eq!(b_val["shareWith"]["usr_alice"]["mayRead"], true);
@@ -507,12 +504,9 @@ fn jscontact_spec_properties_roundtrip() {
     use jmap_proto::state::UtcDate;
     use std::collections::BTreeMap;
 
-    let book = AddressBook {
-        id: Some("ab_custom".into()),
-        name: "Custom Book".to_owned(),
-        my_rights: Some(AddressBookRights::all()),
-        ..AddressBook::default()
-    };
+    let book = AddressBook::new("Custom Book")
+        .with_id("ab_custom")
+        .with_my_rights(AddressBookRights::all());
     let b_json = serde_json::to_value(&book).unwrap();
     assert_eq!(b_json["myRights"]["mayDelete"], true);
     assert_eq!(serde_json::from_value::<AddressBook>(b_json).unwrap(), book);

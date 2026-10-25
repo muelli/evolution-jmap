@@ -115,10 +115,7 @@ fn main() {
     let book = alice
         .address_book_create(
             &alice_account,
-            &AddressBook {
-                name: "agent-sharing-probe book".into(),
-                ..Default::default()
-            },
+            &AddressBook::new("agent-sharing-probe book"),
         )
         .expect("AddressBook/set create");
     let book_id = book.id.clone().expect("server-set address book id");

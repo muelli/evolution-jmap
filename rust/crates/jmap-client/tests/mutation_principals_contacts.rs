@@ -1236,10 +1236,7 @@ fn set_failure_protocol_error_when_set_response_has_neither_success_nor_error() 
     });
 
     let account_id = Id::new("acc1");
-    let book = AddressBook {
-        name: "Test Book".to_owned(),
-        ..AddressBook::default()
-    };
+    let book = AddressBook::new("Test Book");
     let err = client
         .address_book_create(&account_id, &book)
         .expect_err("must fail when server returns empty created map");

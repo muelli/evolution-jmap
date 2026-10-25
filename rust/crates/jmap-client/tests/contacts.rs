@@ -63,10 +63,7 @@ fn address_book_create() {
     let (server, account_id, _personal) = server_with_book();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
-    let book = AddressBook {
-        name: "Work".to_owned(),
-        ..AddressBook::default()
-    };
+    let book = AddressBook::new("Work");
     let created = client.address_book_create(&account_id, &book).unwrap();
 
     let id = created.id.expect("server assigned id");
@@ -100,11 +97,7 @@ fn address_book_create_rejects_client_supplied_id() {
     let (server, account_id, _book) = server_with_book();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
-    let book = AddressBook {
-        id: Some(Id::new("AB999")),
-        name: "Sneaky".to_owned(),
-        ..AddressBook::default()
-    };
+    let book = AddressBook::new("Sneaky").with_id(Id::new("AB999"));
     match client.address_book_create(&account_id, &book) {
         Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "invalidProperties"),
         other => panic!("expected Set error, got {other:?}"),
@@ -117,13 +110,7 @@ fn address_book_destroy() {
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
     let created = client
-        .address_book_create(
-            &account_id,
-            &AddressBook {
-                name: "Temporary".to_owned(),
-                ..AddressBook::default()
-            },
-        )
+        .address_book_create(&account_id, &AddressBook::new("Temporary"))
         .unwrap();
     let id = created.id.unwrap();
 

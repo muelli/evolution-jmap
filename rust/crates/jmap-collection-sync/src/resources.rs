@@ -344,10 +344,10 @@ mod tests {
     use super::*;
 
     fn book(id: Option<&str>, name: &str) -> AddressBook {
-        AddressBook {
-            id: id.map(Id::new),
-            name: name.to_owned(),
-            ..AddressBook::default()
+        let book = AddressBook::new(name);
+        match id {
+            Some(id) => book.with_id(Id::new(id)),
+            None => book,
         }
     }
 
