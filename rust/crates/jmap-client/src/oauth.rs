@@ -587,11 +587,7 @@ fn endpoint(name: &str, value: Option<String>) -> Result<Option<String>, Error> 
     let Some(value) = value else {
         return Ok(None);
     };
-    let scheme = value
-        .split_once("://")
-        .map(|(scheme, _)| scheme)
-        .unwrap_or_default();
-    if !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("http") {
+    if crate::url::split_http_scheme(&value).is_none() {
         return Err(Error::Protocol(format!(
             "{name} is {value}, which is not an absolute http(s) URL"
         )));

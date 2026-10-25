@@ -687,3 +687,28 @@ fn rebasing_accepts_a_session_that_advertises_a_foreign_plain_http_origin() {
     assert_eq!(client.echo(sent.clone()).unwrap(), sent);
     assert_eq!(server.api_requests(), 1);
 }
+
+/// A redirect location with an uppercase scheme resolves to the target server.
+#[test]
+fn a_redirect_location_with_uppercase_scheme_resolves_to_absolute_target() {
+    let foreign = UnauthorizedForeignHost::start();
+    let foreign_without_scheme = foreign
+        .origin()
+        .strip_prefix("http://")
+        .expect("plain http origin");
+    let upper_target = format!("HTTP://{foreign_without_scheme}/jmap/session");
+    let server = RedirectingServer::start(&upper_target);
+
+    let result = Client::connect(server.origin(), Credentials::basic("agent", "sekret"));
+
+    match result {
+        Err(Error::RedirectCredentialsWithheld {
+            requested,
+            followed,
+        }) => {
+            assert_eq!(requested, server.origin());
+            assert_eq!(followed, foreign.origin());
+        }
+        other => panic!("expected Error::RedirectCredentialsWithheld, got {other:?}"),
+    }
+}

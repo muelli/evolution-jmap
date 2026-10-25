@@ -499,11 +499,7 @@ fn parse_url(url: &str) -> Option<UrlParts> {
     if url.bytes().any(|byte| byte <= b' ' || byte == 0x7f) {
         return None;
     }
-    let (tls, rest) = if let Some(rest) = url.strip_prefix("https://") {
-        (true, rest)
-    } else {
-        (false, url.strip_prefix("http://")?)
-    };
+    let (tls, rest) = crate::url::split_http_scheme(url)?;
     let slash = rest.find('/').unwrap_or(rest.len());
     let authority = rest[..slash].to_owned();
     let path_and_query = if slash < rest.len() {
@@ -831,6 +827,26 @@ mod tests {
         assert!(parts.tls);
         assert_eq!(parts.host, "example.com");
         assert_eq!(parts.path_and_query, "/eventsource");
+    }
+
+    #[test]
+    fn parse_url_recognizes_scheme_case_insensitively() {
+        let tls = parse_url("HTTPS://example.com:443/eventsource").expect("parses HTTPS");
+        assert!(tls.tls);
+        assert_eq!(tls.host, "example.com");
+        assert_eq!(tls.path_and_query, "/eventsource");
+
+        let mixed_tls = parse_url("Https://example.com/eventsource").expect("parses Https");
+        assert!(mixed_tls.tls);
+        assert_eq!(mixed_tls.dial, "example.com:443");
+
+        let plain = parse_url("HTTP://example.com:80/eventsource").expect("parses HTTP");
+        assert!(!plain.tls);
+        assert_eq!(plain.host, "example.com");
+
+        let mixed_plain = parse_url("Http://example.com/eventsource").expect("parses Http");
+        assert!(!mixed_plain.tls);
+        assert_eq!(mixed_plain.dial, "example.com:80");
     }
 
     #[test]
