@@ -156,11 +156,7 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
             let created = client
                 .calendar_create(
                     &account.id,
-                    &Calendar {
-                        name: requested.display_name.clone(),
-                        is_subscribed: Some(true),
-                        ..Calendar::default()
-                    },
+                    &Calendar::new(requested.display_name.clone()).is_subscribed(true),
                 )
                 .inspect_err(|error| {
                     tracing::warn!(account_id, ?kind, %error, "collection create failed");

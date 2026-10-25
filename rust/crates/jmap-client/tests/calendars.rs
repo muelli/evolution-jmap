@@ -70,10 +70,7 @@ fn calendar_create() {
     let (server, account_id, _personal) = server_with_calendar();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
-    let calendar = Calendar {
-        name: "Work".to_owned(),
-        ..Calendar::default()
-    };
+    let calendar = Calendar::new("Work");
     let created = client.calendar_create(&account_id, &calendar).unwrap();
 
     let id = created.id.expect("server assigned id");
@@ -107,11 +104,7 @@ fn calendar_create_rejects_client_supplied_id() {
     let (server, account_id, _calendar) = server_with_calendar();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
-    let calendar = Calendar {
-        id: Some(Id::new("CAL999")),
-        name: "Sneaky".to_owned(),
-        ..Calendar::default()
-    };
+    let calendar = Calendar::new("Sneaky").with_id(Id::new("CAL999"));
     match client.calendar_create(&account_id, &calendar) {
         Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "invalidProperties"),
         other => panic!("expected Set error, got {other:?}"),
@@ -124,13 +117,7 @@ fn calendar_destroy() {
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
     let created = client
-        .calendar_create(
-            &account_id,
-            &Calendar {
-                name: "Temporary".to_owned(),
-                ..Calendar::default()
-            },
-        )
+        .calendar_create(&account_id, &Calendar::new("Temporary"))
         .unwrap();
     let id = created.id.unwrap();
 

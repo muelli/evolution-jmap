@@ -722,22 +722,22 @@ prop_compose! {
         may_delete in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> Calendar {
-        Calendar {
-            id,
-            name,
-            description,
-            color,
-            sort_order,
-            is_default,
-            is_subscribed,
-            is_visible,
-            include_in_availability,
-            time_zone,
-            my_rights,
-            share_with,
-            may_delete,
-            extra,
-        }
+        let mut calendar = Calendar::default();
+        calendar.id = id;
+        calendar.name = name;
+        calendar.description = description;
+        calendar.color = color;
+        calendar.sort_order = sort_order;
+        calendar.is_default = is_default;
+        calendar.is_subscribed = is_subscribed;
+        calendar.is_visible = is_visible;
+        calendar.include_in_availability = include_in_availability;
+        calendar.time_zone = time_zone;
+        calendar.my_rights = my_rights;
+        calendar.share_with = share_with;
+        calendar.may_delete = may_delete;
+        calendar.extra = extra;
+        calendar
     }
 }
 

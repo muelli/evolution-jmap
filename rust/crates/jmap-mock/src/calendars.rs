@@ -849,13 +849,10 @@ impl AccountState {
     /// Seed a calendar and return its id. Do not bump state.
     pub fn seed_calendar(&mut self, name: &str, is_default: bool) -> Id {
         let id = self.calendars.alloc_id();
-        let calendar = Calendar {
-            id: Some(id.clone()),
-            name: name.to_owned(),
-            is_default: Some(is_default),
-            is_subscribed: Some(true),
-            ..Calendar::default()
-        };
+        let calendar = Calendar::new(name)
+            .with_id(id.clone())
+            .is_default(is_default)
+            .is_subscribed(true);
         self.calendars.seed_with_id(id.clone(), calendar);
         id
     }

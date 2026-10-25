@@ -629,13 +629,14 @@ fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
         .with_may_share(false)
         .with_may_delete(false);
 
-    let cal = Calendar {
-        id: Some("cal1".into()),
-        name: "Shared Team Calendar".to_owned(),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        share_with: Some(BTreeMap::from([("usr_bob".into(), rights.clone())])),
-        my_rights: Some(rights.clone()),
-        ..Calendar::default()
+    let cal = {
+        let mut c = Calendar::default();
+        c.id = Some("cal1".into());
+        c.name = "Shared Team Calendar".to_owned();
+        c.time_zone = Some("Europe/Berlin".to_owned());
+        c.share_with = Some(BTreeMap::from([("usr_bob".into(), rights.clone())]));
+        c.my_rights = Some(rights.clone());
+        c
     };
 
     let c_val = serde_json::to_value(&cal).unwrap();
@@ -684,12 +685,13 @@ fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
 fn calendar_and_event_spec_properties_roundtrip() {
     use jmap_proto::calendars::{Calendar, CalendarEvent};
 
-    let cal = Calendar {
-        id: Some("cal_spec".into()),
-        name: "Personal Schedule".to_owned(),
-        may_delete: Some(true),
-        color: Some("#336699".to_owned()),
-        ..Calendar::default()
+    let cal = {
+        let mut c = Calendar::default();
+        c.id = Some("cal_spec".into());
+        c.name = "Personal Schedule".to_owned();
+        c.may_delete = Some(true);
+        c.color = Some("#336699".to_owned());
+        c
     };
     let c_val = serde_json::to_value(&cal).unwrap();
     assert_eq!(c_val["mayDelete"], true);

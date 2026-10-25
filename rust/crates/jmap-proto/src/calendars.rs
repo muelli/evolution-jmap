@@ -27,6 +27,7 @@ type Principal = serde_json::Value;
 /// A calendar (draft §4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Calendar {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -71,6 +72,11 @@ impl Calendar {
         }
     }
 
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
@@ -103,6 +109,11 @@ impl Calendar {
 
     pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
         self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_my_rights(mut self, my_rights: CalendarRights) -> Self {
+        self.my_rights = Some(my_rights);
         self
     }
 

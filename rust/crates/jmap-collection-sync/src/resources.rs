@@ -436,16 +436,13 @@ mod tests {
             Some(false)
         );
 
-        let calendar_own_only = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Work".to_owned(),
-            my_rights: Some(
+        let calendar_own_only = Calendar::new("Work")
+            .with_id(Id::new("Cal1"))
+            .with_my_rights(
                 CalendarRights::default()
                     .with_may_write_all(false)
                     .with_may_write_own(true),
-            ),
-            ..Calendar::default()
-        };
+            );
         assert_eq!(
             resources(vec![calendar_own_only], Subscription::Honoured)[0].writable,
             Some(true)
@@ -468,12 +465,9 @@ mod tests {
             Some(false)
         );
 
-        let calendar = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Work".to_owned(),
-            my_rights: Some(CalendarRights::default().with_may_delete(true)),
-            ..Calendar::default()
-        };
+        let calendar = Calendar::new("Work")
+            .with_id(Id::new("Cal1"))
+            .with_my_rights(CalendarRights::default().with_may_delete(true));
         assert_eq!(
             resources(vec![calendar], Subscription::Honoured)[0].deletable,
             Some(true)
@@ -484,12 +478,9 @@ mod tests {
     fn a_calendars_color_is_carried_and_an_address_books_never_is() {
         // `AddressBook` has no `color` property, so its color is always `None`.
         // A `Calendar` keeps the server's value unchanged.
-        let calendar = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Work".to_owned(),
-            color: Some("#ff8800".to_owned()),
-            ..Calendar::default()
-        };
+        let calendar = Calendar::new("Work")
+            .with_id(Id::new("Cal1"))
+            .with_color("#ff8800");
         assert_eq!(
             resources(vec![calendar], Subscription::Honoured)[0].color,
             Some("#ff8800".to_owned())
@@ -503,11 +494,7 @@ mod tests {
 
     #[test]
     fn a_calendar_the_server_named_no_color_for_carries_none() {
-        let calendar = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Work".to_owned(),
-            ..Calendar::default()
-        };
+        let calendar = Calendar::new("Work").with_id(Id::new("Cal1"));
         assert_eq!(
             resources(vec![calendar], Subscription::Honoured)[0].color,
             None
@@ -533,25 +520,19 @@ mod tests {
 
     #[test]
     fn a_calendars_order_default_and_rights_are_read_from_the_calendar() {
-        let late = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Alpha".to_owned(),
-            sort_order: Some(2),
-            ..Calendar::default()
-        };
-        let early = Calendar {
-            id: Some(Id::new("Cal2")),
-            name: "Beta".to_owned(),
-            sort_order: Some(1),
-            is_default: Some(true),
-            my_rights: Some(
+        let late = Calendar::new("Alpha")
+            .with_id(Id::new("Cal1"))
+            .with_sort_order(2);
+        let early = Calendar::new("Beta")
+            .with_id(Id::new("Cal2"))
+            .with_sort_order(1)
+            .is_default(true)
+            .with_my_rights(
                 CalendarRights::default()
                     .with_may_write_all(false)
                     .with_may_write_own(false)
                     .with_may_delete(false),
-            ),
-            ..Calendar::default()
-        };
+            );
 
         let resources = resources(vec![late, early], Subscription::Honoured);
 

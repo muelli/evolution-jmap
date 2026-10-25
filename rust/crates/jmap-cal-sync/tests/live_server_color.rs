@@ -49,13 +49,7 @@ fn setting_then_clearing_a_calendar_colour_round_trips_through_the_real_server()
 
     let display_name = format!("agent-calsync-color-{}", unique_suffix());
     let created = client
-        .calendar_create(
-            &account_id,
-            &Calendar {
-                name: display_name,
-                ..Default::default()
-            },
-        )
+        .calendar_create(&account_id, &Calendar::new(display_name))
         .expect("Calendar/set create failed against the real server");
     let calendar_id = created.id.clone().expect("the server named the calendar");
     assert_eq!(
