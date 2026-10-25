@@ -276,11 +276,10 @@ prop_compose! {
             Just(json!(null)),
         ]),
     ) -> Anniversary {
-        Anniversary {
-            kind,
-            date,
-            extra: BTreeMap::new(),
-        }
+        let mut v = Anniversary::default();
+        v.kind = kind;
+        v.date = date;
+        v
     }
 }
 
@@ -448,10 +447,10 @@ prop_compose! {
         if let Some(l) = label {
             extra.insert("label".to_string(), json!(l));
         }
-        Relation {
-            relation,
-            extra,
-        }
+        let mut v = Relation::default();
+        v.relation = relation;
+        v.extra = extra;
+        v
     }
 }
 

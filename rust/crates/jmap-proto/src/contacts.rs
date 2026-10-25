@@ -1109,6 +1109,7 @@ impl PartialDate {
 /// JSContact Anniversary (RFC 9553 §2.8.1): one memorable date.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Anniversary {
     /// `birth`, `death` or `wedding`. Mandatory per RFC 9553 §2.8.1, which gives it no default.
     #[serde(default)]
@@ -1535,6 +1536,7 @@ impl OnlineService {
 /// The entity key is a Card `uid` or free text (RFC 9555 §2.9.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Relation {
     /// Relation types the entity stands in (RFC 9553 §1.4.3 Set mapping types
     /// such as `spouse`, `child`, `colleague` to boolean values).

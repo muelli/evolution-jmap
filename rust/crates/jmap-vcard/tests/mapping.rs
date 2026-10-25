@@ -1592,14 +1592,12 @@ fn one_anniversary(kind: &str, date: serde_json::Value) -> ContactCard {
     {
         let mut card = ContactCard::default();
         card.anniversaries = Some(
-            [(
-                "y1".to_owned(),
-                Anniversary {
-                    kind: kind.to_owned(),
-                    date: Some(date),
-                    ..Anniversary::default()
-                },
-            )]
+            [("y1".to_owned(), {
+                let mut v = Anniversary::default();
+                v.kind = kind.to_owned();
+                v.date = Some(date);
+                v
+            })]
             .into(),
         );
         card
@@ -1783,30 +1781,24 @@ fn multiple_anniversaries_with_unmodeled_death_and_partial_dates_emit_only_full_
         let mut card = ContactCard::default();
         card.anniversaries = Some(
             [
-                (
-                    "y1".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(json!({"year": 1964})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y2".to_owned(),
-                    Anniversary {
-                        kind: "death".to_owned(),
-                        date: Some(json!({"year": 2019, "month": 10, "day": 15})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y3".to_owned(),
-                    Anniversary {
-                        kind: "wedding".to_owned(),
-                        date: Some(json!({"year": 1996, "month": 8, "day": 3})),
-                        ..Anniversary::default()
-                    },
-                ),
+                ("y1".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date = Some(json!({"year": 1964}));
+                    v
+                }),
+                ("y2".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "death".to_owned();
+                    v.date = Some(json!({"year": 2019, "month": 10, "day": 15}));
+                    v
+                }),
+                ("y3".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".to_owned();
+                    v.date = Some(json!({"year": 1996, "month": 8, "day": 3}));
+                    v
+                }),
             ]
             .into(),
         );
@@ -2330,18 +2322,16 @@ fn one_relation(key: &str, types: &[&str]) -> ContactCard {
     {
         let mut card = ContactCard::default();
         card.related_to = Some(
-            [(
-                key.to_owned(),
-                Relation {
-                    relation: Some(
-                        types
-                            .iter()
-                            .map(|kind| ((*kind).to_owned(), json!(true)))
-                            .collect(),
-                    ),
-                    ..Relation::default()
-                },
-            )]
+            [(key.to_owned(), {
+                let mut v = Relation::default();
+                v.relation = Some(
+                    types
+                        .iter()
+                        .map(|kind| ((*kind).to_owned(), json!(true)))
+                        .collect(),
+                );
+                v
+            })]
             .into(),
         );
         card
@@ -3791,13 +3781,11 @@ fn maps_nicknames_spouse_and_keywords_faithfully() {
         .collect(),
     );
     card.related_to = Some(
-        [(
-            "Alex Olden".to_owned(),
-            Relation {
-                relation: Some([("spouse".to_owned(), json!(true))].into_iter().collect()),
-                ..Relation::default()
-            },
-        )]
+        [("Alex Olden".to_owned(), {
+            let mut v = Relation::default();
+            v.relation = Some([("spouse".to_owned(), json!(true))].into_iter().collect());
+            v
+        })]
         .into_iter()
         .collect(),
     );
@@ -4549,28 +4537,31 @@ fn phone_feature_slot_resolution_order_is_fully_determined() {
 #[test]
 fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
     // Bare-year PartialDate stays unstated because vCard BDAY needs year-month-day.
-    let birth_bare_year = Anniversary {
-        kind: "birth".to_owned(),
-        date: Some(json!({"@type": "PartialDate", "year": 1984})),
-        ..Anniversary::default()
+    let birth_bare_year = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".to_owned();
+        v.date = Some(json!({"@type": "PartialDate", "year": 1984}));
+        v
     };
     assert!(!states_anniversary(&birth_bare_year));
     assert_eq!(anniversary_date(&birth_bare_year), None);
     assert!(!states_a_point_in_time(&birth_bare_year));
 
-    let wedding_bare_year = Anniversary {
-        kind: "wedding".to_owned(),
-        date: Some(json!({"@type": "PartialDate", "year": 1996})),
-        ..Anniversary::default()
+    let wedding_bare_year = {
+        let mut v = Anniversary::default();
+        v.kind = "wedding".to_owned();
+        v.date = Some(json!({"@type": "PartialDate", "year": 1996}));
+        v
     };
     assert!(!states_anniversary(&wedding_bare_year));
     assert_eq!(anniversary_date(&wedding_bare_year), None);
     assert!(!states_a_point_in_time(&wedding_bare_year));
 
-    let death_bare_year = Anniversary {
-        kind: "death".to_owned(),
-        date: Some(json!({"@type": "PartialDate", "year": 2019})),
-        ..Anniversary::default()
+    let death_bare_year = {
+        let mut v = Anniversary::default();
+        v.kind = "death".to_owned();
+        v.date = Some(json!({"@type": "PartialDate", "year": 2019}));
+        v
     };
     assert!(!states_anniversary(&death_bare_year));
     assert_eq!(anniversary_date(&death_bare_year), None);
@@ -4619,78 +4610,58 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
         let mut card = ContactCard::default();
         card.anniversaries = Some(
             [
-                (
-                    "y1".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(json!({"@type": "PartialDate", "year": 1984})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y2".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 1984, "month": 6, "day": 21}),
-                        ),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y3".to_owned(),
-                    Anniversary {
-                        kind: "wedding".to_owned(),
-                        date: Some(json!({"@type": "PartialDate", "year": 1996})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y4".to_owned(),
-                    Anniversary {
-                        kind: "wedding".to_owned(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}),
-                        ),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y5".to_owned(),
-                    Anniversary {
-                        kind: "death".to_owned(),
-                        date: Some(json!({"@type": "PartialDate", "year": 2019})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y6".to_owned(),
-                    Anniversary {
-                        kind: "death".to_owned(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 2019, "month": 10, "day": 15}),
-                        ),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y7".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 800, "month": 6, "day": 21}),
-                        ),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y8".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(json!({"@type": "PartialDate", "year": 800})),
-                        ..Anniversary::default()
-                    },
-                ),
+                ("y1".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date = Some(json!({"@type": "PartialDate", "year": 1984}));
+                    v
+                }),
+                ("y2".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 1984, "month": 6, "day": 21}));
+                    v
+                }),
+                ("y3".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".to_owned();
+                    v.date = Some(json!({"@type": "PartialDate", "year": 1996}));
+                    v
+                }),
+                ("y4".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".to_owned();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}));
+                    v
+                }),
+                ("y5".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "death".to_owned();
+                    v.date = Some(json!({"@type": "PartialDate", "year": 2019}));
+                    v
+                }),
+                ("y6".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "death".to_owned();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 2019, "month": 10, "day": 15}));
+                    v
+                }),
+                ("y7".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 800, "month": 6, "day": 21}));
+                    v
+                }),
+                ("y8".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date = Some(json!({"@type": "PartialDate", "year": 800}));
+                    v
+                }),
             ]
             .into(),
         );
@@ -4735,30 +4706,26 @@ fn bare_year_and_partial_dates_with_custom_attributes_roundtrip() {
         let mut card = ContactCard::default();
         card.anniversaries = Some(
             [
-                (
-                    "y1".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(json!({
-                            "@type": "PartialDate",
-                            "year": 2567,
-                            "calendarScale": "buddhist"
-                        })),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y2".to_owned(),
-                    Anniversary {
-                        kind: "wedding".to_owned(),
-                        date: Some(json!({
-                            "@type": "PartialDate",
-                            "year": 5784,
-                            "calendarScale": "hebrew"
-                        })),
-                        ..Anniversary::default()
-                    },
-                ),
+                ("y1".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date = Some(json!({
+                        "@type": "PartialDate",
+                        "year": 2567,
+                        "calendarScale": "buddhist"
+                    }));
+                    v
+                }),
+                ("y2".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".to_owned();
+                    v.date = Some(json!({
+                        "@type": "PartialDate",
+                        "year": 5784,
+                        "calendarScale": "hebrew"
+                    }));
+                    v
+                }),
             ]
             .into(),
         );
@@ -5146,47 +5113,59 @@ fn calendar_and_spouse_predicates_fidelity() {
     }));
 
     // Check `states_spouse` and `states_nothing_but_the_marriage`.
-    let rel_spouse_only = Relation {
-        relation: Some([("spouse".into(), json!(true))].into()),
-        extra: [("@type".into(), json!("Relation"))].into(),
+    let rel_spouse_only = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".into(), json!(true))].into());
+        v.extra = [("@type".into(), json!("Relation"))].into();
+        v
     };
     assert!(states_spouse("Bob", &rel_spouse_only));
     assert!(states_nothing_but_the_marriage(&rel_spouse_only));
 
-    let rel_no_extra = Relation {
-        relation: Some([("spouse".into(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_no_extra = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".into(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
     assert!(states_nothing_but_the_marriage(&rel_no_extra));
 
-    let rel_with_kin = Relation {
-        relation: Some([("spouse".into(), json!(true)), ("kin".into(), json!(true))].into()),
-        extra: [("@type".into(), json!("Relation"))].into(),
+    let rel_with_kin = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".into(), json!(true)), ("kin".into(), json!(true))].into());
+        v.extra = [("@type".into(), json!("Relation"))].into();
+        v
     };
     assert!(states_spouse("Bob", &rel_with_kin));
     assert!(!states_nothing_but_the_marriage(&rel_with_kin));
 
-    let rel_kin_only = Relation {
-        relation: Some([("kin".into(), json!(true))].into()),
-        extra: [("@type".into(), json!("Relation"))].into(),
+    let rel_kin_only = {
+        let mut v = Relation::default();
+        v.relation = Some([("kin".into(), json!(true))].into());
+        v.extra = [("@type".into(), json!("Relation"))].into();
+        v
     };
     assert!(!states_spouse("Bob", &rel_kin_only));
     assert!(!states_nothing_but_the_marriage(&rel_kin_only));
 
-    let rel_with_custom_extra = Relation {
-        relation: Some([("spouse".into(), json!(true))].into()),
-        extra: [
+    let rel_with_custom_extra = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".into(), json!(true))].into());
+        v.extra = [
             ("@type".into(), json!("Relation")),
             ("customField".into(), json!("value")),
         ]
-        .into(),
+        .into();
+        v
     };
     assert!(states_spouse("Bob", &rel_with_custom_extra));
     assert!(!states_nothing_but_the_marriage(&rel_with_custom_extra));
 
-    let rel_empty = Relation {
-        relation: None,
-        extra: [("@type".into(), json!("Relation"))].into(),
+    let rel_empty = {
+        let mut v = Relation::default();
+        v.relation = None;
+        v.extra = [("@type".into(), json!("Relation"))].into();
+        v
     };
     assert!(!states_spouse("Bob", &rel_empty));
     assert!(states_nothing_but_the_marriage(&rel_empty));
@@ -5346,55 +5325,65 @@ fn media_photo_and_online_service_predicates_and_comparisons() {
 
 #[test]
 fn anniversary_date_validation_and_point_in_time_predicates() {
-    let bday_valid = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 5, "day": 12})),
-        ..Anniversary::default()
+    let bday_valid = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 5, "day": 12}));
+        v
     };
-    let wedding_valid = Anniversary {
-        kind: "wedding".into(),
-        date: Some(json!({"year": 2010, "month": 6, "day": 20})),
-        ..Anniversary::default()
+    let wedding_valid = {
+        let mut v = Anniversary::default();
+        v.kind = "wedding".into();
+        v.date = Some(json!({"year": 2010, "month": 6, "day": 20}));
+        v
     };
-    let death_unmapped = Anniversary {
-        kind: "death".into(),
-        date: Some(json!({"year": 2020, "month": 1, "day": 1})),
-        ..Anniversary::default()
+    let death_unmapped = {
+        let mut v = Anniversary::default();
+        v.kind = "death".into();
+        v.date = Some(json!({"year": 2020, "month": 1, "day": 1}));
+        v
     };
-    let bday_month_zero = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 0, "day": 12})),
-        ..Anniversary::default()
+    let bday_month_zero = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 0, "day": 12}));
+        v
     };
-    let bday_month_13 = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 13, "day": 12})),
-        ..Anniversary::default()
+    let bday_month_13 = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 13, "day": 12}));
+        v
     };
-    let bday_day_zero = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 5, "day": 0})),
-        ..Anniversary::default()
+    let bday_day_zero = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 5, "day": 0}));
+        v
     };
-    let bday_day_32 = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 5, "day": 32})),
-        ..Anniversary::default()
+    let bday_day_32 = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 5, "day": 32}));
+        v
     };
-    let bday_year_zero = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 0, "month": 5, "day": 12})),
-        ..Anniversary::default()
+    let bday_year_zero = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 0, "month": 5, "day": 12}));
+        v
     };
-    let bday_year_10000 = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 10000, "month": 5, "day": 12})),
-        ..Anniversary::default()
+    let bday_year_10000 = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 10000, "month": 5, "day": 12}));
+        v
     };
-    let bday_timestamp = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"utc": "1990-05-12T10:30:00Z"})),
-        ..Anniversary::default()
+    let bday_timestamp = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"utc": "1990-05-12T10:30:00Z"}));
+        v
     };
 
     assert!(states_anniversary(&bday_valid));
@@ -5413,10 +5402,11 @@ fn anniversary_date_validation_and_point_in_time_predicates() {
 
     assert!(states_a_point_in_time(&bday_timestamp));
     assert!(!states_a_point_in_time(&bday_valid));
-    assert!(!states_a_point_in_time(&Anniversary {
-        kind: "birth".into(),
-        date: None,
-        ..Anniversary::default()
+    assert!(!states_a_point_in_time(&{
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = None;
+        v
     }));
 }
 
@@ -8543,13 +8533,12 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
     });
 
     let mut related_to = BTreeMap::new();
-    related_to.insert(
-        "Bob, Smith; Jr.\\II".to_owned(),
-        Relation {
-            relation: Some([("spouse".to_string(), json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
+    related_to.insert("Bob, Smith; Jr.\\II".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut emails = BTreeMap::new();
     emails.insert("e1".to_owned(), {
@@ -10373,13 +10362,12 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
     let mut related_to = BTreeMap::new();
     let mut spouse_rel = BTreeMap::new();
     spouse_rel.insert("spouse".to_owned(), json!(true));
-    related_to.insert(
-        "Hélène Müller-Mayer".to_owned(),
-        Relation {
-            relation: Some(spouse_rel),
-            extra: BTreeMap::new(),
-        },
-    );
+    related_to.insert("Hélène Müller-Mayer".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some(spouse_rel);
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -13170,29 +13158,41 @@ fn evolution_blog_and_video_urls_links_roundtrip() {
 #[test]
 fn evolution_remaining_x_properties_coexistence_and_predicates() {
     // Tests predicates: states_manager, states_assistant, states_spouse, states_link
-    let rel_valid_mgr = Relation {
-        relation: Some([("manager".to_string(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_valid_mgr = {
+        let mut v = Relation::default();
+        v.relation = Some([("manager".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_valid_asst = Relation {
-        relation: Some([("assistant".to_string(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_valid_asst = {
+        let mut v = Relation::default();
+        v.relation = Some([("assistant".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_valid_spouse = Relation {
-        relation: Some([("spouse".to_string(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_valid_spouse = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_other = Relation {
-        relation: Some([("colleague".to_string(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_other = {
+        let mut v = Relation::default();
+        v.relation = Some([("colleague".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_non_bool = Relation {
-        relation: Some([("manager".to_string(), json!(1))].into()),
-        extra: BTreeMap::new(),
+    let rel_non_bool = {
+        let mut v = Relation::default();
+        v.relation = Some([("manager".to_string(), json!(1))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_empty = Relation {
-        relation: None,
-        extra: BTreeMap::new(),
+    let rel_empty = {
+        let mut v = Relation::default();
+        v.relation = None;
+        v.extra = BTreeMap::new();
+        v
     };
 
     // Valid person names
@@ -16403,13 +16403,12 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
             .into(),
         );
         card.related_to = Some(
-            [(
-                "r1".to_string(),
-                Relation {
-                    relation: Some([("partner".to_string(), json!(true))].into()),
-                    extra: rel_extra,
-                },
-            )]
+            [("r1".to_string(), {
+                let mut v = Relation::default();
+                v.relation = Some([("partner".to_string(), json!(true))].into());
+                v.extra = rel_extra;
+                v
+            })]
             .into(),
         );
         card.extra = card_extra;
@@ -17354,49 +17353,43 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
 
     let mut related_to = BTreeMap::new();
     // Mapped relations (have EDS slots)
-    related_to.insert(
-        "Eve Spouse".to_owned(),
-        Relation {
-            relation: Some([("spouse".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
-    related_to.insert(
-        "Bob Manager".to_owned(),
-        Relation {
-            relation: Some([("manager".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
-    related_to.insert(
-        "Carol Assistant".to_owned(),
-        Relation {
-            relation: Some([("assistant".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
+    related_to.insert("Eve Spouse".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
+    related_to.insert("Bob Manager".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("manager".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
+    related_to.insert("Carol Assistant".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("assistant".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
     // Unmapped relations have no EDS slots: agent, child, colleague.
-    related_to.insert(
-        "David Agent".to_owned(),
-        Relation {
-            relation: Some([("agent".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
-    related_to.insert(
-        "Frank Child".to_owned(),
-        Relation {
-            relation: Some([("child".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
-    related_to.insert(
-        "Grace Colleague".to_owned(),
-        Relation {
-            relation: Some([("colleague".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
+    related_to.insert("David Agent".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("agent".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
+    related_to.insert("Frank Child".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("child".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
+    related_to.insert("Grace Colleague".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("colleague".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut media = BTreeMap::new();
     let photo = Media {
@@ -18907,52 +18900,45 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
         );
         card.anniversaries = Some(
             [
-                (
-                    "bday".to_string(),
-                    Anniversary {
-                        kind: "birth".into(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 1980, "month": 5, "day": 20}),
-                        ),
-                        extra: BTreeMap::new(),
-                    },
-                ),
-                (
-                    "anniv".to_string(),
-                    Anniversary {
-                        kind: "wedding".into(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 2008, "month": 10, "day": 12}),
-                        ),
-                        extra: BTreeMap::new(),
-                    },
-                ),
+                ("bday".to_string(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".into();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 1980, "month": 5, "day": 20}));
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("anniv".to_string(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".into();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 2008, "month": 10, "day": 12}));
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
         );
         card.related_to = Some(
             [
-                (
-                    "Spouse Partner".to_string(),
-                    Relation {
-                        relation: Some([("spouse".to_string(), json!(true))].into()),
-                        extra: BTreeMap::new(),
-                    },
-                ),
-                (
-                    "Manager Leader".to_string(),
-                    Relation {
-                        relation: Some([("manager".to_string(), json!(true))].into()),
-                        extra: BTreeMap::new(),
-                    },
-                ),
-                (
-                    "Assistant Helper".to_string(),
-                    Relation {
-                        relation: Some([("assistant".to_string(), json!(true))].into()),
-                        extra: BTreeMap::new(),
-                    },
-                ),
+                ("Spouse Partner".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("spouse".to_string(), json!(true))].into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("Manager Leader".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("manager".to_string(), json!(true))].into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("Assistant Helper".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("assistant".to_string(), json!(true))].into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
         );
@@ -19462,27 +19448,24 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
         );
         card.related_to = Some(
             [
-                (
-                    "Alice Spouse".to_string(),
-                    Relation {
-                        relation: Some([("spouse".to_string(), json!(true))].into()),
-                        extra: rel_extra_spouse,
-                    },
-                ),
-                (
-                    "Bob Agent".to_string(),
-                    Relation {
-                        relation: Some([("agent".to_string(), json!(true))].into()),
-                        extra: rel_extra_agent,
-                    },
-                ),
-                (
-                    "Carol Colleague".to_string(),
-                    Relation {
-                        relation: Some([("colleague".to_string(), json!(true))].into()),
-                        extra: BTreeMap::new(),
-                    },
-                ),
+                ("Alice Spouse".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("spouse".to_string(), json!(true))].into());
+                    v.extra = rel_extra_spouse;
+                    v
+                }),
+                ("Bob Agent".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("agent".to_string(), json!(true))].into());
+                    v.extra = rel_extra_agent;
+                    v
+                }),
+                ("Carol Colleague".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("colleague".to_string(), json!(true))].into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
         );
@@ -21585,38 +21568,30 @@ fn evolution_contact_editor_clamping_and_sync_diff_safety() {
     // Sync preserves unstated bare-year and death anniversaries without
     // generating phantom deletions or modifications.
     let mut anniversaries = BTreeMap::new();
-    anniversaries.insert(
-        "y1".to_owned(),
-        Anniversary {
-            kind: "birth".into(),
-            date: Some(json!({"@type": "PartialDate", "year": 1984})), // bare year
-            ..Anniversary::default()
-        },
-    );
-    anniversaries.insert(
-        "y2".to_owned(),
-        Anniversary {
-            kind: "wedding".into(),
-            date: Some(json!({"@type": "PartialDate", "year": 2005, "month": 11, "day": 15})), // full date
-            ..Anniversary::default()
-        },
-    );
-    anniversaries.insert(
-        "y3".to_owned(),
-        Anniversary {
-            kind: "death".into(),
-            date: Some(json!({"@type": "PartialDate", "year": 2020, "month": 1, "day": 15})), // death date
-            ..Anniversary::default()
-        },
-    );
-    anniversaries.insert(
-        "y4".to_owned(),
-        Anniversary {
-            kind: "birth".into(),
-            date: Some(json!({"@type": "Timestamp", "utc": "1990-05-12T10:30:00Z"})), // timestamp point-in-time
-            ..Anniversary::default()
-        },
-    );
+    anniversaries.insert("y1".to_owned(), {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"@type": "PartialDate", "year": 1984}));
+        v
+    });
+    anniversaries.insert("y2".to_owned(), {
+        let mut v = Anniversary::default();
+        v.kind = "wedding".into();
+        v.date = Some(json!({"@type": "PartialDate", "year": 2005, "month": 11, "day": 15}));
+        v
+    });
+    anniversaries.insert("y3".to_owned(), {
+        let mut v = Anniversary::default();
+        v.kind = "death".into();
+        v.date = Some(json!({"@type": "PartialDate", "year": 2020, "month": 1, "day": 15}));
+        v
+    });
+    anniversaries.insert("y4".to_owned(), {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"@type": "Timestamp", "utc": "1990-05-12T10:30:00Z"}));
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();

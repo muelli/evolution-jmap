@@ -780,10 +780,11 @@ fn arb_anniversary_cards() -> impl Strategy<Value = (ContactCard, ContactCard, C
         for (kind, slot) in [("birth", birth), ("wedding", wedding)] {
             let current_key = format!("c-{kind}");
             let edited_key = format!("e-{kind}");
-            let entry = |date: Value| Anniversary {
-                kind: kind.to_owned(),
-                date: Some(date),
-                extra: BTreeMap::new(),
+            let entry = |date: Value| {
+                let mut v = Anniversary::default();
+                v.kind = kind.to_owned();
+                v.date = Some(date);
+                v
             };
             match slot {
                 AnniversarySlot::Absent => {}
@@ -1020,10 +1021,9 @@ fn round_trips_to(
 const RELATION_KIND: &str = "spouse";
 
 fn bare_relation() -> Relation {
-    Relation {
-        relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
-        extra: BTreeMap::new(),
-    }
+    let mut v = Relation::default();
+    v.relation = Some([(RELATION_KIND.to_owned(), json!(true))].into());
+    v
 }
 
 fn card_with_related_to(map: BTreeMap<String, Relation>) -> ContactCard {
@@ -1100,43 +1100,37 @@ fn arb_related_to_cards() -> impl Strategy<Value = (ContactCard, ContactCard, Co
                     }
                     RelatedSlot::RemovedKeepsUnmappedKind => {
                         let key = format!("kept-kind-{i}");
-                        current.insert(
-                            key.clone(),
-                            Relation {
-                                relation: Some(
-                                    [
-                                        (RELATION_KIND.to_owned(), json!(true)),
-                                        ("kin".to_owned(), json!(true)),
-                                    ]
-                                    .into(),
-                                ),
-                                extra: BTreeMap::new(),
-                            },
-                        );
-                        expected.insert(
-                            key,
-                            Relation {
-                                relation: Some([("kin".to_owned(), json!(true))].into()),
-                                extra: BTreeMap::new(),
-                            },
-                        );
+                        current.insert(key.clone(), {
+                            let mut v = Relation::default();
+                            v.relation = Some(
+                                [
+                                    (RELATION_KIND.to_owned(), json!(true)),
+                                    ("kin".to_owned(), json!(true)),
+                                ]
+                                .into(),
+                            );
+                            v
+                        });
+                        expected.insert(key, {
+                            let mut v = Relation::default();
+                            v.relation = Some([("kin".to_owned(), json!(true))].into());
+                            v
+                        });
                     }
                     RelatedSlot::RemovedKeepsExtra(note) => {
                         let key = format!("kept-extra-{i}");
-                        current.insert(
-                            key.clone(),
-                            Relation {
-                                relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
-                                extra: [("note".to_owned(), json!(note))].into(),
-                            },
-                        );
-                        expected.insert(
-                            key,
-                            Relation {
-                                relation: Some(BTreeMap::new()),
-                                extra: [("note".to_owned(), json!(note))].into(),
-                            },
-                        );
+                        current.insert(key.clone(), {
+                            let mut v = Relation::default();
+                            v.relation = Some([(RELATION_KIND.to_owned(), json!(true))].into());
+                            v.extra = [("note".to_owned(), json!(note))].into();
+                            v
+                        });
+                        expected.insert(key, {
+                            let mut v = Relation::default();
+                            v.relation = Some(BTreeMap::new());
+                            v.extra = [("note".to_owned(), json!(note))].into();
+                            v
+                        });
                     }
                     RelatedSlot::AddedNew => {
                         let key = format!("brand-new-{i}");
@@ -1146,45 +1140,39 @@ fn arb_related_to_cards() -> impl Strategy<Value = (ContactCard, ContactCard, Co
                     }
                     RelatedSlot::AddedExistingWithRelation => {
                         let key = format!("existing-rel-{i}");
-                        current.insert(
-                            key.clone(),
-                            Relation {
-                                relation: Some([("kin".to_owned(), json!(true))].into()),
-                                extra: BTreeMap::new(),
-                            },
-                        );
+                        current.insert(key.clone(), {
+                            let mut v = Relation::default();
+                            v.relation = Some([("kin".to_owned(), json!(true))].into());
+                            v
+                        });
                         edited.insert(key.clone(), bare_relation());
-                        expected.insert(
-                            key,
-                            Relation {
-                                relation: Some(
-                                    [
-                                        ("kin".to_owned(), json!(true)),
-                                        (RELATION_KIND.to_owned(), json!(true)),
-                                    ]
-                                    .into(),
-                                ),
-                                extra: BTreeMap::new(),
-                            },
-                        );
+                        expected.insert(key, {
+                            let mut v = Relation::default();
+                            v.relation = Some(
+                                [
+                                    ("kin".to_owned(), json!(true)),
+                                    (RELATION_KIND.to_owned(), json!(true)),
+                                ]
+                                .into(),
+                            );
+                            v
+                        });
                     }
                     RelatedSlot::AddedExistingNoRelation(note) => {
                         let key = format!("existing-norel-{i}");
-                        current.insert(
-                            key.clone(),
-                            Relation {
-                                relation: None,
-                                extra: [("note".to_owned(), json!(note))].into(),
-                            },
-                        );
+                        current.insert(key.clone(), {
+                            let mut v = Relation::default();
+                            v.relation = None;
+                            v.extra = [("note".to_owned(), json!(note))].into();
+                            v
+                        });
                         edited.insert(key.clone(), bare_relation());
-                        expected.insert(
-                            key,
-                            Relation {
-                                relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
-                                extra: [("note".to_owned(), json!(note))].into(),
-                            },
-                        );
+                        expected.insert(key, {
+                            let mut v = Relation::default();
+                            v.relation = Some([(RELATION_KIND.to_owned(), json!(true))].into());
+                            v.extra = [("note".to_owned(), json!(note))].into();
+                            v
+                        });
                     }
                 }
             }

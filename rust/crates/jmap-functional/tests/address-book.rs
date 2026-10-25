@@ -987,43 +987,37 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     );
     card.anniversaries = Some(
         [
-            (
-                SEEDED_WEDDING_KEY.to_owned(),
-                Anniversary {
-                    kind: "wedding".to_owned(),
-                    date: Some(serde_json::json!({
-                        "@type": "PartialDate",
-                        "year": SEEDED_WEDDING_YEAR,
-                        "month": SEEDED_WEDDING_MONTH,
-                        "day": SEEDED_WEDDING_DAY,
-                    })),
-                    ..Anniversary::default()
-                },
-            ),
-            (
-                SEEDED_YEAR_BIRTHDAY_KEY.to_owned(),
-                Anniversary {
-                    kind: "birth".to_owned(),
-                    date: Some(serde_json::json!({
-                        "@type": "PartialDate",
-                        "year": SEEDED_BIRTH_YEAR,
-                    })),
-                    ..Anniversary::default()
-                },
-            ),
-            (
-                SEEDED_DEATHDAY_KEY.to_owned(),
-                Anniversary {
-                    kind: "death".to_owned(),
-                    date: Some(serde_json::json!({
-                        "@type": "PartialDate",
-                        "year": SEEDED_DEATH_YEAR,
-                        "month": SEEDED_DEATH_MONTH,
-                        "day": SEEDED_DEATH_DAY,
-                    })),
-                    ..Anniversary::default()
-                },
-            ),
+            (SEEDED_WEDDING_KEY.to_owned(), {
+                let mut v = Anniversary::default();
+                v.kind = "wedding".to_owned();
+                v.date = Some(serde_json::json!({
+                    "@type": "PartialDate",
+                    "year": SEEDED_WEDDING_YEAR,
+                    "month": SEEDED_WEDDING_MONTH,
+                    "day": SEEDED_WEDDING_DAY,
+                }));
+                v
+            }),
+            (SEEDED_YEAR_BIRTHDAY_KEY.to_owned(), {
+                let mut v = Anniversary::default();
+                v.kind = "birth".to_owned();
+                v.date = Some(serde_json::json!({
+                    "@type": "PartialDate",
+                    "year": SEEDED_BIRTH_YEAR,
+                }));
+                v
+            }),
+            (SEEDED_DEATHDAY_KEY.to_owned(), {
+                let mut v = Anniversary::default();
+                v.kind = "death".to_owned();
+                v.date = Some(serde_json::json!({
+                    "@type": "PartialDate",
+                    "year": SEEDED_DEATH_YEAR,
+                    "month": SEEDED_DEATH_MONTH,
+                    "day": SEEDED_DEATH_DAY,
+                }));
+                v
+            }),
         ]
         .into_iter()
         .collect(),
@@ -1121,10 +1115,9 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
 /// A `relatedTo` value with one relation type, as the Set of RFC 9553 §2.1.8:
 /// the type is a key and its value is `true`.
 fn relation_of(kind: &str) -> Relation {
-    Relation {
-        relation: Some([(kind.to_owned(), serde_json::json!(true))].into()),
-        ..Relation::default()
-    }
+    let mut v = Relation::default();
+    v.relation = Some([(kind.to_owned(), serde_json::json!(true))].into());
+    v
 }
 
 /// Check that the card on the server still has the seeded sibling, under the

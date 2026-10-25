@@ -1805,9 +1805,10 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 } else {
                     continue;
                 };
-                let entry_rel = related_to.entry(name).or_insert_with(|| Relation {
-                    relation: Some(BTreeMap::new()),
-                    extra: BTreeMap::new(),
+                let entry_rel = related_to.entry(name).or_insert_with(|| {
+                    let mut v = Relation::new();
+                    v.relation = Some(BTreeMap::new());
+                    v
                 });
                 if let Some(types) = &mut entry_rel.relation {
                     types.insert(relation_type, Value::Bool(true));
@@ -1829,10 +1830,11 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                             other if !other.is_empty() => other.to_owned(),
                             _ => "wedding".to_owned(),
                         };
-                        let anniversary = Anniversary {
-                            kind,
-                            date: Some(day.json()),
-                            extra: BTreeMap::new(),
+                        let anniversary = {
+                            let mut v = Anniversary::default();
+                            v.kind = kind;
+                            v.date = Some(day.json());
+                            v
                         };
                         let key = entry_param(entry, X_JMAP_KEY).filter(|k| !k.is_empty());
                         if let Some(k) = key.as_deref()
@@ -2146,11 +2148,10 @@ fn read_anniversary(entry: &VCardEntry) -> Option<Anniversary> {
     } else {
         return None;
     };
-    Some(Anniversary {
-        kind: kind.to_owned(),
-        date: Some(read_day(&entry_text(entry))?.json()),
-        extra: BTreeMap::new(),
-    })
+    let mut v = Anniversary::default();
+    v.kind = kind.to_owned();
+    v.date = Some(read_day(&entry_text(entry))?.json());
+    Some(v)
 }
 
 /// The seven `ADR` fields for an address, or `None` when no mapped component

@@ -546,7 +546,11 @@ prop_compose! {
         date in prop::option::of(arb_partial_date().prop_map(|pd| serde_json::to_value(pd).unwrap())),
         extra in arb_extra(),
     ) -> Anniversary {
-        Anniversary { kind, date, extra }
+        let mut v = Anniversary::default();
+        v.kind = kind;
+        v.date = date;
+        v.extra = extra;
+        v
     }
 }
 

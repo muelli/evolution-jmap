@@ -1318,28 +1318,24 @@ mod tests {
     /// patch into a sub-path that the same patch creates.
     #[test]
     fn a_new_relation_stating_two_mapped_kinds_at_once_is_written_once() {
-        let current: BTreeMap<String, Relation> = [(
-            "Alex Spouse".to_owned(),
-            Relation {
-                relation: Some([("spouse".to_owned(), json!(true))].into()),
-                extra: BTreeMap::new(),
-            },
-        )]
+        let current: BTreeMap<String, Relation> = [("Alex Spouse".to_owned(), {
+            let mut v = Relation::default();
+            v.relation = Some([("spouse".to_owned(), json!(true))].into());
+            v
+        })]
         .into();
         let mut edited = current.clone();
-        edited.insert(
-            "Jordan Multi".to_owned(),
-            Relation {
-                relation: Some(
-                    [
-                        ("manager".to_owned(), json!(true)),
-                        ("assistant".to_owned(), json!(true)),
-                    ]
-                    .into(),
-                ),
-                extra: BTreeMap::new(),
-            },
-        );
+        edited.insert("Jordan Multi".to_owned(), {
+            let mut v = Relation::default();
+            v.relation = Some(
+                [
+                    ("manager".to_owned(), json!(true)),
+                    ("assistant".to_owned(), json!(true)),
+                ]
+                .into(),
+            );
+            v
+        });
 
         let mut patch = Map::new();
         diff_related_to(&mut patch, Some(&current), Some(&edited));
@@ -1459,18 +1455,16 @@ mod tests {
         entries
             .iter()
             .map(|(key, kinds)| {
-                (
-                    (*key).to_owned(),
-                    Relation {
-                        relation: Some(
-                            kinds
-                                .iter()
-                                .map(|k| ((*k).to_owned(), json!(true)))
-                                .collect(),
-                        ),
-                        extra: BTreeMap::new(),
-                    },
-                )
+                ((*key).to_owned(), {
+                    let mut v = Relation::default();
+                    v.relation = Some(
+                        kinds
+                            .iter()
+                            .map(|k| ((*k).to_owned(), json!(true)))
+                            .collect(),
+                    );
+                    v
+                })
             })
             .collect()
     }
