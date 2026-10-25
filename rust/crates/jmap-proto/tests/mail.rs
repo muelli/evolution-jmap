@@ -504,11 +504,12 @@ fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
     let round_id: Identity = serde_json::from_value(id_val).unwrap();
     assert_eq!(round_id, identity);
 
-    let email = Email {
-        id: Some("em1".into()),
-        subject: Some("Report".to_owned()),
-        headers: Some(vec![EmailHeader::new("X-Custom", "value1")]),
-        ..Email::default()
+    let email = {
+        let mut email = Email::default();
+        email.id = Some("em1".into());
+        email.subject = Some("Report".to_owned());
+        email.headers = Some(vec![EmailHeader::new("X-Custom", "value1")]);
+        email
     };
 
     let em_val = serde_json::to_value(&email).unwrap();

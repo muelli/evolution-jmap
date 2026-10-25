@@ -1241,25 +1241,26 @@ fn send_email_delivers_to_a_second_account_on_the_real_server() {
     };
 
     let subject = format!("agent-livewrite-send-{}", unique_suffix());
-    let draft = Email {
-        mailbox_ids: Some([(drafts_id, true)].into()),
-        keywords: Some([(keyword::DRAFT.to_owned(), true)].into()),
-        from: Some(vec![EmailAddress::new(None, &sender_email)]),
-        to: Some(vec![EmailAddress::new(None, &recipient_email)]),
-        subject: Some(subject.clone()),
-        body_values: Some(
+    let draft = {
+        let mut email = Email::default();
+        email.mailbox_ids = Some([(drafts_id, true)].into());
+        email.keywords = Some([(keyword::DRAFT.to_owned(), true)].into());
+        email.from = Some(vec![EmailAddress::new(None, &sender_email)]);
+        email.to = Some(vec![EmailAddress::new(None, &recipient_email)]);
+        email.subject = Some(subject.clone());
+        email.body_values = Some(
             [(
                 "1".to_owned(),
                 EmailBodyValue::new("Delivered, not just accepted."),
             )]
             .into(),
-        ),
-        text_body: Some(vec![
+        );
+        email.text_body = Some(vec![
             EmailBodyPart::new()
                 .with_part_id("1")
                 .with_content_type("text/plain"),
-        ]),
-        ..Email::default()
+        ]);
+        email
     };
 
     let (created_email, submission) = sender

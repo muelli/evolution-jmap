@@ -1072,17 +1072,15 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
             email.received_at = Some(UtcDate::new(MOCK_NOW));
         }
 
-        created.insert(
-            creation_id,
-            Email {
-                id: Some(id.clone()),
-                blob_id: Some(blob_id),
-                thread_id: email.thread_id.clone(),
-                size: Some(size),
-                received_at: email.received_at.clone(),
-                ..Email::default()
-            },
-        );
+        created.insert(creation_id, {
+            let mut summary = Email::default();
+            summary.id = Some(id.clone());
+            summary.blob_id = Some(blob_id);
+            summary.thread_id = email.thread_id.clone();
+            summary.size = Some(size);
+            summary.received_at = email.received_at.clone();
+            summary
+        });
         to_create_threads.push((thread_id.clone(), Thread::new(thread_id, [id.clone()])));
         to_create.push((id, email));
     }
@@ -1237,16 +1235,14 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
         match imported(account, &import) {
             Ok(email) => {
                 // Return only the four RFC-selected server fields.
-                created.insert(
-                    creation_id,
-                    Email {
-                        id: email.id.clone(),
-                        blob_id: email.blob_id.clone(),
-                        thread_id: email.thread_id.clone(),
-                        size: email.size,
-                        ..Email::default()
-                    },
-                );
+                created.insert(creation_id, {
+                    let mut summary = Email::default();
+                    summary.id = email.id.clone();
+                    summary.blob_id = email.blob_id.clone();
+                    summary.thread_id = email.thread_id.clone();
+                    summary.size = email.size;
+                    summary
+                });
                 to_create.push((email.id.clone().expect("imported email has an id"), email));
             }
             Err(refusal) => {
@@ -1305,19 +1301,17 @@ pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, M
             not_parsable.push(id.clone());
             continue;
         };
-        let email = Email {
-            blob_id: Some(id.clone()),
-            size: Some(blob.data.len() as u64),
-            message_id: message.message_ids("message-id"),
-            in_reply_to: message.message_ids("in-reply-to"),
-            references: message.message_ids("references"),
-            from: message.addresses("from"),
-            to: message.addresses("to"),
-            cc: message.addresses("cc"),
-            subject: message.subject(),
-            preview: message.preview(),
-            ..Email::default()
-        };
+        let mut email = Email::default();
+        email.blob_id = Some(id.clone());
+        email.size = Some(blob.data.len() as u64);
+        email.message_id = message.message_ids("message-id");
+        email.in_reply_to = message.message_ids("in-reply-to");
+        email.references = message.message_ids("references");
+        email.from = message.addresses("from");
+        email.to = message.addresses("to");
+        email.cc = message.addresses("cc");
+        email.subject = message.subject();
+        email.preview = message.preview();
         parsed.insert(
             id.to_string(),
             project_properties(&email, request.properties.as_deref())?,
@@ -1352,27 +1346,25 @@ fn imported(
             .with_description("the blob is not an RFC 5322 message"));
     };
 
-    let mut email = Email {
-        blob_id: Some(blob_id),
-        mailbox_ids: import.mailbox_ids.clone(),
-        keywords: Some(import.keywords.clone().unwrap_or_default()),
-        size: Some(size),
-        received_at: Some(
-            import
-                .received_at
-                .clone()
-                .unwrap_or_else(|| UtcDate::new(MOCK_NOW)),
-        ),
-        message_id: message.message_ids("message-id"),
-        in_reply_to: message.message_ids("in-reply-to"),
-        references: message.message_ids("references"),
-        from: message.addresses("from"),
-        to: message.addresses("to"),
-        cc: message.addresses("cc"),
-        subject: message.subject(),
-        preview: message.preview(),
-        ..Email::default()
-    };
+    let mut email = Email::default();
+    email.blob_id = Some(blob_id);
+    email.mailbox_ids = import.mailbox_ids.clone();
+    email.keywords = Some(import.keywords.clone().unwrap_or_default());
+    email.size = Some(size);
+    email.received_at = Some(
+        import
+            .received_at
+            .clone()
+            .unwrap_or_else(|| UtcDate::new(MOCK_NOW)),
+    );
+    email.message_id = message.message_ids("message-id");
+    email.in_reply_to = message.message_ids("in-reply-to");
+    email.references = message.message_ids("references");
+    email.from = message.addresses("from");
+    email.to = message.addresses("to");
+    email.cc = message.addresses("cc");
+    email.subject = message.subject();
+    email.preview = message.preview();
     // Reuse the same mailboxIds validation path as Email/set.
     filed_somewhere(account, &email)?;
 
@@ -2045,32 +2037,30 @@ impl AccountState {
         let source = rfc5322(&id, &seed);
         // RFC 8621 §4.1 defines `size` as octets of the raw `blobId` payload.
         let size = source.len() as u64;
-        let email = Email {
-            id: Some(id.clone()),
-            blob_id: Some(self.add_blob("message/rfc822", source.into_bytes())),
-            thread_id: Some(new_thread_id(&id)),
-            mailbox_ids: Some([(seed.mailbox_id, true)].into()),
-            keywords: Some(
-                seed.keywords
-                    .into_iter()
-                    .map(|keyword| (keyword, true))
-                    .collect(),
-            ),
-            size: Some(size),
-            received_at: Some(seed.received_at),
-            from: Some(vec![seed.from]),
-            to: Some(seed.to),
-            cc: (!seed.cc.is_empty()).then_some(seed.cc),
-            bcc: (!seed.bcc.is_empty()).then_some(seed.bcc),
-            subject: Some(seed.subject),
-            has_attachment: Some(!attachments.is_empty()),
-            preview: Some(seed.text_body.chars().take(64).collect()),
-            body_values: Some([("1".to_owned(), EmailBodyValue::new(seed.text_body))].into()),
-            text_body: Some(vec![text_part]),
-            headers: (!seed.headers.is_empty()).then_some(seed.headers),
-            attachments: (!attachments.is_empty()).then_some(attachments),
-            ..Email::default()
-        };
+        let mut email = Email::default();
+        email.id = Some(id.clone());
+        email.blob_id = Some(self.add_blob("message/rfc822", source.into_bytes()));
+        email.thread_id = Some(new_thread_id(&id));
+        email.mailbox_ids = Some([(seed.mailbox_id, true)].into());
+        email.keywords = Some(
+            seed.keywords
+                .into_iter()
+                .map(|keyword| (keyword, true))
+                .collect(),
+        );
+        email.size = Some(size);
+        email.received_at = Some(seed.received_at);
+        email.from = Some(vec![seed.from]);
+        email.to = Some(seed.to);
+        email.cc = (!seed.cc.is_empty()).then_some(seed.cc);
+        email.bcc = (!seed.bcc.is_empty()).then_some(seed.bcc);
+        email.subject = Some(seed.subject);
+        email.has_attachment = Some(!attachments.is_empty());
+        email.preview = Some(seed.text_body.chars().take(64).collect());
+        email.body_values = Some([("1".to_owned(), EmailBodyValue::new(seed.text_body))].into());
+        email.text_body = Some(vec![text_part]);
+        email.headers = (!seed.headers.is_empty()).then_some(seed.headers);
+        email.attachments = (!attachments.is_empty()).then_some(attachments);
         (id, email)
     }
 }

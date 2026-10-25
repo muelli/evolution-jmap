@@ -309,39 +309,41 @@ prop_compose! {
         (message_id, from, to, subject) in arb_email_envelope(),
         (has_attachment, preview, body_structure, body_values, headers) in arb_email_content(),
     ) -> Email {
-        Email {
-            id,
-            blob_id,
-            thread_id,
-            mailbox_ids,
-            keywords,
-            snoozed,
-            size,
-            received_at,
-            message_id,
-            in_reply_to: None,
-            references: None,
-            sender: None,
-            from,
-            to,
-            cc: None,
-            bcc: None,
-            reply_to: None,
-            subject,
-            sent_at: None,
-            has_attachment,
-            preview,
-            body_structure,
-            body_values,
-            text_body: None,
-            html_body: None,
-            headers,
-            attachments: None,
-            smime_status: None,
-            smime_errors: None,
-            smime_verified_at: None,
-            extra,
-        }
+        {
+    let mut email = Email::default();
+    email.id = id;
+    email.blob_id = blob_id;
+    email.thread_id = thread_id;
+    email.mailbox_ids = mailbox_ids;
+    email.keywords = keywords;
+    email.snoozed = snoozed;
+    email.size = size;
+    email.received_at = received_at;
+    email.message_id = message_id;
+    email.in_reply_to = None;
+    email.references = None;
+    email.sender = None;
+    email.from = from;
+    email.to = to;
+    email.cc = None;
+    email.bcc = None;
+    email.reply_to = None;
+    email.subject = subject;
+    email.sent_at = None;
+    email.has_attachment = has_attachment;
+    email.preview = preview;
+    email.body_structure = body_structure;
+    email.body_values = body_values;
+    email.text_body = None;
+    email.html_body = None;
+    email.headers = headers;
+    email.attachments = None;
+    email.smime_status = None;
+    email.smime_errors = None;
+    email.smime_verified_at = None;
+    email.extra = extra;
+    email
+}
     }
 }
 

@@ -467,6 +467,7 @@ impl SnoozeDetails {
 /// what the client provides.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Email {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -589,6 +590,40 @@ impl Email {
 
     pub fn with_received_at(mut self, received_at: impl Into<UtcDate>) -> Self {
         self.received_at = Some(received_at.into());
+        self
+    }
+
+    pub fn with_sender(mut self, sender: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.sender = Some(sender.into_iter().collect());
+        self
+    }
+
+    pub fn with_message_id(
+        mut self,
+        message_id: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.message_id = Some(message_id.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_in_reply_to(
+        mut self,
+        in_reply_to: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.in_reply_to = Some(in_reply_to.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_references(
+        mut self,
+        references: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.references = Some(references.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_snoozed(mut self, snoozed: SnoozeDetails) -> Self {
+        self.snoozed = Some(snoozed);
         self
     }
 
