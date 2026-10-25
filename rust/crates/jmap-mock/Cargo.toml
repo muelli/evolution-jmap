@@ -4,6 +4,11 @@
 [package]
 name = "evolution-jmap-mock"
 description = "Stateful in-memory mock JMAP server for testing"
+repository = "https://gitlab.gnome.org/GNOME/evolution-jmap"
+readme = "README.md"
+documentation = "https://docs.rs/evolution-jmap-mock"
+keywords = ["jmap", "mock", "test", "email", "calendar"]
+categories = ["development-tools::testing", "email", "network-programming"]
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -20,13 +25,21 @@ name = "jmap_mock"
 name = "jmap-mockd"
 path = "src/bin/jmap-mockd.rs"
 
+[features]
+default = []
+parse = ["dep:evolution-jmap-ical", "dep:evolution-jmap-vcard"]
+
 [dependencies]
-evolution-jmap-proto = { workspace = true }
-evolution-jmap-ical = { workspace = true }
-evolution-jmap-vcard = { workspace = true }
+evolution-jmap-proto = { path = "../jmap-proto", version = "0.5.0" }
+evolution-jmap-ical = { path = "../jmap-ical", version = "0.5.0", optional = true }
+evolution-jmap-vcard = { path = "../jmap-vcard", version = "0.5.0", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tiny_http = { workspace = true }
 percent-encoding = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
+
+[dev-dependencies]
+evolution-jmap-client = { path = "../jmap-client", version = "0.5.0" }
+proptest = { workspace = true }

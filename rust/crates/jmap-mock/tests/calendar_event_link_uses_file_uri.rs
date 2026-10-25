@@ -50,31 +50,27 @@ fn api(server: &MockServer, body: Value) -> Value {
 }
 
 fn seed_calendar_event_with_link(server: &MockServer) -> String {
-    let state = server.state();
-    let mut state = state.lock().expect("state lock");
-    let account = state
-        .account_mut(&server.account_id())
-        .expect("default account exists");
+    server.with_account_mut(server.account_id(), |account| {
+        let event_id = account.calendar_events.alloc_id();
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.id = Some(event_id.clone());
+            event_out.links = Some(BTreeMap::from([(
+                "l1".to_owned(),
+                json!({
+                    "@type": "Link",
+                    "href": SAFE_LINK_URI,
+                    "title": "Agenda",
+                }),
+            )]));
+            event_out
+        };
+        account
+            .calendar_events
+            .seed_with_id(event_id.clone(), event);
 
-    let event_id = account.calendar_events.alloc_id();
-    let event = {
-        let mut event_out = CalendarEvent::default();
-        event_out.id = Some(event_id.clone());
-        event_out.links = Some(BTreeMap::from([(
-            "l1".to_owned(),
-            json!({
-                "@type": "Link",
-                "href": SAFE_LINK_URI,
-                "title": "Agenda",
-            }),
-        )]));
-        event_out
-    };
-    account
-        .calendar_events
-        .seed_with_id(event_id.clone(), event);
-
-    event_id.to_string()
+        event_id.to_string()
+    })
 }
 
 fn event_link_uri(server: &MockServer, event_id: &str) -> String {

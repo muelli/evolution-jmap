@@ -442,10 +442,92 @@ pub(crate) fn project_properties(
 
 #[cfg(test)]
 mod tests {
-    use super::eval_pointer;
+    use super::{eval_pointer, resolve_references};
     use crate::state::ServerState;
-    use jmap_proto::request::Request;
+    use jmap_proto::request::{Invocation, Request};
+    use proptest::prelude::*;
+    use serde_json::Value;
     use serde_json::json;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    fn json_value() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i64>().prop_map(|n| Value::Number(n.into())),
+            ".{0,16}".prop_map(Value::String),
+        ];
+        leaf.prop_recursive(4, 64, 8, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
+                prop::collection::btree_map(".{0,8}", inner, 0..8)
+                    .prop_map(|map| Value::Object(map.into_iter().collect())),
+            ]
+        })
+    }
+
+    fn method_name() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("Core/echo".to_owned()),
+            Just("Mailbox/get".to_owned()),
+            Just("Mailbox/set".to_owned()),
+            Just("Email/get".to_owned()),
+            Just("Email/query".to_owned()),
+            Just("Email/set".to_owned()),
+            Just("Email/import".to_owned()),
+            Just("EmailSubmission/set".to_owned()),
+            Just("AddressBook/get".to_owned()),
+            Just("AddressBook/set".to_owned()),
+            Just("ContactCard/get".to_owned()),
+            Just("ContactCard/query".to_owned()),
+            Just("Calendar/get".to_owned()),
+            Just("Calendar/set".to_owned()),
+            Just("CalendarEvent/get".to_owned()),
+            Just("CalendarEvent/set".to_owned()),
+            Just("Blob/upload".to_owned()),
+            Just("Quota/get".to_owned()),
+            ".{0,24}",
+        ]
+    }
+
+    fn structured_request_body() -> impl Strategy<Value = Vec<u8>> {
+        prop::collection::vec((method_name(), json_value(), ".{0,8}"), 0..4).prop_map(|calls| {
+            let method_calls: Vec<Value> = calls
+                .into_iter()
+                .map(|(name, arguments, call_id)| {
+                    Value::Array(vec![Value::String(name), arguments, Value::String(call_id)])
+                })
+                .collect();
+            serde_json::to_vec(&json!({
+                "using": ["urn:ietf:params:jmap:core"],
+                "methodCalls": method_calls,
+            }))
+            .expect("generated request body serializes")
+        })
+    }
+
+    fn arbitrary_request_body() -> impl Strategy<Value = Vec<u8>> {
+        prop_oneof![
+            prop::collection::vec(any::<u8>(), 0..512),
+            structured_request_body(),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn dispatcher_never_panics_on_bad_request_body(body in arbitrary_request_body()) {
+            let mut state = ServerState::new();
+            state.add_account("A1", "test");
+
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                super::handle_api(&mut state, &body, None)
+            }));
+
+            prop_assert!(result.is_ok());
+        }
+    }
 
     #[test]
     fn pointer_object_and_array() {
@@ -454,6 +536,32 @@ mod tests {
         assert_eq!(eval_pointer("/ids/1", &value), Some(json!("b")));
         assert_eq!(eval_pointer("/list/*/id", &value), Some(json!(["x", "y"])));
         assert_eq!(eval_pointer("/missing", &value), None);
+    }
+
+    #[test]
+    fn result_references_require_matching_call_id_and_method_name() {
+        let call = Invocation::from_value(
+            "Email/get",
+            json!({
+                "#ids": {
+                    "resultOf": "c1",
+                    "name": "Email/get",
+                    "path": "/list"
+                }
+            }),
+            "c2",
+        );
+        let responses = vec![
+            Invocation::from_value("Mailbox/get", json!({"list": ["mailbox-id"]}), "c1"),
+            Invocation::from_value("Email/get", json!({"list": ["wrong-call-id"]}), "c9"),
+        ];
+
+        let error = resolve_references(&call, &responses)
+            .expect_err("partial response matches must not resolve a result reference");
+        assert_eq!(
+            error.error_type,
+            jmap_proto::error::method::INVALID_RESULT_REFERENCE
+        );
     }
 
     #[test]
@@ -597,5 +705,468 @@ mod tests {
             Some(&json!("urn:ietf:params:jmap:error:limit"))
         );
         assert_eq!(response.get("limit"), Some(&json!("maxSizeRequest")));
+    }
+
+    #[test]
+    fn requests_at_max_size_are_accepted() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c1")
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+        state.size_request = Some(body.len() as u64);
+
+        let (status, _response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+    }
+
+    #[test]
+    fn requests_over_max_calls_are_rejected() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c1")
+            .expect("build request")
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c2")
+            .expect("append request call");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+        state.calls_in_request = Some(1);
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 400);
+        assert_eq!(
+            response.get("type"),
+            Some(&json!("urn:ietf:params:jmap:error:limit"))
+        );
+        assert_eq!(response.get("limit"), Some(&json!("maxCallsInRequest")));
+    }
+
+    #[test]
+    fn requests_at_max_calls_are_accepted() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c1")
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+        state.calls_in_request = Some(1);
+
+        let (status, _response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+    }
+
+    #[test]
+    fn core_echo_returns_arguments_unchanged() {
+        let mut state = ServerState::new();
+        let arguments = json!({
+            "message": "ping",
+            "ids": ["A1", "A2"],
+            "metadata": {"ok": true}
+        });
+
+        let request = Request::new(["urn:ietf:params:jmap:core"])
+            .call("Core/echo", &arguments, "c1")
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("Core/echo"));
+        assert_eq!(response["methodResponses"][0][1], arguments);
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn mailbox_get_dispatches_through_mailbox_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c1")
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("Mailbox/get"));
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn thread_get_dispatches_through_thread_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call("Thread/get", &json!({"accountId": "A1"}), "c1")
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("Thread/get"));
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn search_snippet_get_dispatches_through_search_snippet_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "SearchSnippet/get",
+                &json!({"accountId": "A1", "emailIds": []}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("SearchSnippet/get")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn email_import_dispatches_through_email_import_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "Email/import",
+                &json!({"accountId": "A1", "emails": {}}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("Email/import"));
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn email_parse_dispatches_through_email_parse_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "Email/parse",
+                &json!({"accountId": "A1", "blobIds": []}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("Email/parse"));
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn address_book_set_dispatches_through_address_book_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:contacts"])
+            .call(
+                "AddressBook/set",
+                &json!({"accountId": "A1", "create": {"book1": {"name": "Personal"}}}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("AddressBook/set"));
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn calendar_set_dispatches_through_calendar_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call(
+            "Calendar/set",
+            &json!({"accountId": "A1", "create": {"cal1": {"name": "Work"}}}),
+            "c1",
+        )
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("Calendar/set"));
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn calendar_event_query_dispatches_through_calendar_event_query_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call("CalendarEvent/query", &json!({"accountId": "A1"}), "c1")
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("CalendarEvent/query")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn calendar_event_parse_dispatches_through_calendar_event_parse_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call(
+            "CalendarEvent/parse",
+            &json!({"accountId": "A1", "blobIds": []}),
+            "c1",
+        )
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("CalendarEvent/parse")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn calendar_event_notification_get_dispatches_through_notification_get_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call(
+            "CalendarEventNotification/get",
+            &json!({"accountId": "A1"}),
+            "c1",
+        )
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("CalendarEventNotification/get")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn calendar_event_notification_query_dispatches_through_notification_query_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call(
+            "CalendarEventNotification/query",
+            &json!({"accountId": "A1"}),
+            "c1",
+        )
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("CalendarEventNotification/query")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn contact_card_query_dispatches_through_contact_card_query_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:contacts"])
+            .call("ContactCard/query", &json!({"accountId": "A1"}), "c1")
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("ContactCard/query")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn contact_card_parse_dispatches_through_contact_card_parse_handler() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:contacts"])
+            .call(
+                "ContactCard/parse",
+                &json!({"accountId": "A1", "blobIds": []}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(
+            response["methodResponses"][0][0],
+            json!("ContactCard/parse")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[cfg(not(feature = "parse"))]
+    #[test]
+    fn calendar_event_parse_returns_unknown_method_when_parse_feature_is_disabled() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new([
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:calendars",
+        ])
+        .call(
+            "CalendarEvent/parse",
+            &json!({"accountId": "A1", "blobIds": []}),
+            "c1",
+        )
+        .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("error"));
+        assert_eq!(
+            response["methodResponses"][0][1]["type"],
+            json!("unknownMethod")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[cfg(not(feature = "parse"))]
+    #[test]
+    fn contact_card_parse_returns_unknown_method_when_parse_feature_is_disabled() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:contacts"])
+            .call(
+                "ContactCard/parse",
+                &json!({"accountId": "A1", "blobIds": []}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+        assert_eq!(response["methodResponses"][0][0], json!("error"));
+        assert_eq!(
+            response["methodResponses"][0][1]["type"],
+            json!("unknownMethod")
+        );
+        assert_eq!(response["methodResponses"][0][2], json!("c1"));
+    }
+
+    #[test]
+    fn email_submission_set_resolves_email_creation_id_from_prior_set_call() {
+        let mut state = ServerState::new();
+        let account = state.add_account("A1", "test");
+        let identity_id = account.seed_identity("Sender", "sender@example.test");
+        let inbox_id = account.seed_mailbox("Inbox", Some("inbox"));
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "Email/set",
+                &json!({
+                    "accountId": "A1",
+                    "create": {
+                        "draft": {
+                            "mailboxIds": {
+                                (inbox_id.to_string()): true
+                            }
+                        }
+                    }
+                }),
+                "c1",
+            )
+            .expect("build request")
+            .call(
+                "EmailSubmission/set",
+                &json!({
+                    "accountId": "A1",
+                    "create": {
+                        "submit1": {
+                            "identityId": identity_id,
+                            "emailId": "#draft"
+                        }
+                    }
+                }),
+                "c2",
+            )
+            .expect("append request call");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, response) = super::handle_api(&mut state, &body, None);
+        assert_eq!(status, 200);
+
+        let created_email_id = response["methodResponses"][0][1]["created"]["draft"]["id"]
+            .as_str()
+            .expect("Email/set create returns an id")
+            .to_owned();
+        let submission = &response["methodResponses"][1];
+        assert_eq!(submission[0], json!("EmailSubmission/set"));
+        assert!(submission[1].get("notCreated").is_none());
+        assert_eq!(
+            submission[1]["created"]["submit1"]["emailId"],
+            json!(created_email_id)
+        );
     }
 }

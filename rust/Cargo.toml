@@ -86,7 +86,7 @@ eds-sys = { path = "crates/eds-sys" }
 evo-sys = { path = "crates/evo-sys" }
 evolution-jmap-proto = { path = "crates/jmap-proto" }
 evolution-jmap-client = { path = "crates/jmap-client" }
-evolution-jmap-mock = { path = "crates/jmap-mock" }
+evolution-jmap-mock = { path = "crates/jmap-mock", default-features = false, features = ["parse"] }
 evolution-jmap-vcard = { path = "crates/jmap-vcard" }
 evolution-jmap-ical = { path = "crates/jmap-ical" }
 evolution-jmap-book-sync = { path = "crates/jmap-book-sync" }

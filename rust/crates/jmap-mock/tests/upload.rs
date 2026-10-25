@@ -55,15 +55,8 @@ fn an_upload_over_the_advertised_limit_is_refused_with_the_limit_it_broke() {
     // RFC 8620 §3.6.1 requires limit errors to name the exceeded capability.
     assert_eq!(problem["limit"], "maxSizeUpload");
 
-    let state = server.state();
-    let state = state.lock().unwrap();
-    assert!(
-        state
-            .account(&server.account_id())
-            .unwrap()
-            .blobs
-            .is_empty()
-    );
+    let blobs_empty = server.with_account(server.account_id(), |account| account.blobs.is_empty());
+    assert!(blobs_empty);
 }
 
 #[test]
@@ -73,11 +66,9 @@ fn an_upload_of_exactly_the_advertised_limit_is_taken() {
     let (status, _) = post_upload(&server, &vec![b'x'; 1024]);
 
     assert!(status.contains("201"), "{status}");
-    let state = server.state();
-    let state = state.lock().unwrap();
+    let blob_count = server.with_account(server.account_id(), |account| account.blobs.len());
     assert_eq!(
-        state.account(&server.account_id()).unwrap().blobs.len(),
-        1,
+        blob_count, 1,
         "an upload of exactly the limit was not stored"
     );
 }

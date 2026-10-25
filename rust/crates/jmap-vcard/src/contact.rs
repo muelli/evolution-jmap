@@ -279,7 +279,7 @@ fn feature_slot(features: Option<&Value>) -> Option<&'static str> {
 /// Whether the line written for a phone with these `features` states this
 /// feature.
 ///
-/// A feature omitted by [`feature_slot`] is preserved, not treated as deleted.
+/// A feature omitted by `feature_slot` is preserved, not treated as deleted.
 pub fn states_phone_feature(features: Option<&Value>, key: &str) -> bool {
     let Some(slot) = feature_slot(features) else {
         return false;
@@ -432,7 +432,7 @@ fn names_a_uri(value: &str) -> bool {
 /// Whether this media entry can be emitted as `PHOTO`.
 ///
 /// It must state photo kind and data that a `PHOTO` line can carry.
-/// [`photo`] shares this decision point with [`card_to_vcard`].
+/// The internal `photo` helper shares this decision point with [`card_to_vcard`].
 pub fn states_media(media: &Media) -> bool {
     photo(media).is_some()
 }
@@ -444,14 +444,16 @@ fn photo(media: &Media) -> Option<Photo<'_>> {
     if media.kind.as_deref() != Some(PHOTO_KIND) || media.uri.is_empty() {
         return None;
     }
-    let Some(rest) = strip_prefix_ci(&media.uri, DATA_SCHEME) else {
+    let Some(parsed) = data_uri(&media.uri) else {
         return states_remote_photo_uri(&media.uri).then_some(Photo::Uri(&media.uri));
     };
-    let (metadata, payload) = rest.split_once(',')?;
-    let stated = strip_suffix_ci(metadata, BASE64_MARKER)?;
+    if !parsed.base64 {
+        return None;
+    }
+    let stated = parsed.media_type.unwrap_or_default();
     Some(Photo::Inline {
         subtype: image_subtype(media.media_type.as_deref().unwrap_or(stated)),
-        base64: BASE64.encode(decoded(payload)?),
+        base64: BASE64.encode(decoded(parsed.payload)?),
     })
 }
 
@@ -508,6 +510,36 @@ fn decoded(payload: &str) -> Option<Vec<u8>> {
         .decode(payload)
         .or_else(|_| BASE64_UNPADDED.decode(payload))
         .ok()
+}
+
+/// Parsed fields from an RFC 2397 `data:` URI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DataUri<'a> {
+    /// Optional media type before payload bytes.
+    pub media_type: Option<&'a str>,
+    /// Whether the metadata ends with `;base64`.
+    pub base64: bool,
+    /// Payload text after the first comma.
+    pub payload: &'a str,
+}
+
+/// Parse an RFC 2397 `data:` URI.
+///
+/// Match `data:` and `;base64` markers case-insensitively.
+pub fn data_uri(value: &str) -> Option<DataUri<'_>> {
+    let rest = strip_prefix_ci(value, DATA_SCHEME)?;
+    let (metadata, payload) = rest.split_once(',')?;
+    let (metadata, base64) = if let Some(trimmed) = strip_suffix_ci(metadata, BASE64_MARKER) {
+        (trimmed, true)
+    } else {
+        (metadata, false)
+    };
+    let media_type = (!metadata.is_empty()).then_some(metadata);
+    Some(DataUri {
+        media_type,
+        base64,
+        payload,
+    })
 }
 
 /// Whether this URI names a remote photo location to keep as `VALUE=uri`.
@@ -704,7 +736,7 @@ fn read_keywords(entries: &[VCardEntry]) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = entries
         .iter()
         .filter(|entry| entry.name.as_str().eq_ignore_ascii_case(CATEGORIES))
-        .flat_map(entry_items)
+        .flat_map(entry_components)
         .filter(|tag| !tag.is_empty())
         .map(|tag| (tag, Value::Bool(true)))
         .collect();
@@ -2042,12 +2074,15 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
         return None;
     }
 
-    let (bytes, stated_media_type) = if let Some(rest) = strip_prefix_ci(&raw_text, DATA_SCHEME) {
-        if let Some((metadata, payload)) = rest.split_once(',') {
-            let stated = strip_suffix_ci(metadata, BASE64_MARKER)
-                .filter(|s| !s.is_empty())
+    let (bytes, stated_media_type) = if strip_prefix_ci(&raw_text, DATA_SCHEME).is_some() {
+        if let Some(parsed) = data_uri(&raw_text) {
+            let stated = parsed
+                .base64
+                .then_some(parsed.media_type)
+                .flatten()
                 .map(str::to_owned);
-            let bytes = decoded(payload).or_else(|| entry_binary(entry).map(<[u8]>::to_vec))?;
+            let bytes =
+                decoded(parsed.payload).or_else(|| entry_binary(entry).map(<[u8]>::to_vec))?;
             (bytes, stated)
         } else {
             let bytes = entry_binary(entry)?.to_vec();
@@ -2596,25 +2631,15 @@ fn value_text(value: &VCardValue) -> Option<String> {
 }
 
 fn entry_text(entry: &VCardEntry) -> String {
-    entry
-        .values
-        .iter()
-        .filter_map(value_text)
-        .collect::<Vec<_>>()
-        .join(";")
+    entry_items(entry).join(";")
 }
 
 fn entry_text_list(entry: &VCardEntry) -> String {
-    entry
-        .values
-        .iter()
-        .filter_map(value_text)
-        .collect::<Vec<_>>()
-        .join(",")
+    entry_items(entry).join(",")
 }
 
 fn entry_components(entry: &VCardEntry) -> Vec<String> {
-    entry.values.iter().filter_map(value_text).collect()
+    entry_items(entry)
 }
 
 fn entry_items(entry: &VCardEntry) -> Vec<String> {
@@ -2659,8 +2684,9 @@ fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_LINE_OCTETS, VCardEntry, VCardProperty, entry_key, fold_overlong_lines,
-        normalize_vcard_dates, service_of, split_vcard_property_line, states_unsupported_photo_uri,
+        MAX_LINE_OCTETS, VCardEntry, VCardProperty, data_uri, entry_key, entry_text,
+        entry_text_list, fold_overlong_lines, normalize_vcard_dates, service_of,
+        split_vcard_property_line, states_unsupported_photo_uri,
     };
     use calcard::common::CalendarScale;
     use calcard::vcard::{
@@ -2705,6 +2731,71 @@ mod tests {
         ));
         assert!(states_unsupported_photo_uri("file:///home/user/photo.png"));
         assert!(states_unsupported_photo_uri("ftp://example.test/photo.png"));
+    }
+
+    #[test]
+    fn data_uri_parses_case_insensitive_data_and_base64_markers() {
+        let parsed = data_uri("DATA:image/png;BASE64,QUJDRA==").expect("parse data URI");
+
+        assert_eq!(parsed.media_type, Some("image/png"));
+        assert!(parsed.base64);
+        assert_eq!(parsed.payload, "QUJDRA==");
+    }
+
+    #[test]
+    fn data_uri_parses_media_type_free_base64_payloads() {
+        let parsed = data_uri("data:;base64,QUJDRA==").expect("parse data URI");
+
+        assert_eq!(parsed.media_type, None);
+        assert!(parsed.base64);
+        assert_eq!(parsed.payload, "QUJDRA==");
+    }
+
+    #[test]
+    fn data_uri_marks_non_base64_payloads() {
+        let parsed = data_uri("data:text/plain,Hello%20World").expect("parse data URI");
+
+        assert_eq!(parsed.media_type, Some("text/plain"));
+        assert!(!parsed.base64);
+        assert_eq!(parsed.payload, "Hello%20World");
+    }
+
+    #[test]
+    fn data_uri_rejects_non_data_uris_and_missing_payload_separator() {
+        assert!(data_uri("https://example.test/photo.png").is_none());
+        assert!(data_uri("data:image/png;base64QUJDRA==").is_none());
+    }
+
+    #[test]
+    fn param_value_text_encodes_line_feed_with_rfc6868_escape() {
+        assert_eq!(
+            super::param_value_text("one\ntwo"),
+            VCardParameterValue::Text("one^ntwo".to_owned())
+        );
+    }
+
+    #[test]
+    fn param_value_text_encodes_carriage_return_sequences_as_line_feed() {
+        assert_eq!(
+            super::param_value_text("one\r\ntwo"),
+            VCardParameterValue::Text("one^ntwo".to_owned())
+        );
+        assert_eq!(
+            super::param_value_text("one\rtwo"),
+            VCardParameterValue::Text("one^ntwo".to_owned())
+        );
+    }
+
+    #[test]
+    fn param_text_decodes_rfc6868_line_feed_escape_sequences() {
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Text("one^ntwo".to_owned())),
+            "one\ntwo".to_owned()
+        );
+        assert_eq!(
+            super::param_text(&VCardParameterValue::Text("one^Ntwo".to_owned())),
+            "one\ntwo".to_owned()
+        );
     }
 
     #[test]
@@ -2862,6 +2953,17 @@ mod tests {
     }
 
     #[test]
+    fn entry_text_join_modes_keep_item_order() {
+        let entry = VCardEntry::new(VCardProperty::N).with_values(vec![
+            VCardValue::Text("Doe".to_owned()),
+            VCardValue::Text("Jane".to_owned()),
+        ]);
+
+        assert_eq!(entry_text(&entry), "Doe;Jane");
+        assert_eq!(entry_text_list(&entry), "Doe,Jane");
+    }
+
+    #[test]
     fn param_text_keeps_typed_parameter_text_for_round_trip_checks() {
         // RFC 6350 section 3.3 carries parameters as text in content lines.
         // RFC 6350 sections 4.3.5 and 4.5 define TIMESTAMP and INTEGER text forms.
@@ -2881,6 +2983,10 @@ mod tests {
         assert_eq!(
             super::param_text(&VCardParameterValue::Bool(false)),
             "FALSE".to_owned()
+        );
+        assert_eq!(
+            super::param_text(&VCardParameterValue::ValueType(super::VCardValueType::Uri)),
+            "URI".to_owned()
         );
         assert_eq!(
             super::param_text(&VCardParameterValue::Calscale(CalendarScale::Gregorian)),
