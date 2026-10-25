@@ -10,7 +10,7 @@
 //! - The parent sizes come from the running type system
 //!   ([`TypeSizes::of_parent`]).
 //! - The subclass adds no inline fields.
-//! - All of its state is in one qdata box ([`UiState`]).
+//! - All of its state is in one qdata box (`UiState`).
 //!
 //! Thus this file has no struct layout that a GTK release can contradict.
 //!
@@ -18,7 +18,7 @@
 //! `instance_init` has already built the widgets (they need no
 //! configuration). Then `create` starts the asynchronous load (connect, get
 //! the `VacationResponse`) through [`crate::dispatch::spawn_for`].
-//! [`apply_outcome`] fills the widgets, or shows the problem in the status
+//! `apply_outcome` fills the widgets, or shows the problem in the status
 //! label.
 //!
 //! Save follows the `EMailConfigPage` contract. The OK button of the account
