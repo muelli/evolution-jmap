@@ -144,10 +144,30 @@ pub(crate) fn downgrades(current: &str, next: &str) -> bool {
     on_tls(current) && !on_tls(next)
 }
 
+/// Splits an `http://` or `https://` URL into a TLS flag and the rest of the string.
+///
+/// Returns `Some((true, rest))` for `https://` and `Some((false, rest))` for `http://`.
+/// Matches the scheme without case sensitivity.
+/// Returns `None` for any other scheme or for a relative path.
+pub fn split_http_scheme(url: &str) -> Option<(bool, &str)> {
+    if url
+        .get(..8)
+        .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+    {
+        Some((true, &url[8..]))
+    } else if url
+        .get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+    {
+        Some((false, &url[7..]))
+    } else {
+        None
+    }
+}
+
 /// Whether `url` uses TLS.
 fn on_tls(url: &str) -> bool {
-    url.get(..8)
-        .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+    split_http_scheme(url).is_some_and(|(tls, _)| tls)
 }
 
 /// Whether the host of `url` is a loopback name or address.
@@ -193,7 +213,7 @@ pub(crate) fn may_carry_credentials(session_url: &str, endpoint: &str) -> bool {
 
 /// Resolves a redirect location against the current URL.
 pub(crate) fn resolve_redirect(current_url: &str, location: &str) -> Result<String, String> {
-    if location.starts_with("http://") || location.starts_with("https://") {
+    if split_http_scheme(location).is_some() {
         return Ok(location.to_string());
     }
     let scheme_end = current_url
@@ -233,7 +253,7 @@ mod tests {
 
     use super::{
         downgrades, encode_template_value, is_loopback, may_carry_credentials, origin, origin_of,
-        rebase_origin, resolve_redirect, same_origin,
+        rebase_origin, resolve_redirect, same_origin, split_http_scheme,
     };
 
     #[test]
@@ -565,6 +585,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resolve_redirect_handles_uppercase_and_mixed_case_schemes() {
+        assert_eq!(
+            resolve_redirect(
+                "http://example.com/api/v1/auth",
+                "HTTPS://other.example.com/session"
+            )
+            .unwrap(),
+            "HTTPS://other.example.com/session"
+        );
+        assert_eq!(
+            resolve_redirect(
+                "http://example.com/api/v1/auth",
+                "Https://other.example.com/session"
+            )
+            .unwrap(),
+            "Https://other.example.com/session"
+        );
+        assert_eq!(
+            resolve_redirect(
+                "http://example.com/api/v1/auth",
+                "HTTP://other.example.com/session"
+            )
+            .unwrap(),
+            "HTTP://other.example.com/session"
+        );
+        assert_eq!(
+            resolve_redirect(
+                "http://example.com/api/v1/auth",
+                "Http://other.example.com/session"
+            )
+            .unwrap(),
+            "Http://other.example.com/session"
+        );
+    }
+
+    #[test]
+    fn split_http_scheme_detects_tls_and_plain_http_case_insensitively() {
+        assert_eq!(
+            split_http_scheme("https://example.com/path"),
+            Some((true, "example.com/path"))
+        );
+        assert_eq!(
+            split_http_scheme("HTTPS://example.com/path"),
+            Some((true, "example.com/path"))
+        );
+        assert_eq!(
+            split_http_scheme("Https://example.com/path"),
+            Some((true, "example.com/path"))
+        );
+        assert_eq!(
+            split_http_scheme("http://example.com/path"),
+            Some((false, "example.com/path"))
+        );
+        assert_eq!(
+            split_http_scheme("HTTP://example.com/path"),
+            Some((false, "example.com/path"))
+        );
+        assert_eq!(
+            split_http_scheme("Http://example.com/path"),
+            Some((false, "example.com/path"))
+        );
+        assert_eq!(split_http_scheme("ftp://example.com/path"), None);
+        assert_eq!(split_http_scheme("/relative/path"), None);
+        assert_eq!(split_http_scheme(""), None);
+    }
+
     proptest! {
         // Verifies that arbitrary Unicode inputs do not panic `rebase_origin`.
         // A server controls both template URLs and origin strings.
@@ -577,6 +664,12 @@ mod tests {
         #[test]
         fn origin_of_never_panics_on_hostile_input(url in ".*") {
             let _ = origin_of(&url);
+        }
+
+        // Verifies that arbitrary input strings do not panic `split_http_scheme`.
+        #[test]
+        fn split_http_scheme_never_panics_on_hostile_input(url in ".*") {
+            let _ = split_http_scheme(&url);
         }
 
         #[test]

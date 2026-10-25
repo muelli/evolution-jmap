@@ -113,4 +113,4 @@ pub use jmap_proto as proto;
 pub use jmap_proto;
 pub use jmap_proto::{Id, State};
 pub use transport::CancelFlag;
-pub use url::{origin, origin_of};
+pub use url::{origin, origin_of, split_http_scheme};
