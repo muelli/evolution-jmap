@@ -957,11 +957,10 @@ impl MailSync {
         parent: Option<&FolderInfo>,
         name: &str,
     ) -> Result<FolderInfo, SyncError> {
-        let requested = Mailbox {
-            name: name.to_owned(),
-            parent_id: parent.map(|parent| parent.id.clone()),
-            ..Mailbox::default()
-        };
+        let mut requested = Mailbox::new(name);
+        if let Some(parent) = parent {
+            requested = requested.with_parent_id(parent.id.clone());
+        }
         let account_id = self.account_id().to_string();
         tracing::debug!(account_id, name, "creating mail folder");
         let created = match self.client.mailbox_create(&self.account_id, &requested) {

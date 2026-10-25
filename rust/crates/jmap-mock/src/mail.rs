@@ -352,13 +352,12 @@ fn placeable(
 
 /// Return a new mailbox with explicit zero counters.
 fn counted_empty(mailbox: &Mailbox) -> Mailbox {
-    Mailbox {
-        total_emails: Some(0),
-        unread_emails: Some(0),
-        total_threads: Some(0),
-        unread_threads: Some(0),
-        ..mailbox.clone()
-    }
+    mailbox
+        .clone()
+        .with_total_emails(0)
+        .with_unread_emails(0)
+        .with_total_threads(0)
+        .with_unread_threads(0)
 }
 
 /// Whether `email` is filed in mailbox `id` (`mailboxIds[id] == true`).
@@ -1926,15 +1925,16 @@ impl AccountState {
         parent_id: Option<Id>,
     ) -> Id {
         let id = self.mailboxes.alloc_id();
-        let mailbox = Mailbox {
-            id: Some(id.clone()),
-            name: name.to_owned(),
-            parent_id,
-            role: role.map(str::to_owned),
-            sort_order: Some(0),
-            is_subscribed: Some(true),
-            ..Mailbox::default()
-        };
+        let mut mailbox = Mailbox::new(name)
+            .with_id(id.clone())
+            .with_sort_order(0)
+            .is_subscribed(true);
+        if let Some(parent_id) = parent_id {
+            mailbox = mailbox.with_parent_id(parent_id);
+        }
+        if let Some(role) = role {
+            mailbox = mailbox.with_role(role);
+        }
         self.mailboxes.seed_with_id(id.clone(), mailbox);
         id
     }
@@ -1942,15 +1942,16 @@ impl AccountState {
     /// Create a mailbox via transaction so `/changes` reports it.
     pub fn create_mailbox(&mut self, name: &str, role: Option<&str>, parent: Option<&Id>) -> Id {
         let id = self.mailboxes.alloc_id();
-        let mailbox = Mailbox {
-            id: Some(id.clone()),
-            name: name.to_owned(),
-            parent_id: parent.cloned(),
-            role: role.map(str::to_owned),
-            sort_order: Some(0),
-            is_subscribed: Some(true),
-            ..Mailbox::default()
-        };
+        let mut mailbox = Mailbox::new(name)
+            .with_id(id.clone())
+            .with_sort_order(0)
+            .is_subscribed(true);
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(parent.clone());
+        }
+        if let Some(role) = role {
+            mailbox = mailbox.with_role(role);
+        }
         self.mailboxes
             .transaction(|transaction| transaction.create(id.clone(), mailbox));
         id
@@ -1962,10 +1963,8 @@ impl AccountState {
             let Some(mailbox) = transaction.get(id) else {
                 return false;
             };
-            let renamed = Mailbox {
-                name: name.to_owned(),
-                ..mailbox.clone()
-            };
+            let mut renamed = mailbox.clone();
+            renamed.name = name.to_owned();
             transaction.update(id, renamed)
         })
     }

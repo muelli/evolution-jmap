@@ -526,10 +526,7 @@ fn a_subscription_that_another_client_changed_is_announced_alone() {
             .find(|(_, mailbox)| mailbox.name == "Projects")
             .map(|(id, mailbox)| (id.clone(), mailbox.clone()))
             .expect("Projects seeded");
-        let unsubscribed = jmap_proto::mail::Mailbox {
-            is_subscribed: Some(false),
-            ..mailbox
-        };
+        let unsubscribed = mailbox.is_subscribed(false);
         account
             .mailboxes
             .transaction(|transaction| transaction.update(&id, unsubscribed));

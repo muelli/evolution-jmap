@@ -136,21 +136,21 @@ prop_compose! {
         my_rights in prop::option::of(arb_mailbox_rights()),
         extra in arb_extra(),
     ) -> Mailbox {
-        Mailbox {
-            id,
-            name,
-            parent_id,
-            role,
-            sort_order,
-            total_emails,
-            unread_emails,
-            total_threads,
-            unread_threads,
-            is_subscribed,
-            share_with,
-            my_rights,
-            extra,
-        }
+        let mut mailbox = Mailbox::default();
+        mailbox.id = id;
+        mailbox.name = name;
+        mailbox.parent_id = parent_id;
+        mailbox.role = role;
+        mailbox.sort_order = sort_order;
+        mailbox.total_emails = total_emails;
+        mailbox.unread_emails = unread_emails;
+        mailbox.total_threads = total_threads;
+        mailbox.unread_threads = unread_threads;
+        mailbox.is_subscribed = is_subscribed;
+        mailbox.share_with = share_with;
+        mailbox.my_rights = my_rights;
+        mailbox.extra = extra;
+        mailbox
     }
 }
 

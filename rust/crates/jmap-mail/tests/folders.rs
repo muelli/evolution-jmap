@@ -409,11 +409,12 @@ fn the_listing_is_the_connected_accounts() {
 /// the server. Sibling order follows RFC 8621: `sortOrder`, then name. So
 /// `Personal` comes before `Work`.
 fn hand_built() -> FolderTree {
-    let mailbox = |id: &str, name: &str, parent: Option<&str>| Mailbox {
-        id: Some(Id::new(id)),
-        name: name.to_owned(),
-        parent_id: parent.map(Id::new),
-        ..Mailbox::default()
+    let mailbox = |id: &str, name: &str, parent: Option<&str>| {
+        let mut mailbox = Mailbox::new(name).with_id(Id::new(id));
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(Id::new(parent));
+        }
+        mailbox
     };
     FolderTree::from_mailboxes(&[
         mailbox("M1", "Work", None),
@@ -550,12 +551,14 @@ fn the_refresh_flag_does_not_change_which_folders_are_asked_for() {
 /// `jmap-mail-sync` reads a missing value as a tick. Omitting it here would
 /// give the opposite of what a test about unsubscribed folders wants.
 fn ticked(subscribed: &[&str]) -> FolderTree {
-    let mailbox = |id: &str, name: &str, parent: Option<&str>| Mailbox {
-        id: Some(Id::new(id)),
-        name: name.to_owned(),
-        parent_id: parent.map(Id::new),
-        is_subscribed: Some(subscribed.contains(&name)),
-        ..Mailbox::default()
+    let mailbox = |id: &str, name: &str, parent: Option<&str>| {
+        let mut mailbox = Mailbox::new(name)
+            .with_id(Id::new(id))
+            .is_subscribed(subscribed.contains(&name));
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(Id::new(parent));
+        }
+        mailbox
     };
     FolderTree::from_mailboxes(&[
         mailbox("M1", "Work", None),
@@ -1921,15 +1924,18 @@ fn a_null_store_has_nothing_to_set_up_either() {
 /// Every mailbox states whether it is subscribed, rather than leaving the
 /// property out, for the reason [`ticked`] gives.
 fn checkable() -> FolderTree {
-    let mailbox =
-        |id: &str, name: &str, parent: Option<&str>, role: Option<&str>, ticked| Mailbox {
-            id: Some(Id::new(id)),
-            name: name.to_owned(),
-            parent_id: parent.map(Id::new),
-            role: role.map(str::to_owned),
-            is_subscribed: Some(ticked),
-            ..Mailbox::default()
-        };
+    let mailbox = |id: &str, name: &str, parent: Option<&str>, role: Option<&str>, ticked| {
+        let mut mailbox = Mailbox::new(name)
+            .with_id(Id::new(id))
+            .is_subscribed(ticked);
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(Id::new(parent));
+        }
+        if let Some(role) = role {
+            mailbox = mailbox.with_role(role);
+        }
+        mailbox
+    };
     FolderTree::from_mailboxes(&[
         mailbox("M1", "Inbox", None, Some(role::INBOX), true),
         mailbox("M2", "Lists", None, None, true),
@@ -2013,13 +2019,10 @@ fn send_receive_checks_the_inbox_and_the_folders_the_user_ticked() {
 #[test]
 fn the_inbox_is_checked_even_when_the_user_unticked_it() {
     let account = Account::open();
-    let tree = FolderTree::from_mailboxes(&[Mailbox {
-        id: Some(Id::new("M1")),
-        name: "Inbox".to_owned(),
-        role: Some(role::INBOX.to_owned()),
-        is_subscribed: Some(false),
-        ..Mailbox::default()
-    }])
+    let tree = FolderTree::from_mailboxes(&[Mailbox::new("Inbox")
+        .with_id(Id::new("M1"))
+        .with_role(role::INBOX)
+        .is_subscribed(false)])
     .expect("a well-formed mailbox list");
 
     assert_eq!(checked(&tree, account.store), ["Inbox"]);

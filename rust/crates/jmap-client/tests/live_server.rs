@@ -336,10 +336,7 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
     // Unique per run so a prior run's leftover (e.g. a destroy that failed)
     // cannot be mistaken for this run's own mailbox.
     let name = format!("agent-livewrite-{}", unique_suffix());
-    let mailbox = Mailbox {
-        name: name.clone(),
-        ..Mailbox::default()
-    };
+    let mailbox = Mailbox::new(name.clone());
 
     let created = client
         .mailbox_create(&account_id, &mailbox)
@@ -1736,10 +1733,7 @@ fn push_notifies_a_subscribed_eventsource_of_a_real_mailbox_change() {
     std::thread::sleep(Duration::from_millis(500));
 
     let name = format!("agent-livewrite-push-{}", unique_suffix());
-    let mailbox = Mailbox {
-        name: name.clone(),
-        ..Mailbox::default()
-    };
+    let mailbox = Mailbox::new(name.clone());
     let created = client
         .mailbox_create(&account_id, &mailbox)
         .expect("Mailbox/set create failed against the real server");
@@ -1826,10 +1820,7 @@ fn eventsource_reconnect_and_gap_handling_through_the_real_api() {
 
     // 2. Mutate state during the disconnection gap.
     let gap_name = format!("agent-livewrite-gap-{}", unique_suffix());
-    let gap_mailbox = Mailbox {
-        name: gap_name.clone(),
-        ..Mailbox::default()
-    };
+    let gap_mailbox = Mailbox::new(gap_name.clone());
     let gap_created = client
         .mailbox_create(&account_id, &gap_mailbox)
         .expect("Mailbox/set create failed against the real server during gap");
@@ -1872,10 +1863,7 @@ fn eventsource_reconnect_and_gap_handling_through_the_real_api() {
 
     // 6. Verify subsequent real-time changes are delivered over the reconnected stream.
     let post_name = format!("agent-livewrite-post-{}", unique_suffix());
-    let post_mailbox = Mailbox {
-        name: post_name.clone(),
-        ..Mailbox::default()
-    };
+    let post_mailbox = Mailbox::new(post_name.clone());
     let post_created = client
         .mailbox_create(&account_id, &post_mailbox)
         .expect("Mailbox/set create failed against the real server after reconnect");
@@ -2748,13 +2736,7 @@ fn mailbox_shared_with_a_second_real_account_is_visible_only_after_the_grant() {
 
     let name = format!("agent-livewrite-acl-{}", unique_suffix());
     let mailbox = owner
-        .mailbox_create(
-            &owner_account_id,
-            &Mailbox {
-                name: name.clone(),
-                ..Mailbox::default()
-            },
-        )
+        .mailbox_create(&owner_account_id, &Mailbox::new(name.clone()))
         .expect("Mailbox/set create failed against the real server");
     let mailbox_id = mailbox
         .id
@@ -5041,10 +5023,7 @@ fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
         .expect("write account has a mail capability");
 
     let raw_name = format!("  agent-livewrite-pad-{}  ", unique_suffix());
-    let mailbox = Mailbox {
-        name: raw_name.clone(),
-        ..Mailbox::default()
-    };
+    let mailbox = Mailbox::new(raw_name.clone());
 
     let created = client
         .mailbox_create(&account_id, &mailbox)

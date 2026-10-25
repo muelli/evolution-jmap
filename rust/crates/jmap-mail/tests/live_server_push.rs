@@ -176,13 +176,7 @@ fn creating_a_mailbox_pushes_a_mailbox_state_change() {
 
     let name = format!("agent-mailpush-folder-{}", unique_suffix());
     client
-        .mailbox_create(
-            &account_id,
-            &Mailbox {
-                name,
-                ..Mailbox::default()
-            },
-        )
+        .mailbox_create(&account_id, &Mailbox::new(name))
         .expect("Mailbox/set create failed against the real server");
 
     assert!(

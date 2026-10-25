@@ -484,12 +484,9 @@ fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
         .with_may_submit(false)
         .with_may_share(false);
 
-    let mailbox = Mailbox {
-        id: Some("mb1".into()),
-        name: "Shared Support Inbox".to_owned(),
-        my_rights: Some(rights.clone()),
-        ..Mailbox::default()
-    };
+    let mailbox = Mailbox::new("Shared Support Inbox")
+        .with_id("mb1")
+        .with_my_rights(rights.clone());
 
     let mb_val = serde_json::to_value(&mailbox).unwrap();
     assert_eq!(mb_val["myRights"]["maySetKeywords"], true);

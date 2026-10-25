@@ -211,14 +211,11 @@ fn mailbox_create_and_backfills_omitted_properties() {
     });
 
     let account_id = Id::new("acc1");
-    let req_mb = Mailbox {
-        name: "  Projects  ".to_owned(),
-        parent_id: Some(Id::new("mb-inbox")),
-        role: Some("archive".to_owned()),
-        sort_order: Some(42),
-        is_subscribed: Some(true),
-        ..Mailbox::default()
-    };
+    let req_mb = Mailbox::new("  Projects  ")
+        .with_parent_id(Id::new("mb-inbox"))
+        .with_role("archive")
+        .with_sort_order(42)
+        .is_subscribed(true);
     let created = client.mailbox_create(&account_id, &req_mb).unwrap();
     assert_eq!(
         created.id.as_ref().map(|id| id.as_str()),
@@ -276,10 +273,7 @@ fn mailbox_create_error_paths() {
     });
 
     let account_id = Id::new("acc1");
-    let req_mb = Mailbox {
-        name: "Duplicate".to_owned(),
-        ..Mailbox::default()
-    };
+    let req_mb = Mailbox::new("Duplicate");
     match client.mailbox_create(&account_id, &req_mb) {
         Err(Error::Set(err)) => assert_eq!(err.error_type, "invalidProperties"),
         other => panic!("expected Error::Set, got {:?}", other),

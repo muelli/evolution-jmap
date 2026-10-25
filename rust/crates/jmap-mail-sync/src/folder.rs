@@ -710,15 +710,15 @@ mod tests {
     use super::*;
 
     fn mailbox(id: &str, name: &str, parent: Option<&str>, total: u64, unread: u64) -> Mailbox {
-        Mailbox {
-            id: Some(Id::from(id)),
-            name: name.to_owned(),
-            parent_id: parent.map(Id::from),
-            total_emails: Some(total),
-            unread_emails: Some(unread),
-            is_subscribed: Some(true),
-            ..Mailbox::default()
+        let mut mailbox = Mailbox::new(name)
+            .with_id(Id::from(id))
+            .with_total_emails(total)
+            .with_unread_emails(unread)
+            .is_subscribed(true);
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(Id::from(parent));
         }
+        mailbox
     }
 
     /// A delivery changes the counts of mailboxes, and that is not a shape

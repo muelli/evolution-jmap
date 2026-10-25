@@ -87,18 +87,11 @@ fn read(chain: &FolderInfoChain) -> Vec<Read> {
 }
 
 fn mailbox(id: &str, name: &str) -> Mailbox {
-    Mailbox {
-        id: Some(Id::new(id)),
-        name: name.to_owned(),
-        ..Mailbox::default()
-    }
+    Mailbox::new(name).with_id(Id::new(id))
 }
 
 fn child(id: &str, name: &str, parent: &str) -> Mailbox {
-    Mailbox {
-        parent_id: Some(Id::new(parent)),
-        ..mailbox(id, name)
-    }
+    mailbox(id, name).with_parent_id(Id::new(parent))
 }
 
 fn chain(mailboxes: &[Mailbox]) -> FolderInfoChain {
@@ -219,10 +212,7 @@ fn a_leaf_says_it_has_no_children_but_not_that_it_can_have_none() {
 /// Trash folder the user must find manually.
 #[test]
 fn roles_become_camel_folder_types() {
-    let with_role = |id: &str, name: &str, role: &str| Mailbox {
-        role: Some(role.to_owned()),
-        ..mailbox(id, name)
-    };
+    let with_role = |id: &str, name: &str, role: &str| mailbox(id, name).with_role(role);
     let chain = chain(&[
         with_role("M1", "In", role::INBOX),
         with_role("M2", "Out", role::SENT),
@@ -260,10 +250,7 @@ fn roles_become_camel_folder_types() {
 #[test]
 fn a_role_folder_is_a_system_folder_and_an_ordinary_one_is_not() {
     let chain = chain(&[
-        Mailbox {
-            role: Some(role::INBOX.to_owned()),
-            ..mailbox("M1", "In")
-        },
+        mailbox("M1", "In").with_role(role::INBOX),
         mailbox("M2", "Ordinary"),
     ]);
     let read = read(&chain);
@@ -279,14 +266,8 @@ fn a_role_folder_is_a_system_folder_and_an_ordinary_one_is_not() {
 #[test]
 fn subscription_is_a_flag_and_defaults_to_subscribed() {
     let chain = chain(&[
-        Mailbox {
-            is_subscribed: Some(false),
-            ..mailbox("M1", "Hidden")
-        },
-        Mailbox {
-            is_subscribed: Some(true),
-            ..mailbox("M2", "Shown")
-        },
+        mailbox("M1", "Hidden").is_subscribed(false),
+        mailbox("M2", "Shown").is_subscribed(true),
         mailbox("M3", "Silent"),
     ]);
     let read = read(&chain);
@@ -302,11 +283,9 @@ fn subscription_is_a_flag_and_defaults_to_subscribed() {
 
 #[test]
 fn counts_cross_as_they_are() {
-    let chain = chain(&[Mailbox {
-        total_emails: Some(42),
-        unread_emails: Some(7),
-        ..mailbox("M1", "Inbox")
-    }]);
+    let chain = chain(&[mailbox("M1", "Inbox")
+        .with_total_emails(42)
+        .with_unread_emails(7)]);
     let read = read(&chain);
 
     assert_eq!(read[0].total, 42);
@@ -320,11 +299,9 @@ fn counts_cross_as_they_are() {
 /// saturates into 32 bits in the first place.
 #[test]
 fn a_count_too_large_for_camel_saturates_rather_than_going_negative() {
-    let chain = chain(&[Mailbox {
-        total_emails: Some(u64::from(u32::MAX)),
-        unread_emails: Some(i64::from(i32::MAX) as u64 + 1),
-        ..mailbox("M1", "Enormous")
-    }]);
+    let chain = chain(&[mailbox("M1", "Enormous")
+        .with_total_emails(u64::from(u32::MAX))
+        .with_unread_emails(i64::from(i32::MAX) as u64 + 1)]);
     let read = read(&chain);
 
     assert_eq!(read[0].total, i32::MAX);

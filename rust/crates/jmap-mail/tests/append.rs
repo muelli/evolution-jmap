@@ -144,10 +144,7 @@ impl Fixture {
             let id = account.seed_mailbox("Archive", None);
             account.mailboxes.transaction(|mailboxes| {
                 let mailbox = mailboxes.get(&id).expect("the seeded mailbox").clone();
-                let denied = jmap_proto::mail::Mailbox {
-                    my_rights: Some(MailboxRights::new().with_may_add_items(false)),
-                    ..mailbox
-                };
+                let denied = mailbox.with_my_rights(MailboxRights::new().with_may_add_items(false));
                 assert!(
                     mailboxes.update(&id, denied),
                     "the seeded mailbox was not there"

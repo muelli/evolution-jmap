@@ -17,6 +17,7 @@ use crate::state::UtcDate;
 /// A mailbox (folder/label), RFC 8621 §2.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Mailbox {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -56,6 +57,11 @@ impl Mailbox {
         }
     }
 
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     pub fn with_parent_id(mut self, parent_id: impl Into<Id>) -> Self {
         self.parent_id = Some(parent_id.into());
         self
@@ -71,8 +77,33 @@ impl Mailbox {
         self
     }
 
+    pub fn with_total_emails(mut self, total_emails: u64) -> Self {
+        self.total_emails = Some(total_emails);
+        self
+    }
+
+    pub fn with_unread_emails(mut self, unread_emails: u64) -> Self {
+        self.unread_emails = Some(unread_emails);
+        self
+    }
+
+    pub fn with_total_threads(mut self, total_threads: u64) -> Self {
+        self.total_threads = Some(total_threads);
+        self
+    }
+
+    pub fn with_unread_threads(mut self, unread_threads: u64) -> Self {
+        self.unread_threads = Some(unread_threads);
+        self
+    }
+
     pub fn is_subscribed(mut self, subscribed: bool) -> Self {
         self.is_subscribed = Some(subscribed);
+        self
+    }
+
+    pub fn with_my_rights(mut self, my_rights: MailboxRights) -> Self {
+        self.my_rights = Some(my_rights);
         self
     }
 
