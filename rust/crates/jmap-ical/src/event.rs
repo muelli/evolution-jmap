@@ -4107,10 +4107,7 @@ pub fn to_nday(token: &str) -> NDay {
     let (ordinal, weekday) = token.split_at(token.len() - unsigned.len() + digits);
     match ordinal.parse::<i32>() {
         // Ordinal must be non-zero (RFC 8984 §4.3.3).
-        Ok(nth) if nth != 0 => NDay {
-            nth_of_period: Some(nth),
-            ..NDay::new(&weekday.to_ascii_lowercase())
-        },
+        Ok(nth) if nth != 0 => NDay::new(&weekday.to_ascii_lowercase()).with_nth_of_period(nth),
         _ => NDay::new(&token.to_ascii_lowercase()),
     }
 }

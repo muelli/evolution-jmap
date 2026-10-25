@@ -120,13 +120,7 @@ fn recurrence_rule_roundtrip() {
     // `byDay` is modeled rather than parked in `extra`: an `RRULE` spells it,
     // so the mapping must see it and roundtrip it unchanged.
     let days = rule.by_day.as_deref().expect("byDay");
-    assert_eq!(
-        days,
-        [NDay {
-            nth_of_period: Some(2),
-            ..NDay::new("we")
-        }]
-    );
+    assert_eq!(days, [NDay::new("we").with_nth_of_period(2)]);
     assert_eq!(days[0].day_type.as_deref(), Some("NDay"));
     assert!(rule.extra.is_empty());
 }

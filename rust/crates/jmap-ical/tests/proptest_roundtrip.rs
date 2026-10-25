@@ -186,12 +186,7 @@ fn arb_plain_weekday() -> impl Strategy<Value = NDay> {
         Just("sa"),
         Just("su"),
     ]
-    .prop_map(|d| NDay {
-        day_type: Some("NDay".to_owned()),
-        day: d.to_owned(),
-        nth_of_period: None,
-        extra: Default::default(),
-    })
+    .prop_map(NDay::new)
 }
 
 /// Generates valid NDay objects with optional ordinal for monthly/yearly rules.
@@ -213,11 +208,10 @@ fn arb_monthly_nday() -> impl Strategy<Value = NDay> {
             Just(Some(-1i32)),
         ],
     )
-        .prop_map(|(d, nth)| NDay {
-            day_type: Some("NDay".to_owned()),
-            day: d.to_owned(),
-            nth_of_period: nth,
-            extra: Default::default(),
+        .prop_map(|(d, nth)| {
+            let mut nday = NDay::new(d);
+            nday.nth_of_period = nth;
+            nday
         })
 }
 

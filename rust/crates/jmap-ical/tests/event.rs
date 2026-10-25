@@ -3316,14 +3316,8 @@ fn a_monthly_rule_names_which_of_those_days_it_means() {
     // RFC 5545 §3.3.10's ordinal, and RFC 8984 §4.3.3's `nthOfPeriod`: the
     // second Wednesday and the last Friday of the month, not every one of them.
     let days = vec![
-        NDay {
-            nth_of_period: Some(2),
-            ..NDay::new("we")
-        },
-        NDay {
-            nth_of_period: Some(-1),
-            ..NDay::new("fr")
-        },
+        NDay::new("we").with_nth_of_period(2),
+        NDay::new("fr").with_nth_of_period(-1),
     ];
     let event = CalendarEvent {
         recurrence_rule: Some(RecurrenceRule {
@@ -3359,12 +3353,7 @@ fn reads_the_days_off_a_rule_written_by_hand() {
         .expect("a rule came back");
     assert_eq!(
         rules.by_day.as_deref(),
-        Some(
-            &[NDay {
-                nth_of_period: Some(3),
-                ..NDay::new("tu")
-            }][..]
-        )
+        Some(&[NDay::new("tu").with_nth_of_period(3)][..])
     );
 }
 
@@ -3379,10 +3368,7 @@ fn an_ordinal_weekday_is_refused_where_the_recurrence_has_no_period_to_count_in(
     // rule was seen in part.
     for frequency in ["weekly", "daily", "hourly"] {
         let rule = RecurrenceRule {
-            by_day: Some(vec![NDay {
-                nth_of_period: Some(2),
-                ..NDay::new("mo")
-            }]),
+            by_day: Some(vec![NDay::new("mo").with_nth_of_period(2)]),
             ..RecurrenceRule::new(frequency)
         };
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
@@ -3411,16 +3397,10 @@ fn a_day_no_weekday_names_is_flagged_rather_than_written() {
         vec![NDay::new("mo,tu")],
         // Zero is no occurrence of a weekday; RFC 8984 §4.3.3 forbids it and
         // RFC 5545's ordwk starts at 1.
-        vec![NDay {
-            nth_of_period: Some(0),
-            ..NDay::new("mo")
-        }],
+        vec![NDay::new("mo").with_nth_of_period(0)],
         // An NDay carrying more than this mapping reads is as unseen as a rule
         // that does.
-        vec![NDay {
-            extra: [("weekOfMonth".to_owned(), json!(2))].into(),
-            ..NDay::new("mo")
-        }],
+        vec![NDay::new("mo").with_extra([("weekOfMonth".to_owned(), json!(2))].into())],
         // No day at all is not a set of days a BYDAY can name.
         vec![],
     ] {
@@ -8763,13 +8743,15 @@ fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
         interval: Some(2),
         count: Some(8),
         by_day: Some(vec![
-            NDay {
-                day: "mo".to_owned(),
-                ..Default::default()
+            {
+                let mut nday = NDay::default();
+                nday.day = "mo".to_owned();
+                nday
             },
-            NDay {
-                day: "fr".to_owned(),
-                ..Default::default()
+            {
+                let mut nday = NDay::default();
+                nday.day = "fr".to_owned();
+                nday
             },
         ]),
         ..RecurrenceRule::new("weekly")
@@ -10195,48 +10177,13 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
             frequency: "monthly".to_owned(),
             interval: Some(2),
             by_day: Some(vec![
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "mo".to_owned(),
-                    nth_of_period: Some(1),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "tu".to_owned(),
-                    nth_of_period: Some(2),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "we".to_owned(),
-                    nth_of_period: Some(3),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "th".to_owned(),
-                    nth_of_period: Some(4),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "fr".to_owned(),
-                    nth_of_period: Some(5),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "sa".to_owned(),
-                    nth_of_period: Some(-1),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "su".to_owned(),
-                    nth_of_period: Some(-2),
-                    extra: Default::default(),
-                },
+                NDay::new("mo").with_nth_of_period(1),
+                NDay::new("tu").with_nth_of_period(2),
+                NDay::new("we").with_nth_of_period(3),
+                NDay::new("th").with_nth_of_period(4),
+                NDay::new("fr").with_nth_of_period(5),
+                NDay::new("sa").with_nth_of_period(-1),
+                NDay::new("su").with_nth_of_period(-2),
             ]),
             by_month: Some(vec![
                 "1".to_owned(),
@@ -14990,18 +14937,9 @@ fn recurrence_complex_rrule_bysetpos_and_byday_ordinals_matrix() {
     let complex_rule = RecurrenceRule {
         frequency: "monthly".to_owned(),
         by_day: Some(vec![
-            NDay {
-                nth_of_period: Some(1),
-                ..NDay::new("mo")
-            },
-            NDay {
-                nth_of_period: Some(3),
-                ..NDay::new("mo")
-            },
-            NDay {
-                nth_of_period: Some(-1),
-                ..NDay::new("fr")
-            },
+            NDay::new("mo").with_nth_of_period(1),
+            NDay::new("mo").with_nth_of_period(3),
+            NDay::new("fr").with_nth_of_period(-1),
         ]),
         by_set_position: Some(vec![1, -1]),
         ..RecurrenceRule::new("monthly")
@@ -15124,13 +15062,7 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
     // 2. Mixed ordinals and bare weekdays
     let mixed_rule = RecurrenceRule {
         frequency: "monthly".to_owned(),
-        by_day: Some(vec![
-            NDay {
-                nth_of_period: Some(2),
-                ..NDay::new("tu")
-            },
-            NDay::new("th"),
-        ]),
+        by_day: Some(vec![NDay::new("tu").with_nth_of_period(2), NDay::new("th")]),
         ..RecurrenceRule::new("monthly")
     };
     assert!(maps_recurrence_rule(&mixed_rule));
@@ -15150,10 +15082,7 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
     for valid_freq in ["monthly", "yearly"] {
         let rule = RecurrenceRule {
             frequency: valid_freq.to_owned(),
-            by_day: Some(vec![NDay {
-                nth_of_period: Some(1),
-                ..NDay::new("mo")
-            }]),
+            by_day: Some(vec![NDay::new("mo").with_nth_of_period(1)]),
             ..RecurrenceRule::default()
         };
         assert!(maps_recurrence_rule(&rule), "{valid_freq} allows ordinals");
@@ -15161,10 +15090,7 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
     for invalid_freq in ["weekly", "daily", "hourly"] {
         let rule = RecurrenceRule {
             frequency: invalid_freq.to_owned(),
-            by_day: Some(vec![NDay {
-                nth_of_period: Some(1),
-                ..NDay::new("mo")
-            }]),
+            by_day: Some(vec![NDay::new("mo").with_nth_of_period(1)]),
             ..RecurrenceRule::default()
         };
         assert!(
@@ -15372,10 +15298,7 @@ fn recurrence_rdate_exdate_and_override_interactions_matrix() {
         show_without_time: Some(true),
         recurrence_rule: Some(RecurrenceRule {
             frequency: "monthly".to_owned(),
-            by_day: Some(vec![NDay {
-                nth_of_period: Some(1),
-                ..NDay::new("mo")
-            }]),
+            by_day: Some(vec![NDay::new("mo").with_nth_of_period(1)]),
             ..RecurrenceRule::default()
         }),
         recurrence_overrides: Some(BTreeMap::from([
@@ -28237,10 +28160,11 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     // 1. Ordinal permitted on monthly rule
     let monthly_rule = RecurrenceRule {
         frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "mo".to_owned(),
-            nth_of_period: Some(2),
-            ..NDay::default()
+        by_day: Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "mo".to_owned();
+            nday.nth_of_period = Some(2);
+            nday
         }]),
         ..RecurrenceRule::default()
     };
@@ -28265,10 +28189,11 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     // 2. Ordinal permitted on yearly rule
     let yearly_rule = RecurrenceRule {
         frequency: "yearly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "fr".to_owned(),
-            nth_of_period: Some(-1),
-            ..NDay::default()
+        by_day: Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "fr".to_owned();
+            nday.nth_of_period = Some(-1);
+            nday
         }]),
         ..RecurrenceRule::default()
     };
@@ -28293,10 +28218,11 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     // 3. Ordinal strictly refused on weekly rule per RFC 5545 section 3.3.10
     let weekly_rule = RecurrenceRule {
         frequency: "weekly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "mo".to_owned(),
-            nth_of_period: Some(1),
-            ..NDay::default()
+        by_day: Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "mo".to_owned();
+            nday.nth_of_period = Some(1);
+            nday
         }]),
         ..RecurrenceRule::default()
     };
@@ -28321,10 +28247,11 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     // 4. Ordinal zero is refused
     let zero_rule = RecurrenceRule {
         frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "tu".to_owned(),
-            nth_of_period: Some(0),
-            ..NDay::default()
+        by_day: Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "tu".to_owned();
+            nday.nth_of_period = Some(0);
+            nday
         }]),
         ..RecurrenceRule::default()
     };
@@ -28358,11 +28285,12 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     extra_map.insert("vendor".to_owned(), serde_json::Value::Bool(true));
     let extra_rule = RecurrenceRule {
         frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "we".to_owned(),
-            nth_of_period: Some(1),
-            extra: extra_map,
-            ..NDay::default()
+        by_day: Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "we".to_owned();
+            nday.nth_of_period = Some(1);
+            nday.extra = extra_map;
+            nday
         }]),
         ..RecurrenceRule::default()
     };
@@ -32283,10 +32211,7 @@ fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
     // 1. BYDAY with ordinal is valid under MONTHLY or YEARLY
     let monthly_with_ordinal = RecurrenceRule {
         frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            nth_of_period: Some(2),
-            ..NDay::new("mo")
-        }]),
+        by_day: Some(vec![NDay::new("mo").with_nth_of_period(2)]),
         ..RecurrenceRule::default()
     };
     assert!(maps_recurrence_rule(&monthly_with_ordinal));
@@ -32294,10 +32219,7 @@ fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
     // 2. BYDAY with ordinal is prohibited under WEEKLY (RFC 5545 Section 3.3.10)
     let weekly_with_ordinal = RecurrenceRule {
         frequency: "weekly".to_owned(),
-        by_day: Some(vec![NDay {
-            nth_of_period: Some(2),
-            ..NDay::new("mo")
-        }]),
+        by_day: Some(vec![NDay::new("mo").with_nth_of_period(2)]),
         ..RecurrenceRule::default()
     };
     assert!(
@@ -32308,10 +32230,7 @@ fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
     // 3. Ordinal 0 is rejected (RFC 8984 Section 4.3.3 and RFC 5545 ordwk 1-based)
     let zero_ordinal = RecurrenceRule {
         frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            nth_of_period: Some(0),
-            ..NDay::new("mo")
-        }]),
+        by_day: Some(vec![NDay::new("mo").with_nth_of_period(0)]),
         ..RecurrenceRule::default()
     };
     assert!(!maps_recurrence_rule(&zero_ordinal));
@@ -35018,10 +34937,7 @@ fn differential_oracle_rrule_by_parts_ordering_and_validation() {
         Some("MO")
     );
 
-    let monday_ordinal = NDay {
-        nth_of_period: Some(2),
-        ..NDay::new("mo")
-    };
+    let monday_ordinal = NDay::new("mo").with_nth_of_period(2);
     assert_eq!(
         jmap_ical::event::by_day_token(&monday_ordinal, "monthly").as_deref(),
         Some("2MO")
@@ -35031,10 +34947,7 @@ fn differential_oracle_rrule_by_parts_ordering_and_validation() {
         None
     );
 
-    let monday_zero = NDay {
-        nth_of_period: Some(0),
-        ..NDay::new("mo")
-    };
+    let monday_zero = NDay::new("mo").with_nth_of_period(0);
     assert_eq!(
         jmap_ical::event::by_day_token(&monday_zero, "monthly"),
         None
@@ -38258,10 +38171,7 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
 #[test]
 fn differential_oracle_by_day_part_frequency_period_scoping_and_month_day() {
     // 1. Weekday ordinals scoped to MONTHLY and YEARLY
-    let nday_ord = NDay {
-        nth_of_period: Some(2),
-        ..NDay::new("mo")
-    };
+    let nday_ord = NDay::new("mo").with_nth_of_period(2);
     assert_eq!(
         jmap_ical::event::by_day_token(&nday_ord, "monthly").as_deref(),
         Some("2MO")
@@ -38285,10 +38195,7 @@ fn differential_oracle_by_day_part_frequency_period_scoping_and_month_day() {
     );
 
     // 3. Ordinal 0 strictly rejected
-    let nday_zero = NDay {
-        nth_of_period: Some(0),
-        ..NDay::new("fr")
-    };
+    let nday_zero = NDay::new("fr").with_nth_of_period(0);
     assert_eq!(jmap_ical::event::by_day_token(&nday_zero, "monthly"), None);
 
     // 4. by_month_day_part forbidden on WEEKLY frequency
@@ -40582,12 +40489,9 @@ fn differential_oracle_rrule_serialization_libical_subparts_and_ordering() {
     assert!(jmap_ical::event::by_year_day_part(&invalid_daily_yearday).is_none());
 
     // BYDAY ordinal (nthOfPeriod) requires MONTHLY or YEARLY
-    let nday_with_nth = jmap_proto::calendars::NDay {
-        day: "mo".to_string(),
-        nth_of_period: Some(2),
-        extra: Default::default(),
-        day_type: None,
-    };
+    let mut nday_with_nth = jmap_proto::calendars::NDay::default();
+    nday_with_nth.day = "mo".to_string();
+    nday_with_nth.nth_of_period = Some(2);
     assert!(jmap_ical::event::by_day_token(&nday_with_nth, "monthly").is_some());
     assert!(jmap_ical::event::by_day_token(&nday_with_nth, "weekly").is_none());
 }
@@ -42894,11 +42798,9 @@ fn differential_oracle_recurrence_rule_ordinal_days_and_month_day_bounding() {
     assert!(!jmap_ical::event::counts_within_a_period("hourly"));
 
     // 2. by_day_token: ordinals are formatted when permitted, and refused on other frequencies
-    let day_with_nth = NDay {
-        day: "mo".to_string(),
-        nth_of_period: Some(2),
-        ..NDay::default()
-    };
+    let mut day_with_nth = NDay::default();
+    day_with_nth.day = "mo".to_string();
+    day_with_nth.nth_of_period = Some(2);
     assert_eq!(
         jmap_ical::event::by_day_token(&day_with_nth, "monthly").as_deref(),
         Some("2MO")
@@ -42912,19 +42814,15 @@ fn differential_oracle_recurrence_rule_ordinal_days_and_month_day_bounding() {
     assert!(jmap_ical::event::by_day_token(&day_with_nth, "daily").is_none());
 
     // Zero ordinal is invalid in both RFC 5545 and RFC 8984
-    let day_zero = NDay {
-        day: "fr".to_string(),
-        nth_of_period: Some(0),
-        ..NDay::default()
-    };
+    let mut day_zero = NDay::default();
+    day_zero.day = "fr".to_string();
+    day_zero.nth_of_period = Some(0);
     assert!(jmap_ical::event::by_day_token(&day_zero, "monthly").is_none());
 
     // Negative ordinals count from end of period
-    let day_neg = NDay {
-        day: "fr".to_string(),
-        nth_of_period: Some(-1),
-        ..NDay::default()
-    };
+    let mut day_neg = NDay::default();
+    day_neg.day = "fr".to_string();
+    day_neg.nth_of_period = Some(-1);
     assert_eq!(
         jmap_ical::event::by_day_token(&day_neg, "monthly").as_deref(),
         Some("-1FR")

@@ -755,12 +755,12 @@ prop_compose! {
         nth_of_period in any::<Option<i32>>(),
         extra in arb_extra(),
     ) -> NDay {
-        NDay {
-            day_type: Some("NDay".to_string()),
-            day,
-            nth_of_period,
-            extra,
-        }
+        let mut nday = NDay::default();
+        nday.day_type = Some("NDay".to_string());
+        nday.day = day;
+        nday.nth_of_period = nth_of_period;
+        nday.extra = extra;
+        nday
     }
 }
 

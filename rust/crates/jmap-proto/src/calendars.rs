@@ -606,6 +606,7 @@ pub struct RecurrenceRule {
 /// Negative values count from the end.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct NDay {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub day_type: Option<String>,
@@ -629,6 +630,11 @@ impl NDay {
 
     pub fn with_nth_of_period(mut self, nth: i32) -> Self {
         self.nth_of_period = Some(nth);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

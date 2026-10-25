@@ -31,12 +31,9 @@ prop_compose! {
         ],
         nth_of_period in prop::option::of(-53..=53i32),
     ) -> NDay {
-        NDay {
-            day_type: Some("NDay".to_string()),
-            day,
-            nth_of_period,
-            extra: BTreeMap::new(),
-        }
+        let mut nday = NDay::new(&day);
+        nday.nth_of_period = nth_of_period;
+        nday
     }
 }
 
