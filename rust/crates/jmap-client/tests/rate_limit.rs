@@ -474,12 +474,7 @@ fn non_idempotent_email_import_never_retries_on_429() {
     interceptor.set_jmap_429_count(1);
     let requests_before = interceptor.jmap_requests();
 
-    let email_import = jmap_proto::mail::EmailImport {
-        blob_id: Some(Id::new("b1")),
-        mailbox_ids: Some([("mb1".into(), true)].into()),
-        keywords: None,
-        received_at: None,
-    };
+    let email_import = jmap_proto::mail::EmailImport::new(Id::new("b1"), "mb1");
 
     let result = client.email_import(&account_id, &email_import);
 

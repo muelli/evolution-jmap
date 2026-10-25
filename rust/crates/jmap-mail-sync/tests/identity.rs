@@ -25,14 +25,9 @@ impl Fixture {
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&self.account_id).unwrap();
         let id = account.identities.alloc_id();
-        account.identities.seed_with_id(
-            id.clone(),
-            Identity {
-                id: None,
-                email: email.to_owned(),
-                ..Identity::default()
-            },
-        );
+        let mut identity = Identity::default();
+        identity.email = email.to_owned();
+        account.identities.seed_with_id(id.clone(), identity);
         id
     }
 }

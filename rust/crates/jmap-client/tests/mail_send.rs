@@ -22,11 +22,11 @@ fn draft(drafts_mailbox: &Id) -> Email {
         to: Some(vec![EmailAddress::new(Some("Bob"), "bob@example.com")]),
         subject: Some("Ping".to_owned()),
         body_values: Some([("1".to_owned(), EmailBodyValue::new("Hello Bob"))].into()),
-        text_body: Some(vec![EmailBodyPart {
-            part_id: Some("1".to_owned()),
-            content_type: Some("text/plain".to_owned()),
-            ..EmailBodyPart::default()
-        }]),
+        text_body: Some(vec![
+            EmailBodyPart::new()
+                .with_part_id("1")
+                .with_content_type("text/plain"),
+        ]),
         ..Email::default()
     }
 }
@@ -308,10 +308,10 @@ fn ready_to_submit(server: &MockServer) -> (Client, Id, Id) {
 /// The envelope the scheduling tests submit with; scheduling requires one,
 /// since the FUTURERELEASE parameter has to sit on its `mailFrom`.
 fn alice_to_bob() -> Envelope {
-    Envelope {
-        mail_from: EnvelopeAddress::new("alice@example.com"),
-        rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
-    }
+    Envelope::new(
+        EnvelopeAddress::new("alice@example.com"),
+        [EnvelopeAddress::new("bob@example.com")],
+    )
 }
 
 /// `submit_email_at` with a `HOLDFOR`: the mock holds the message rather than

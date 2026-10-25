@@ -705,6 +705,16 @@ impl EmailImport {
         self.received_at = Some(received_at.into());
         self
     }
+
+    pub fn with_blob_id(mut self, blob_id: impl Into<Id>) -> Self {
+        self.blob_id = Some(blob_id.into());
+        self
+    }
+
+    pub fn with_mailbox_ids(mut self, mailbox_ids: BTreeMap<Id, bool>) -> Self {
+        self.mailbox_ids = Some(mailbox_ids);
+        self
+    }
 }
 
 /// `Email/import` arguments (RFC 8621 §4.8).

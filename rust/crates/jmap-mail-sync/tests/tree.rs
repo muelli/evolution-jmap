@@ -38,10 +38,7 @@ fn with_sort_order(mut mailbox: Mailbox, sort_order: u32) -> Mailbox {
 }
 
 fn with_may_add_items(mut mailbox: Mailbox, allowed: bool) -> Mailbox {
-    mailbox.my_rights = Some(MailboxRights {
-        may_add_items: Some(allowed),
-        ..MailboxRights::default()
-    });
+    mailbox.my_rights = Some(MailboxRights::new().with_may_add_items(allowed));
     mailbox
 }
 

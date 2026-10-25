@@ -95,10 +95,7 @@ mod tests {
     use super::*;
 
     fn identity(email: &str) -> Identity {
-        Identity {
-            email: email.to_owned(),
-            ..Identity::default()
-        }
+        Identity::new("", email)
     }
 
     #[test]

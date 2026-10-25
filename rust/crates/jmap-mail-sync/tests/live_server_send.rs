@@ -106,10 +106,10 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
         .send_message(Outgoing {
             source: message.into_bytes(),
             identity,
-            envelope: Some(Envelope {
-                mail_from: EnvelopeAddress::new(sender_email.clone()),
-                rcpt_to: vec![EnvelopeAddress::new(recipient_email.clone())],
-            }),
+            envelope: Some(Envelope::new(
+                EnvelopeAddress::new(sender_email.clone()),
+                [EnvelopeAddress::new(recipient_email.clone())],
+            )),
             staging: mailboxes.staging,
             destination: mailboxes.destination,
         })
@@ -235,10 +235,10 @@ fn an_envelope_recipient_absent_from_every_header_is_still_delivered() {
         .send_message(Outgoing {
             source: message.into_bytes(),
             identity,
-            envelope: Some(Envelope {
-                mail_from: EnvelopeAddress::new(sender_email.clone()),
-                rcpt_to: vec![EnvelopeAddress::new(recipient_email.clone())],
-            }),
+            envelope: Some(Envelope::new(
+                EnvelopeAddress::new(sender_email.clone()),
+                [EnvelopeAddress::new(recipient_email.clone())],
+            )),
             staging: mailboxes.staging,
             destination: mailboxes.destination,
         })

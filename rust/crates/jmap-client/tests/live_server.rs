@@ -1257,11 +1257,11 @@ fn send_email_delivers_to_a_second_account_on_the_real_server() {
             )]
             .into(),
         ),
-        text_body: Some(vec![EmailBodyPart {
-            part_id: Some("1".to_owned()),
-            content_type: Some("text/plain".to_owned()),
-            ..EmailBodyPart::default()
-        }]),
+        text_body: Some(vec![
+            EmailBodyPart::new()
+                .with_part_id("1")
+                .with_content_type("text/plain"),
+        ]),
         ..Email::default()
     };
 

@@ -145,10 +145,7 @@ impl Fixture {
             account.mailboxes.transaction(|mailboxes| {
                 let mailbox = mailboxes.get(&id).expect("the seeded mailbox").clone();
                 let denied = jmap_proto::mail::Mailbox {
-                    my_rights: Some(MailboxRights {
-                        may_add_items: Some(false),
-                        ..MailboxRights::default()
-                    }),
+                    my_rights: Some(MailboxRights::new().with_may_add_items(false)),
                     ..mailbox
                 };
                 assert!(

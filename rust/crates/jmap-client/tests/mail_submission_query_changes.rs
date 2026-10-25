@@ -21,11 +21,11 @@ fn draft(mailbox: &Id, to: &str) -> Email {
         to: Some(vec![EmailAddress::new(None, to)]),
         subject: Some("Ping".to_owned()),
         body_values: Some([("1".to_owned(), EmailBodyValue::new("Hello"))].into()),
-        text_body: Some(vec![EmailBodyPart {
-            part_id: Some("1".to_owned()),
-            content_type: Some("text/plain".to_owned()),
-            ..EmailBodyPart::default()
-        }]),
+        text_body: Some(vec![
+            EmailBodyPart::new()
+                .with_part_id("1")
+                .with_content_type("text/plain"),
+        ]),
         ..Email::default()
     }
 }

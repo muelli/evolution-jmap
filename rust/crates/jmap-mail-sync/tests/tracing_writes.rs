@@ -583,10 +583,10 @@ fn sending_a_message_traces_the_account_and_identity_on_success() {
         sync.send_message(Outgoing {
             source: MESSAGE.to_vec(),
             identity: identity.clone(),
-            envelope: Some(Envelope {
-                mail_from: EnvelopeAddress::new("alice@example.com"),
-                rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
-            }),
+            envelope: Some(Envelope::new(
+                EnvelopeAddress::new("alice@example.com"),
+                [EnvelopeAddress::new("bob@example.com")],
+            )),
             staging: drafts,
             destination: None,
         })
@@ -622,10 +622,10 @@ fn sending_a_message_through_no_identity_traces_the_failure() {
         let _ = sync.send_message(Outgoing {
             source: MESSAGE.to_vec(),
             identity: Id::new("I404"),
-            envelope: Some(Envelope {
-                mail_from: EnvelopeAddress::new("alice@example.com"),
-                rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
-            }),
+            envelope: Some(Envelope::new(
+                EnvelopeAddress::new("alice@example.com"),
+                [EnvelopeAddress::new("bob@example.com")],
+            )),
             staging: drafts,
             destination: None,
         });

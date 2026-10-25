@@ -152,10 +152,7 @@ fn guest_status(client: &Client, account_id: &Id, title: &str, address: &str) ->
 
 /// The subjects of the messages of the guest that contain `title`.
 fn guest_mail(guest: &Client, account_id: &Id, title: &str) -> Vec<String> {
-    let filter = EmailQueryFilter {
-        text: Some(title.to_owned()),
-        ..EmailQueryFilter::default()
-    };
+    let filter = EmailQueryFilter::default().text(title);
     let ids = guest
         .email_query(account_id, filter, None, None, 0)
         .unwrap()
