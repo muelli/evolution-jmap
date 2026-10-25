@@ -22,7 +22,7 @@
 //! needs a running `evolution-source-registry`. Thus the tests drive the pump
 //! with a counting closure, and the backends pass a closure that calls
 //! `e_book_meta_backend_schedule_refresh` through a
-//! [`WeakBackend`](crate::weak::WeakBackend). The address book backend is the
+//! [`WeakBackend`]. The address book backend is the
 //! exception: it queues its own refresh, because the EDS scheduled refresh can
 //! deadlock with a manual-query book view.
 //!
@@ -175,7 +175,7 @@ impl PushRefresh {
     /// backend.
     ///
     /// An empty `types` accepts any type for the account. This matches the
-    /// `*` that [`expand_url`](jmap_client::eventsource::expand_url) puts in
+    /// `*` that [`expand_url`] puts in
     /// the URL for the same input.
     ///
     /// `refresh` receives the subset of `types` that the relevant

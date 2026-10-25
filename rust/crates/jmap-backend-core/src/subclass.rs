@@ -330,7 +330,7 @@ unsafe extern "C" fn interface_init_trampoline<I: InterfaceImpl>(
 /// is named in [`class_init_types`](ObjectSubclass::class_init_types), so
 /// that the lookup finds it.
 ///
-/// The accessor causes the same cycle that [`REGISTRATION`] prevents, with
+/// The accessor causes the same cycle that `REGISTRATION` prevents, with
 /// GLib's lazy `get_type` once-init in place of our lock. A class initialiser
 /// holds GLib's class-init lock. An accessor whose type is not registered yet
 /// waits in `g_once_init_enter` for the thread that registers it. That thread

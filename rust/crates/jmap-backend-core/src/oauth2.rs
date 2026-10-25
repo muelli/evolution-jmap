@@ -443,7 +443,7 @@ pub enum SilentRefreshFailureReason {
     /// A transport or spawn failure of the secret store (D-Bus or daemon).
     SecretStoreFailure,
     /// A D-Bus peer that the token fetch must reach does not exist (see
-    /// [`is_service_gone`]). This is an infrastructure failure, never a
+    /// `is_service_gone`). This is an infrastructure failure, never a
     /// credential failure.
     ServiceGone,
     /// The authorization server rejected the refresh token exchange (for
