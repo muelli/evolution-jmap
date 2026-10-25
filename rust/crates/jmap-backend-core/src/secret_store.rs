@@ -8,7 +8,7 @@
 //! A failed secret store must show a message, not one more consent window.
 //! The `GError` that `e_source_get_oauth2_access_token_sync` sets identifies
 //! two of the three causes of this failure (see
-//! [`crate::oauth2::is_secret_store_failure`]). It cannot identify the third
+//! `crate::oauth2::is_secret_store_failure`). It cannot identify the third
 //! cause, a *locked* login keyring. The cause of this is the design, not an
 //! oversight:
 //!
