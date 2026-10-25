@@ -148,12 +148,11 @@ fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> O
     } else {
         "confirmed"
     };
-    Some(BusyPeriod {
-        utc_start: UtcDate::new(format!("{start}Z")),
-        utc_end: UtcDate::new(format!("{end}Z")),
-        busy_status: busy_status.to_owned(),
-        event: request.show_details.then(|| event.clone()),
-    })
+    let mut period = BusyPeriod::new(format!("{start}Z"), format!("{end}Z"), busy_status);
+    if request.show_details {
+        period = period.with_event(event.clone());
+    }
+    Some(period)
 }
 
 /// Add `PT<h>H<m>M<s>S` to `YYYY-MM-DDTHH:MM:SS` with same-day arithmetic.
@@ -392,10 +391,7 @@ impl AccountState {
     /// Seed a principal and return its id without a state bump.
     pub fn seed_principal(&mut self, principal: Principal) -> Id {
         let id = self.principals.alloc_id();
-        let principal = Principal {
-            id: Some(id.clone()),
-            ..principal
-        };
+        let principal = principal.with_id(id.clone());
         self.principals.seed_with_id(id.clone(), principal);
         id
     }

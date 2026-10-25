@@ -56,18 +56,16 @@ fn busy_periods_to_vfreebusy_renders_component_with_periods() {
     let window_start = UtcDate::new("2026-08-19T08:00:00Z");
     let window_end = UtcDate::new("2026-08-19T18:00:00Z");
     let periods = vec![
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-08-19T09:00:00Z"),
-            utc_end: UtcDate::new("2026-08-19T10:00:00Z"),
-            busy_status: "tentative".to_string(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-08-19T11:00:00Z"),
-            utc_end: UtcDate::new("2026-08-19T12:00:00Z"),
-            busy_status: "unavailable".to_string(),
-            event: None,
-        },
+        BusyPeriod::new(
+            UtcDate::new("2026-08-19T09:00:00Z"),
+            UtcDate::new("2026-08-19T10:00:00Z"),
+            "tentative",
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-08-19T11:00:00Z"),
+            UtcDate::new("2026-08-19T12:00:00Z"),
+            "unavailable",
+        ),
     ];
 
     let ics = busy_periods_to_vfreebusy("user@example.com", &window_start, &window_end, &periods)
@@ -86,12 +84,11 @@ fn busy_periods_to_vfreebusy_renders_component_with_periods() {
 fn busy_periods_to_vfreebusy_returns_none_on_invalid_period() {
     let window_start = UtcDate::new("2026-08-19T08:00:00Z");
     let window_end = UtcDate::new("2026-08-19T18:00:00Z");
-    let periods = vec![BusyPeriod {
-        utc_start: UtcDate::new("invalid-start"),
-        utc_end: UtcDate::new("2026-08-19T10:00:00Z"),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    }];
+    let periods = vec![BusyPeriod::new(
+        UtcDate::new("invalid-start"),
+        UtcDate::new("2026-08-19T10:00:00Z"),
+        "confirmed",
+    )];
 
     assert_eq!(
         busy_periods_to_vfreebusy("user@example.com", &window_start, &window_end, &periods),

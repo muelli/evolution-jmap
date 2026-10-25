@@ -10318,11 +10318,12 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
         .map(|i| format!("2026-09-{:02}T18:00:00Z", i))
         .collect::<Vec<_>>();
     let periods = (0..10)
-        .map(|i| jmap_proto::principals::BusyPeriod {
-            busy_status: "confirmed".to_owned(),
-            utc_start: jmap_proto::state::UtcDate::new(&starts[i]),
-            utc_end: jmap_proto::state::UtcDate::new(&ends[i]),
-            event: None,
+        .map(|i| {
+            jmap_proto::principals::BusyPeriod::new(
+                jmap_proto::state::UtcDate::new(&starts[i]),
+                jmap_proto::state::UtcDate::new(&ends[i]),
+                "confirmed".to_owned(),
+            )
         })
         .collect::<Vec<_>>();
     let fb_ics = jmap_ical::busy_periods_to_vfreebusy(
@@ -14641,24 +14642,21 @@ fn mapping_docs_completeness_audit_freebusy_decision_matrix() {
 
     // 2. busy_periods_to_vfreebusy formatting and search window bounding
     let periods = [
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-15T10:00:00Z"),
-            utc_end: UtcDate::new("2026-09-15T11:30:00Z"),
-            busy_status: "busy".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-15T14:00:00Z"),
-            utc_end: UtcDate::new("2026-09-15T15:00:00Z"),
-            busy_status: "tentative".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-15T16:00:00Z"),
-            utc_end: UtcDate::new("2026-09-15T17:00:00Z"),
-            busy_status: "unavailable".to_owned(),
-            event: None,
-        },
+        BusyPeriod::new(
+            UtcDate::new("2026-09-15T10:00:00Z"),
+            UtcDate::new("2026-09-15T11:30:00Z"),
+            "busy".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-15T14:00:00Z"),
+            UtcDate::new("2026-09-15T15:00:00Z"),
+            "tentative".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-15T16:00:00Z"),
+            UtcDate::new("2026-09-15T17:00:00Z"),
+            "unavailable".to_owned(),
+        ),
     ];
 
     let vfb = busy_periods_to_vfreebusy(
@@ -22284,12 +22282,7 @@ fn differential_oracle_freebusy_whole_component_refusal_on_invalid_period_or_win
     );
 
     // Invalid busy period refuses component rather than dropping period
-    let bad_period = BusyPeriod {
-        utc_start: invalid_hour,
-        utc_end: valid_end.clone(),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    };
+    let bad_period = BusyPeriod::new(invalid_hour, valid_end.clone(), "confirmed".to_string());
     assert_eq!(
         busy_periods_to_vfreebusy("alice@example.com", &valid_start, &valid_end, &[bad_period]),
         None
@@ -22331,24 +22324,21 @@ fn differential_oracle_freebusy_status_mapping_and_fail_safe_busy_fallback() {
     let window_start = UtcDate::new("2026-09-04T08:00:00Z");
     let window_end = UtcDate::new("2026-09-04T18:00:00Z");
     let periods = vec![
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-04T09:00:00Z"),
-            utc_end: UtcDate::new("2026-09-04T10:00:00Z"),
-            busy_status: "tentative".to_string(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-04T11:00:00Z"),
-            utc_end: UtcDate::new("2026-09-04T12:00:00Z"),
-            busy_status: "unavailable".to_string(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-04T13:00:00Z"),
-            utc_end: UtcDate::new("2026-09-04T14:00:00Z"),
-            busy_status: "future-extension".to_string(),
-            event: None,
-        },
+        BusyPeriod::new(
+            UtcDate::new("2026-09-04T09:00:00Z"),
+            UtcDate::new("2026-09-04T10:00:00Z"),
+            "tentative".to_string(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-04T11:00:00Z"),
+            UtcDate::new("2026-09-04T12:00:00Z"),
+            "unavailable".to_string(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-04T13:00:00Z"),
+            UtcDate::new("2026-09-04T14:00:00Z"),
+            "future-extension".to_string(),
+        ),
     ];
     let ics = busy_periods_to_vfreebusy("alice@example.com", &window_start, &window_end, &periods)
         .expect("render periods");
@@ -22367,12 +22357,11 @@ fn differential_oracle_freebusy_fractional_seconds_truncation_and_digit_validati
     //    refusing the whole component.
     let window_start = UtcDate::new("2026-09-04T08:00:00.123Z");
     let window_end = UtcDate::new("2026-09-04T18:00:00.999Z");
-    let periods = vec![BusyPeriod {
-        utc_start: UtcDate::new("2026-09-04T09:30:00.555Z"),
-        utc_end: UtcDate::new("2026-09-04T10:30:00.001Z"),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    }];
+    let periods = vec![BusyPeriod::new(
+        UtcDate::new("2026-09-04T09:30:00.555Z"),
+        UtcDate::new("2026-09-04T10:30:00.001Z"),
+        "confirmed".to_string(),
+    )];
     let ics = busy_periods_to_vfreebusy("alice@example.com", &window_start, &window_end, &periods)
         .expect("render with fractional seconds");
     assert!(ics.contains("DTSTART:20260904T080000Z"));
@@ -22381,12 +22370,11 @@ fn differential_oracle_freebusy_fractional_seconds_truncation_and_digit_validati
 
     // Invalid non-digit fractional seconds refuse component
     let bad_fraction = UtcDate::new("2026-09-04T09:30:00.55aZ");
-    let bad_period = BusyPeriod {
-        utc_start: bad_fraction,
-        utc_end: UtcDate::new("2026-09-04T10:30:00Z"),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    };
+    let bad_period = BusyPeriod::new(
+        bad_fraction,
+        UtcDate::new("2026-09-04T10:30:00Z"),
+        "confirmed".to_string(),
+    );
     assert_eq!(
         busy_periods_to_vfreebusy(
             "alice@example.com",
@@ -28588,30 +28576,26 @@ fn differential_oracle_freebusy_envelope_and_window_demarcation() {
     let window_end = UtcDate::new("2026-09-01T18:00:00Z");
 
     let periods = vec![
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T09:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T10:00:00Z"),
-            busy_status: "tentative".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T11:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T12:00:00Z"),
-            busy_status: "unavailable".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T14:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T15:00:00Z"),
-            busy_status: "confirmed".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T16:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T17:00:00Z"),
-            busy_status: "unknown-future-type".to_owned(),
-            event: None,
-        },
+        BusyPeriod::new(
+            UtcDate::new("2026-09-01T09:00:00Z"),
+            UtcDate::new("2026-09-01T10:00:00Z"),
+            "tentative".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-01T11:00:00Z"),
+            UtcDate::new("2026-09-01T12:00:00Z"),
+            "unavailable".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-01T14:00:00Z"),
+            UtcDate::new("2026-09-01T15:00:00Z"),
+            "confirmed".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-01T16:00:00Z"),
+            UtcDate::new("2026-09-01T17:00:00Z"),
+            "unknown-future-type".to_owned(),
+        ),
     ];
 
     // 1. Bare VFREEBUSY component envelope
@@ -28673,12 +28657,11 @@ fn differential_oracle_freebusy_envelope_and_window_demarcation() {
         "refuses component whole on unreadable window start"
     );
 
-    let bad_period = BusyPeriod {
-        utc_start: UtcDate::new("not-a-utc-date"),
-        utc_end: UtcDate::new("2026-09-01T10:00:00Z"),
-        busy_status: "confirmed".to_owned(),
-        event: None,
-    };
+    let bad_period = BusyPeriod::new(
+        UtcDate::new("not-a-utc-date"),
+        UtcDate::new("2026-09-01T10:00:00Z"),
+        "confirmed".to_owned(),
+    );
     assert!(
         busy_periods_to_vfreebusy(
             "user@example.com",
@@ -33787,18 +33770,16 @@ fn differential_oracle_freebusy_status_mapping_and_address_normalization() {
     // 4. busy_periods_to_vfreebusy whole-component refusal integrity
     let start = UtcDate::new("2026-09-01T08:00:00Z");
     let end = UtcDate::new("2026-09-01T18:00:00Z");
-    let valid_period = BusyPeriod {
-        utc_start: UtcDate::new("2026-09-01T09:00:00.123Z"),
-        utc_end: UtcDate::new("2026-09-01T10:00:00.456Z"),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    };
-    let invalid_period = BusyPeriod {
-        utc_start: UtcDate::new("invalid-timestamp"),
-        utc_end: UtcDate::new("2026-09-01T11:00:00Z"),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    };
+    let valid_period = BusyPeriod::new(
+        UtcDate::new("2026-09-01T09:00:00.123Z"),
+        UtcDate::new("2026-09-01T10:00:00.456Z"),
+        "confirmed".to_string(),
+    );
+    let invalid_period = BusyPeriod::new(
+        UtcDate::new("invalid-timestamp"),
+        UtcDate::new("2026-09-01T11:00:00Z"),
+        "confirmed".to_string(),
+    );
 
     let result_valid = jmap_ical::freebusy::busy_periods_to_vfreebusy(
         "alice@example.com",
@@ -36376,12 +36357,11 @@ fn differential_oracle_freebusy_availability_fail_closed_and_address_normalizati
     let window_start = UtcDate::new("2026-09-01T08:00:00Z");
     let window_end = UtcDate::new("2026-09-01T18:00:00Z");
 
-    let invalid_period = BusyPeriod {
-        utc_start: UtcDate::new("not-a-valid-date"),
-        utc_end: UtcDate::new("2026-09-01T10:00:00Z"),
-        busy_status: "confirmed".to_owned(),
-        event: None,
-    };
+    let invalid_period = BusyPeriod::new(
+        UtcDate::new("not-a-valid-date"),
+        UtcDate::new("2026-09-01T10:00:00Z"),
+        "confirmed".to_owned(),
+    );
     assert_eq!(
         busy_periods_to_vfreebusy(
             "user@example.com",
@@ -36401,12 +36381,11 @@ fn differential_oracle_freebusy_availability_fail_closed_and_address_normalizati
     );
 
     // 3. Sub-second fraction truncation in UtcDate
-    let subsecond_period = BusyPeriod {
-        utc_start: UtcDate::new("2026-09-01T09:00:00.123Z"),
-        utc_end: UtcDate::new("2026-09-01T10:00:00.999Z"),
-        busy_status: "confirmed".to_owned(),
-        event: None,
-    };
+    let subsecond_period = BusyPeriod::new(
+        UtcDate::new("2026-09-01T09:00:00.123Z"),
+        UtcDate::new("2026-09-01T10:00:00.999Z"),
+        "confirmed".to_owned(),
+    );
     let vfb = busy_periods_to_vfreebusy(
         "user@example.com",
         &window_start,

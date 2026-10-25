@@ -22,6 +22,7 @@ use crate::state::UtcDate;
 /// server knows about.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Principal {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -223,6 +224,7 @@ impl GetAvailabilityResponse {
 /// when the request asked for `showDetails` and the caller may see it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BusyPeriod {
     pub utc_start: UtcDate,
     pub utc_end: UtcDate,

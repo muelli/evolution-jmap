@@ -470,12 +470,11 @@ fn get_free_busy_traces_structured_fields() {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&fixture.server.account_id()).unwrap();
-        account.seed_principal(jmap_proto::principals::Principal {
-            principal_type: Some("individual".to_owned()),
-            name: "bob@example.com".to_owned(),
-            email: Some("bob@example.com".to_owned()),
-            ..Default::default()
-        });
+        account.seed_principal(
+            jmap_proto::principals::Principal::new("bob@example.com")
+                .with_type("individual")
+                .with_email("bob@example.com"),
+        );
     }
 
     let sync = fixture.sync();

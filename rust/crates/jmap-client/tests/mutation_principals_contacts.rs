@@ -762,17 +762,13 @@ fn share_notifications_and_query_return_matching_records() {
         let state = server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&account_id).unwrap();
-        let me = account.seed_current_user_principal(Principal {
-            name: "Alice".to_owned(),
-            email: Some("alice@example.com".to_owned()),
-            ..Principal::default()
-        });
-        account.seed_principal(Principal {
-            id: Some(attendee.clone()),
-            name: "Bob".to_owned(),
-            email: Some("bob@example.com".to_owned()),
-            ..Principal::default()
-        });
+        let me = account
+            .seed_current_user_principal(Principal::new("Alice").with_email("alice@example.com"));
+        account.seed_principal(
+            Principal::new("Bob")
+                .with_id(attendee.clone())
+                .with_email("bob@example.com"),
+        );
         me
     };
 

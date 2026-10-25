@@ -132,16 +132,13 @@ fn principal_secret_send_to_typed_and_query_filter_builders_roundtrip() {
     use jmap_proto::principals::{Principal, PrincipalQueryFilter};
     use std::collections::BTreeMap;
 
-    let p = Principal {
-        id: Some("p_typed".into()),
-        name: "Meeting Room 1".to_owned(),
-        secret: Some("secret123".to_owned()),
-        send_to: Some(BTreeMap::from([(
+    let p = Principal::new("Meeting Room 1")
+        .with_id("p_typed")
+        .with_secret("secret123")
+        .with_send_to(BTreeMap::from([(
             "imip".to_owned(),
             "mailto:room1@example.com".to_owned(),
-        )])),
-        ..Principal::default()
-    };
+        )]));
 
     let p_val = serde_json::to_value(&p).unwrap();
     assert_eq!(p_val["secret"], "secret123");
@@ -163,12 +160,9 @@ fn principal_secret_send_to_typed_and_query_filter_builders_roundtrip() {
 fn principal_is_personal_spec_roundtrip() {
     use jmap_proto::principals::Principal;
 
-    let p = Principal {
-        id: Some("p_self".into()),
-        name: "Self Principal".to_owned(),
-        is_personal: Some(true),
-        ..Principal::default()
-    };
+    let p = Principal::new("Self Principal")
+        .with_id("p_self")
+        .is_personal(true);
     let p_val = serde_json::to_value(&p).unwrap();
     assert_eq!(p_val["isPersonal"], true);
 
@@ -181,11 +175,7 @@ fn share_notification_builders_roundtrip() {
     use jmap_proto::UtcDate;
     use jmap_proto::principals::{Principal, ShareNotification, share_notification_object_type};
 
-    let changer = Principal {
-        id: Some("p_admin".into()),
-        name: "Admin User".to_owned(),
-        ..Principal::default()
-    };
+    let changer = Principal::new("Admin User").with_id("p_admin");
 
     let notif = ShareNotification::new(
         UtcDate::new("2026-09-01T15:00:00Z"),
