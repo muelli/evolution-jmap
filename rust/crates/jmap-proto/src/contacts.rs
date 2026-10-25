@@ -499,6 +499,7 @@ where
 /// JSContact Name (RFC 9553 §2.2.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Name {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<NameComponent>>,
@@ -812,6 +813,7 @@ impl Title {
 /// JSContact Address (RFC 9553 §2.5.1): one postal address.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Address {
     /// The parts the address is built from, each naming what it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]

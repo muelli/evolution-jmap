@@ -58,12 +58,7 @@ prop_compose! {
         if let Some(s) = sort_as {
             extra.insert("sortAs".to_string(), json!(s));
         }
-        Name {
-            components,
-            full,
-            extra,
-            ..Name::default()
-        }
+        { let mut name_val = Name::default(); name_val.components = components; name_val.full = full; name_val.extra = extra; name_val }
     }
 }
 
@@ -239,13 +234,7 @@ prop_compose! {
         if let Some(l) = label {
             extra.insert("label".to_owned(), json!(l));
         }
-        Address {
-            components,
-            contexts,
-            full,
-            extra,
-            ..Address::default()
-        }
+        { let mut address_val = Address::default(); address_val.components = components; address_val.contexts = contexts; address_val.full = full; address_val.extra = extra; address_val }
     }
 }
 
@@ -1132,11 +1121,12 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
 fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            components: Some(vec![NameComponent::new("given", "A")]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![NameComponent::new("given", "A")]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
         });
         card
     };
@@ -1223,19 +1213,17 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
-    addresses.insert(
-        "-AaaAa".to_owned(),
-        Address {
-            components: Some(vec![AddressComponent::new(
-                "postOfficeBox",
-                "ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প",
-            )]),
-            contexts: None,
-            full: None,
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
+    addresses.insert("-AaaAa".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new(
+            "postOfficeBox",
+            "ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প",
+        )]);
+        address_val.contexts = None;
+        address_val.full = None;
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
     let card = {
         let mut card = ContactCard::default();
         card.addresses = Some(addresses);
@@ -1404,15 +1392,10 @@ proptest! {
         let card = {
             let mut card = ContactCard::default();
             card.id = Some("C-PROP-UNICODE".into());
-            card.name = Some(Name {
-                full: Some(full.clone()),
-                components: Some(vec![
+            card.name = Some({ let mut name_val = Name::default(); name_val.full = Some(full.clone()); name_val.components = Some(vec![
                     NameComponent::new("given", &given),
                     NameComponent::new("surname", &surname),
-                ]),
-                extra: BTreeMap::new(),
-                ..Name::default()
-            });
+                ]); name_val.extra = BTreeMap::new(); name_val });
             card.notes = Some([(
                 "n1".to_owned(),
                 { let mut v = Note::default(); v.note = note_text.clone(); v.extra = BTreeMap::new(); v },

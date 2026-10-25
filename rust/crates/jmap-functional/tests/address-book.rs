@@ -861,10 +861,11 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // The server sets a uid. The mock's `ContactCard/set` sets the same shape,
     // but seeding does not go through it.
     card.uid = Some(format!("urn:example:card:{}", id.as_str()));
-    card.name = Some(Name {
-        full: Some(EDITED_FULL_NAME.to_owned()),
-        components: Some(components),
-        ..Name::default()
+    card.name = Some({
+        let mut name_val = Name::default();
+        name_val.full = Some(EDITED_FULL_NAME.to_owned());
+        name_val.components = Some(components);
+        name_val
     });
     // A picture under a key that only a server would select. Like the
     // pronunciations, the user does not edit it, so the save must return it
@@ -1076,34 +1077,30 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     );
     card.addresses = Some(
         [
-            (
-                SEEDED_WORK_ADDR_KEY.to_owned(),
-                Address {
-                    contexts: Some(serde_json::json!({"work": true})),
-                    components: Some(vec![
-                        AddressComponent::new("name", SEEDED_WORK_STREET),
-                        AddressComponent::new("locality", SEEDED_WORK_LOCALITY),
-                        AddressComponent::new("postcode", SEEDED_WORK_POSTCODE),
-                        AddressComponent::new("country", SEEDED_WORK_COUNTRY),
-                    ]),
-                    full: Some(SEEDED_WORK_LABEL.to_owned()),
-                    ..Address::default()
-                },
-            ),
-            (
-                SEEDED_HOME_ADDR_KEY.to_owned(),
-                Address {
-                    contexts: Some(serde_json::json!({"private": true})),
-                    components: Some(vec![
-                        AddressComponent::new("name", SEEDED_HOME_STREET),
-                        AddressComponent::new("locality", SEEDED_HOME_LOCALITY),
-                        AddressComponent::new("postcode", SEEDED_HOME_POSTCODE),
-                        AddressComponent::new("country", SEEDED_HOME_COUNTRY),
-                    ]),
-                    full: Some(SEEDED_HOME_LABEL.to_owned()),
-                    ..Address::default()
-                },
-            ),
+            (SEEDED_WORK_ADDR_KEY.to_owned(), {
+                let mut address_val = Address::default();
+                address_val.contexts = Some(serde_json::json!({"work": true}));
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", SEEDED_WORK_STREET),
+                    AddressComponent::new("locality", SEEDED_WORK_LOCALITY),
+                    AddressComponent::new("postcode", SEEDED_WORK_POSTCODE),
+                    AddressComponent::new("country", SEEDED_WORK_COUNTRY),
+                ]);
+                address_val.full = Some(SEEDED_WORK_LABEL.to_owned());
+                address_val
+            }),
+            (SEEDED_HOME_ADDR_KEY.to_owned(), {
+                let mut address_val = Address::default();
+                address_val.contexts = Some(serde_json::json!({"private": true}));
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", SEEDED_HOME_STREET),
+                    AddressComponent::new("locality", SEEDED_HOME_LOCALITY),
+                    AddressComponent::new("postcode", SEEDED_HOME_POSTCODE),
+                    AddressComponent::new("country", SEEDED_HOME_COUNTRY),
+                ]);
+                address_val.full = Some(SEEDED_HOME_LABEL.to_owned());
+                address_val
+            }),
         ]
         .into_iter()
         .collect(),

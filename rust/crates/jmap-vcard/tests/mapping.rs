@@ -135,16 +135,17 @@ fn a_vcard_from_evolution_has_no_jmap_id_yet() {
 fn maps_name_components_onto_the_structured_n_property() {
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Dr. Vera Marie Oldenburg MSc".to_owned()),
-            components: Some(vec![
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Dr. Vera Marie Oldenburg MSc".to_owned());
+            name_val.components = Some(vec![
                 NameComponent::new("title", "Dr."),
                 NameComponent::new("given", "Vera"),
                 NameComponent::new("given2", "Marie"),
                 NameComponent::new("surname", "Oldenburg"),
                 NameComponent::new("credential", "MSc"),
-            ]),
-            ..Name::default()
+            ]);
+            name_val
         });
         card
     };
@@ -162,12 +163,13 @@ fn derives_the_missing_half_of_the_name() {
     // If `full` is absent, derive it from components in display order.
     let components = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            components: Some(vec![
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![
                 NameComponent::new("surname", "Oldenburg"),
                 NameComponent::new("given", "Vera"),
-            ]),
-            ..Name::default()
+            ]);
+            name_val
         });
         card
     };
@@ -1024,28 +1026,24 @@ fn maps_every_field_the_adr_value_has() {
 #[test]
 fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
     // vCard 3.0 has no ADR field for floor or room.
-    let card = one_address(
-        "a1",
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße"),
-                AddressComponent::new("floor", "3"),
-            ]),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße"),
+            AddressComponent::new("floor", "3"),
+        ]);
+        address_val
+    });
     assert_eq!(
         line(&card_to_vcard(&card), "ADR"),
         "ADR;X-JMAP-KEY=a1:;;Hauptstraße;;;;"
     );
 
-    let only_unmapped = one_address(
-        "a1",
-        Address {
-            components: Some(vec![AddressComponent::new("floor", "3")]),
-            ..Address::default()
-        },
-    );
+    let only_unmapped = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("floor", "3")]);
+        address_val
+    });
     assert!(!card_to_vcard(&only_unmapped).contains("\r\nADR"));
 }
 
@@ -1053,31 +1051,27 @@ fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
 fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
     // RFC 9553 splits street name and house number; RFC 2426 has one street
     // slot, so both components share it in source order.
-    let english = one_address(
-        "a1",
-        Address {
-            components: Some(vec![
-                AddressComponent::new("number", "1"),
-                AddressComponent::new("name", "Main Street"),
-            ]),
-            ..Address::default()
-        },
-    );
+    let english = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("number", "1"),
+            AddressComponent::new("name", "Main Street"),
+        ]);
+        address_val
+    });
     assert_eq!(
         line(&card_to_vcard(&english), "ADR"),
         "ADR;X-JMAP-KEY=a1:;;1 Main Street;;;;"
     );
 
-    let german = one_address(
-        "a1",
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße"),
-                AddressComponent::new("number", "1"),
-            ]),
-            ..Address::default()
-        },
-    );
+    let german = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße"),
+            AddressComponent::new("number", "1"),
+        ]);
+        address_val
+    });
     let vcard = card_to_vcard(&german);
     assert_eq!(line(&vcard, "ADR"), "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1;;;;");
 
@@ -1093,13 +1087,11 @@ fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
 #[test]
 fn an_address_that_states_only_a_house_number_is_on_the_line() {
     // A standalone house number is valid address data, so emit ADR.
-    let card = one_address(
-        "a1",
-        Address {
-            components: Some(vec![AddressComponent::new("number", "1")]),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("number", "1")]);
+        address_val
+    });
     assert_eq!(
         line(&card_to_vcard(&card), "ADR"),
         "ADR;X-JMAP-KEY=a1:;;1;;;;"
@@ -1108,16 +1100,14 @@ fn an_address_that_states_only_a_house_number_is_on_the_line() {
 
 #[test]
 fn two_address_components_of_one_kind_share_the_field_they_map_onto() {
-    let card = one_address(
-        "a1",
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße 1"),
-                AddressComponent::new("name", "Hinterhaus"),
-            ]),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße 1"),
+            AddressComponent::new("name", "Hinterhaus"),
+        ]);
+        address_val
+    });
     assert_eq!(
         line(&card_to_vcard(&card), "ADR"),
         "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1 Hinterhaus;;;;"
@@ -1187,13 +1177,11 @@ fn a_label_without_a_key_joins_the_address_of_the_same_type() {
 fn a_label_that_belongs_to_no_address_becomes_one_of_its_own() {
     // RFC 9553 allows `full` without components, so LABEL-only addresses keep
     // their key on LABEL and do not require an ADR line.
-    let card = one_address(
-        "a2",
-        Address {
-            full: Some("Postfach 42\n10115 Berlin".to_owned()),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a2", {
+        let mut address_val = Address::default();
+        address_val.full = Some("Postfach 42\n10115 Berlin".to_owned());
+        address_val
+    });
     let vcard = card_to_vcard(&card);
     assert!(!vcard.contains("\r\nADR"), "{vcard}");
     assert_eq!(
@@ -1221,14 +1209,12 @@ fn a_label_that_belongs_to_no_address_becomes_one_of_its_own() {
 
 #[test]
 fn an_address_written_out_as_nothing_gets_no_label_line() {
-    let card = one_address(
-        "a1",
-        Address {
-            components: Some(vec![AddressComponent::new("locality", "Berlin")]),
-            full: Some(String::new()),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", "Berlin")]);
+        address_val.full = Some(String::new());
+        address_val
+    });
     let vcard = card_to_vcard(&card);
     assert!(!vcard.contains("\r\nLABEL"), "{vcard}");
 
@@ -1240,34 +1226,30 @@ fn an_address_written_out_as_nothing_gets_no_label_line() {
 #[test]
 fn multiple_addresses_with_different_types_and_labels_pair_accurately() {
     let mut addresses = BTreeMap::new();
-    addresses.insert(
-        "a-work".to_owned(),
-        Address {
-            contexts: Some(json!({"work": true})),
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße 1"),
-                AddressComponent::new("locality", "Berlin"),
-                AddressComponent::new("postcode", "10115"),
-                AddressComponent::new("country", "Germany"),
-            ]),
-            full: Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned()),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a-home".to_owned(),
-        Address {
-            contexts: Some(json!({"private": true})),
-            components: Some(vec![
-                AddressComponent::new("name", "Heimweg 2"),
-                AddressComponent::new("locality", "München"),
-                AddressComponent::new("postcode", "80331"),
-                AddressComponent::new("country", "Germany"),
-            ]),
-            full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
-            ..Address::default()
-        },
-    );
+    addresses.insert("a-work".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße 1"),
+            AddressComponent::new("locality", "Berlin"),
+            AddressComponent::new("postcode", "10115"),
+            AddressComponent::new("country", "Germany"),
+        ]);
+        address_val.full = Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned());
+        address_val
+    });
+    addresses.insert("a-home".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"private": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Heimweg 2"),
+            AddressComponent::new("locality", "München"),
+            AddressComponent::new("postcode", "80331"),
+            AddressComponent::new("country", "Germany"),
+        ]);
+        address_val.full = Some("Heimweg 2\n80331 München\nGermany".to_owned());
+        address_val
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -1309,18 +1291,16 @@ fn multiple_addresses_with_different_types_and_labels_pair_accurately() {
 #[test]
 fn an_address_at_home_and_at_work_states_one_slot_rather_than_both() {
     let mut addresses = BTreeMap::new();
-    addresses.insert(
-        "a1".to_owned(),
-        Address {
-            contexts: Some(json!({"work": true, "private": true})),
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße 1"),
-                AddressComponent::new("locality", "Berlin"),
-            ]),
-            full: Some("Hauptstraße 1\n10115 Berlin".to_owned()),
-            ..Address::default()
-        },
-    );
+    addresses.insert("a1".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"work": true, "private": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße 1"),
+            AddressComponent::new("locality", "Berlin"),
+        ]);
+        address_val.full = Some("Hauptstraße 1\n10115 Berlin".to_owned());
+        address_val
+    });
     let card = {
         let mut card = ContactCard::default();
         card.addresses = Some(addresses);
@@ -3646,9 +3626,10 @@ fn maps_notes_with_multiple_entries_and_newlines_faithfully() {
     let mut card = {
         let mut card = ContactCard::default();
         card.id = Some("C10".into());
-        card.name = Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
         });
         card
     };
@@ -3697,9 +3678,10 @@ fn maps_calendars_freebusy_and_links_faithfully() {
     let mut card = {
         let mut card = ContactCard::default();
         card.id = Some("C11".into());
-        card.name = Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
         });
         card
     };
@@ -3765,9 +3747,10 @@ fn maps_nicknames_spouse_and_keywords_faithfully() {
     let mut card = {
         let mut card = ContactCard::default();
         card.id = Some("C12".into());
-        card.name = Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
         });
         card
     };
@@ -4021,16 +4004,17 @@ fn maps_emails_with_multiple_contexts_and_pref_faithfully() {
 fn maps_name_with_all_components_and_empty_prefix_suffix_faithfully() {
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Prof. Dr. Vera Marie Oldenburg MSc Ph.D.".to_owned()),
-            components: Some(vec![
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Prof. Dr. Vera Marie Oldenburg MSc Ph.D.".to_owned());
+            name_val.components = Some(vec![
                 NameComponent::new("title", "Prof. Dr."),
                 NameComponent::new("given", "Vera"),
                 NameComponent::new("given2", "Marie"),
                 NameComponent::new("surname", "Oldenburg"),
                 NameComponent::new("credential", "MSc Ph.D."),
-            ]),
-            ..Name::default()
+            ]);
+            name_val
         });
         card
     };
@@ -4062,9 +4046,10 @@ fn maps_contact_with_unmodeled_crypto_keys_and_personal_info_safely() {
     );
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Vera Oldenburg".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Oldenburg".to_owned());
+            name_val
         });
         card.extra = extra;
         card
@@ -4081,44 +4066,42 @@ fn maps_contact_with_unmodeled_crypto_keys_and_personal_info_safely() {
 #[test]
 fn maps_multiple_addresses_with_custom_extended_and_po_box_components() {
     let mut addresses = std::collections::BTreeMap::new();
-    addresses.insert(
-        "a1".to_owned(),
-        Address {
-            contexts: Some(json!({"work": true})),
-            components: Some(vec![
-                AddressComponent::new("postOfficeBox", "PO Box 42"),
-                AddressComponent::new("apartment", "Suite 100"),
-                AddressComponent::new("name", "Hauptstraße 1"),
-                AddressComponent::new("locality", "Berlin"),
-                AddressComponent::new("region", "Brandenburg"),
-                AddressComponent::new("postcode", "10115"),
-                AddressComponent::new("country", "Germany"),
-            ]),
-            full: Some("PO Box 42\nSuite 100\nHauptstraße 1\n10115 Berlin\nGermany".to_owned()),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a2".to_owned(),
-        Address {
-            contexts: Some(json!({"private": true})),
-            components: Some(vec![
-                AddressComponent::new("name", "Heimweg 2"),
-                AddressComponent::new("locality", "München"),
-                AddressComponent::new("region", "Bayern"),
-                AddressComponent::new("postcode", "80331"),
-                AddressComponent::new("country", "Germany"),
-            ]),
-            full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
-            ..Address::default()
-        },
-    );
+    addresses.insert("a1".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("postOfficeBox", "PO Box 42"),
+            AddressComponent::new("apartment", "Suite 100"),
+            AddressComponent::new("name", "Hauptstraße 1"),
+            AddressComponent::new("locality", "Berlin"),
+            AddressComponent::new("region", "Brandenburg"),
+            AddressComponent::new("postcode", "10115"),
+            AddressComponent::new("country", "Germany"),
+        ]);
+        address_val.full =
+            Some("PO Box 42\nSuite 100\nHauptstraße 1\n10115 Berlin\nGermany".to_owned());
+        address_val
+    });
+    addresses.insert("a2".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"private": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Heimweg 2"),
+            AddressComponent::new("locality", "München"),
+            AddressComponent::new("region", "Bayern"),
+            AddressComponent::new("postcode", "80331"),
+            AddressComponent::new("country", "Germany"),
+        ]);
+        address_val.full = Some("Heimweg 2\n80331 München\nGermany".to_owned());
+        address_val
+    });
 
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
         });
         card.addresses = Some(addresses);
         card
@@ -4168,9 +4151,10 @@ fn maps_contact_with_unmodeled_office_and_organization_extra_safely() {
 
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
         });
         card.organizations = Some(organizations);
         card
@@ -4932,23 +4916,27 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         "Alice"
     )));
     // `states_name` checks mapped components, full name, or file-as.
-    assert!(states_name(&Name {
-        full: Some("Alice".to_string()),
-        ..Name::default()
+    assert!(states_name(&{
+        let mut name_val = Name::default();
+        name_val.full = Some("Alice".to_string());
+        name_val
     }));
-    assert!(states_name(&Name {
-        components: Some(vec![NameComponent::new("given", "Alice")]),
-        ..Name::default()
+    assert!(states_name(&{
+        let mut name_val = Name::default();
+        name_val.components = Some(vec![NameComponent::new("given", "Alice")]);
+        name_val
     }));
     assert!(!states_name(&Name::default()));
-    assert!(!states_name(&Name {
-        full: Some("".to_string()),
-        components: Some(vec![]),
-        ..Name::default()
+    assert!(!states_name(&{
+        let mut name_val = Name::default();
+        name_val.full = Some("".to_string());
+        name_val.components = Some(vec![]);
+        name_val
     }));
-    assert!(!states_name(&Name {
-        components: Some(vec![NameComponent::new("unmapped_kind", "value")]),
-        ..Name::default()
+    assert!(!states_name(&{
+        let mut name_val = Name::default();
+        name_val.components = Some(vec![NameComponent::new("unmapped_kind", "value")]);
+        name_val
     }));
 
     // `maps_context` supports only `work` and `private`.
@@ -4983,38 +4971,45 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
     )));
 
     // `states_address` needs address fields or an address label.
-    assert!(states_address(&Address {
-        components: Some(vec![AddressComponent::new("locality", "Berlin")]),
-        ..Address::default()
+    assert!(states_address(&{
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", "Berlin")]);
+        address_val
     }));
-    assert!(states_address(&Address {
-        full: Some("123 Main St, Berlin".into()),
-        ..Address::default()
+    assert!(states_address(&{
+        let mut address_val = Address::default();
+        address_val.full = Some("123 Main St, Berlin".into());
+        address_val
     }));
-    assert!(!states_address(&Address {
-        full: Some("".into()),
-        ..Address::default()
+    assert!(!states_address(&{
+        let mut address_val = Address::default();
+        address_val.full = Some("".into());
+        address_val
     }));
-    assert!(!states_address(&Address {
-        components: Some(vec![AddressComponent::new("locality", "")]),
-        ..Address::default()
+    assert!(!states_address(&{
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", "")]);
+        address_val
     }));
-    assert!(!states_address(&Address {
-        components: Some(vec![AddressComponent::new("unmapped_kind", "Value")]),
-        ..Address::default()
+    assert!(!states_address(&{
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("unmapped_kind", "Value")]);
+        address_val
     }));
     assert!(!states_address(&Address::default()));
     assert_eq!(
-        address_label(&Address {
-            full: Some("Main Street".into()),
-            ..Address::default()
+        address_label(&{
+            let mut address_val = Address::default();
+            address_val.full = Some("Main Street".into());
+            address_val
         }),
         Some("Main Street")
     );
     assert_eq!(
-        address_label(&Address {
-            full: Some("".into()),
-            ..Address::default()
+        address_label(&{
+            let mut address_val = Address::default();
+            address_val.full = Some("".into());
+            address_val
         }),
         None
     );
@@ -5741,9 +5736,10 @@ fn jscontact_group_card_with_members_map_in_extra_characterization() {
         card.uid = Some("urn:uuid:grp-1".to_owned());
         card.card_type = Some("Card".to_owned());
         card.version = Some("1.0".to_owned());
-        card.name = Some(Name {
-            full: Some("Frontend Working Group".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Frontend Working Group".to_owned());
+            name_val
         });
         card.extra = extra;
         card
@@ -6464,9 +6460,10 @@ fn jscontact_server_localizations_and_preferred_languages_characterization() {
         card.uid = Some("urn:uuid:srv-loc-01".to_owned());
         card.card_type = Some("Card".to_owned());
         card.version = Some("1.0".to_owned());
-        card.name = Some(Name {
-            full: Some("Clara Schumann".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Clara Schumann".to_owned());
+            name_val
         });
         card.titles = Some(
             [("t1".to_owned(), {
@@ -6780,36 +6777,33 @@ fn address_pref_ordering_and_primary_selection_with_label_pairing() {
         let mut card = ContactCard::default();
         card.addresses = Some(
             [
-                (
-                    "a_sec".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("name", "Secondary Weg 2")]),
-                        contexts: Some(json!({"home": true})),
-                        full: None,
-                        extra: extra_sec,
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_pri".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("name", "Primary Allee 1")]),
-                        contexts: Some(json!({"home": true})),
-                        full: Some("Primary Allee 1\n10115 Berlin\nGermany".to_owned()),
-                        extra: extra_pri,
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_work".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("name", "Work Str 42")]),
-                        contexts: Some(json!({"work": true})),
-                        full: None,
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
+                ("a_sec".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("name", "Secondary Weg 2")]);
+                    address_val.contexts = Some(json!({"home": true}));
+                    address_val.full = None;
+                    address_val.extra = extra_sec;
+                    address_val
+                }),
+                ("a_pri".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("name", "Primary Allee 1")]);
+                    address_val.contexts = Some(json!({"home": true}));
+                    address_val.full = Some("Primary Allee 1\n10115 Berlin\nGermany".to_owned());
+                    address_val.extra = extra_pri;
+                    address_val
+                }),
+                ("a_work".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("name", "Work Str 42")]);
+                    address_val.contexts = Some(json!({"work": true}));
+                    address_val.full = None;
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
             ]
             .into_iter()
             .collect(),
@@ -6919,8 +6913,9 @@ fn adr_all_seven_structured_components_roundtrip() {
     // RFC 2426 §3.2.1 and RFC 6350 §6.3.1 define seven structured components in order:
     // 0: postOfficeBox, 1: apartment (extended address), 2: name (street),
     // 3: locality, 4: region, 5: postcode, 6: country.
-    let full_address = Address {
-        components: Some(vec![
+    let full_address = {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
             AddressComponent::new("postOfficeBox", "PO Box 777"),
             AddressComponent::new("apartment", "Suite 400, Floor 4"),
             AddressComponent::new("name", "500 Silicon Way"),
@@ -6928,11 +6923,12 @@ fn adr_all_seven_structured_components_roundtrip() {
             AddressComponent::new("region", "California"),
             AddressComponent::new("postcode", "94043"),
             AddressComponent::new("country", "United States of America"),
-        ]),
-        contexts: Some(json!({"work": true})),
-        full: Some("Acme Corp\nPO Box 777\nSuite 400\nMountain View, CA 94043\nUSA".to_owned()),
-        extra: BTreeMap::new(),
-        ..Address::default()
+        ]);
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.full =
+            Some("Acme Corp\nPO Box 777\nSuite 400\nMountain View, CA 94043\nUSA".to_owned());
+        address_val.extra = BTreeMap::new();
+        address_val
     };
 
     let card = one_address("a1", full_address);
@@ -7178,68 +7174,61 @@ fn multiple_addresses_with_mixed_labels_and_contexts_pairing() {
     // a3: Label-only address (no ADR)
     // a4: Structured address without LABEL
     let mut addresses = BTreeMap::new();
-    addresses.insert(
-        "a1".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("postOfficeBox", "Box 10"),
-                AddressComponent::new("apartment", "Suite 1"),
-                AddressComponent::new("name", "100 Work Way"),
-                AddressComponent::new("locality", "Work City"),
-                AddressComponent::new("region", "WA"),
-                AddressComponent::new("postcode", "98101"),
-                AddressComponent::new("country", "USA"),
-            ]),
-            contexts: Some(json!({"work": true})),
-            full: Some("Work Label\n100 Work Way\nSeattle, WA".to_owned()),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a2".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "200 Home St"),
-                AddressComponent::new("locality", "Home Town"),
-                AddressComponent::new("country", "USA"),
-            ]),
-            contexts: Some(json!({"private": true})),
-            full: Some("Home Label\n200 Home St\nHome Town, USA".to_owned()),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a3".to_owned(),
-        Address {
-            components: None,
-            contexts: None,
-            full: Some("Postal Delivery Only\nPO Box 9999\nRemote City".to_owned()),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a4".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "400 Unlabelled St"),
-                AddressComponent::new("locality", "Plain City"),
-                AddressComponent::new("country", "USA"),
-            ]),
-            contexts: None,
-            full: None,
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
+    addresses.insert("a1".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("postOfficeBox", "Box 10"),
+            AddressComponent::new("apartment", "Suite 1"),
+            AddressComponent::new("name", "100 Work Way"),
+            AddressComponent::new("locality", "Work City"),
+            AddressComponent::new("region", "WA"),
+            AddressComponent::new("postcode", "98101"),
+            AddressComponent::new("country", "USA"),
+        ]);
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.full = Some("Work Label\n100 Work Way\nSeattle, WA".to_owned());
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
+    addresses.insert("a2".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "200 Home St"),
+            AddressComponent::new("locality", "Home Town"),
+            AddressComponent::new("country", "USA"),
+        ]);
+        address_val.contexts = Some(json!({"private": true}));
+        address_val.full = Some("Home Label\n200 Home St\nHome Town, USA".to_owned());
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
+    addresses.insert("a3".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = None;
+        address_val.contexts = None;
+        address_val.full = Some("Postal Delivery Only\nPO Box 9999\nRemote City".to_owned());
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
+    addresses.insert("a4".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "400 Unlabelled St"),
+            AddressComponent::new("locality", "Plain City"),
+            AddressComponent::new("country", "USA"),
+        ]);
+        address_val.contexts = None;
+        address_val.full = None;
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
 
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Multi Address User".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Multi Address User".to_owned());
+            name_val
         });
         card.addresses = Some(addresses);
         card
@@ -7296,31 +7285,35 @@ fn adr_predicates_and_component_restoration_comprehensive() {
     }
 
     // 2. states_address evaluation
-    let valid_comp_addr = Address {
-        components: Some(vec![AddressComponent::new("locality", "Berlin")]),
-        full: None,
-        ..Address::default()
+    let valid_comp_addr = {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", "Berlin")]);
+        address_val.full = None;
+        address_val
     };
     assert!(states_address(&valid_comp_addr));
 
-    let valid_label_addr = Address {
-        components: None,
-        full: Some("Some Label".to_owned()),
-        ..Address::default()
+    let valid_label_addr = {
+        let mut address_val = Address::default();
+        address_val.components = None;
+        address_val.full = Some("Some Label".to_owned());
+        address_val
     };
     assert!(states_address(&valid_label_addr));
 
-    let unmapped_only_addr = Address {
-        components: Some(vec![AddressComponent::new("floor", "3")]),
-        full: None,
-        ..Address::default()
+    let unmapped_only_addr = {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("floor", "3")]);
+        address_val.full = None;
+        address_val
     };
     assert!(!states_address(&unmapped_only_addr));
 
-    let empty_label_only_addr = Address {
-        components: None,
-        full: Some("".to_owned()),
-        ..Address::default()
+    let empty_label_only_addr = {
+        let mut address_val = Address::default();
+        address_val.components = None;
+        address_val.full = Some("".to_owned());
+        address_val
     };
     assert!(!states_address(&empty_label_only_addr));
 
@@ -7771,9 +7764,10 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
 
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Server Card With Extra".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Server Card With Extra".to_owned());
+            name_val
         });
         card.emails = Some(
             [("e1".to_owned(), {
@@ -7917,9 +7911,10 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
     let card = {
         let mut card = ContactCard::default();
         card.id = Some("C-FOLD-1".into());
-        card.name = Some(Name {
-            full: Some("Line Folding Verification".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Line Folding Verification".to_owned());
+            name_val
         });
         card.notes = Some(notes);
         card.media = Some(media);
@@ -8122,9 +8117,10 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
             let card = {
                 let mut card = ContactCard::default();
                 card.id = Some("C-UTF8".into());
-                card.name = Some(Name {
-                    full: Some(format!("UTF8 Test {label} pad {pad_len}")),
-                    ..Name::default()
+                card.name = Some({
+                    let mut name_val = Name::default();
+                    name_val.full = Some(format!("UTF8 Test {label} pad {pad_len}"));
+                    name_val
                 });
                 card.notes = Some(notes);
                 card
@@ -8438,8 +8434,7 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
     let mut addresses = BTreeMap::new();
     addresses.insert(
         "a1".to_owned(),
-        Address {
-            components: Some(vec![
+        { let mut address_val = Address::default(); address_val.components = Some(vec![
                 AddressComponent::new("postOfficeBox", "PO Box 123; Station B"),
                 AddressComponent::new("apartment", "Apt 4B, Room 12; Building C"),
                 AddressComponent::new("name", "123 Main St; 2nd Floor, West Wing"),
@@ -8447,14 +8442,10 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
                 AddressComponent::new("region", "California; Northern"),
                 AddressComponent::new("postcode", "94105; 94107"),
                 AddressComponent::new("country", "United States; North America"),
-            ]),
-            contexts: Some(json!({"work": true})),
-            full: Some(
+            ]); address_val.contexts = Some(json!({"work": true})); address_val.full = Some(
                 "PO Box 123; Station B\nApt 4B, Room 12; Building C\n123 Main St; 2nd Floor, West Wing\nSan Francisco; Bay Area, California; Northern 94105; 94107\nUnited States; North America"
                     .to_owned(),
-            ),
-            extra: BTreeMap::new(), ..Address::default()
-        },
+            ); address_val.extra = BTreeMap::new(); address_val },
     );
 
     let card = {
@@ -8578,17 +8569,18 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
     let card = {
         let mut card = ContactCard::default();
         card.id = Some("C-ALL-ESC".into());
-        card.name = Some(Name {
-            full: Some("Dr. Alice Smith, Ph.D.; Junior\\Senior".to_owned()),
-            components: Some(vec![
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Dr. Alice Smith, Ph.D.; Junior\\Senior".to_owned());
+            name_val.components = Some(vec![
                 NameComponent::new("surname", "Smith, Jr."),
                 NameComponent::new("given", "Alice; Marie"),
                 NameComponent::new("given2", "B.\\C."),
                 NameComponent::new("title", "Dr., Prof."),
                 NameComponent::new("credential", "III; Esq."),
-            ]),
-            extra: BTreeMap::new(),
-            ..Name::default()
+            ]);
+            name_val.extra = BTreeMap::new();
+            name_val
         });
         card.nicknames = Some(nicknames);
         card.titles = Some(titles);
@@ -8764,9 +8756,10 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
     // Empty, absent, or refused keywords all collapse to `keywords: None`.
     let card_none = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Alice Smith".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Smith".to_owned());
+            name_val
         });
         card.keywords = None;
         card
@@ -8778,9 +8771,10 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
 
     let card_empty_map = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Alice Smith".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Smith".to_owned());
+            name_val
         });
         card.keywords = Some(BTreeMap::new());
         card
@@ -8806,9 +8800,10 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
 
     let card_refused = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Alice Smith".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Smith".to_owned());
+            name_val
         });
         card.keywords = Some(
             [
@@ -8858,9 +8853,10 @@ fn categories_single_tag_variations_and_escaped_delimiters_roundtrip() {
     for (tag, expected_line) in test_cases {
         let card = {
             let mut card = ContactCard::default();
-            card.name = Some(Name {
-                full: Some("Bob Builder".to_owned()),
-                ..Name::default()
+            card.name = Some({
+                let mut name_val = Name::default();
+                name_val.full = Some("Bob Builder".to_owned());
+                name_val
             });
             card.keywords = Some([(tag.to_owned(), json!(true))].into());
             card
@@ -8913,9 +8909,10 @@ fn categories_multiple_tags_sorted_order_and_escaping_roundtrip() {
 
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Charlie Davis".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Charlie Davis".to_owned());
+            name_val
         });
         card.keywords = Some(map);
         card
@@ -9056,9 +9053,10 @@ fn categories_unicode_and_multibyte_utf8_roundtrip() {
 
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Fiona Gallagher".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Fiona Gallagher".to_owned());
+            name_val
         });
         card.keywords = Some(map);
         card
@@ -9136,9 +9134,10 @@ fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
     // 6. Mixed valid and refused tags emit only the valid tags.
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("George Harris".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("George Harris".to_owned());
+            name_val
         });
         card.keywords = Some(
             [
@@ -10033,11 +10032,12 @@ fn non_ascii_multilingual_names_and_components_roundtrip() {
         let card = {
             let mut card = ContactCard::default();
             card.id = Some(format!("C-NAME-{}", label.replace(' ', "-")).into());
-            card.name = Some(Name {
-                full: Some(full_name.to_owned()),
-                components: (!components.is_empty()).then_some(components),
-                extra: BTreeMap::new(),
-                ..Name::default()
+            card.name = Some({
+                let mut name_val = Name::default();
+                name_val.full = Some(full_name.to_owned());
+                name_val.components = (!components.is_empty()).then_some(components);
+                name_val.extra = BTreeMap::new();
+                name_val
             });
             card
         };
@@ -10194,61 +10194,54 @@ fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
 fn non_ascii_structured_addresses_and_labels_roundtrip() {
     let mut addrs = BTreeMap::new();
     // French address with accents and special characters
-    addrs.insert(
-        "a_fr".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("postOfficeBox", "Boîte Postale 42"),
-                AddressComponent::new("apartment", "Bâtiment B, Étage 3, Porte 12"),
-                AddressComponent::new("name", "12 Rue de l'Étoile"),
-                AddressComponent::new("locality", "Épinay-sur-Seine"),
-                AddressComponent::new("region", "Île-de-France"),
-                AddressComponent::new("postcode", "93800"),
-                AddressComponent::new("country", "France"),
-            ]),
-            full: Some(
-                "12 Rue de l'Étoile\nBâtiment B, Étage 3\n93800 Épinay-sur-Seine\nFrance"
-                    .to_owned(),
-            ),
-            contexts: Some(json!({"work": true})),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
+    addrs.insert("a_fr".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("postOfficeBox", "Boîte Postale 42"),
+            AddressComponent::new("apartment", "Bâtiment B, Étage 3, Porte 12"),
+            AddressComponent::new("name", "12 Rue de l'Étoile"),
+            AddressComponent::new("locality", "Épinay-sur-Seine"),
+            AddressComponent::new("region", "Île-de-France"),
+            AddressComponent::new("postcode", "93800"),
+            AddressComponent::new("country", "France"),
+        ]);
+        address_val.full = Some(
+            "12 Rue de l'Étoile\nBâtiment B, Étage 3\n93800 Épinay-sur-Seine\nFrance".to_owned(),
+        );
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
     // German address with umlauts and eszett
-    addrs.insert(
-        "a_de".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("apartment", "Hinterhaus 2. Stock"),
-                AddressComponent::new("name", "Goethestraße 42"),
-                AddressComponent::new("locality", "München"),
-                AddressComponent::new("region", "Bayern"),
-                AddressComponent::new("postcode", "80336"),
-                AddressComponent::new("country", "Deutschland"),
-            ]),
-            full: Some("Goethestraße 42\n80336 München\nDeutschland".to_owned()),
-            contexts: Some(json!({"home": true})),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
+    addrs.insert("a_de".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("apartment", "Hinterhaus 2. Stock"),
+            AddressComponent::new("name", "Goethestraße 42"),
+            AddressComponent::new("locality", "München"),
+            AddressComponent::new("region", "Bayern"),
+            AddressComponent::new("postcode", "80336"),
+            AddressComponent::new("country", "Deutschland"),
+        ]);
+        address_val.full = Some("Goethestraße 42\n80336 München\nDeutschland".to_owned());
+        address_val.contexts = Some(json!({"home": true}));
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
     // Japanese address with Kanji
-    addrs.insert(
-        "a_ja".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "千代田区千代田1-1"),
-                AddressComponent::new("region", "東京都"),
-                AddressComponent::new("postcode", "100-8111"),
-                AddressComponent::new("country", "日本"),
-            ]),
-            full: Some("〒100-8111 東京都千代田区千代田1-1\n日本".to_owned()),
-            contexts: None,
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
+    addrs.insert("a_ja".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "千代田区千代田1-1"),
+            AddressComponent::new("region", "東京都"),
+            AddressComponent::new("postcode", "100-8111"),
+            AddressComponent::new("country", "日本"),
+        ]);
+        address_val.full = Some("〒100-8111 東京都千代田区千代田1-1\n日本".to_owned());
+        address_val.contexts = None;
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -12225,9 +12218,10 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
 
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Media Test Contact".to_owned()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Media Test Contact".to_owned());
+            name_val
         });
         card.media = Some(media);
         card
@@ -13551,51 +13545,45 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         card.version = Some("1.0".to_owned());
         card.addresses = Some(
             [
-                (
-                    "a_work".to_owned(),
-                    Address {
-                        components: Some(vec![
-                            AddressComponent::new("name", "Hauptstraße 1"),
-                            AddressComponent::new("locality", "Berlin"),
-                            AddressComponent::new("postcode", "10115"),
-                            AddressComponent::new("country", "Germany"),
-                        ]),
-                        contexts: Some(json!({"work": true})),
-                        full: Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned()),
-                        extra: extra_work,
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_home".to_owned(),
-                    Address {
-                        components: Some(vec![
-                            AddressComponent::new("name", "Heimweg 2"),
-                            AddressComponent::new("locality", "München"),
-                            AddressComponent::new("postcode", "80331"),
-                            AddressComponent::new("country", "Germany"),
-                        ]),
-                        contexts: Some(json!({"private": true})),
-                        full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_other".to_owned(),
-                    Address {
-                        components: Some(vec![
-                            AddressComponent::new("postOfficeBox", "Postfach 42"),
-                            AddressComponent::new("locality", "Hamburg"),
-                            AddressComponent::new("postcode", "20095"),
-                            AddressComponent::new("country", "Germany"),
-                        ]),
-                        contexts: None,
-                        full: Some("Postfach 42\n20095 Hamburg\nGermany".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
+                ("a_work".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = Some(vec![
+                        AddressComponent::new("name", "Hauptstraße 1"),
+                        AddressComponent::new("locality", "Berlin"),
+                        AddressComponent::new("postcode", "10115"),
+                        AddressComponent::new("country", "Germany"),
+                    ]);
+                    address_val.contexts = Some(json!({"work": true}));
+                    address_val.full = Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned());
+                    address_val.extra = extra_work;
+                    address_val
+                }),
+                ("a_home".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = Some(vec![
+                        AddressComponent::new("name", "Heimweg 2"),
+                        AddressComponent::new("locality", "München"),
+                        AddressComponent::new("postcode", "80331"),
+                        AddressComponent::new("country", "Germany"),
+                    ]);
+                    address_val.contexts = Some(json!({"private": true}));
+                    address_val.full = Some("Heimweg 2\n80331 München\nGermany".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a_other".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = Some(vec![
+                        AddressComponent::new("postOfficeBox", "Postfach 42"),
+                        AddressComponent::new("locality", "Hamburg"),
+                        AddressComponent::new("postcode", "20095"),
+                        AddressComponent::new("country", "Germany"),
+                    ]);
+                    address_val.contexts = None;
+                    address_val.full = Some("Postfach 42\n20095 Hamburg\nGermany".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
             ]
             .into_iter()
             .collect(),
@@ -13674,36 +13662,30 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         card.version = Some("1.0".to_owned());
         card.addresses = Some(
             [
-                (
-                    "a1".to_owned(),
-                    Address {
-                        components: None,
-                        contexts: Some(json!({"work": true})),
-                        full: Some("Work Label Only\nBerlin".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a2".to_owned(),
-                    Address {
-                        components: None,
-                        contexts: Some(json!({"private": true})),
-                        full: Some("Home Label Only\nMünchen".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a3".to_owned(),
-                    Address {
-                        components: None,
-                        contexts: None,
-                        full: Some("Other Label Only\nHamburg".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
+                ("a1".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = None;
+                    address_val.contexts = Some(json!({"work": true}));
+                    address_val.full = Some("Work Label Only\nBerlin".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a2".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = None;
+                    address_val.contexts = Some(json!({"private": true}));
+                    address_val.full = Some("Home Label Only\nMünchen".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a3".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = None;
+                    address_val.contexts = None;
+                    address_val.full = Some("Other Label Only\nHamburg".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
             ]
             .into_iter()
             .collect(),
@@ -13735,36 +13717,32 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
         card.version = Some("1.0".to_owned());
         card.addresses = Some(
             [
-                (
-                    "a_work".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("name", "Work Street 10")]),
-                        contexts: Some(json!({"work": true})),
-                        full: Some("Work Street 10\nBerlin".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_home".to_owned(),
-                    Address {
-                        components: None,
-                        contexts: Some(json!({"private": true})),
-                        full: Some("Home Label Only\nCologne".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_other".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("locality", "Frankfurt")]),
-                        contexts: None,
-                        full: None,
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
+                ("a_work".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("name", "Work Street 10")]);
+                    address_val.contexts = Some(json!({"work": true}));
+                    address_val.full = Some("Work Street 10\nBerlin".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a_home".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = None;
+                    address_val.contexts = Some(json!({"private": true}));
+                    address_val.full = Some("Home Label Only\nCologne".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a_other".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("locality", "Frankfurt")]);
+                    address_val.contexts = None;
+                    address_val.full = None;
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
             ]
             .into_iter()
             .collect(),
@@ -13834,22 +13812,19 @@ fn email_and_address_label_edge_cases_and_parameter_permutations() {
         card.card_type = Some("Card".to_owned());
         card.version = Some("1.0".to_owned());
         card.addresses = Some(
-            [(
-                "a_complex".to_owned(),
-                Address {
-                    components: Some(vec![
-                        AddressComponent::new("name", "Suite 400, Floor 2"),
-                        AddressComponent::new("locality", "San Francisco; Bay Area"),
-                        AddressComponent::new("country", "United States \\ USA"),
-                    ]),
-                    contexts: Some(json!({"work": true})),
-                    full: Some(
-                        "Acme Corp, Suite 400\\nDept; Ops\\nSan Francisco, CA\\nUSA".to_owned(),
-                    ),
-                    extra: BTreeMap::new(),
-                    ..Address::default()
-                },
-            )]
+            [("a_complex".to_owned(), {
+                let mut address_val = Address::default();
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", "Suite 400, Floor 2"),
+                    AddressComponent::new("locality", "San Francisco; Bay Area"),
+                    AddressComponent::new("country", "United States \\ USA"),
+                ]);
+                address_val.contexts = Some(json!({"work": true}));
+                address_val.full =
+                    Some("Acme Corp, Suite 400\\nDept; Ops\\nSan Francisco, CA\\nUSA".to_owned());
+                address_val.extra = BTreeMap::new();
+                address_val
+            })]
             .into_iter()
             .collect(),
         );
@@ -14839,11 +14814,12 @@ fn trailing_whitespace_with_vcard_21_and_quoted_printable_fixpoint() {
 fn name_with_empty_full_string_and_components_reaches_fixed_point() {
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            components: Some(vec![NameComponent::new("given", "TestGiven")]),
-            full: Some("".to_string()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![NameComponent::new("given", "TestGiven")]);
+            name_val.full = Some("".to_string());
+            name_val.extra = BTreeMap::new();
+            name_val
         });
         card
     };
@@ -15000,11 +14976,12 @@ fn file_as_and_sort_string_coexistence_without_clobbering() {
     let card_dual = {
         let mut card = ContactCard::default();
         card.uid = Some("dual-sort-file-01".to_string());
-        card.name = Some(Name {
-            full: Some("Albert Einstein".to_string()),
-            components: None,
-            extra,
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Albert Einstein".to_string());
+            name_val.components = None;
+            name_val.extra = extra;
+            name_val
         });
         card
     };
@@ -15052,15 +15029,16 @@ fn file_as_card_level_and_name_level_emission() {
     let card1 = {
         let mut card = ContactCard::default();
         card.uid = Some("fa-001".to_string());
-        card.name = Some(Name {
-            full: Some("John Doe".to_string()),
-            components: None,
-            extra: {
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("John Doe".to_string());
+            name_val.components = None;
+            name_val.extra = {
                 let mut m = BTreeMap::new();
                 m.insert("file_as".to_string(), json!("Doe, John (Name Extra)"));
                 m
-            },
-            ..Name::default()
+            };
+            name_val
         });
         card
     };
@@ -15087,15 +15065,16 @@ fn file_as_card_level_and_name_level_emission() {
     let card3 = {
         let mut card = ContactCard::default();
         card.uid = Some("fa-003".to_string());
-        card.name = Some(Name {
-            full: Some("John Doe".to_string()),
-            components: None,
-            extra: {
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("John Doe".to_string());
+            name_val.components = None;
+            name_val.extra = {
                 let mut m = BTreeMap::new();
                 m.insert("fileAs".to_string(), json!("   "));
                 m
-            },
-            ..Name::default()
+            };
+            name_val
         });
         card
     };
@@ -16342,14 +16321,15 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
     let card = {
         let mut card = ContactCard::default();
         card.id = Some("C-GEN-SYNC".into());
-        card.name = Some(Name {
-            full: Some("John Doe".into()),
-            components: Some(vec![
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("John Doe".into());
+            name_val.components = Some(vec![
                 NameComponent::new("given", "John"),
                 NameComponent::new("surname", "Doe"),
-            ]),
-            extra: name_extra,
-            ..Name::default()
+            ]);
+            name_val.extra = name_extra;
+            name_val
         });
         card.emails = Some(
             [("e1".to_string(), {
@@ -16375,19 +16355,17 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
             .into(),
         );
         card.addresses = Some(
-            [(
-                "a1".to_string(),
-                Address {
-                    components: Some(vec![
-                        AddressComponent::new("name", "100 Industrial Pkwy"),
-                        AddressComponent::new("locality", "Springfield"),
-                    ]),
-                    contexts: Some(json!({"work": true})),
-                    full: Some("100 Industrial Pkwy, Springfield".into()),
-                    extra: adr_extra,
-                    ..Address::default()
-                },
-            )]
+            [("a1".to_string(), {
+                let mut address_val = Address::default();
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", "100 Industrial Pkwy"),
+                    AddressComponent::new("locality", "Springfield"),
+                ]);
+                address_val.contexts = Some(json!({"work": true}));
+                address_val.full = Some("100 Industrial Pkwy, Springfield".into());
+                address_val.extra = adr_extra;
+                address_val
+            })]
             .into(),
         );
         card.links = Some(
@@ -17431,9 +17409,10 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
     let card = {
         let mut card = ContactCard::default();
         card.id = Some("C-SERVER-PRESERVE".into());
-        card.name = Some(Name {
-            full: Some("Alice Representative".into()),
-            ..Name::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Representative".into());
+            name_val
         });
         card.related_to = Some(related_to);
         card.media = Some(media);
@@ -18785,15 +18764,16 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
     let card = {
         let mut card = ContactCard::default();
         card.id = Some("C-SELF-CONSISTENCY-1".into());
-        card.name = Some(Name {
-            full: Some("Dr. Test SelfConsistency".into()),
-            components: Some(vec![
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Dr. Test SelfConsistency".into());
+            name_val.components = Some(vec![
                 NameComponent::new("prefix", "Dr."),
                 NameComponent::new("given", "Test"),
                 NameComponent::new("surname", "SelfConsistency"),
-            ]),
-            extra: name_extra,
-            ..Name::default()
+            ]);
+            name_val.extra = name_extra;
+            name_val
         });
         card.nicknames = Some(
             [("n1".to_string(), {
@@ -18849,22 +18829,20 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
             .into(),
         );
         card.addresses = Some(
-            [(
-                "a1".to_string(),
-                Address {
-                    components: Some(vec![
-                        AddressComponent::new("name", "100 Innovation Way"),
-                        AddressComponent::new("locality", "Cambridge"),
-                        AddressComponent::new("region", "MA"),
-                        AddressComponent::new("postcode", "02139"),
-                        AddressComponent::new("country", "USA"),
-                    ]),
-                    contexts: Some(json!({"work": true})),
-                    full: Some("100 Innovation Way, Cambridge, MA 02139, USA".into()),
-                    extra: BTreeMap::new(),
-                    ..Address::default()
-                },
-            )]
+            [("a1".to_string(), {
+                let mut address_val = Address::default();
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", "100 Innovation Way"),
+                    AddressComponent::new("locality", "Cambridge"),
+                    AddressComponent::new("region", "MA"),
+                    AddressComponent::new("postcode", "02139"),
+                    AddressComponent::new("country", "USA"),
+                ]);
+                address_val.contexts = Some(json!({"work": true}));
+                address_val.full = Some("100 Innovation Way, Cambridge, MA 02139, USA".into());
+                address_val.extra = BTreeMap::new();
+                address_val
+            })]
             .into(),
         );
         card.organizations = Some(
@@ -19360,14 +19338,15 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
     let card = {
         let mut card = ContactCard::default();
         card.id = Some("C-GEN-SYNC-B6".into());
-        card.name = Some(Name {
-            full: Some("Fuzz Sync".into()),
-            components: Some(vec![
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Fuzz Sync".into());
+            name_val.components = Some(vec![
                 NameComponent::new("given", "Fuzz"),
                 NameComponent::new("surname", "Sync"),
-            ]),
-            extra: name_extra,
-            ..Name::default()
+            ]);
+            name_val.extra = name_extra;
+            name_val
         });
         card.emails = Some(
             [("e1".to_string(), {
@@ -19393,22 +19372,20 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
             .into(),
         );
         card.addresses = Some(
-            [(
-                "a1".to_string(),
-                Address {
-                    components: Some(vec![
-                        AddressComponent::new("name", "500 Silicon Ave"),
-                        AddressComponent::new("locality", "Palo Alto"),
-                        AddressComponent::new("region", "CA"),
-                        AddressComponent::new("postcode", "94301"),
-                        AddressComponent::new("country", "USA"),
-                    ]),
-                    contexts: Some(json!({"work": true})),
-                    full: Some("500 Silicon Ave, Palo Alto, CA 94301, USA".into()),
-                    extra: adr_extra,
-                    ..Address::default()
-                },
-            )]
+            [("a1".to_string(), {
+                let mut address_val = Address::default();
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", "500 Silicon Ave"),
+                    AddressComponent::new("locality", "Palo Alto"),
+                    AddressComponent::new("region", "CA"),
+                    AddressComponent::new("postcode", "94301"),
+                    AddressComponent::new("country", "USA"),
+                ]);
+                address_val.contexts = Some(json!({"work": true}));
+                address_val.full = Some("500 Silicon Ave, Palo Alto, CA 94301, USA".into());
+                address_val.extra = adr_extra;
+                address_val
+            })]
             .into(),
         );
         card.media = Some(
@@ -21773,38 +21750,42 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
     // The empty-is-absent filter now derives once.
     // vCard and ContactCard stabilize by pass 2.
     let test_names = vec![
-        Name {
-            components: Some(vec![NameComponent::new("given", "0")]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+        {
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![NameComponent::new("given", "0")]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
         },
-        Name {
-            components: Some(vec![NameComponent::new("given", "𞋀")]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+        {
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![NameComponent::new("given", "𞋀")]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
         },
-        Name {
-            components: Some(vec![
+        {
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![
                 NameComponent::new("given", "Alice"),
                 NameComponent::new("surname", "Smith"),
-            ]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+            ]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
         },
-        Name {
-            components: Some(vec![
+        {
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![
                 NameComponent::new("prefix", "Dr."),
                 NameComponent::new("given", "René"),
                 NameComponent::new("middle", "Jean"),
                 NameComponent::new("surname", "Müller"),
                 NameComponent::new("suffix", "III"),
-            ]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+            ]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
         },
     ];
 
@@ -22093,9 +22074,10 @@ fn empty_org_name_normalisation_and_fixpoint_stability() {
     // Start with an explicit empty name and non-empty units.
     let initial_card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Alice Smith".to_owned()),
-            ..Default::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Smith".to_owned());
+            name_val
         });
         card.organizations = Some(
             [(
@@ -22149,9 +22131,10 @@ fn empty_org_name_normalisation_and_fixpoint_stability() {
 fn empty_org_name_multiple_organizations_matrix() {
     let card = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Bob MultiOrg".to_owned()),
-            ..Default::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Bob MultiOrg".to_owned());
+            name_val
         });
         card.organizations = Some(
             [
@@ -22436,10 +22419,11 @@ fn eds_360_chat_handles_and_sort_order_measured_non_issue_characterization() {
     // E_CONTACT_NAME_OR_ORG directly.
     let card_with_file_as = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Albert Einstein".to_owned()),
-            extra: [("fileAs".to_owned(), json!("Einstein, Albert"))].into(),
-            ..Default::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Albert Einstein".to_owned());
+            name_val.extra = [("fileAs".to_owned(), json!("Einstein, Albert"))].into();
+            name_val
         });
         card
     };
@@ -22448,9 +22432,10 @@ fn eds_360_chat_handles_and_sort_order_measured_non_issue_characterization() {
 
     let card_without_file_as = {
         let mut card = ContactCard::default();
-        card.name = Some(Name {
-            full: Some("Albert Einstein".to_owned()),
-            ..Default::default()
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Albert Einstein".to_owned());
+            name_val
         });
         card
     };

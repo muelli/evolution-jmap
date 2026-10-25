@@ -248,9 +248,10 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
         card.id = Some("C1".into());
         card
     };
-    card.name = Some(jmap_proto::contacts::Name {
-        full: Some("Vera\r\nFN:Mallory".to_owned()),
-        ..jmap_proto::contacts::Name::default()
+    card.name = Some({
+        let mut name_val = jmap_proto::contacts::Name::default();
+        name_val.full = Some("Vera\r\nFN:Mallory".to_owned());
+        name_val
     });
 
     let vcard = card_to_vcard(&card);

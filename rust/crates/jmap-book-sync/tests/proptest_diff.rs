@@ -517,9 +517,10 @@ const ADDRESS_COMPONENT_KINDS: [&str; 7] = [
 ];
 
 fn arb_address_with_components() -> impl Strategy<Value = Address> {
-    arb_address_value().prop_map(|value| Address {
-        components: Some(vec![AddressComponent::new("locality", value)]),
-        ..Address::default()
+    arb_address_value().prop_map(|value| {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", value)]);
+        address_val
     })
 }
 
@@ -604,9 +605,10 @@ fn arb_address_components_pair() -> impl Strategy<Value = (Address, Address)> {
             }
             current.extend(current_tail);
             edited.extend(edited_tail);
-            let to_address = |components: Vec<AddressComponent>| Address {
-                components: (!components.is_empty()).then_some(components),
-                ..Address::default()
+            let to_address = |components: Vec<AddressComponent>| {
+                let mut address_val = Address::default();
+                address_val.components = (!components.is_empty()).then_some(components);
+                address_val
             };
             (to_address(current), to_address(edited))
         })
@@ -709,9 +711,10 @@ fn arb_name_components_pair() -> impl Strategy<Value = (Name, Name)> {
             }
             current.extend(current_tail);
             edited.extend(edited_tail);
-            let to_name = |components: Vec<NameComponent>| Name {
-                components: (!components.is_empty()).then_some(components),
-                ..Name::default()
+            let to_name = |components: Vec<NameComponent>| {
+                let mut name_val = Name::default();
+                name_val.components = (!components.is_empty()).then_some(components);
+                name_val
             };
             (to_name(current), to_name(edited))
         })

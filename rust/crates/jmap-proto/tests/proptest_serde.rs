@@ -444,14 +444,13 @@ prop_compose! {
         default_separator in prop::option::of(" "),
         extra in arb_extra(),
     ) -> Name {
-        Name {
-            components,
-            full,
-            is_ordered,
-            sort_as: None,
-            default_separator,
-            extra,
-        }
+        let mut result = Name::default();
+        result.components = components;
+        result.full = full;
+        result.is_ordered = is_ordered;
+        result.default_separator = default_separator;
+        result.extra = extra;
+        result
     }
 }
 
@@ -515,18 +514,12 @@ prop_compose! {
         default_separator in prop::option::of(", "),
         extra in arb_extra(),
     ) -> Address {
-        Address {
-            components: None,
-            contexts: None,
-            full,
-            is_ordered: None,
-            country_code,
-            coordinates: None,
-            time_zone: None,
-            pref: None,
-            default_separator,
-            extra,
-        }
+        let mut result = Address::default();
+        result.full = full;
+        result.country_code = country_code;
+        result.default_separator = default_separator;
+        result.extra = extra;
+        result
     }
 }
 

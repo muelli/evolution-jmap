@@ -1934,9 +1934,10 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         }
         let contexts = read_flags(&CONTEXTS, entry);
         let key = label_entry(entry, contexts.as_ref(), &addresses, &full);
-        let address = addresses.entry(key).or_insert_with(|| Address {
-            contexts,
-            ..Address::default()
+        let address = addresses.entry(key).or_insert_with(|| {
+            let mut address = Address::default();
+            address.contexts = contexts;
+            address
         });
         address.full = Some(full);
         if entry_has_type(entry, "PREF") && !address.extra.contains_key("pref") {
@@ -2303,13 +2304,12 @@ fn read_address(entry: &VCardEntry, group_label: Option<&str>) -> Option<Address
             }
         }
     }
-    Some(Address {
-        components: (!components.is_empty()).then_some(components),
-        contexts,
-        full,
-        extra,
-        ..Address::default()
-    })
+    let mut address = Address::default();
+    address.components = (!components.is_empty()).then_some(components);
+    address.contexts = contexts;
+    address.full = full;
+    address.extra = extra;
+    Some(address)
 }
 
 /// The `ORG` components for an organisation, name first then units, or `None`
@@ -2470,12 +2470,11 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
     if full.is_none() && components.is_empty() && extra.is_empty() {
         return None;
     }
-    Some(Name {
-        components: (!components.is_empty()).then_some(components),
-        full,
-        extra,
-        ..Name::default()
-    })
+    let mut name = Name::default();
+    name.components = (!components.is_empty()).then_some(components);
+    name.full = full;
+    name.extra = extra;
+    Some(name)
 }
 
 /// vCard `TYPE` values for the JSContact boolean map `value`.
@@ -2944,10 +2943,8 @@ mod tests {
             super::Value::String("Example, Alice".to_owned()),
         );
 
-        let name = super::Name {
-            extra,
-            ..super::Name::default()
-        };
+        let mut name = super::Name::default();
+        name.extra = extra;
 
         assert!(super::states_name(&name));
     }

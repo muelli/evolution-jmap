@@ -512,14 +512,15 @@ fn jscontact_spec_properties_roundtrip() {
     card.id = Some("c_full_spec".into());
     card.created = Some(created_date.clone());
     card.updated = Some(updated_date.clone());
-    card.name = Some(Name {
-        full: Some("Dr. Ada Lovelace".to_owned()),
-        is_ordered: Some(true),
-        sort_as: Some(BTreeMap::from([(
+    card.name = Some({
+        let mut name = Name::default();
+        name.full = Some("Dr. Ada Lovelace".to_owned());
+        name.is_ordered = Some(true);
+        name.sort_as = Some(BTreeMap::from([(
             "en".to_owned(),
             "Lovelace, Ada".to_owned(),
-        )])),
-        ..Name::default()
+        )]));
+        name
     });
     card.nicknames = Some(BTreeMap::from([(
         "k1".to_owned(),
@@ -544,18 +545,16 @@ fn jscontact_spec_properties_roundtrip() {
         title.organization_id = Some("o1".to_owned());
         title
     })]));
-    card.addresses = Some(BTreeMap::from([(
-        "a1".to_owned(),
-        Address {
-            full: Some("12 St James's Square\nLondon\nUK".to_owned()),
-            is_ordered: Some(true),
-            country_code: Some("GB".to_owned()),
-            coordinates: Some("geo:51.5074,-0.1364".to_owned()),
-            time_zone: Some("Europe/London".to_owned()),
-            pref: Some(1),
-            ..Address::default()
-        },
-    )]));
+    card.addresses = Some(BTreeMap::from([("a1".to_owned(), {
+        let mut address = Address::default();
+        address.full = Some("12 St James's Square\nLondon\nUK".to_owned());
+        address.is_ordered = Some(true);
+        address.country_code = Some("GB".to_owned());
+        address.coordinates = Some("geo:51.5074,-0.1364".to_owned());
+        address.time_zone = Some("Europe/London".to_owned());
+        address.pref = Some(1);
+        address
+    })]));
     card.notes = Some(BTreeMap::from([(
         "n1".to_owned(),
         Note::new("First computer programmer")
