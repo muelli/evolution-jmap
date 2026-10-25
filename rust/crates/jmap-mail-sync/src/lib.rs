@@ -935,7 +935,7 @@ impl MailSync {
     /// whitespace or Unicode normalisation). `created_resource` in
     /// `jmap-collection-sync` does the same for address books and calendars.
     /// If this function ignores the server name, the cached path stays
-    /// incorrect until the next full listing. [`created_folder_name`] makes the
+    /// incorrect until the next full listing. `created_folder_name` makes the
     /// selection. The RFC always guarantees the id.
     ///
     /// The counts are zero and there are no children. A new mailbox has no
@@ -1117,7 +1117,7 @@ impl MailSync {
     /// the server (`folder.rs` in `jmap-mail` translates a Camel search
     /// expression). `Email/query` has no mailbox limit of its own. Thus this
     /// function adds the mailbox condition with an AND, as
-    /// [`Self::message_ids`] does.
+    /// `message_ids` does.
     pub fn search(
         &self,
         mailbox: &Id,

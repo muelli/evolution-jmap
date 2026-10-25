@@ -47,7 +47,7 @@ pub struct Requested {
     /// It can be empty, and is then sent as it is, not refused. The server
     /// validates names. If this code refused a name, it could refuse a name that
     /// the server accepts. The name written back onto the child is never empty:
-    /// see [`shown_name`](crate::resources::shown_name).
+    /// see [`shown_name`].
     pub display_name: String,
 }
 
