@@ -935,21 +935,20 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // user can see one entry and not the other: Evolution shows only the first
     // `NOTE` line. No line can hold the `created`; see [`SEEDED_NOTE_CREATED`].
     // The caller selects the number of notes; see [`SeededNotes`].
-    let mut note = Note {
-        note: SEEDED_NOTE.to_owned(),
-        ..Note::default()
+    let mut note = {
+        let mut v = Note::default();
+        v.note = SEEDED_NOTE.to_owned();
+        v
     };
     note.extra
         .insert("created".to_owned(), serde_json::json!(SEEDED_NOTE_CREATED));
     let mut notes: BTreeMap<String, Note> = [(SEEDED_NOTE_KEY.to_owned(), note)].into();
     if matches!(seeded_notes, SeededNotes::Both) {
-        notes.insert(
-            SEEDED_SECOND_NOTE_KEY.to_owned(),
-            Note {
-                note: SEEDED_SECOND_NOTE.to_owned(),
-                ..Note::default()
-            },
-        );
+        notes.insert(SEEDED_SECOND_NOTE_KEY.to_owned(), {
+            let mut v = Note::default();
+            v.note = SEEDED_SECOND_NOTE.to_owned();
+            v
+        });
     }
     card.notes = Some(notes);
     // Three online services. The Jabber and Skype entries state only a URI (see

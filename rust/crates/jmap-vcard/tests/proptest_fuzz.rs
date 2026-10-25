@@ -82,11 +82,7 @@ prop_compose! {
             Just("🌟 Star".to_string()),
         ],
     ) -> Nickname {
-        Nickname {
-            name,
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        }
+        { let mut v = Nickname::default(); v.name = name; v.extra = BTreeMap::new(); v }
     }
 }
 
@@ -265,11 +261,7 @@ prop_compose! {
 
 prop_compose! {
     fn arb_note()(note in "\\PC*") -> Note {
-        Note {
-            note,
-            extra: BTreeMap::new(),
-            ..Note::default()
-        }
+        { let mut v = Note::default(); v.note = note; v.extra = BTreeMap::new(); v }
     }
 }
 
@@ -1360,11 +1352,7 @@ proptest! {
         let mut notes = BTreeMap::new();
         notes.insert(
             "n1".to_owned(),
-            Note {
-                note: text.clone(),
-                extra: BTreeMap::new(),
-                ..Note::default()
-            },
+            { let mut v = Note::default(); v.note = text.clone(); v.extra = BTreeMap::new(); v },
         );
         let card = {
             let mut card = ContactCard::default();
@@ -1437,11 +1425,7 @@ proptest! {
             });
             card.notes = Some([(
                 "n1".to_owned(),
-                Note {
-                    note: note_text.clone(),
-                    extra: BTreeMap::new(),
-                    ..Note::default()
-                },
+                { let mut v = Note::default(); v.note = note_text.clone(); v.extra = BTreeMap::new(); v },
             )].into());
             card
         };

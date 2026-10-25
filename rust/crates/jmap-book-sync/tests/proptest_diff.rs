@@ -209,17 +209,19 @@ fn entry_sets<T: Clone + std::fmt::Debug>(
 }
 
 fn arb_nickname() -> impl Strategy<Value = Nickname> {
-    "[a-zA-Z ]{1,12}".prop_map(|name| Nickname {
-        name,
-        ..Nickname::default()
+    "[a-zA-Z ]{1,12}".prop_map(|name| {
+        let mut v = Nickname::default();
+        v.name = name;
+        v
     })
 }
 
 fn arb_nickname_pair() -> impl Strategy<Value = (Nickname, Nickname)> {
     (arb_nickname(), "[a-zA-Z ]{1,12}").prop_map(|(old, name)| {
-        let new = Nickname {
-            name,
-            ..old.clone()
+        let new = {
+            let mut v = old.clone();
+            v.name = name;
+            v
         };
         (old, new)
     })
@@ -234,17 +236,19 @@ fn card_with_nicknames(map: BTreeMap<String, Nickname>) -> ContactCard {
 }
 
 fn arb_note() -> impl Strategy<Value = Note> {
-    "[a-zA-Z0-9 .,]{1,20}".prop_map(|note| Note {
-        note,
-        ..Note::default()
+    "[a-zA-Z0-9 .,]{1,20}".prop_map(|note| {
+        let mut v = Note::default();
+        v.note = note;
+        v
     })
 }
 
 fn arb_note_pair() -> impl Strategy<Value = (Note, Note)> {
     (arb_note(), "[a-zA-Z0-9 .,]{1,20}").prop_map(|(old, note)| {
-        let new = Note {
-            note,
-            ..old.clone()
+        let new = {
+            let mut v = old.clone();
+            v.note = note;
+            v
         };
         (old, new)
     })

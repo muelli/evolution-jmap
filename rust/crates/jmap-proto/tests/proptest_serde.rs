@@ -566,12 +566,11 @@ prop_compose! {
         ),
         extra in arb_extra(),
     ) -> Note {
-        Note {
-            note,
-            created,
-            author,
-            extra,
-        }
+        let mut result = Note::new(note);
+        result.created = created;
+        result.author = author;
+        result.extra = extra;
+        result
     }
 }
 

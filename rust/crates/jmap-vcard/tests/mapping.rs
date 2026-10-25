@@ -1552,13 +1552,11 @@ fn one_note(key: &str, note: &str) -> ContactCard {
     {
         let mut card = ContactCard::default();
         card.notes = Some(
-            [(
-                key.to_owned(),
-                Note {
-                    note: note.to_owned(),
-                    ..Note::default()
-                },
-            )]
+            [(key.to_owned(), {
+                let mut v = Note::default();
+                v.note = note.to_owned();
+                v
+            })]
             .into(),
         );
         card
@@ -1865,13 +1863,11 @@ fn one_nickname(key: &str, name: &str) -> ContactCard {
     {
         let mut card = ContactCard::default();
         card.nicknames = Some(
-            [(
-                key.to_owned(),
-                Nickname {
-                    name: name.to_owned(),
-                    ..Nickname::default()
-                },
-            )]
+            [(key.to_owned(), {
+                let mut v = Nickname::default();
+                v.name = name.to_owned();
+                v
+            })]
             .into(),
         );
         card
@@ -1912,13 +1908,14 @@ fn each_nickname_gets_a_line_of_its_own() {
     // Use one line per nickname key. A comma list cannot carry per-entry keys,
     // and EDS reads NICKNAME as one string anyway.
     let mut card = one_nickname("k1", "Vee");
-    card.nicknames.as_mut().expect("nicknames").insert(
-        "k2".to_owned(),
-        Nickname {
-            name: "Vera the Elder".to_owned(),
-            ..Nickname::default()
-        },
-    );
+    card.nicknames
+        .as_mut()
+        .expect("nicknames")
+        .insert("k2".to_owned(), {
+            let mut v = Nickname::default();
+            v.name = "Vera the Elder".to_owned();
+            v
+        });
     let vcard = card_to_vcard(&card);
 
     assert_eq!(
@@ -3709,20 +3706,16 @@ fn maps_notes_with_multiple_entries_and_newlines_faithfully() {
     };
     card.notes = Some(
         [
-            (
-                "n1".to_owned(),
-                Note {
-                    note: "First paragraph.\nSecond paragraph with details.".to_owned(),
-                    ..Note::default()
-                },
-            ),
-            (
-                "n2".to_owned(),
-                Note {
-                    note: "Follow-up note for 2026 meeting.".to_owned(),
-                    ..Note::default()
-                },
-            ),
+            ("n1".to_owned(), {
+                let mut v = Note::default();
+                v.note = "First paragraph.\nSecond paragraph with details.".to_owned();
+                v
+            }),
+            ("n2".to_owned(), {
+                let mut v = Note::default();
+                v.note = "Follow-up note for 2026 meeting.".to_owned();
+                v
+            }),
         ]
         .into_iter()
         .collect(),
@@ -3835,13 +3828,11 @@ fn maps_nicknames_spouse_and_keywords_faithfully() {
         card
     };
     card.nicknames = Some(
-        [(
-            "k1".to_owned(),
-            Nickname {
-                name: "Vee".to_owned(),
-                ..Nickname::default()
-            },
-        )]
+        [("k1".to_owned(), {
+            let mut v = Nickname::default();
+            v.name = "Vee".to_owned();
+            v
+        })]
         .into_iter()
         .collect(),
     );
@@ -5142,13 +5133,15 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         number: "".into(),
         ..ContactPhone::default()
     }));
-    assert!(states_note(&Note {
-        note: "Important contact".into(),
-        ..Note::default()
+    assert!(states_note(&{
+        let mut v = Note::default();
+        v.note = "Important contact".into();
+        v
     }));
-    assert!(!states_note(&Note {
-        note: "".into(),
-        ..Note::default()
+    assert!(!states_note(&{
+        let mut v = Note::default();
+        v.note = "".into();
+        v
     }));
     assert!(states_link(&Link {
         uri: "https://example.com".into(),
@@ -5158,13 +5151,15 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         uri: "".into(),
         ..Link::default()
     }));
-    assert!(states_nickname(&Nickname {
-        name: "Ali".into(),
-        ..Nickname::default()
+    assert!(states_nickname(&{
+        let mut v = Nickname::default();
+        v.name = "Ali".into();
+        v
     }));
-    assert!(!states_nickname(&Nickname {
-        name: "".into(),
-        ..Nickname::default()
+    assert!(!states_nickname(&{
+        let mut v = Nickname::default();
+        v.name = "".into();
+        v
     }));
     assert_eq!(title_kind(None), "title");
     assert_eq!(title_kind(Some("role")), "role");
@@ -6550,13 +6545,11 @@ fn jscontact_server_localizations_and_preferred_languages_characterization() {
             .collect(),
         );
         card.notes = Some(
-            [(
-                "n1".to_owned(),
-                Note {
-                    note: "English Note".to_owned(),
-                    ..Note::default()
-                },
-            )]
+            [("n1".to_owned(), {
+                let mut v = Note::default();
+                v.note = "English Note".to_owned();
+                v
+            })]
             .into_iter()
             .collect(),
         );
@@ -7885,14 +7878,12 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
             .into(),
         );
         card.notes = Some(
-            [(
-                "n1".to_owned(),
-                Note {
-                    note: "Modeled note".to_owned(),
-                    extra: note_extra,
-                    ..Note::default()
-                },
-            )]
+            [("n1".to_owned(), {
+                let mut v = Note::default();
+                v.note = "Modeled note".to_owned();
+                v.extra = note_extra;
+                v
+            })]
             .into(),
         );
         card.extra = extra;
@@ -7993,14 +7984,12 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         with 100% lossless fidelity upon reading back from vCard 3.0 format.";
 
     let mut notes = BTreeMap::new();
-    notes.insert(
-        "n1".to_owned(),
-        Note {
-            note: long_note_text.to_owned(),
-            extra: BTreeMap::new(),
-            ..Note::default()
-        },
-    );
+    notes.insert("n1".to_owned(), {
+        let mut v = Note::default();
+        v.note = long_note_text.to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     // Build an inline `PHOTO` payload as a data URI.
     let binary_data: Vec<u8> = (0..350).map(|i| (i % 256) as u8).collect();
@@ -8217,14 +8206,12 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
             );
 
             let mut notes = BTreeMap::new();
-            notes.insert(
-                "n1".to_owned(),
-                Note {
-                    note: note_text.clone(),
-                    extra: BTreeMap::new(),
-                    ..Note::default()
-                },
-            );
+            notes.insert("n1".to_owned(), {
+                let mut v = Note::default();
+                v.note = note_text.clone();
+                v.extra = BTreeMap::new();
+                v
+            });
 
             let card = {
                 let mut card = ContactCard::default();
@@ -8298,14 +8285,12 @@ fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
         let value = "X".repeat(value_len);
 
         let mut notes = BTreeMap::new();
-        notes.insert(
-            "n1".to_owned(),
-            Note {
-                note: value.clone(),
-                extra: BTreeMap::new(),
-                ..Note::default()
-            },
-        );
+        notes.insert("n1".to_owned(), {
+            let mut v = Note::default();
+            v.note = value.clone();
+            v.extra = BTreeMap::new();
+            v
+        });
 
         let card = {
             let mut card = ContactCard::default();
@@ -8357,14 +8342,12 @@ fn rfc2426_line_folding_with_escaped_delimiters_and_backslashes() {
     let long_note_with_escapes = multiline_note.repeat(4);
 
     let mut notes = BTreeMap::new();
-    notes.insert(
-        "n1".to_owned(),
-        Note {
-            note: long_note_with_escapes.clone(),
-            extra: BTreeMap::new(),
-            ..Note::default()
-        },
-    );
+    notes.insert("n1".to_owned(), {
+        let mut v = Note::default();
+        v.note = long_note_with_escapes.clone();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -8404,14 +8387,12 @@ fn rfc2426_value_escaping_note_with_all_four_special_characters_roundtrip() {
     let note_text = "First line of notes.\nSecond line with comma, semicolon; and backslash \\.\nThird line with literal escapes: \\n \\, \\; \\\\ and more.";
 
     let mut notes = BTreeMap::new();
-    notes.insert(
-        "n1".to_owned(),
-        Note {
-            note: note_text.to_owned(),
-            extra: BTreeMap::new(),
-            ..Note::default()
-        },
-    );
+    notes.insert("n1".to_owned(), {
+        let mut v = Note::default();
+        v.note = note_text.to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -8622,14 +8603,12 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
 fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
     // Tests escaping of \n, \,, \;, \\ across all mapped vCard properties
     let mut nicknames = BTreeMap::new();
-    nicknames.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "Ali, Baba; Chief\\Boss\nLead".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
+    nicknames.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Ali, Baba; Chief\\Boss\nLead".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut titles = BTreeMap::new();
     titles.insert(
@@ -8793,14 +8772,12 @@ fn rfc2426_value_escaping_no_double_escaping_multiroundtrip() {
     // vcard1 -> card1 -> vcard2 -> card2 -> vcard3 -> card3
     let complex_text = "Text with single backslash \\, literal \\n, literal \\,, literal \\;, and double \\\\ backslashes.";
     let mut notes = BTreeMap::new();
-    notes.insert(
-        "n1".to_owned(),
-        Note {
-            note: complex_text.to_owned(),
-            extra: BTreeMap::new(),
-            ..Note::default()
-        },
-    );
+    notes.insert("n1".to_owned(), {
+        let mut v = Note::default();
+        v.note = complex_text.to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card0 = {
         let mut card = ContactCard::default();
@@ -9301,14 +9278,12 @@ fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
 
     // Single nickname roundtrip.
     let mut single_nick = BTreeMap::new();
-    single_nick.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "Vee".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
+    single_nick.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Vee".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
     let card = {
         let mut card = ContactCard::default();
         card.id = Some("C-NICK-SINGLE".into());
@@ -9326,30 +9301,24 @@ fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
 
     // 2. Multiple nicknames emitted as distinct lines
     let mut multi_nicks = BTreeMap::new();
-    multi_nicks.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "Vee".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    multi_nicks.insert(
-        "k2".to_owned(),
-        Nickname {
-            name: "Vera the Elder".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    multi_nicks.insert(
-        "k3".to_owned(),
-        Nickname {
-            name: "Chief Architect".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
+    multi_nicks.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Vee".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    multi_nicks.insert("k2".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Vera the Elder".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    multi_nicks.insert("k3".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Chief Architect".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
     let multi_card = {
         let mut card = ContactCard::default();
         card.id = Some("C-NICK-MULTI".into());
@@ -9450,42 +9419,34 @@ fn nickname_comma_separated_text_list_inbound_and_escaping_fidelity() {
 fn nickname_special_characters_escaping_unicode_and_parameters() {
     // Tests nicknames with semicolons, backslashes, newlines, UTF-8 unicode, and parameters:
     let mut nicks = BTreeMap::new();
-    nicks.insert(
-        "k_special".to_owned(),
-        Nickname {
-            name: "Nick;Name\\With\nNewline & \"Quotes\"".to_owned(),
-            extra: [
-                ("pref".to_owned(), json!(1)),
-                ("contexts".to_owned(), json!({"work": true})),
-            ]
-            .into(),
-            ..Nickname::default()
-        },
-    );
-    nicks.insert(
-        "k_unicode_jp".to_owned(),
-        Nickname {
-            name: "たなかさん (田中)".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicks.insert(
-        "k_unicode_cyrillic".to_owned(),
-        Nickname {
-            name: "Саша (Александр)".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicks.insert(
-        "k_unicode_emoji".to_owned(),
-        Nickname {
-            name: "🌟 SuperStar 🦊".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
+    nicks.insert("k_special".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Nick;Name\\With\nNewline & \"Quotes\"".to_owned();
+        v.extra = [
+            ("pref".to_owned(), json!(1)),
+            ("contexts".to_owned(), json!({"work": true})),
+        ]
+        .into();
+        v
+    });
+    nicks.insert("k_unicode_jp".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "たなかさん (田中)".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicks.insert("k_unicode_cyrillic".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Саша (Александр)".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicks.insert("k_unicode_emoji".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "🌟 SuperStar 🦊".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -9526,35 +9487,33 @@ fn nickname_special_characters_escaping_unicode_and_parameters() {
 #[test]
 fn nickname_empty_absent_and_predicate_fidelity() {
     // Tests states_nickname predicate and empty/absent nickname handling:
-    assert!(states_nickname(&Nickname {
-        name: "Nick".into(),
-        extra: BTreeMap::new(),
-        ..Nickname::default()
+    assert!(states_nickname(&{
+        let mut v = Nickname::default();
+        v.name = "Nick".into();
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_nickname(&Nickname {
-        name: "".into(),
-        extra: BTreeMap::new(),
-        ..Nickname::default()
+    assert!(!states_nickname(&{
+        let mut v = Nickname::default();
+        v.name = "".into();
+        v.extra = BTreeMap::new();
+        v
     }));
 
     // Empty nicknames are not emitted
     let mut nicks = BTreeMap::new();
-    nicks.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicks.insert(
-        "k2".to_owned(),
-        Nickname {
-            name: "Valid Nick".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
+    nicks.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicks.insert("k2".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Valid Nick".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
     let card = {
         let mut card = ContactCard::default();
         card.nicknames = Some(nicks);
@@ -10483,37 +10442,28 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
     let mut notes = BTreeMap::new();
     notes.insert(
         "n1".to_owned(),
-        Note {
-            note: "München ist eine wunderschöne Stadt mit vielen Parks und Museen.\nRené & Hélène apprécient beaucoup la gastronomie française: café, croissants, crème brûlée.\n∀x ∈ ℝ: x² ≥ 0 (math symbols test 🧑‍💻🚀🌟)".to_owned(),
-            extra: BTreeMap::new(), ..Note::default()
-        },
+        { let mut v = Note::default(); v.note = "München ist eine wunderschöne Stadt mit vielen Parks und Museen.\nRené & Hélène apprécient beaucoup la gastronomie française: café, croissants, crème brûlée.\n∀x ∈ ℝ: x² ≥ 0 (math symbols test 🧑‍💻🚀🌟)".to_owned(); v.extra = BTreeMap::new(); v },
     );
 
     let mut nicknames = BTreeMap::new();
-    nicknames.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "Schätzchen".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicknames.insert(
-        "k2".to_owned(),
-        Nickname {
-            name: "Маша (Мария)".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicknames.insert(
-        "k3".to_owned(),
-        Nickname {
-            name: "たなか (田中)".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
+    nicknames.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Schätzchen".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicknames.insert("k2".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Маша (Мария)".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicknames.insert("k3".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "たなか (田中)".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut keywords = BTreeMap::new();
     keywords.insert("Amis".to_owned(), json!(true));
@@ -18970,14 +18920,12 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
             ..Name::default()
         });
         card.nicknames = Some(
-            [(
-                "n1".to_string(),
-                Nickname {
-                    name: "SelfTest".into(),
-                    extra: BTreeMap::new(),
-                    ..Nickname::default()
-                },
-            )]
+            [("n1".to_string(), {
+                let mut v = Nickname::default();
+                v.name = "SelfTest".into();
+                v.extra = BTreeMap::new();
+                v
+            })]
             .into(),
         );
         card.emails = Some(
@@ -19182,14 +19130,12 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
             .into(),
         );
         card.notes = Some(
-            [(
-                "n1".to_string(),
-                Note {
-                    note: "Self-consistency verification note.\nLine 2 of multi-line note.".into(),
-                    extra: BTreeMap::new(),
-                    ..Note::default()
-                },
-            )]
+            [("n1".to_string(), {
+                let mut v = Note::default();
+                v.note = "Self-consistency verification note.\nLine 2 of multi-line note.".into();
+                v.extra = BTreeMap::new();
+                v
+            })]
             .into(),
         );
         card.keywords = Some(

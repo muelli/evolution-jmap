@@ -1504,12 +1504,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
             "NICKNAME" => {
                 // Parse as RFC 2426 `text-list`, matching calcard and EDS.
                 // Unescaped commas stay in one nickname instead of splitting it.
-                let nickname = Nickname {
-                    name: entry_text_list(entry),
-                    contexts: read_flags(&CONTEXTS, entry),
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra: BTreeMap::new(),
-                };
+                let mut nickname = Nickname::new(entry_text_list(entry));
+                nickname.contexts = read_flags(&CONTEXTS, entry);
+                nickname.pref = entry_has_type(entry, "PREF").then_some(1);
                 if !states_nickname(&nickname) {
                     continue;
                 }
@@ -1665,11 +1662,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 titles.insert(entry_key(entry, "t", &titles), title);
             }
             "NOTE" => {
-                let note = Note {
-                    note: entry_text(entry),
-                    extra: BTreeMap::new(),
-                    ..Note::default()
-                };
+                let note = Note::new(entry_text(entry));
                 if !states_note(&note) {
                     continue;
                 }

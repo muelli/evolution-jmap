@@ -523,12 +523,9 @@ fn jscontact_spec_properties_roundtrip() {
     });
     card.nicknames = Some(BTreeMap::from([(
         "k1".to_owned(),
-        Nickname {
-            name: "Enchantress of Numbers".to_owned(),
-            contexts: Some(serde_json::json!({"private": true})),
-            pref: Some(1),
-            ..Nickname::default()
-        },
+        Nickname::new("Enchantress of Numbers")
+            .with_contexts(serde_json::json!({"private": true}))
+            .with_pref(1),
     )]));
     card.organizations = Some(BTreeMap::from([(
         "o1".to_owned(),

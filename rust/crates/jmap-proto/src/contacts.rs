@@ -579,6 +579,7 @@ impl NameComponent {
 /// by.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Nickname {
     /// The nickname itself. Mandatory per RFC 9553 §2.2.2, and the only part
     /// of it a `NICKNAME` line has room for.
@@ -590,6 +591,25 @@ pub struct Nickname {
     pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Nickname {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
 }
 
 /// JSContact EmailAddress (RFC 9553 §2.3.1).
@@ -944,6 +964,7 @@ impl Author {
 /// JSContact Note (RFC 9553 §2.8.3): one free-text note about the contact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Note {
     /// The note's text. Mandatory per RFC 9553 §2.8.3, and the only part of
     /// a note a `NOTE` line has room for.
