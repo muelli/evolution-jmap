@@ -387,10 +387,7 @@ fn meeting_with_reminder(uid: &str, organizer: &str, guest: &str) -> String {
 /// Returns the subjects of the guest mails that contain `uid`.
 fn guest_mail(guest: &Client, uid: &str) -> Vec<String> {
     let account_id = guest.primary_account(CAPABILITY_MAIL).unwrap();
-    let filter = EmailQueryFilter {
-        text: Some(uid.to_owned()),
-        ..EmailQueryFilter::default()
-    };
+    let filter = EmailQueryFilter::default().text(uid);
     let ids = guest
         .email_query(&account_id, filter, None, None, 0)
         .unwrap()

@@ -164,10 +164,7 @@ pub unsafe fn read_envelope(
         rcpt_to.push(EnvelopeAddress::new(email));
     }
 
-    Ok(Envelope {
-        mail_from: EnvelopeAddress::new(mail_from),
-        rcpt_to,
-    })
+    Ok(Envelope::new(EnvelopeAddress::new(mail_from), rcpt_to))
 }
 
 /// Casts `address` to a `CamelInternetAddress`. A NULL gives `None`, which the

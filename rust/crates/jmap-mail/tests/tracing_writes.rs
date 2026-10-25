@@ -343,10 +343,10 @@ fn transport_send_message_traces_structured_fields() {
     let transport = fixture.transport();
 
     let raw = b"From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Hi\r\n\r\nSent body\r\n".to_vec();
-    let envelope = Envelope {
-        mail_from: EnvelopeAddress::new("alice@example.com"),
-        rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
-    };
+    let envelope = Envelope::new(
+        EnvelopeAddress::new("alice@example.com"),
+        [EnvelopeAddress::new("bob@example.com")],
+    );
 
     let (_, logs) = capture(|| {
         let sent = transport.send_message(raw, envelope).expect("send_message");
@@ -396,10 +396,10 @@ fn send_message_identity_error_traces_failure_field() {
 
     let raw = b"From: Unknown <unknown@example.com>\r\nTo: Bob <bob@example.com>\r\n\r\nBody\r\n"
         .to_vec();
-    let envelope = Envelope {
-        mail_from: EnvelopeAddress::new("unknown@example.com"),
-        rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
-    };
+    let envelope = Envelope::new(
+        EnvelopeAddress::new("unknown@example.com"),
+        [EnvelopeAddress::new("bob@example.com")],
+    );
 
     let (_, logs) = capture(|| {
         let result = transport.send_message(raw, envelope);

@@ -54,10 +54,10 @@ fn a_submission_that_needs_a_credential_refresh_does_not_restage_the_message() {
     let outgoing = Outgoing {
         source: MESSAGE.to_vec(),
         identity,
-        envelope: Some(Envelope {
-            mail_from: EnvelopeAddress::new("alice@example.com"),
-            rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
-        }),
+        envelope: Some(Envelope::new(
+            EnvelopeAddress::new("alice@example.com"),
+            [EnvelopeAddress::new("bob@example.com")],
+        )),
         staging: drafts.clone(),
         destination: Some(sent.clone()),
     };

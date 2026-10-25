@@ -153,20 +153,18 @@ fn address(address: &str) -> Option<EmailAddress> {
         return None;
     }
     let Some((name, rest)) = address.split_once('<') else {
-        return Some(EmailAddress {
-            name: None,
-            email: address.to_owned(),
-        });
+        return Some(EmailAddress::from_email(address));
     };
     let email = rest.trim_end().trim_end_matches('>').trim();
     if email.is_empty() {
         return None;
     }
     let name = name.trim().trim_matches('"').trim();
-    Some(EmailAddress {
-        name: (!name.is_empty()).then(|| name.to_owned()),
-        email: email.to_owned(),
-    })
+    let mut result = EmailAddress::from_email(email);
+    if !name.is_empty() {
+        result = result.with_name(name);
+    }
+    Some(result)
 }
 
 #[cfg(test)]

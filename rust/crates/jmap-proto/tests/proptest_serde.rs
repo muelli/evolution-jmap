@@ -98,19 +98,19 @@ prop_compose! {
         may_share in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> MailboxRights {
-        MailboxRights {
-            may_read_items,
-            may_add_items,
-            may_remove_items,
-            may_set_seen,
-            may_set_keywords,
-            may_create_child,
-            may_rename,
-            may_delete,
-            may_submit,
-            may_share,
-            extra,
-        }
+        let mut rights = MailboxRights::default();
+        rights.may_read_items = may_read_items;
+        rights.may_add_items = may_add_items;
+        rights.may_remove_items = may_remove_items;
+        rights.may_set_seen = may_set_seen;
+        rights.may_set_keywords = may_set_keywords;
+        rights.may_create_child = may_create_child;
+        rights.may_rename = may_rename;
+        rights.may_delete = may_delete;
+        rights.may_submit = may_submit;
+        rights.may_share = may_share;
+        rights.extra = extra;
+        rights
     }
 }
 
@@ -159,7 +159,10 @@ prop_compose! {
         name in prop::option::of("[A-Za-z ]{1,20}"),
         email in "[a-z0-9]{1,10}@[a-z0-9]{1,10}\\.com",
     ) -> EmailAddress {
-        EmailAddress { name, email }
+        let mut address = EmailAddress::default();
+        address.name = name;
+        address.email = email;
+        address
     }
 }
 
@@ -168,7 +171,7 @@ prop_compose! {
         name in "[A-Za-z-]{1,16}",
         value in "[A-Za-z0-9 ;=_-]{1,32}",
     ) -> EmailHeader {
-        EmailHeader { name, value }
+        EmailHeader::new(name, value)
     }
 }
 
@@ -178,11 +181,10 @@ prop_compose! {
         is_encoding_problem in any::<bool>(),
         is_truncated in any::<bool>(),
     ) -> EmailBodyValue {
-        EmailBodyValue {
-            value,
-            is_encoding_problem,
-            is_truncated,
-        }
+        let mut body_value = EmailBodyValue::new(value);
+        body_value.is_encoding_problem = is_encoding_problem;
+        body_value.is_truncated = is_truncated;
+        body_value
     }
 }
 
@@ -202,23 +204,17 @@ prop_compose! {
         cid in prop::option::of("<cid123@example.com>"),
         extra in arb_extra(),
     ) -> EmailBodyPart {
-        EmailBodyPart {
-            part_id,
-            blob_id,
-            size,
-            name,
-            content_type,
-            charset,
-            disposition,
-            cid,
-            location: None,
-            sub_parts: None,
-            headers: None,
-            smime_status: None,
-            smime_errors: None,
-            smime_verified_at: None,
-            extra,
-        }
+        let mut part = EmailBodyPart::default();
+        part.part_id = part_id;
+        part.blob_id = blob_id;
+        part.size = size;
+        part.name = name;
+        part.content_type = content_type;
+        part.charset = charset;
+        part.disposition = disposition;
+        part.cid = cid;
+        part.extra = extra;
+        part
     }
 }
 
@@ -229,12 +225,11 @@ prop_compose! {
         set_keywords in prop::option::of(prop::collection::btree_map("[a-z]{1,8}", any::<bool>(), 0..2)),
         extra in arb_extra(),
     ) -> SnoozeDetails {
-        SnoozeDetails {
-            until,
-            move_to_mailbox_id,
-            set_keywords,
-            extra,
-        }
+        let mut details = SnoozeDetails::new(until);
+        details.move_to_mailbox_id = move_to_mailbox_id;
+        details.set_keywords = set_keywords;
+        details.extra = extra;
+        details
     }
 }
 
@@ -364,19 +359,19 @@ prop_compose! {
         may_send in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> Identity {
-        Identity {
-            id,
-            name,
-            email,
-            reply_to,
-            bcc,
-            text_signature,
-            html_signature,
-            draft_mailbox_id,
-            may_delete,
-            may_send,
-            extra,
-        }
+        let mut identity = Identity::default();
+        identity.id = id;
+        identity.name = name;
+        identity.email = email;
+        identity.reply_to = reply_to;
+        identity.bcc = bcc;
+        identity.text_signature = text_signature;
+        identity.html_signature = html_signature;
+        identity.draft_mailbox_id = draft_mailbox_id;
+        identity.may_delete = may_delete;
+        identity.may_send = may_send;
+        identity.extra = extra;
+        identity
     }
 }
 
@@ -1069,17 +1064,17 @@ prop_compose! {
         fetch_all_body_values in any::<bool>(),
         max_body_value_bytes in any::<Option<u64>>(),
     ) -> EmailGetRequest {
-        EmailGetRequest {
-            account_id,
-            ids,
-            ids_ref,
-            properties,
-            body_properties,
-            fetch_text_body_values,
-            fetch_html_body_values,
-            fetch_all_body_values,
-            max_body_value_bytes,
-        }
+        let mut request = EmailGetRequest::default();
+        request.account_id = account_id;
+        request.ids = ids;
+        request.ids_ref = ids_ref;
+        request.properties = properties;
+        request.body_properties = body_properties;
+        request.fetch_text_body_values = fetch_text_body_values;
+        request.fetch_html_body_values = fetch_html_body_values;
+        request.fetch_all_body_values = fetch_all_body_values;
+        request.max_body_value_bytes = max_body_value_bytes;
+        request
     }
 }
 

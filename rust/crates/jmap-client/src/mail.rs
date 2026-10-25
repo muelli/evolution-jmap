@@ -109,27 +109,20 @@ fn submission_request(
     on_success_update: Option<Value>,
 ) -> EmailSubmissionSetRequest {
     const SUBMISSION: &str = "submission";
-    EmailSubmissionSetRequest {
-        set: SetRequest::<EmailSubmission>::new(account_id.clone()).create(
-            SUBMISSION,
-            EmailSubmission {
-                id: None,
-                identity_id: identity_id.clone(),
-                email_id,
-                thread_id: None,
-                envelope,
-                // Server-set (RFC 8621 §7.1): a release time travels as a
-                // FUTURERELEASE envelope parameter, never as this property.
-                send_at: None,
-                undo_status: None,
-                delivery_status: None,
-                extra: Default::default(),
-            },
-        ),
-        on_success_update_email: on_success_update
-            .map(|patch| [(format!("#{SUBMISSION}"), patch)].into()),
-        on_success_destroy_email: None,
+    // Server-set (RFC 8621 §7.1): a release time travels as a FUTURERELEASE
+    // envelope parameter, never as the submission's own property.
+    let mut submission = EmailSubmission::new(identity_id.clone(), email_id);
+    if let Some(envelope) = envelope {
+        submission = submission.with_envelope(envelope);
     }
+
+    let mut request = EmailSubmissionSetRequest::new(
+        SetRequest::<EmailSubmission>::new(account_id.clone()).create(SUBMISSION, submission),
+    );
+    if let Some(patch) = on_success_update {
+        request = request.with_on_success_update_email([(format!("#{SUBMISSION}"), patch)].into());
+    }
+    request
 }
 
 impl Client {

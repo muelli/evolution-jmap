@@ -488,11 +488,11 @@ pub fn search_snippet_get(state: &mut ServerState, arguments: Value) -> Result<V
         });
     }
 
-    to_result(&SearchSnippetGetResponse {
-        account_id: request.account_id,
-        list,
-        not_found: (!not_found.is_empty()).then_some(not_found),
-    })
+    let mut response = SearchSnippetGetResponse::new(request.account_id, list);
+    if !not_found.is_empty() {
+        response = response.with_not_found(not_found);
+    }
+    to_result(&response)
 }
 
 /// Preview byte cap after text and HTML escaping (RFC 8621 §5).
@@ -1278,13 +1278,15 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
         }
     });
 
-    to_result(&EmailImportResponse {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: account.emails.state(),
-        created: (!created.is_empty()).then_some(created),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-    })
+    let mut response = EmailImportResponse::new(request.account_id, account.emails.state())
+        .with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    to_result(&response)
 }
 
 /// `Email/parse` (RFC 8621 §4.8): parse an uploaded blob without storing it.
@@ -1523,21 +1525,22 @@ pub fn email_submission_set(
         }
 
         // When absent, derive the SMTP envelope from the message (RFC 8621 §7).
-        let envelope = submission.envelope.clone().unwrap_or_else(|| Envelope {
-            mail_from: EnvelopeAddress::new(
-                email
-                    .from
-                    .as_ref()
-                    .and_then(|from| from.first())
-                    .map(|address| address.email.clone())
-                    .unwrap_or_default(),
-            ),
-            rcpt_to: [&email.to, &email.cc, &email.bcc]
-                .into_iter()
-                .flatten()
-                .flat_map(|addresses| addresses.iter())
-                .map(|address| EnvelopeAddress::new(address.email.clone()))
-                .collect(),
+        let envelope = submission.envelope.clone().unwrap_or_else(|| {
+            Envelope::new(
+                EnvelopeAddress::new(
+                    email
+                        .from
+                        .as_ref()
+                        .and_then(|from| from.first())
+                        .map(|address| address.email.clone())
+                        .unwrap_or_default(),
+                ),
+                [&email.to, &email.cc, &email.bcc]
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|addresses| addresses.iter())
+                    .map(|address| EnvelopeAddress::new(address.email.clone())),
+            )
         });
 
         let id = account.submissions.alloc_id();
@@ -1899,13 +1902,9 @@ impl AccountState {
     /// Seed a sending identity without bumping state.
     pub fn seed_identity(&mut self, name: &str, email: &str) -> Id {
         let id = self.identities.alloc_id();
-        let identity = Identity {
-            id: Some(id.clone()),
-            name: name.to_owned(),
-            email: email.to_owned(),
-            may_delete: Some(false),
-            ..Identity::default()
-        };
+        let identity = Identity::new(name, email)
+            .with_id(id.clone())
+            .with_may_delete(false);
         self.identities.seed_with_id(id.clone(), identity);
         id
     }
@@ -2020,26 +2019,27 @@ impl AccountState {
         let id = self.emails.alloc_id();
         let body_blob_id = self.add_blob("text/plain", seed.text_body.clone().into_bytes());
 
-        let text_part = EmailBodyPart {
-            part_id: Some("1".to_owned()),
-            blob_id: Some(body_blob_id),
-            size: Some(seed.text_body.len() as u64),
-            content_type: Some("text/plain".to_owned()),
-            charset: Some("utf-8".to_owned()),
-            ..EmailBodyPart::default()
-        };
+        let text_part = EmailBodyPart::new()
+            .with_part_id("1")
+            .with_blob_id(body_blob_id)
+            .with_size(seed.text_body.len() as u64)
+            .with_content_type("text/plain")
+            .with_charset("utf-8");
         let attachments: Vec<EmailBodyPart> = seed
             .attachments
             .iter()
             .enumerate()
-            .map(|(index, (blob_id, name, content_type))| EmailBodyPart {
-                part_id: Some(format!("{}", index + 2)),
-                blob_id: Some(blob_id.clone()),
-                size: self.blobs.get(blob_id).map(|blob| blob.data.len() as u64),
-                name: Some(name.clone()),
-                content_type: Some(content_type.clone()),
-                disposition: Some("attachment".to_owned()),
-                ..EmailBodyPart::default()
+            .map(|(index, (blob_id, name, content_type))| {
+                let mut part = EmailBodyPart::new()
+                    .with_part_id(format!("{}", index + 2))
+                    .with_blob_id(blob_id.clone())
+                    .with_name(name.clone())
+                    .with_content_type(content_type.clone())
+                    .with_disposition("attachment");
+                if let Some(size) = self.blobs.get(blob_id).map(|blob| blob.data.len() as u64) {
+                    part = part.with_size(size);
+                }
+                part
             })
             .collect();
 
