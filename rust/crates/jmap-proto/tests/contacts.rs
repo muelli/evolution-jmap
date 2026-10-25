@@ -530,13 +530,10 @@ fn jscontact_spec_properties_roundtrip() {
     )]));
     card.organizations = Some(BTreeMap::from([(
         "o1".to_owned(),
-        Organization {
-            name: Some("Analytical Engine Corp".to_owned()),
-            sort_as: Some("Analytical".to_owned()),
-            contexts: Some(serde_json::json!({"work": true})),
-            units: Some(vec![OrgUnit::new("Computing").with_sort_as("Comp")]),
-            ..Organization::default()
-        },
+        Organization::new("Analytical Engine Corp")
+            .with_sort_as("Analytical")
+            .with_contexts(serde_json::json!({"work": true}))
+            .with_units(vec![OrgUnit::new("Computing").with_sort_as("Comp")]),
     )]));
     card.titles = Some(BTreeMap::from([("t1".to_owned(), {
         let mut title = Title::default();
@@ -561,18 +558,16 @@ fn jscontact_spec_properties_roundtrip() {
             .with_created(created_date.clone())
             .with_author(Author::new("Charles Babbage")),
     )]));
-    card.links = Some(BTreeMap::from([(
-        "l1".to_owned(),
-        Link {
-            uri: "https://adalovelace.example.org".to_owned(),
-            kind: Some("website".to_owned()),
-            contexts: Some(serde_json::json!({"work": true})),
-            media_type: Some("text/html".to_owned()),
-            pref: Some(1),
-            label: Some("Personal Website".to_owned()),
-            ..Link::default()
-        },
-    )]));
+    card.links = Some(BTreeMap::from([("l1".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://adalovelace.example.org".to_owned();
+        v.kind = Some("website".to_owned());
+        v.contexts = Some(serde_json::json!({"work": true}));
+        v.media_type = Some("text/html".to_owned());
+        v.pref = Some(1);
+        v.label = Some("Personal Website".to_owned());
+        v
+    })]));
     card.calendars = Some(BTreeMap::from([("c1".to_owned(), {
         let mut calendar = Calendar::default();
         calendar.uri = "https://cal.example.org/ada.ics".to_owned();

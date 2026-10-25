@@ -711,6 +711,7 @@ impl ContactPhone {
 /// JSContact Organization (RFC 9553 §2.2.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Organization {
     /// The organisation's own name, which the `ORG` value states first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -742,6 +743,11 @@ impl Organization {
 
     pub fn with_sort_as(mut self, sort_as: impl Into<String>) -> Self {
         self.sort_as = Some(sort_as.into());
+        self
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
         self
     }
 }
@@ -1241,6 +1247,7 @@ impl Anniversary {
 /// JSContact Link (RFC 9553 §2.6.3): one resource the contact points at.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Link {
     /// Where the resource is. Mandatory per RFC 9553 §2.6.3, and the only
     /// part of a link a `URL` line has room for.
@@ -1282,6 +1289,16 @@ impl Link {
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+
+    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
         self
     }
 }

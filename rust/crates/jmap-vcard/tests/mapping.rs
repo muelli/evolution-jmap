@@ -311,14 +311,12 @@ fn maps_organization_units_onto_the_components_after_the_name() {
     let card = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Example GmbH".to_owned()),
-                    units: Some(vec![OrgUnit::new("Research"), OrgUnit::new("Optics")]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Example GmbH".to_owned());
+                v.units = Some(vec![OrgUnit::new("Research"), OrgUnit::new("Optics")]);
+                v
+            })]
             .into(),
         );
         card
@@ -340,13 +338,11 @@ fn an_organization_with_units_but_no_name_keeps_the_field_it_leaves_empty() {
     let card = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    units: Some(vec![OrgUnit::new("Research")]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.units = Some(vec![OrgUnit::new("Research")]);
+                v
+            })]
             .into(),
         );
         card
@@ -379,14 +375,12 @@ fn an_organization_with_an_empty_name_string_behaves_consistently() {
     let card_empty_name = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some(String::new()),
-                    units: None,
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some(String::new());
+                v.units = None;
+                v
+            })]
             .into(),
         );
         card
@@ -402,14 +396,12 @@ fn an_organization_with_an_empty_name_string_behaves_consistently() {
     let card_empty_name_with_units = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some(String::new()),
-                    units: Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Security")]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some(String::new());
+                v.units = Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Security")]);
+                v
+            })]
             .into(),
         );
         card
@@ -532,22 +524,18 @@ fn multiple_organizations_emit_distinct_vcard_lines_and_roundtrip() {
         let mut card = ContactCard::default();
         card.organizations = Some(
             [
-                (
-                    "o1".to_owned(),
-                    Organization {
-                        name: Some("Acme Ltd".to_owned()),
-                        units: Some(vec![OrgUnit::new("Research")]),
-                        ..Organization::default()
-                    },
-                ),
-                (
-                    "o2".to_owned(),
-                    Organization {
-                        name: Some("Brauerei".to_owned()),
-                        units: Some(vec![OrgUnit::new("Logistics")]),
-                        ..Organization::default()
-                    },
-                ),
+                ("o1".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some("Acme Ltd".to_owned());
+                    v.units = Some(vec![OrgUnit::new("Research")]);
+                    v
+                }),
+                ("o2".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some("Brauerei".to_owned());
+                    v.units = Some(vec![OrgUnit::new("Logistics")]);
+                    v
+                }),
             ]
             .into(),
         );
@@ -633,18 +621,16 @@ fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully
     let card = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Acme Ltd".to_owned()),
-                    units: Some(vec![
-                        OrgUnit::new("Research"),
-                        OrgUnit::new("Optics"),
-                        OrgUnit::new("Lenses"),
-                    ]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Acme Ltd".to_owned());
+                v.units = Some(vec![
+                    OrgUnit::new("Research"),
+                    OrgUnit::new("Optics"),
+                    OrgUnit::new("Lenses"),
+                ]);
+                v
+            })]
             .into(),
         );
         card
@@ -694,20 +680,18 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
     let deep_card = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Global Tech".to_owned()),
-                    units: Some(vec![
-                        OrgUnit::new("Engineering"),
-                        OrgUnit::new("Infrastructure"),
-                        OrgUnit::new("Storage Systems"),
-                        OrgUnit::new("Flash Division"),
-                        OrgUnit::new("Team Beta"),
-                    ]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Global Tech".to_owned());
+                v.units = Some(vec![
+                    OrgUnit::new("Engineering"),
+                    OrgUnit::new("Infrastructure"),
+                    OrgUnit::new("Storage Systems"),
+                    OrgUnit::new("Flash Division"),
+                    OrgUnit::new("Team Beta"),
+                ]);
+                v
+            })]
             .into(),
         );
         card
@@ -725,19 +709,17 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
     let nameless_card = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: None,
-                    units: Some(vec![
-                        OrgUnit::new("Engineering"),
-                        OrgUnit::new("Security"),
-                        OrgUnit::new("Cryptography"),
-                        OrgUnit::new("Quantum"),
-                    ]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = None;
+                v.units = Some(vec![
+                    OrgUnit::new("Engineering"),
+                    OrgUnit::new("Security"),
+                    OrgUnit::new("Cryptography"),
+                    OrgUnit::new("Quantum"),
+                ]);
+                v
+            })]
             .into(),
         );
         card
@@ -779,31 +761,27 @@ fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
         let mut card = ContactCard::default();
         card.organizations = Some(
             [
-                (
-                    "o1".to_owned(),
-                    Organization {
-                        name: Some("Acme Corp".to_owned()),
-                        units: Some(vec![
-                            OrgUnit::new("Research"),
-                            OrgUnit::new("Optics"),
-                            OrgUnit::new("Lenses"),
-                        ]),
-                        ..Organization::default()
-                    },
-                ),
-                (
-                    "o2".to_owned(),
-                    Organization {
-                        name: Some("MegaCorp Industries".to_owned()),
-                        units: Some(vec![
-                            OrgUnit::new("Cloud"),
-                            OrgUnit::new("Datacenter"),
-                            OrgUnit::new("Hardware"),
-                            OrgUnit::new("Power"),
-                        ]),
-                        ..Organization::default()
-                    },
-                ),
+                ("o1".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some("Acme Corp".to_owned());
+                    v.units = Some(vec![
+                        OrgUnit::new("Research"),
+                        OrgUnit::new("Optics"),
+                        OrgUnit::new("Lenses"),
+                    ]);
+                    v
+                }),
+                ("o2".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some("MegaCorp Industries".to_owned());
+                    v.units = Some(vec![
+                        OrgUnit::new("Cloud"),
+                        OrgUnit::new("Datacenter"),
+                        OrgUnit::new("Hardware"),
+                        OrgUnit::new("Power"),
+                    ]);
+                    v
+                }),
             ]
             .into(),
         );
@@ -921,18 +899,16 @@ fn multi_component_org_with_escaped_punctuation_roundtrips() {
     let card = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Acme, Inc.".to_owned()),
-                    units: Some(vec![
-                        OrgUnit::new("R&D; Applied Science"),
-                        OrgUnit::new("Optics, Lasers & Sensors"),
-                        OrgUnit::new("Lab #4 (Room 101; Wing B)"),
-                    ]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Acme, Inc.".to_owned());
+                v.units = Some(vec![
+                    OrgUnit::new("R&D; Applied Science"),
+                    OrgUnit::new("Optics, Lasers & Sensors"),
+                    OrgUnit::new("Lab #4 (Room 101; Wing B)"),
+                ]);
+                v
+            })]
             .into(),
         );
         card
@@ -1951,13 +1927,11 @@ fn one_link(key: &str, uri: &str) -> ContactCard {
     {
         let mut card = ContactCard::default();
         card.links = Some(
-            [(
-                key.to_owned(),
-                Link {
-                    uri: uri.to_owned(),
-                    ..Link::default()
-                },
-            )]
+            [(key.to_owned(), {
+                let mut v = Link::default();
+                v.uri = uri.to_owned();
+                v
+            })]
             .into(),
         );
         card
@@ -1997,14 +1971,15 @@ fn a_link_of_a_kind_no_vcard_30_property_states_gets_no_line() {
 
     // Omit unknown link kinds for the same reason.
     let mut card = one_link("l1", "https://vera.example/");
-    card.links.as_mut().expect("links").insert(
-        "l2".to_owned(),
-        Link {
-            uri: "https://vera.example/rss".to_owned(),
-            kind: Some("example.com:feed".to_owned()),
-            ..Link::default()
-        },
-    );
+    card.links
+        .as_mut()
+        .expect("links")
+        .insert("l2".to_owned(), {
+            let mut v = Link::default();
+            v.uri = "https://vera.example/rss".to_owned();
+            v.kind = Some("example.com:feed".to_owned());
+            v
+        });
     let vcard = card_to_vcard(&card);
     assert_eq!(vcard.matches("\r\nURL").count(), 1, "{vcard}");
 }
@@ -3705,13 +3680,11 @@ fn maps_calendars_freebusy_and_links_faithfully() {
         .collect(),
     );
     card.links = Some(
-        [(
-            "l1".to_owned(),
-            Link {
-                uri: "https://example.com/homepage".to_owned(),
-                ..Link::default()
-            },
-        )]
+        [("l1".to_owned(), {
+            let mut v = Link::default();
+            v.uri = "https://example.com/homepage".to_owned();
+            v
+        })]
         .into_iter()
         .collect(),
     );
@@ -4137,18 +4110,16 @@ fn maps_contact_with_unmodeled_office_and_organization_extra_safely() {
     org_extra.insert("sortAs".to_owned(), json!("Acme"));
 
     let mut organizations = std::collections::BTreeMap::new();
-    organizations.insert(
-        "o1".to_owned(),
-        Organization {
-            name: Some("Acme Corp".to_owned()),
-            units: Some(vec![
-                OrgUnit::new("Research"),
-                OrgUnit::new("Advanced Optics"),
-            ]),
-            extra: org_extra,
-            ..Organization::default()
-        },
-    );
+    organizations.insert("o1".to_owned(), {
+        let mut v = Organization::default();
+        v.name = Some("Acme Corp".to_owned());
+        v.units = Some(vec![
+            OrgUnit::new("Research"),
+            OrgUnit::new("Advanced Optics"),
+        ]);
+        v.extra = org_extra;
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -4751,33 +4722,37 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
 
     // Check `states_organization` with empty unit combinations.
     // An empty org name plus empty units states nothing.
-    let empty_org = Organization {
-        name: None,
-        units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
-        ..Organization::default()
+    let empty_org = {
+        let mut v = Organization::default();
+        v.name = None;
+        v.units = Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]);
+        v
     };
     assert!(!states_organization(&empty_org));
 
-    let empty_named_org = Organization {
-        name: Some("".to_owned()),
-        units: Some(vec![OrgUnit::new("")]),
-        ..Organization::default()
+    let empty_named_org = {
+        let mut v = Organization::default();
+        v.name = Some("".to_owned());
+        v.units = Some(vec![OrgUnit::new("")]);
+        v
     };
     assert!(!states_organization(&empty_named_org));
 
     // An employer name states an ORG line, even when units are empty.
-    let named_org_empty_units = Organization {
-        name: Some("Acme Corp".to_owned()),
-        units: Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]),
-        ..Organization::default()
+    let named_org_empty_units = {
+        let mut v = Organization::default();
+        v.name = Some("Acme Corp".to_owned());
+        v.units = Some(vec![OrgUnit::new(""), empty_with_sort_as.clone()]);
+        v
     };
     assert!(states_organization(&named_org_empty_units));
 
     // No employer name still states ORG when one unit has a name.
-    let nameless_org_valid_unit = Organization {
-        name: None,
-        units: Some(vec![OrgUnit::new(""), OrgUnit::new("Finance")]),
-        ..Organization::default()
+    let nameless_org_valid_unit = {
+        let mut v = Organization::default();
+        v.name = None;
+        v.units = Some(vec![OrgUnit::new(""), OrgUnit::new("Finance")]);
+        v
     };
     assert!(states_organization(&nameless_org_valid_unit));
 }
@@ -4789,18 +4764,16 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
     let card1 = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Acme Corp".to_owned()),
-                    units: Some(vec![OrgUnit::new(""), {
-                        let mut unit = OrgUnit::new("");
-                        unit.extra = [("sortAs".to_owned(), json!("Secret"))].into();
-                        unit
-                    }]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Acme Corp".to_owned());
+                v.units = Some(vec![OrgUnit::new(""), {
+                    let mut unit = OrgUnit::new("");
+                    unit.extra = [("sortAs".to_owned(), json!("Secret"))].into();
+                    unit
+                }]);
+                v
+            })]
             .into(),
         );
         card
@@ -4817,24 +4790,22 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
     let card2 = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Acme Corp".to_owned()),
-                    units: Some(vec![
-                        OrgUnit::new(""),
-                        OrgUnit::new("Research"),
-                        {
-                            let mut unit = OrgUnit::new("");
-                            unit.extra = [("sortAs".to_owned(), json!("OpticsSort"))].into();
-                            unit
-                        },
-                        OrgUnit::new("Optics"),
-                        OrgUnit::new(""),
-                    ]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Acme Corp".to_owned());
+                v.units = Some(vec![
+                    OrgUnit::new(""),
+                    OrgUnit::new("Research"),
+                    {
+                        let mut unit = OrgUnit::new("");
+                        unit.extra = [("sortAs".to_owned(), json!("OpticsSort"))].into();
+                        unit
+                    },
+                    OrgUnit::new("Optics"),
+                    OrgUnit::new(""),
+                ]);
+                v
+            })]
             .into(),
         );
         card
@@ -4857,14 +4828,12 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
     let card3 = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: None,
-                    units: Some(vec![OrgUnit::new(""), OrgUnit::new("Engineering")]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = None;
+                v.units = Some(vec![OrgUnit::new(""), OrgUnit::new("Engineering")]);
+                v
+            })]
             .into(),
         );
         card
@@ -5046,13 +5015,15 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         v.note = "".into();
         v
     }));
-    assert!(states_link(&Link {
-        uri: "https://example.com".into(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".into();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "".into(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "".into();
+        v
     }));
     assert!(states_nickname(&{
         let mut v = Nickname::default();
@@ -8348,20 +8319,18 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
     // RFC 2426 §2 and §3.5.5: escape commas and semicolons inside ORG components.
     // Keep `;` as the component separator. Escape data commas as `\,` and data semicolons as `\;`.
     let mut orgs = BTreeMap::new();
-    orgs.insert(
-        "o1".to_owned(),
-        Organization {
-            name: Some("Acme, Inc.".to_owned()),
-            units: Some(vec![
-                OrgUnit::new("Research, Development & Innovation"),
-                OrgUnit::new("Optics, Lasers & Sensors"),
-                OrgUnit::new("Hardware; Systems Division"),
-                OrgUnit::new("Unit with \\ backslash and \n newline"),
-            ]),
-            extra: BTreeMap::new(),
-            ..Organization::default()
-        },
-    );
+    orgs.insert("o1".to_owned(), {
+        let mut v = Organization::default();
+        v.name = Some("Acme, Inc.".to_owned());
+        v.units = Some(vec![
+            OrgUnit::new("Research, Development & Innovation"),
+            OrgUnit::new("Optics, Lasers & Sensors"),
+            OrgUnit::new("Hardware; Systems Division"),
+            OrgUnit::new("Unit with \\ backslash and \n newline"),
+        ]);
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -8399,19 +8368,17 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
 
     // Verify a nameless organization keeps a leading semicolon and escaped unit values.
     let mut nameless_orgs = BTreeMap::new();
-    nameless_orgs.insert(
-        "o_nameless".to_owned(),
-        Organization {
-            name: None,
-            units: Some(vec![
-                OrgUnit::new("Engineering, Core Team"),
-                OrgUnit::new("Architecture; Infrastructure"),
-                OrgUnit::new("Group\\Gamma\nAlpha"),
-            ]),
-            extra: BTreeMap::new(),
-            ..Organization::default()
-        },
-    );
+    nameless_orgs.insert("o_nameless".to_owned(), {
+        let mut v = Organization::default();
+        v.name = None;
+        v.units = Some(vec![
+            OrgUnit::new("Engineering, Core Team"),
+            OrgUnit::new("Architecture; Infrastructure"),
+            OrgUnit::new("Group\\Gamma\nAlpha"),
+        ]);
+        v.extra = BTreeMap::new();
+        v
+    });
     let nameless_card = {
         let mut card = ContactCard::default();
         card.id = Some("C-NAMELESS-ESC-ORG".into());
@@ -8559,15 +8526,13 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
     });
 
     let mut links = BTreeMap::new();
-    links.insert(
-        "l1".to_owned(),
-        Link {
-            uri: "https://example.com/query?q=test;sort=desc,rank&filter=a\\b".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l1".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://example.com/query?q=test;sort=desc,rank&filter=a\\b".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut keywords = BTreeMap::new();
     keywords.insert("Tag 1, with comma".to_owned(), json!(true));
@@ -9451,33 +9416,27 @@ fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
     // 3. Roundtrips keep all keys and URIs.
 
     let mut links = BTreeMap::new();
-    links.insert(
-        "l1".to_owned(),
-        Link {
-            uri: "https://alice.example.com".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l2".to_owned(),
-        Link {
-            uri: "https://work.example.org/alice".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l3".to_owned(),
-        Link {
-            uri: "https://github.com/alice".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l1".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://alice.example.com".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l2".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://work.example.org/alice".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l3".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://github.com/alice".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -9528,51 +9487,41 @@ fn url_kind_filtering_and_contact_uri_omission() {
     // Emit URL only for plain website links with `kind: None`.
 
     let mut links = BTreeMap::new();
-    links.insert(
-        "l_web".to_owned(),
-        Link {
-            uri: "https://alice.example.com".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_contact".to_owned(),
-        Link {
-            uri: "https://contact.example.com/form".to_owned(),
-            kind: Some("contact".to_owned()),
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_feed".to_owned(),
-        Link {
-            uri: "https://alice.example.com/rss.xml".to_owned(),
-            kind: Some("feed".to_owned()),
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_news".to_owned(),
-        Link {
-            uri: "https://news.alice.example.com".to_owned(),
-            kind: Some("news".to_owned()),
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_custom".to_owned(),
-        Link {
-            uri: "https://custom.example.com/profile".to_owned(),
-            kind: Some("x-vendor-profile".to_owned()),
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l_web".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://alice.example.com".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_contact".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://contact.example.com/form".to_owned();
+        v.kind = Some("contact".to_owned());
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_feed".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://alice.example.com/rss.xml".to_owned();
+        v.kind = Some("feed".to_owned());
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_news".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://news.alice.example.com".to_owned();
+        v.kind = Some("news".to_owned());
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_custom".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://custom.example.com/profile".to_owned();
+        v.kind = Some("x-vendor-profile".to_owned());
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -9643,35 +9592,29 @@ fn url_eds_blog_video_and_custom_extensions_characterization() {
 fn url_query_parameters_punctuation_and_encoding_fidelity() {
     // Complex URLs preserve URI punctuation and encoding as raw URI text.
     let mut links = BTreeMap::new();
-    links.insert(
-        "l_complex_query".to_owned(),
-        Link {
-            uri: "https://api.example.com:8443/v1/search?q=tag:a,b;status:active&filter=x,y;z#top"
-                .to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_auth".to_owned(),
-        Link {
-            uri: "https://user:p%40ssw%3Brd@secure.example.org:9000/path/to/res?a=1&b=2#sec"
-                .to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_ipv6".to_owned(),
-        Link {
-            uri: "http://[2001:db8::1]:8080/index.html?token=abc;def,ghi".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l_complex_query".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://api.example.com:8443/v1/search?q=tag:a,b;status:active&filter=x,y;z#top"
+            .to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_auth".to_owned(), {
+        let mut v = Link::default();
+        v.uri =
+            "https://user:p%40ssw%3Brd@secure.example.org:9000/path/to/res?a=1&b=2#sec".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_ipv6".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "http://[2001:db8::1]:8080/index.html?token=abc;def,ghi".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -9704,51 +9647,51 @@ fn url_query_parameters_punctuation_and_encoding_fidelity() {
 #[test]
 fn url_empty_absent_and_predicate_fidelity() {
     // Tests states_link predicate and empty/absent link handling:
-    assert!(states_link(&Link {
-        uri: "https://example.com".into(),
-        kind: None,
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".into();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "".into(),
-        kind: None,
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "".into();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "https://example.com".into(),
-        kind: Some("contact".into()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".into();
+        v.kind = Some("contact".into());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "https://example.com".into(),
-        kind: Some("other".into()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".into();
+        v.kind = Some("other".into());
+        v.extra = BTreeMap::new();
+        v
     }));
 
     // Empty links are not emitted
     let mut links = BTreeMap::new();
-    links.insert(
-        "l1".to_owned(),
-        Link {
-            uri: "".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l2".to_owned(),
-        Link {
-            uri: "https://valid.example.com".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l1".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l2".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://valid.example.com".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
     let card = {
         let mut card = ContactCard::default();
         card.links = Some(links);
@@ -9774,21 +9717,19 @@ fn url_empty_absent_and_predicate_fidelity() {
 
     // Unmodeled Link fields in extra survive roundtrips untouched.
     let mut extra_links = BTreeMap::new();
-    extra_links.insert(
-        "l_rich".to_owned(),
-        Link {
-            uri: "https://rich.example.com".to_owned(),
-            kind: None,
-            extra: [
-                ("pref".to_owned(), json!(1)),
-                ("contexts".to_owned(), json!({"work": true})),
-                ("label".to_owned(), json!("Work Portal")),
-                ("mediaType".to_owned(), json!("text/html")),
-            ]
-            .into(),
-            ..Link::default()
-        },
-    );
+    extra_links.insert("l_rich".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://rich.example.com".to_owned();
+        v.kind = None;
+        v.extra = [
+            ("pref".to_owned(), json!(1)),
+            ("contexts".to_owned(), json!({"work": true})),
+            ("label".to_owned(), json!("Work Portal")),
+            ("mediaType".to_owned(), json!("text/html")),
+        ]
+        .into();
+        v
+    });
     let rich_card = {
         let mut card = ContactCard::default();
         card.links = Some(extra_links);
@@ -9809,15 +9750,13 @@ fn url_and_calendar_properties_coexistence_and_slotting() {
     // CALURI -> E_CONTACT_CALENDAR_URI (card.calendars, kind: "calendar")
     // FBURL -> E_CONTACT_FREEBUSY_URL (card.calendars, kind: "freeBusy")
     let mut links = BTreeMap::new();
-    links.insert(
-        "l1".to_owned(),
-        Link {
-            uri: "https://alice.example.com".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l1".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://alice.example.com".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut cals = BTreeMap::new();
     cals.insert("c1".to_owned(), {
@@ -10099,31 +10038,27 @@ fn non_ascii_multilingual_names_and_components_roundtrip() {
 #[test]
 fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
     let mut orgs = BTreeMap::new();
-    orgs.insert(
-        "o1".to_owned(),
-        Organization {
-            name: Some("Société Générale & Compagnie".to_owned()),
-            units: Some(vec![
-                OrgUnit::new("Direction des Systèmes d'Information"),
-                OrgUnit::new("Pôle Innovation & Recherche"),
-                OrgUnit::new("Équipe Cryptographie"),
-            ]),
-            extra: BTreeMap::new(),
-            ..Organization::default()
-        },
-    );
-    orgs.insert(
-        "o2".to_owned(),
-        Organization {
-            name: Some("ООО \"Яндекс\"".to_owned()),
-            units: Some(vec![
-                OrgUnit::new("Департамент разработки"),
-                OrgUnit::new("Группа поисковых технологий"),
-            ]),
-            extra: BTreeMap::new(),
-            ..Organization::default()
-        },
-    );
+    orgs.insert("o1".to_owned(), {
+        let mut v = Organization::default();
+        v.name = Some("Société Générale & Compagnie".to_owned());
+        v.units = Some(vec![
+            OrgUnit::new("Direction des Systèmes d'Information"),
+            OrgUnit::new("Pôle Innovation & Recherche"),
+            OrgUnit::new("Équipe Cryptographie"),
+        ]);
+        v.extra = BTreeMap::new();
+        v
+    });
+    orgs.insert("o2".to_owned(), {
+        let mut v = Organization::default();
+        v.name = Some("ООО \"Яндекс\"".to_owned());
+        v.units = Some(vec![
+            OrgUnit::new("Департамент разработки"),
+            OrgUnit::new("Группа поисковых технологий"),
+        ]);
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut titles = BTreeMap::new();
     titles.insert("t1".to_owned(), {
@@ -13231,47 +13166,54 @@ fn evolution_remaining_x_properties_coexistence_and_predicates() {
     assert!(!states_assistant("urn:uuid:67890", &rel_valid_asst));
 
     // states_link across kinds
-    assert!(states_link(&Link {
-        uri: "https://example.com".to_string(),
-        kind: None,
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".to_string();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(states_link(&Link {
-        uri: "https://blogs.example.com".to_string(),
-        kind: Some("blog".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://blogs.example.com".to_string();
+        v.kind = Some("blog".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(states_link(&Link {
-        uri: "https://video.example.com".to_string(),
-        kind: Some("video".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://video.example.com".to_string();
+        v.kind = Some("video".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "".to_string(),
-        kind: None,
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "".to_string();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "".to_string(),
-        kind: Some("blog".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "".to_string();
+        v.kind = Some("blog".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "https://example.com/contact".to_string(),
-        kind: Some("contact".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com/contact".to_string();
+        v.kind = Some("contact".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "https://example.com/rss".to_string(),
-        kind: Some("feed".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com/rss".to_string();
+        v.kind = Some("feed".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
 }
 
@@ -16365,15 +16307,13 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
             .into(),
         );
         card.links = Some(
-            [(
-                "l1".to_string(),
-                Link {
-                    uri: "https://portfolio.example.com".into(),
-                    kind: Some("website".into()),
-                    extra: link_extra,
-                    ..Link::default()
-                },
-            )]
+            [("l1".to_string(), {
+                let mut v = Link::default();
+                v.uri = "https://portfolio.example.com".into();
+                v.kind = Some("website".into());
+                v.extra = link_extra;
+                v
+            })]
             .into(),
         );
         card.related_to = Some(
@@ -18842,15 +18782,13 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
             .into(),
         );
         card.organizations = Some(
-            [(
-                "o1".to_string(),
-                Organization {
-                    name: Some("SelfConsistency Labs Inc.".into()),
-                    units: Some(vec![OrgUnit::new("Core Engine"), OrgUnit::new("Protocols")]),
-                    extra: BTreeMap::new(),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_string(), {
+                let mut v = Organization::default();
+                v.name = Some("SelfConsistency Labs Inc.".into());
+                v.units = Some(vec![OrgUnit::new("Core Engine"), OrgUnit::new("Protocols")]);
+                v.extra = BTreeMap::new();
+                v
+            })]
             .into(),
         );
         card.titles = Some(
@@ -18939,24 +18877,20 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
         );
         card.links = Some(
             [
-                (
-                    "l1".to_string(),
-                    Link {
-                        uri: "https://blog.selftest.example".into(),
-                        kind: Some("blog".into()),
-                        extra: BTreeMap::new(),
-                        ..Link::default()
-                    },
-                ),
-                (
-                    "l2".to_string(),
-                    Link {
-                        uri: "https://video.selftest.example/watch".into(),
-                        kind: Some("video".into()),
-                        extra: BTreeMap::new(),
-                        ..Link::default()
-                    },
-                ),
+                ("l1".to_string(), {
+                    let mut v = Link::default();
+                    v.uri = "https://blog.selftest.example".into();
+                    v.kind = Some("blog".into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("l2".to_string(), {
+                    let mut v = Link::default();
+                    v.uri = "https://video.selftest.example/watch".into();
+                    v.kind = Some("video".into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
         );
@@ -19564,38 +19498,32 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
         let mut card = ContactCard::default();
         card.organizations = Some(
             [
-                (
-                    "o1".to_owned(),
-                    Organization {
-                        name: Some("Acme Corporation".to_owned()),
-                        units: Some(vec![
-                            OrgUnit::new("Engineering"),
-                            OrgUnit::new("Hardware Division"),
-                            OrgUnit::new("Optics Lab"),
-                            OrgUnit::new("Lenses Team"),
-                        ]),
-                        ..Organization::default()
-                    },
-                ),
-                (
-                    "o2".to_owned(),
-                    Organization {
-                        name: Some("Starlight Research Foundation".to_owned()),
-                        units: Some(vec![
-                            OrgUnit::new("Astrophysics"),
-                            OrgUnit::new("Observatories Network"),
-                        ]),
-                        ..Organization::default()
-                    },
-                ),
-                (
-                    "o3".to_owned(),
-                    Organization {
-                        name: Some("Quantum Innovations GmbH".to_owned()),
-                        units: Some(vec![OrgUnit::new("Theoretical Physics")]),
-                        ..Organization::default()
-                    },
-                ),
+                ("o1".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some("Acme Corporation".to_owned());
+                    v.units = Some(vec![
+                        OrgUnit::new("Engineering"),
+                        OrgUnit::new("Hardware Division"),
+                        OrgUnit::new("Optics Lab"),
+                        OrgUnit::new("Lenses Team"),
+                    ]);
+                    v
+                }),
+                ("o2".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some("Starlight Research Foundation".to_owned());
+                    v.units = Some(vec![
+                        OrgUnit::new("Astrophysics"),
+                        OrgUnit::new("Observatories Network"),
+                    ]);
+                    v
+                }),
+                ("o3".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some("Quantum Innovations GmbH".to_owned());
+                    v.units = Some(vec![OrgUnit::new("Theoretical Physics")]);
+                    v
+                }),
             ]
             .into(),
         );
@@ -19713,14 +19641,12 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     let c1 = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Megacorp Inc".to_owned()),
-                    units: None,
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Megacorp Inc".to_owned());
+                v.units = None;
+                v
+            })]
             .into(),
         );
         card
@@ -19736,14 +19662,12 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     let c2 = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Megacorp Inc".to_owned()),
-                    units: Some(vec![OrgUnit::new("Aerospace")]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Megacorp Inc".to_owned());
+                v.units = Some(vec![OrgUnit::new("Aerospace")]);
+                v
+            })]
             .into(),
         );
         card
@@ -19759,14 +19683,12 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     let c3 = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Megacorp Inc".to_owned()),
-                    units: Some(vec![OrgUnit::new("Aerospace"), OrgUnit::new("Building 4B")]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Megacorp Inc".to_owned());
+                v.units = Some(vec![OrgUnit::new("Aerospace"), OrgUnit::new("Building 4B")]);
+                v
+            })]
             .into(),
         );
         card
@@ -19785,18 +19707,16 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     let c4 = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Megacorp Inc".to_owned()),
-                    units: Some(vec![
-                        OrgUnit::new("Aerospace"),
-                        OrgUnit::new("Building 4B"),
-                        OrgUnit::new("Propulsion Lab"),
-                    ]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Megacorp Inc".to_owned());
+                v.units = Some(vec![
+                    OrgUnit::new("Aerospace"),
+                    OrgUnit::new("Building 4B"),
+                    OrgUnit::new("Propulsion Lab"),
+                ]);
+                v
+            })]
             .into(),
         );
         card
@@ -19815,20 +19735,18 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     let c6 = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Megacorp Inc".to_owned()),
-                    units: Some(vec![
-                        OrgUnit::new("Aerospace"),
-                        OrgUnit::new("Building 4B"),
-                        OrgUnit::new("Propulsion Lab"),
-                        OrgUnit::new("Ion Thruster Project"),
-                        OrgUnit::new("Sub-team Alpha"),
-                    ]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Megacorp Inc".to_owned());
+                v.units = Some(vec![
+                    OrgUnit::new("Aerospace"),
+                    OrgUnit::new("Building 4B"),
+                    OrgUnit::new("Propulsion Lab"),
+                    OrgUnit::new("Ion Thruster Project"),
+                    OrgUnit::new("Sub-team Alpha"),
+                ]);
+                v
+            })]
             .into(),
         );
         card
@@ -19867,18 +19785,16 @@ fn multi_component_org_special_characters_escaping_and_fixpoint() {
     let card = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Müller & Söhne; GmbH, Berlin \\ [HQ]".to_owned()),
-                    units: Some(vec![
-                        OrgUnit::new("R&D; Advanced Division, Sector 7"),
-                        OrgUnit::new("Office 42; Building B \\ Room 101"),
-                        OrgUnit::new("Deep Tech / Quantum \\ Sub-unit, Team 4"),
-                    ]),
-                    ..Organization::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Müller & Söhne; GmbH, Berlin \\ [HQ]".to_owned());
+                v.units = Some(vec![
+                    OrgUnit::new("R&D; Advanced Division, Sector 7"),
+                    OrgUnit::new("Office 42; Building B \\ Room 101"),
+                    OrgUnit::new("Deep Tech / Quantum \\ Sub-unit, Team 4"),
+                ]);
+                v
+            })]
             .into(),
         );
         card
@@ -21934,24 +21850,27 @@ fn empty_org_name_reads_as_absent_inbound_matrix() {
 #[test]
 fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     // Empty organization payloads are omitted from state and wire output.
-    let org_none_no_units = Organization {
-        name: None,
-        units: None,
-        ..Default::default()
+    let org_none_no_units = {
+        let mut v = Organization::default();
+        v.name = None;
+        v.units = None;
+        v
     };
     assert!(!states_organization(&org_none_no_units));
 
-    let org_empty_name_no_units = Organization {
-        name: Some(String::new()),
-        units: None,
-        ..Default::default()
+    let org_empty_name_no_units = {
+        let mut v = Organization::default();
+        v.name = Some(String::new());
+        v.units = None;
+        v
     };
     assert!(!states_organization(&org_empty_name_no_units));
 
-    let org_empty_name_empty_units = Organization {
-        name: Some(String::new()),
-        units: Some(vec![OrgUnit::new(""), OrgUnit::new("")]),
-        ..Default::default()
+    let org_empty_name_empty_units = {
+        let mut v = Organization::default();
+        v.name = Some(String::new());
+        v.units = Some(vec![OrgUnit::new(""), OrgUnit::new("")]);
+        v
     };
     assert!(!states_organization(&org_empty_name_empty_units));
 
@@ -21971,14 +21890,12 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     let card_named_org = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Acme Corp".to_owned()),
-                    units: None,
-                    ..Default::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Acme Corp".to_owned());
+                v.units = None;
+                v
+            })]
             .into(),
         );
         card
@@ -21990,14 +21907,12 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     let card_named_org_empty_units = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some("Acme Corp".to_owned()),
-                    units: Some(vec![OrgUnit::new(""), OrgUnit::new("")]),
-                    ..Default::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some("Acme Corp".to_owned());
+                v.units = Some(vec![OrgUnit::new(""), OrgUnit::new("")]);
+                v
+            })]
             .into(),
         );
         card
@@ -22012,14 +21927,12 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     let card_empty_name_valid_units = {
         let mut card = ContactCard::default();
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some(String::new()),
-                    units: Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Security")]),
-                    ..Default::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some(String::new());
+                v.units = Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Security")]);
+                v
+            })]
             .into(),
         );
         card
@@ -22042,14 +21955,12 @@ fn empty_org_name_normalisation_and_fixpoint_stability() {
             name_val
         });
         card.organizations = Some(
-            [(
-                "o1".to_owned(),
-                Organization {
-                    name: Some(String::new()),
-                    units: Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Platform")]),
-                    ..Default::default()
-                },
-            )]
+            [("o1".to_owned(), {
+                let mut v = Organization::default();
+                v.name = Some(String::new());
+                v.units = Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Platform")]);
+                v
+            })]
             .into(),
         );
         card
@@ -22100,38 +22011,30 @@ fn empty_org_name_multiple_organizations_matrix() {
         });
         card.organizations = Some(
             [
-                (
-                    "o1".to_owned(),
-                    Organization {
-                        name: Some("Acme Corp".to_owned()),
-                        units: Some(vec![OrgUnit::new("Primary")]),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "o2".to_owned(),
-                    Organization {
-                        name: Some(String::new()),
-                        units: Some(vec![OrgUnit::new("Contracting")]),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "o3".to_owned(),
-                    Organization {
-                        name: None,
-                        units: Some(vec![OrgUnit::new("Advisory")]),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "o4".to_owned(),
-                    Organization {
-                        name: Some(String::new()),
-                        units: None,
-                        ..Default::default()
-                    },
-                ),
+                ("o1".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some("Acme Corp".to_owned());
+                    v.units = Some(vec![OrgUnit::new("Primary")]);
+                    v
+                }),
+                ("o2".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some(String::new());
+                    v.units = Some(vec![OrgUnit::new("Contracting")]);
+                    v
+                }),
+                ("o3".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = None;
+                    v.units = Some(vec![OrgUnit::new("Advisory")]);
+                    v
+                }),
+                ("o4".to_owned(), {
+                    let mut v = Organization::default();
+                    v.name = Some(String::new());
+                    v.units = None;
+                    v
+                }),
             ]
             .into(),
         );
