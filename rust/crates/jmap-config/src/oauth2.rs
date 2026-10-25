@@ -449,8 +449,8 @@ unsafe fn extension_of(source: *mut ESource) -> *mut Extension {
 /// again.
 ///
 /// Because of that rule, a field that this rewrite does not change keeps its
-/// allocation, so pointers from [`borrowed`] into it stay valid. All writes go
-/// through [`Fields::set`].
+/// allocation, so pointers from `borrowed` into it stay valid. All writes go
+/// through `Fields::set`.
 ///
 /// The writes go through `g_object_set_property`, not directly into the
 /// fields, so each write emits `notify`. `notify` sends a new discovery or
@@ -634,7 +634,7 @@ unsafe fn borrowed(
 }
 
 /// Returns the stored RFC 7591 `client_id` of `source`, or NULL before
-/// registration. See [`borrowed`] for the lifetime of the pointer.
+/// registration. See `borrowed` for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -644,7 +644,7 @@ pub unsafe fn client_id(source: *mut ESource) -> *const c_char {
 }
 
 /// Returns the stored RFC 7591 `client_secret` of `source`, or NULL. NULL for
-/// the usual public client, and before registration. See [`borrowed`] for the
+/// the usual public client, and before registration. See `borrowed` for the
 /// lifetime of the pointer.
 ///
 /// # Safety
@@ -655,7 +655,7 @@ pub unsafe fn client_secret(source: *mut ESource) -> *const c_char {
 }
 
 /// Returns the stored RFC 8414 `authorization_endpoint` of `source`, or NULL
-/// before discovery. See [`borrowed`] for the lifetime of the pointer.
+/// before discovery. See `borrowed` for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -665,7 +665,7 @@ pub unsafe fn authorization_endpoint(source: *mut ESource) -> *const c_char {
 }
 
 /// Returns the stored RFC 8414 `token_endpoint` of `source`, or NULL before
-/// discovery. See [`borrowed`] for the lifetime of the pointer.
+/// discovery. See `borrowed` for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -675,7 +675,7 @@ pub unsafe fn token_endpoint(source: *mut ESource) -> *const c_char {
 }
 
 /// Returns the registered `redirect_uri` of `source`, or NULL before
-/// registration. See [`borrowed`] for the lifetime of the pointer.
+/// registration. See `borrowed` for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -685,7 +685,7 @@ pub unsafe fn redirect_uri(source: *mut ESource) -> *const c_char {
 }
 
 /// Returns the registered `scope` of `source`, or NULL for a deployment that
-/// advertises no scopes. See [`borrowed`] for the lifetime of the pointer.
+/// advertises no scopes. See `borrowed` for the lifetime of the pointer.
 ///
 /// # Safety
 ///
@@ -695,7 +695,7 @@ pub unsafe fn scope(source: *mut ESource) -> *const c_char {
 }
 
 /// Returns the stored RFC 8707 `resource` indicator of `source`, or NULL if
-/// discovery could not find one. See [`borrowed`] for the lifetime of the pointer.
+/// discovery could not find one. See `borrowed` for the lifetime of the pointer.
 ///
 /// # Safety
 ///

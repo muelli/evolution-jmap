@@ -13,7 +13,7 @@
 //!
 //! - the [`EMailConfigServiceBackend`
 //!   subclass](crate::backend::JmapConfigServiceBackend),
-//! - [`JmapConfigLookup`](crate::config_lookup::JmapConfigLookup), an
+//! - [`JmapConfigLookup`], an
 //!   `EConfigLookupWorker` that the "Look Up Account Details" step of the
 //!   account assistant finds in the same way,
 //! - the two [`ESourceConfigBackend`s](crate::source_config) that show JMAP in
