@@ -316,7 +316,7 @@ impl Session {
         self.root.join("data/keyrings/login.keyring")
     }
 
-    /// The unique `XDG_RUNTIME_DIR` of the session. [`Self::reap_keyring_daemon`]
+    /// The unique `XDG_RUNTIME_DIR` of the session. `reap_keyring_daemon`
     /// uses it to find daemons. A test can use it to make sure that no daemon
     /// from [`Self::run`] is still alive.
     pub fn runtime_directory(&self) -> PathBuf {
@@ -455,7 +455,7 @@ impl Session {
     /// `program`. The factory holds the meta-backend cache, and it stops with
     /// the private bus, so only this function can examine it. A background
     /// thread polls `/proc` every 20ms, with the `XDG_RUNTIME_DIR` match that
-    /// [`Self::keyring_daemons`] uses.
+    /// `keyring_daemons` uses.
     ///
     /// The value is `None` if the process did not start, for example if its
     /// name is incorrect or the open did not reach the factory.
@@ -622,7 +622,7 @@ pub enum SourceKind {
 }
 
 /// A `.source` keyfile for a JMAP source on `127.0.0.1` with plaintext transport.
-/// [`Keyfile::to_string`] gives the text for [`Session::write_source`].
+/// `to_string()` (via its `Display` impl) gives the text for [`Session::write_source`].
 #[derive(Clone, Debug)]
 pub struct Keyfile {
     kind: SourceKind,
