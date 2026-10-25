@@ -416,11 +416,7 @@ fn arb_sort_as() -> impl Strategy<Value = Option<String>> {
 }
 
 fn bare_unit(name: String) -> OrgUnit {
-    OrgUnit {
-        name,
-        sort_as: None,
-        extra: BTreeMap::new(),
-    }
+    OrgUnit::new(&name)
 }
 
 /// A `(current, edited)` pair of units lists. `kept` units have the same name
@@ -439,11 +435,8 @@ fn arb_units_pair() -> impl Strategy<Value = (Vec<OrgUnit>, Vec<OrgUnit>)> {
             let mut current = Vec::new();
             let mut edited = Vec::new();
             for (index, sort_as) in kept_sort_as.into_iter().enumerate() {
-                let unit = OrgUnit {
-                    name: format!("k{index}"),
-                    sort_as,
-                    extra: BTreeMap::new(),
-                };
+                let mut unit = OrgUnit::new(&format!("k{index}"));
+                unit.sort_as = sort_as;
                 current.push(unit.clone());
                 edited.push(unit);
             }
@@ -472,10 +465,10 @@ fn arb_organization_units_stable() -> impl Strategy<Value = Organization> {
         let units = sort_as_list
             .into_iter()
             .enumerate()
-            .map(|(index, sort_as)| OrgUnit {
-                name: format!("u{index}"),
-                sort_as,
-                extra: BTreeMap::new(),
+            .map(|(index, sort_as)| {
+                let mut unit = OrgUnit::new(&format!("u{index}"));
+                unit.sort_as = sort_as;
+                unit
             })
             .collect();
         organization_with_units(units)

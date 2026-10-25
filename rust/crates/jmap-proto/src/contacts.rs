@@ -80,6 +80,7 @@ impl AddressBook {
 /// `AddressBook/set` request arguments (RFC 9610 §2.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AddressBookSetRequest {
     #[serde(flatten)]
     pub set: crate::methods::SetRequest<AddressBook>,
@@ -112,6 +113,7 @@ impl AddressBookSetRequest {
 /// `AddressBook.myRights`/a `shareWith` entry, RFC 9610 §2.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AddressBookRights {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_read: Option<bool>,
@@ -145,6 +147,26 @@ impl AddressBookRights {
 
     pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
         self.extra = extra;
+        self
+    }
+
+    pub fn with_may_read(mut self, may_read: bool) -> Self {
+        self.may_read = Some(may_read);
+        self
+    }
+
+    pub fn with_may_write(mut self, may_write: bool) -> Self {
+        self.may_write = Some(may_write);
+        self
+    }
+
+    pub fn with_may_share(mut self, may_share: bool) -> Self {
+        self.may_share = Some(may_share);
+        self
+    }
+
+    pub fn with_may_delete(mut self, may_delete: bool) -> Self {
+        self.may_delete = Some(may_delete);
         self
     }
 
@@ -503,6 +525,7 @@ impl Name {
 /// Unmodeled properties (such as phonetic spellings) are preserved in `extra`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct NameComponent {
     pub kind: String,
     pub value: String,
@@ -681,6 +704,7 @@ impl Organization {
 /// JSContact OrgUnit (RFC 9553 §2.2.3): one unit of an [`Organization`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct OrgUnit {
     #[serde(default)]
     pub name: String,
@@ -826,6 +850,7 @@ impl Address {
 /// `postcode`, `floor`, …
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AddressComponent {
     #[serde(default)]
     pub kind: String,
@@ -858,6 +883,7 @@ impl AddressComponent {
 /// An author of a note (RFC 9553 §2.8.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Author {
     #[serde(
         rename = "@type",
@@ -975,6 +1001,7 @@ impl Note {
 /// A partial date (RFC 9553 §2.8.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PartialDate {
     #[serde(rename = "@type", default = "default_partial_date_type")]
     pub date_type: String,
@@ -1261,6 +1288,7 @@ impl Calendar {
 /// JSContact SchedulingAddress (RFC 9553 §2.4.2): one scheduling address of the contact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SchedulingAddress {
     #[serde(
         rename = "@type",
@@ -1489,6 +1517,7 @@ impl Relation {
 /// only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ContactCardQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_address_book: Option<Id>,
@@ -1634,6 +1663,7 @@ pub mod address_component_kind {
 /// JSContact CryptoKey (RFC 9553 §2.6.1): a cryptographic key for the contact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CryptoKey {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -1678,6 +1708,7 @@ pub mod crypto_key_kind {
 /// JSContact Directory (RFC 9553 §2.6.2): a directory service for the contact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Directory {
     #[serde(
         rename = "@type",
@@ -1848,6 +1879,7 @@ where
 /// JSContact PersonalInfo (RFC 9553 §2.8.4): personal information about the contact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PersonalInfo {
     #[serde(default)]
     pub kind: String,
@@ -1898,6 +1930,7 @@ pub mod personal_info_kind {
 /// JSContact CardGroup (RFC 9553 §2.1.2): a group of contact cards.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CardGroup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -1959,6 +1992,11 @@ impl CardGroup {
         }
     }
 
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     pub fn with_type(mut self, card_type: impl Into<String>) -> Self {
         self.card_type = Some(card_type.into());
         self
@@ -1978,6 +2016,7 @@ impl CardGroup {
 /// Contacts capability properties (RFC 9610 §1.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ContactsCapability {
     #[serde(default)]
     pub max_size_attachments_per_card: u64,
@@ -2031,6 +2070,7 @@ pub mod grammatical_gender {
 /// JSContact Pronouns (RFC 9553 §2.2.4): pronouns to use when addressing or speaking about the contact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Pronouns {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub pronouns_type: Option<String>,
@@ -2099,6 +2139,7 @@ impl From<BTreeMap<String, Pronouns>> for PronounsValue {
 /// JSContact SpeakToAs (RFC 9553 §2.2.4): how to address the contact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SpeakToAs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grammatical_gender: Option<String>,
@@ -2142,6 +2183,7 @@ impl SpeakToAs {
 /// JSContact LanguagePref (RFC 9553 §2.8.5): preferred language for communication.
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct LanguagePref {
     #[serde(default)]
     pub language: String,
@@ -2252,6 +2294,7 @@ impl<'de> serde::Deserialize<'de> for LanguagePref {
 /// `ContactCard/parse` arguments (RFC 9610 §3.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ContactCardParseRequest {
     pub account_id: Id,
     pub blob_ids: Vec<Id>,
@@ -2280,6 +2323,7 @@ impl ContactCardParseRequest {
 /// `ContactCard/parse` response (RFC 9610 §3.4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ContactCardParseResponse {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]

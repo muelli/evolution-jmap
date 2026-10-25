@@ -296,10 +296,7 @@ fn contact_query_by_addressbook() {
     let by_text = client
         .contact_query(
             &account_id,
-            ContactCardQueryFilter {
-                text: Some("wor@example.com".to_owned()),
-                ..ContactCardQueryFilter::default()
-            },
+            ContactCardQueryFilter::default().text("wor@example.com"),
         )
         .unwrap()
         .ids;

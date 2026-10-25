@@ -383,13 +383,13 @@ prop_compose! {
         may_delete in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> AddressBookRights {
-        AddressBookRights {
-            may_read,
-            may_write,
-            may_share,
-            may_delete,
-            extra,
-        }
+        let mut rights = AddressBookRights::default();
+        rights.may_read = may_read;
+        rights.may_write = may_write;
+        rights.may_share = may_share;
+        rights.may_delete = may_delete;
+        rights.extra = extra;
+        rights
     }
 }
 
@@ -1085,10 +1085,11 @@ fn arb_address_book_set_request() -> impl Strategy<Value = AddressBookSetRequest
         prop::option::of(arb_id()),
     )
         .prop_map(
-            |(set, on_destroy_remove_contents, on_success_set_is_default)| AddressBookSetRequest {
-                set,
-                on_destroy_remove_contents,
-                on_success_set_is_default,
+            |(set, on_destroy_remove_contents, on_success_set_is_default)| {
+                let mut request = AddressBookSetRequest::new(set);
+                request.on_destroy_remove_contents = on_destroy_remove_contents;
+                request.on_success_set_is_default = on_success_set_is_default;
+                request
             },
         )
 }

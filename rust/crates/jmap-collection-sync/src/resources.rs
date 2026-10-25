@@ -430,10 +430,7 @@ mod tests {
         );
 
         let mut locked = book(Some("AB2"), "Read-only share");
-        locked.my_rights = Some(AddressBookRights {
-            may_write: Some(false),
-            ..AddressBookRights::default()
-        });
+        locked.my_rights = Some(AddressBookRights::default().with_may_write(false));
         assert_eq!(
             resources(vec![locked], Subscription::Honoured)[0].writable,
             Some(false)
@@ -465,10 +462,7 @@ mod tests {
         );
 
         let mut undeletable = book(Some("AB2"), "Locked share");
-        undeletable.my_rights = Some(AddressBookRights {
-            may_delete: Some(false),
-            ..AddressBookRights::default()
-        });
+        undeletable.my_rights = Some(AddressBookRights::default().with_may_delete(false));
         assert_eq!(
             resources(vec![undeletable], Subscription::Honoured)[0].deletable,
             Some(false)

@@ -130,13 +130,11 @@ fn main() {
     let mut share_with = BTreeMap::new();
     share_with.insert(
         bob_principal_id.clone(),
-        AddressBookRights {
-            may_read: Some(true),
-            may_write: Some(false),
-            may_share: Some(false),
-            may_delete: Some(false),
-            extra: BTreeMap::new(),
-        },
+        AddressBookRights::default()
+            .with_may_read(true)
+            .with_may_write(false)
+            .with_may_share(false)
+            .with_may_delete(false),
     );
     let patch = json!({ "shareWith": share_with });
     let share_response = alice

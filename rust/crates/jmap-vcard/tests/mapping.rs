@@ -2112,16 +2112,7 @@ fn one_calendar(key: &str, kind: Option<&str>, uri: &str) -> ContactCard {
 
 fn one_scheduling_address(key: &str, uri: &str) -> ContactCard {
     ContactCard {
-        scheduling_addresses: Some(
-            [(
-                key.to_owned(),
-                SchedulingAddress {
-                    uri: uri.to_owned(),
-                    ..SchedulingAddress::default()
-                },
-            )]
-            .into(),
-        ),
+        scheduling_addresses: Some([(key.to_owned(), SchedulingAddress::new(uri))].into()),
         ..ContactCard::default()
     }
 }
@@ -2333,11 +2324,7 @@ fn scheduling_addresses_emit_the_eds_profile_without_pref_parameters() {
     let mut scheduling = BTreeMap::new();
     scheduling.insert(
         "s1".to_owned(),
-        SchedulingAddress {
-            uri: "mailto:vera-calendar@example.com".to_owned(),
-            pref: Some(1),
-            ..SchedulingAddress::default()
-        },
+        SchedulingAddress::new("mailto:vera-calendar@example.com").with_pref(1),
     );
     let card = ContactCard {
         scheduling_addresses: Some(scheduling),
@@ -4818,21 +4805,15 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     let empty_unit = OrgUnit::new("");
     assert!(!states_org_unit(&empty_unit));
 
-    let empty_with_sort_as = OrgUnit {
-        name: "".to_owned(),
-        extra: [("sortAs".to_owned(), json!("Alpha"))].into(),
-        ..OrgUnit::default()
-    };
+    let mut empty_with_sort_as = OrgUnit::new("");
+    empty_with_sort_as.extra = [("sortAs".to_owned(), json!("Alpha"))].into();
     assert!(!states_org_unit(&empty_with_sort_as));
 
     let normal_unit = OrgUnit::new("Engineering");
     assert!(states_org_unit(&normal_unit));
 
-    let normal_with_sort_as = OrgUnit {
-        name: "Engineering".to_owned(),
-        extra: [("sortAs".to_owned(), json!("Eng"))].into(),
-        ..OrgUnit::default()
-    };
+    let mut normal_with_sort_as = OrgUnit::new("Engineering");
+    normal_with_sort_as.extra = [("sortAs".to_owned(), json!("Eng"))].into();
     assert!(states_org_unit(&normal_with_sort_as));
 
     let whitespace_unit = OrgUnit::new("   ");
@@ -4881,14 +4862,11 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
                 "o1".to_owned(),
                 Organization {
                     name: Some("Acme Corp".to_owned()),
-                    units: Some(vec![
-                        OrgUnit::new(""),
-                        OrgUnit {
-                            name: "".to_owned(),
-                            extra: [("sortAs".to_owned(), json!("Secret"))].into(),
-                            ..OrgUnit::default()
-                        },
-                    ]),
+                    units: Some(vec![OrgUnit::new(""), {
+                        let mut unit = OrgUnit::new("");
+                        unit.extra = [("sortAs".to_owned(), json!("Secret"))].into();
+                        unit
+                    }]),
                     ..Organization::default()
                 },
             )]
@@ -4914,10 +4892,10 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
                     units: Some(vec![
                         OrgUnit::new(""),
                         OrgUnit::new("Research"),
-                        OrgUnit {
-                            name: "".to_owned(),
-                            extra: [("sortAs".to_owned(), json!("OpticsSort"))].into(),
-                            ..OrgUnit::default()
+                        {
+                            let mut unit = OrgUnit::new("");
+                            unit.extra = [("sortAs".to_owned(), json!("OpticsSort"))].into();
+                            unit
                         },
                         OrgUnit::new("Optics"),
                         OrgUnit::new(""),
@@ -14923,11 +14901,7 @@ fn trailing_whitespace_with_vcard_21_and_quoted_printable_fixpoint() {
 fn name_with_empty_full_string_and_components_reaches_fixed_point() {
     let card = ContactCard {
         name: Some(Name {
-            components: Some(vec![NameComponent {
-                kind: "given".to_string(),
-                value: "TestGiven".to_string(),
-                extra: BTreeMap::new(),
-            }]),
+            components: Some(vec![NameComponent::new("given", "TestGiven")]),
             full: Some("".to_string()),
             extra: BTreeMap::new(),
             ..Name::default()

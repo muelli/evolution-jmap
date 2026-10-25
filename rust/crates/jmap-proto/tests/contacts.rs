@@ -315,13 +315,9 @@ fn jscontact_crypto_keys_directories_personal_info_and_groups_roundtrip() {
         id: Some("C1".into()),
         crypto_keys: Some(BTreeMap::from([(
             "k1".to_owned(),
-            CryptoKey {
-                kind: Some(crypto_key_kind::KEY.to_owned()),
-                uri: "https://example.com/pgp.asc".to_owned(),
-                media_type: Some("application/pgp-keys".to_owned()),
-                pref: Some(1),
-                extra: BTreeMap::new(),
-            },
+            CryptoKey::new(crypto_key_kind::KEY, "https://example.com/pgp.asc")
+                .with_media_type("application/pgp-keys")
+                .with_pref(1),
         )])),
         directories: Some(BTreeMap::from([(
             "d1".to_owned(),
@@ -351,16 +347,12 @@ fn jscontact_crypto_keys_directories_personal_info_and_groups_roundtrip() {
     let round_tripped: ContactCard = serde_json::from_value(json).unwrap();
     assert_eq!(round_tripped, card);
 
-    let group = CardGroup {
-        id: Some("G1".into()),
-        card_type: Some("CardGroup".to_owned()),
-        name: Some("Core Team".to_owned()),
-        members: Some(BTreeMap::from([
+    let group = CardGroup::new("Core Team")
+        .with_id("G1")
+        .with_members(BTreeMap::from([
             ("urn:uuid:c1".to_owned(), true),
             ("urn:uuid:c2".to_owned(), true),
-        ])),
-        extra: BTreeMap::new(),
-    };
+        ]));
     let g_val = serde_json::to_value(&group).unwrap();
     assert_eq!(g_val["@type"], "CardGroup");
     assert_eq!(g_val["name"], "Core Team");
@@ -376,7 +368,6 @@ fn contacts_capabilities_speak_to_as_and_languages_roundtrip_covers_rfc9610_rfc9
     use jmap_proto::contacts::{
         ContactCard, ContactsCapability, LanguagePref, SpeakToAs, card_kind, grammatical_gender,
     };
-    use std::collections::BTreeMap;
 
     assert_eq!(grammatical_gender::ANIMATE, "animate");
     assert_eq!(grammatical_gender::INANIMATE, "inanimate");
@@ -392,11 +383,9 @@ fn contacts_capabilities_speak_to_as_and_languages_roundtrip_covers_rfc9610_rfc9
     assert_eq!(card_kind::DEVICE, "device");
     assert_eq!(card_kind::APPLICATION, "application");
 
-    let cap = ContactsCapability {
-        max_size_attachments_per_card: 10_000_000,
-        max_number_of_cards_in_set: 500,
-        extra: BTreeMap::new(),
-    };
+    let cap = ContactsCapability::new()
+        .with_max_size_attachments_per_card(10_000_000)
+        .with_max_number_of_cards_in_set(500);
     let cap_val = serde_json::to_value(&cap).unwrap();
     assert_eq!(cap_val["maxSizeAttachmentsPerCard"], 10_000_000);
     assert_eq!(cap_val["maxNumberOfCardsInSet"], 500);
@@ -404,23 +393,18 @@ fn contacts_capabilities_speak_to_as_and_languages_roundtrip_covers_rfc9610_rfc9
     let round_cap: ContactsCapability = serde_json::from_value(cap_val).unwrap();
     assert_eq!(round_cap, cap);
 
-    let speak = SpeakToAs {
-        grammatical_gender: Some(grammatical_gender::NEUTER.to_owned()),
-        pronouns: Some("they/them".into()),
-        extra: BTreeMap::new(),
-    };
+    let speak = SpeakToAs::new()
+        .with_grammatical_gender(grammatical_gender::NEUTER)
+        .with_pronouns("they/them");
     let s_val = serde_json::to_value(&speak).unwrap();
     assert_eq!(s_val["grammaticalGender"], "neuter");
     assert_eq!(s_val["pronouns"], "they/them");
     let round_speak: SpeakToAs = serde_json::from_value(s_val).unwrap();
     assert_eq!(round_speak, speak);
 
-    let lang = LanguagePref {
-        language: "en-US".to_owned(),
-        contexts: Some(serde_json::json!({"work": true})),
-        pref: Some(1),
-        extra: BTreeMap::new(),
-    };
+    let lang = LanguagePref::new("en-US")
+        .with_contexts(serde_json::json!({"work": true}))
+        .with_pref(1);
     let l_val = serde_json::to_value(&lang).unwrap();
     assert_eq!(l_val["language"], "en-US");
     assert_eq!(l_val["pref"], 1);
@@ -449,13 +433,11 @@ fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
     };
     use std::collections::BTreeMap;
 
-    let rights = AddressBookRights {
-        may_read: Some(true),
-        may_write: Some(true),
-        may_share: Some(true),
-        may_delete: Some(false),
-        extra: BTreeMap::new(),
-    };
+    let rights = AddressBookRights::default()
+        .with_may_read(true)
+        .with_may_write(true)
+        .with_may_share(true)
+        .with_may_delete(false);
 
     let book = AddressBook {
         id: Some("ab1".into()),
@@ -474,19 +456,14 @@ fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
 
     let card = ContactCard {
         id: Some("card_ext".into()),
-        speak_to_as: Some(SpeakToAs {
-            grammatical_gender: Some(grammatical_gender::FEMININE.to_owned()),
-            pronouns: Some("she/her".into()),
-            extra: BTreeMap::new(),
-        }),
+        speak_to_as: Some(
+            SpeakToAs::new()
+                .with_grammatical_gender(grammatical_gender::FEMININE)
+                .with_pronouns("she/her"),
+        ),
         preferred_languages: Some(BTreeMap::from([(
             "en".to_owned(),
-            LanguagePref {
-                language: "en".to_owned(),
-                contexts: None,
-                pref: Some(1),
-                extra: BTreeMap::new(),
-            },
+            LanguagePref::new("en").with_pref(1),
         )])),
         localizations: Some(BTreeMap::from([(
             "de".to_owned(),
@@ -571,11 +548,7 @@ fn jscontact_spec_properties_roundtrip() {
                 name: Some("Analytical Engine Corp".to_owned()),
                 sort_as: Some("Analytical".to_owned()),
                 contexts: Some(serde_json::json!({"work": true})),
-                units: Some(vec![OrgUnit {
-                    name: "Computing".to_owned(),
-                    sort_as: Some("Comp".to_owned()),
-                    ..OrgUnit::default()
-                }]),
+                units: Some(vec![OrgUnit::new("Computing").with_sort_as("Comp")]),
                 ..Organization::default()
             },
         )])),
@@ -709,18 +682,16 @@ fn contact_card_parse_and_set_error_roundtrip_covers_rfc9610() {
         parse_req
     );
 
-    let parse_resp = ContactCardParseResponse {
-        account_id: "A1".into(),
-        parsed: Some(BTreeMap::from([(
+    let parse_resp = ContactCardParseResponse::new("A1")
+        .with_parsed(BTreeMap::from([(
             "blob1".into(),
             ContactCard {
                 id: Some("C1".into()),
                 ..ContactCard::default()
             },
-        )])),
-        not_parsable: Some(vec!["blob2".into()]),
-        not_found: Some(vec!["blob3".into()]),
-    };
+        )]))
+        .with_not_parsable(["blob2"])
+        .with_not_found(["blob3"]);
     let resp_json = serde_json::to_value(&parse_resp).unwrap();
     assert_eq!(resp_json["accountId"], "A1");
     assert_eq!(resp_json["parsed"]["blob1"]["id"], "C1");

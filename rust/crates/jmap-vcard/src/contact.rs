@@ -1748,12 +1748,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 if uri.is_empty() {
                     continue;
                 }
-                let address = SchedulingAddress {
-                    uri,
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra: BTreeMap::new(),
-                    ..SchedulingAddress::default()
-                };
+                let mut address = SchedulingAddress::new(uri);
+                address.pref = entry_has_type(entry, "PREF").then_some(1);
                 scheduling_addresses.insert(entry_key(entry, "s", &scheduling_addresses), address);
             }
             "PHOTO" => {

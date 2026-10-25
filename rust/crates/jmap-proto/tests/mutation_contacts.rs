@@ -76,16 +76,10 @@ fn address_book_rights_presets_permissions_logic_and_extra_preservation() {
     assert_eq!(ro_rights.may_delete, None);
     assert!(!ro_rights.is_writable());
 
-    let write_only = AddressBookRights {
-        may_write: Some(true),
-        ..AddressBookRights::default()
-    };
+    let write_only = AddressBookRights::default().with_may_write(true);
     assert!(write_only.is_writable());
 
-    let write_false = AddressBookRights {
-        may_write: Some(false),
-        ..AddressBookRights::default()
-    };
+    let write_false = AddressBookRights::default().with_may_write(false);
     assert!(!write_false.is_writable());
 
     let mut extra = BTreeMap::new();
