@@ -112,7 +112,7 @@ pub enum ConnectError {
     /// The account's `ESource` still holds the interface proxy of an
     /// `evolution-source-registry` that has restarted. The bus answers
     /// `SERVICE_UNKNOWN` and names the dead unique name. See
-    /// [`crate::oauth2::is_service_gone`] for the mechanism and for
+    /// `crate::oauth2::is_service_gone` for the mechanism and for
     /// why EDS 3.52 does not recover from it by itself.
     ///
     /// Separate from [`Self::SecretStore`], although both are `ERROR` and

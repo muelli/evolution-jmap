@@ -113,7 +113,7 @@ pub unsafe fn set_raw_gerror(dest: *mut *mut GError, error: *mut GError) {
 ///
 /// An EDS vfunc reports failure as `FALSE` and a `GError`. Thus when a shared
 /// retry wrapper sees it, the [`Error`] that caused it is gone. Only the
-/// domain and code remain. [`client_error_code`] gives
+/// domain and code remain. `client_error_code` gives
 /// `E_CLIENT_ERROR_AUTHENTICATION_FAILED` to `Error::Http { status: 401, .. }`
 /// and to nothing else. Thus this pair *is* "the server refused these
 /// credentials", accurately and without a parse of the message text.
