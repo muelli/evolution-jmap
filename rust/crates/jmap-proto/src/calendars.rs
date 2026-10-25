@@ -1303,6 +1303,7 @@ impl VirtualLocation {
 /// JSCalendar Link (draft-ietf-calext-jscalendarbis-22 §1.5.11): external resource.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Link {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub link_type: Option<String>,

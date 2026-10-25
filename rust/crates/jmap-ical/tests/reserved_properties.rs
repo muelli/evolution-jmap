@@ -136,17 +136,17 @@ fn never_emit_reserved_or_obsoleted_names_in_serialized_types_and_ical_output() 
     assert_no_reserved_or_obsoleted_properties(&alert_val, "Alert");
 
     // 3. Link with all fields populated (including obsoleted cid)
-    let link = Link {
-        link_type: Some("Link".to_owned()),
-        href: "https://example.com/agenda.pdf".to_owned(),
-        content_type: Some("application/pdf".to_owned()),
-        size: Some(1024),
-        rel: Some("enclosure".to_owned()),
-        display: Some(BTreeMap::from([("badge".to_owned(), true)])),
-        title: Some("Meeting Agenda".to_owned()),
-        cid: Some("cid:12345@example.com".to_owned()),
-        extra: BTreeMap::new(),
-    };
+    let link: Link = serde_json::from_value(serde_json::json!({
+        "@type": "Link",
+        "href": "https://example.com/agenda.pdf",
+        "contentType": "application/pdf",
+        "size": 1024,
+        "rel": "enclosure",
+        "display": {"badge": true},
+        "title": "Meeting Agenda",
+        "cid": "cid:12345@example.com",
+    }))
+    .expect("deserializes Link with obsoleted cid");
     let link_val = serde_json::to_value(&link).expect("serializes Link");
     assert_no_reserved_or_obsoleted_properties(&link_val, "Link");
 
