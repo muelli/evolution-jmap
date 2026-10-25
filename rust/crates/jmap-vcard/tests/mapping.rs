@@ -1951,13 +1951,11 @@ fn one_link(key: &str, uri: &str) -> ContactCard {
     {
         let mut card = ContactCard::default();
         card.links = Some(
-            [(
-                key.to_owned(),
-                Link {
-                    uri: uri.to_owned(),
-                    ..Link::default()
-                },
-            )]
+            [(key.to_owned(), {
+                let mut v = Link::default();
+                v.uri = uri.to_owned();
+                v
+            })]
             .into(),
         );
         card
@@ -1997,14 +1995,15 @@ fn a_link_of_a_kind_no_vcard_30_property_states_gets_no_line() {
 
     // Omit unknown link kinds for the same reason.
     let mut card = one_link("l1", "https://vera.example/");
-    card.links.as_mut().expect("links").insert(
-        "l2".to_owned(),
-        Link {
-            uri: "https://vera.example/rss".to_owned(),
-            kind: Some("example.com:feed".to_owned()),
-            ..Link::default()
-        },
-    );
+    card.links
+        .as_mut()
+        .expect("links")
+        .insert("l2".to_owned(), {
+            let mut v = Link::default();
+            v.uri = "https://vera.example/rss".to_owned();
+            v.kind = Some("example.com:feed".to_owned());
+            v
+        });
     let vcard = card_to_vcard(&card);
     assert_eq!(vcard.matches("\r\nURL").count(), 1, "{vcard}");
 }
@@ -3705,13 +3704,11 @@ fn maps_calendars_freebusy_and_links_faithfully() {
         .collect(),
     );
     card.links = Some(
-        [(
-            "l1".to_owned(),
-            Link {
-                uri: "https://example.com/homepage".to_owned(),
-                ..Link::default()
-            },
-        )]
+        [("l1".to_owned(), {
+            let mut v = Link::default();
+            v.uri = "https://example.com/homepage".to_owned();
+            v
+        })]
         .into_iter()
         .collect(),
     );
@@ -5046,13 +5043,15 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         v.note = "".into();
         v
     }));
-    assert!(states_link(&Link {
-        uri: "https://example.com".into(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".into();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "".into(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "".into();
+        v
     }));
     assert!(states_nickname(&{
         let mut v = Nickname::default();
@@ -8559,15 +8558,13 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
     });
 
     let mut links = BTreeMap::new();
-    links.insert(
-        "l1".to_owned(),
-        Link {
-            uri: "https://example.com/query?q=test;sort=desc,rank&filter=a\\b".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l1".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://example.com/query?q=test;sort=desc,rank&filter=a\\b".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut keywords = BTreeMap::new();
     keywords.insert("Tag 1, with comma".to_owned(), json!(true));
@@ -9451,33 +9448,27 @@ fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
     // 3. Roundtrips keep all keys and URIs.
 
     let mut links = BTreeMap::new();
-    links.insert(
-        "l1".to_owned(),
-        Link {
-            uri: "https://alice.example.com".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l2".to_owned(),
-        Link {
-            uri: "https://work.example.org/alice".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l3".to_owned(),
-        Link {
-            uri: "https://github.com/alice".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l1".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://alice.example.com".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l2".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://work.example.org/alice".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l3".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://github.com/alice".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -9528,51 +9519,41 @@ fn url_kind_filtering_and_contact_uri_omission() {
     // Emit URL only for plain website links with `kind: None`.
 
     let mut links = BTreeMap::new();
-    links.insert(
-        "l_web".to_owned(),
-        Link {
-            uri: "https://alice.example.com".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_contact".to_owned(),
-        Link {
-            uri: "https://contact.example.com/form".to_owned(),
-            kind: Some("contact".to_owned()),
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_feed".to_owned(),
-        Link {
-            uri: "https://alice.example.com/rss.xml".to_owned(),
-            kind: Some("feed".to_owned()),
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_news".to_owned(),
-        Link {
-            uri: "https://news.alice.example.com".to_owned(),
-            kind: Some("news".to_owned()),
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_custom".to_owned(),
-        Link {
-            uri: "https://custom.example.com/profile".to_owned(),
-            kind: Some("x-vendor-profile".to_owned()),
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l_web".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://alice.example.com".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_contact".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://contact.example.com/form".to_owned();
+        v.kind = Some("contact".to_owned());
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_feed".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://alice.example.com/rss.xml".to_owned();
+        v.kind = Some("feed".to_owned());
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_news".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://news.alice.example.com".to_owned();
+        v.kind = Some("news".to_owned());
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_custom".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://custom.example.com/profile".to_owned();
+        v.kind = Some("x-vendor-profile".to_owned());
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -9643,35 +9624,29 @@ fn url_eds_blog_video_and_custom_extensions_characterization() {
 fn url_query_parameters_punctuation_and_encoding_fidelity() {
     // Complex URLs preserve URI punctuation and encoding as raw URI text.
     let mut links = BTreeMap::new();
-    links.insert(
-        "l_complex_query".to_owned(),
-        Link {
-            uri: "https://api.example.com:8443/v1/search?q=tag:a,b;status:active&filter=x,y;z#top"
-                .to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_auth".to_owned(),
-        Link {
-            uri: "https://user:p%40ssw%3Brd@secure.example.org:9000/path/to/res?a=1&b=2#sec"
-                .to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l_ipv6".to_owned(),
-        Link {
-            uri: "http://[2001:db8::1]:8080/index.html?token=abc;def,ghi".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l_complex_query".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://api.example.com:8443/v1/search?q=tag:a,b;status:active&filter=x,y;z#top"
+            .to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_auth".to_owned(), {
+        let mut v = Link::default();
+        v.uri =
+            "https://user:p%40ssw%3Brd@secure.example.org:9000/path/to/res?a=1&b=2#sec".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l_ipv6".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "http://[2001:db8::1]:8080/index.html?token=abc;def,ghi".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -9704,51 +9679,51 @@ fn url_query_parameters_punctuation_and_encoding_fidelity() {
 #[test]
 fn url_empty_absent_and_predicate_fidelity() {
     // Tests states_link predicate and empty/absent link handling:
-    assert!(states_link(&Link {
-        uri: "https://example.com".into(),
-        kind: None,
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".into();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "".into(),
-        kind: None,
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "".into();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "https://example.com".into(),
-        kind: Some("contact".into()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".into();
+        v.kind = Some("contact".into());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "https://example.com".into(),
-        kind: Some("other".into()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".into();
+        v.kind = Some("other".into());
+        v.extra = BTreeMap::new();
+        v
     }));
 
     // Empty links are not emitted
     let mut links = BTreeMap::new();
-    links.insert(
-        "l1".to_owned(),
-        Link {
-            uri: "".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
-    links.insert(
-        "l2".to_owned(),
-        Link {
-            uri: "https://valid.example.com".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l1".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
+    links.insert("l2".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://valid.example.com".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
     let card = {
         let mut card = ContactCard::default();
         card.links = Some(links);
@@ -9774,21 +9749,19 @@ fn url_empty_absent_and_predicate_fidelity() {
 
     // Unmodeled Link fields in extra survive roundtrips untouched.
     let mut extra_links = BTreeMap::new();
-    extra_links.insert(
-        "l_rich".to_owned(),
-        Link {
-            uri: "https://rich.example.com".to_owned(),
-            kind: None,
-            extra: [
-                ("pref".to_owned(), json!(1)),
-                ("contexts".to_owned(), json!({"work": true})),
-                ("label".to_owned(), json!("Work Portal")),
-                ("mediaType".to_owned(), json!("text/html")),
-            ]
-            .into(),
-            ..Link::default()
-        },
-    );
+    extra_links.insert("l_rich".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://rich.example.com".to_owned();
+        v.kind = None;
+        v.extra = [
+            ("pref".to_owned(), json!(1)),
+            ("contexts".to_owned(), json!({"work": true})),
+            ("label".to_owned(), json!("Work Portal")),
+            ("mediaType".to_owned(), json!("text/html")),
+        ]
+        .into();
+        v
+    });
     let rich_card = {
         let mut card = ContactCard::default();
         card.links = Some(extra_links);
@@ -9809,15 +9782,13 @@ fn url_and_calendar_properties_coexistence_and_slotting() {
     // CALURI -> E_CONTACT_CALENDAR_URI (card.calendars, kind: "calendar")
     // FBURL -> E_CONTACT_FREEBUSY_URL (card.calendars, kind: "freeBusy")
     let mut links = BTreeMap::new();
-    links.insert(
-        "l1".to_owned(),
-        Link {
-            uri: "https://alice.example.com".to_owned(),
-            kind: None,
-            extra: BTreeMap::new(),
-            ..Link::default()
-        },
-    );
+    links.insert("l1".to_owned(), {
+        let mut v = Link::default();
+        v.uri = "https://alice.example.com".to_owned();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut cals = BTreeMap::new();
     cals.insert("c1".to_owned(), {
@@ -13231,47 +13202,54 @@ fn evolution_remaining_x_properties_coexistence_and_predicates() {
     assert!(!states_assistant("urn:uuid:67890", &rel_valid_asst));
 
     // states_link across kinds
-    assert!(states_link(&Link {
-        uri: "https://example.com".to_string(),
-        kind: None,
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com".to_string();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(states_link(&Link {
-        uri: "https://blogs.example.com".to_string(),
-        kind: Some("blog".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://blogs.example.com".to_string();
+        v.kind = Some("blog".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(states_link(&Link {
-        uri: "https://video.example.com".to_string(),
-        kind: Some("video".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://video.example.com".to_string();
+        v.kind = Some("video".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "".to_string(),
-        kind: None,
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "".to_string();
+        v.kind = None;
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "".to_string(),
-        kind: Some("blog".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "".to_string();
+        v.kind = Some("blog".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "https://example.com/contact".to_string(),
-        kind: Some("contact".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com/contact".to_string();
+        v.kind = Some("contact".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_link(&Link {
-        uri: "https://example.com/rss".to_string(),
-        kind: Some("feed".to_string()),
-        extra: BTreeMap::new(),
-        ..Link::default()
+    assert!(!states_link(&{
+        let mut v = Link::default();
+        v.uri = "https://example.com/rss".to_string();
+        v.kind = Some("feed".to_string());
+        v.extra = BTreeMap::new();
+        v
     }));
 }
 
@@ -16365,15 +16343,13 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
             .into(),
         );
         card.links = Some(
-            [(
-                "l1".to_string(),
-                Link {
-                    uri: "https://portfolio.example.com".into(),
-                    kind: Some("website".into()),
-                    extra: link_extra,
-                    ..Link::default()
-                },
-            )]
+            [("l1".to_string(), {
+                let mut v = Link::default();
+                v.uri = "https://portfolio.example.com".into();
+                v.kind = Some("website".into());
+                v.extra = link_extra;
+                v
+            })]
             .into(),
         );
         card.related_to = Some(
@@ -18939,24 +18915,20 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
         );
         card.links = Some(
             [
-                (
-                    "l1".to_string(),
-                    Link {
-                        uri: "https://blog.selftest.example".into(),
-                        kind: Some("blog".into()),
-                        extra: BTreeMap::new(),
-                        ..Link::default()
-                    },
-                ),
-                (
-                    "l2".to_string(),
-                    Link {
-                        uri: "https://video.selftest.example/watch".into(),
-                        kind: Some("video".into()),
-                        extra: BTreeMap::new(),
-                        ..Link::default()
-                    },
-                ),
+                ("l1".to_string(), {
+                    let mut v = Link::default();
+                    v.uri = "https://blog.selftest.example".into();
+                    v.kind = Some("blog".into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("l2".to_string(), {
+                    let mut v = Link::default();
+                    v.uri = "https://video.selftest.example/watch".into();
+                    v.kind = Some("video".into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
         );

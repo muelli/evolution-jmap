@@ -311,19 +311,21 @@ fn arb_link_kind() -> impl Strategy<Value = Option<String>> {
 }
 
 fn arb_link() -> impl Strategy<Value = Link> {
-    (arb_uri(), arb_link_kind()).prop_map(|(uri, kind)| Link {
-        uri,
-        kind,
-        ..Link::default()
+    (arb_uri(), arb_link_kind()).prop_map(|(uri, kind)| {
+        let mut v = Link::default();
+        v.uri = uri;
+        v.kind = kind;
+        v
     })
 }
 
 fn arb_link_pair() -> impl Strategy<Value = (Link, Link)> {
     (arb_link(), arb_uri(), arb_link_kind()).prop_map(|(old, uri, kind)| {
-        let new = Link {
-            uri,
-            kind,
-            ..old.clone()
+        let new = {
+            let mut v = old.clone();
+            v.uri = uri;
+            v.kind = kind;
+            v
         };
         (old, new)
     })

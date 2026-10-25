@@ -301,12 +301,7 @@ prop_compose! {
         if let Some(l) = label {
             extra.insert("label".to_string(), json!(l));
         }
-        Link {
-            uri,
-            kind,
-            extra,
-            ..Link::default()
-        }
+        { let mut v = Link::default(); v.uri = uri; v.kind = kind; v.extra = extra; v }
     }
 }
 

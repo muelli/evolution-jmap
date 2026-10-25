@@ -1703,11 +1703,12 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                         }
                     }
                 }
-                let link = Link {
-                    uri: entry_text(entry),
-                    kind,
-                    extra,
-                    ..Link::default()
+                let link = {
+                    let mut v = Link::default();
+                    v.uri = entry_text(entry);
+                    v.kind = kind;
+                    v.extra = extra;
+                    v
                 };
                 if !states_link(&link) {
                     continue;

@@ -1241,6 +1241,7 @@ impl Anniversary {
 /// JSContact Link (RFC 9553 §2.6.3): one resource the contact points at.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Link {
     /// Where the resource is. Mandatory per RFC 9553 §2.6.3, and the only
     /// part of a link a `URL` line has room for.
@@ -1282,6 +1283,16 @@ impl Link {
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+
+    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
         self
     }
 }
