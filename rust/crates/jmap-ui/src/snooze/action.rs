@@ -57,8 +57,8 @@ use glib_sys::{GFALSE, GTRUE, gpointer};
 use gobject_sys::{GObject, g_object_get, g_object_unref};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::{g_object_set, g_signal_connect_data};
-#[cfg(not(evolution_eui_manager))]
 use jmap_backend_core::BACKEND_NAME;
+#[cfg(not(evolution_eui_manager))]
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::{read_string, take_string};
