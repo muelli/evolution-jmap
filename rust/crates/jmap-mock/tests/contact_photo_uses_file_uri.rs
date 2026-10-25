@@ -65,11 +65,12 @@ fn seed_contact_card_with_photo(server: &MockServer) -> String {
         Media::new(SAFE_PHOTO_URI).with_kind("photo"),
     );
 
-    let card = ContactCard {
-        id: Some(card_id.clone()),
-        address_book_ids: Some(BTreeMap::from([(book_id, true)])),
-        media: Some(media),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some(card_id.clone());
+        card.address_book_ids = Some(BTreeMap::from([(book_id, true)]));
+        card.media = Some(media);
+        card
     };
     account.contact_cards.seed_with_id(card_id.clone(), card);
 

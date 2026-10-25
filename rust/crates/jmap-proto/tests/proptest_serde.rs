@@ -640,42 +640,24 @@ prop_compose! {
         (emails, phones, addresses) in arb_card_comm(),
         (notes, anniversaries) in arb_card_entries(),
     ) -> ContactCard {
-        ContactCard {
-            id,
-            address_book_ids,
-            card_type: Some("Card".to_string()),
-            kind: Some("individual".to_string()),
-            version: Some("1.0".to_string()),
-            language: None,
-            members: None,
-            prod_id: None,
-            uid,
-            created,
-            updated: None,
-            name,
-            nicknames: None,
-            emails,
-            phones,
-            organizations,
-            titles,
-            addresses,
-            notes,
-            anniversaries,
-            links: None,
-            calendars: None,
-            scheduling_addresses: None,
-            media: None,
-            online_services: None,
-            keywords: None,
-            related_to: None,
-            crypto_keys: None,
-            directories: None,
-            personal_info: None,
-            speak_to_as: None,
-            preferred_languages: None,
-            localizations: None,
-            extra,
-        }
+        let mut card = ContactCard::default();
+        card.id = id;
+        card.address_book_ids = address_book_ids;
+        card.card_type = Some("Card".to_string());
+        card.kind = Some("individual".to_string());
+        card.version = Some("1.0".to_string());
+        card.uid = uid;
+        card.created = created;
+        card.name = name;
+        card.emails = emails;
+        card.phones = phones;
+        card.organizations = organizations;
+        card.titles = titles;
+        card.addresses = addresses;
+        card.notes = notes;
+        card.anniversaries = anniversaries;
+        card.extra = extra;
+        card
     }
 }
 

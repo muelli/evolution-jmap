@@ -27,12 +27,13 @@ fn hostile_card() -> ContactCard {
             ..ContactEmail::default()
         },
     );
-    ContactCard {
-        id: Some("C1".into()),
+    {
+        let mut card = ContactCard::default();
+        card.id = Some("C1".into());
         // Omit `name` so the card renders no legitimate `FN` property.
         // An injected `FN` would become the display name in Evolution.
-        emails: Some(emails),
-        ..ContactCard::default()
+        card.emails = Some(emails);
+        card
     }
 }
 
@@ -73,10 +74,11 @@ fn a_map_key_cannot_terminate_the_card_early() {
             ..ContactEmail::default()
         },
     );
-    let card = ContactCard {
-        id: Some("C1".into()),
-        emails: Some(emails),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C1".into());
+        card.emails = Some(emails);
+        card
     };
 
     // Parameter text must not start a new vCard line.

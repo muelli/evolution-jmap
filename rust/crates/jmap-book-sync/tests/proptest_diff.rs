@@ -226,9 +226,10 @@ fn arb_nickname_pair() -> impl Strategy<Value = (Nickname, Nickname)> {
 }
 
 fn card_with_nicknames(map: BTreeMap<String, Nickname>) -> ContactCard {
-    ContactCard {
-        nicknames: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.nicknames = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -250,9 +251,10 @@ fn arb_note_pair() -> impl Strategy<Value = (Note, Note)> {
 }
 
 fn card_with_notes(map: BTreeMap<String, Note>) -> ContactCard {
-    ContactCard {
-        notes: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.notes = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -283,9 +285,10 @@ fn arb_title_pair() -> impl Strategy<Value = (Title, Title)> {
 }
 
 fn card_with_titles(map: BTreeMap<String, Title>) -> ContactCard {
-    ContactCard {
-        titles: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.titles = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -321,9 +324,10 @@ fn arb_link_pair() -> impl Strategy<Value = (Link, Link)> {
 }
 
 fn card_with_links(map: BTreeMap<String, Link>) -> ContactCard {
-    ContactCard {
-        links: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.links = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -354,9 +358,10 @@ fn arb_calendar_pair() -> impl Strategy<Value = (Calendar, Calendar)> {
 }
 
 fn card_with_calendars(map: BTreeMap<String, Calendar>) -> ContactCard {
-    ContactCard {
-        calendars: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.calendars = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -369,9 +374,10 @@ fn card_with_keywords(tags: BTreeSet<String>) -> ContactCard {
         .into_iter()
         .map(|tag| (tag, Value::Bool(true)))
         .collect();
-    ContactCard {
-        keywords: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.keywords = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -405,9 +411,10 @@ fn arb_organization_name_pair() -> impl Strategy<Value = (Organization, Organiza
 }
 
 fn card_with_organizations(map: BTreeMap<String, Organization>) -> ContactCard {
-    ContactCard {
-        organizations: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.organizations = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -598,9 +605,10 @@ fn arb_address_components_pair() -> impl Strategy<Value = (Address, Address)> {
 }
 
 fn card_with_addresses(map: BTreeMap<String, Address>) -> ContactCard {
-    ContactCard {
-        addresses: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.addresses = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -702,9 +710,10 @@ fn arb_name_components_pair() -> impl Strategy<Value = (Name, Name)> {
 }
 
 fn card_with_name(name: Name) -> ContactCard {
-    ContactCard {
-        name: Some(name),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.name = Some(name);
+        card
     }
 }
 
@@ -741,9 +750,10 @@ fn arb_anniversary_slot() -> impl Strategy<Value = AnniversarySlot> {
 }
 
 fn card_with_anniversaries(map: BTreeMap<String, Anniversary>) -> ContactCard {
-    ContactCard {
-        anniversaries: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.anniversaries = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -824,9 +834,10 @@ fn arb_media_slot() -> impl Strategy<Value = MediaSlot> {
 }
 
 fn card_with_media(map: BTreeMap<String, Media>) -> ContactCard {
-    ContactCard {
-        media: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.media = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -922,9 +933,10 @@ fn arb_online_service_service_pair() -> impl Strategy<Value = (OnlineService, On
 }
 
 fn card_with_online_services(map: BTreeMap<String, OnlineService>) -> ContactCard {
-    ContactCard {
-        online_services: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.online_services = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -1007,9 +1019,10 @@ fn bare_relation() -> Relation {
 }
 
 fn card_with_related_to(map: BTreeMap<String, Relation>) -> ContactCard {
-    ContactCard {
-        related_to: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.related_to = (!map.is_empty()).then_some(map);
+        card
     }
 }
 

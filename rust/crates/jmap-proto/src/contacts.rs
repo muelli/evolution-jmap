@@ -202,6 +202,7 @@ impl AddressBookRights {
 /// `addressBookIds`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ContactCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,

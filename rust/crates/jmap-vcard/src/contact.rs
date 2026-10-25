@@ -1957,44 +1957,44 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         }
     }
 
-    Ok(ContactCard {
-        id: text("UID").map(Into::into),
-        // Membership depends on the EDS source being served.
-        // The backend fills it in during create.
-        address_book_ids: None,
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        uid: text(X_JMAP_UID),
-        name,
-        nicknames: (!nicknames.is_empty()).then_some(nicknames),
-        emails: (!emails.is_empty()).then_some(emails),
-        phones: (!phones.is_empty()).then_some(phones),
-        addresses: (!addresses.is_empty()).then_some(addresses),
-        organizations: (!organizations.is_empty()).then_some(organizations),
-        titles: (!titles.is_empty()).then_some(titles),
-        notes: (!notes.is_empty()).then_some(notes),
-        anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
-        links: (!links.is_empty()).then_some(links),
-        calendars: (!calendars.is_empty()).then_some(calendars),
-        scheduling_addresses: (!scheduling_addresses.is_empty()).then_some(scheduling_addresses),
-        // vCard 3.0 exposes media through `PHOTO` only.
-        // Other media kinds stay absent here and stay in save-path extras.
-        media: (!media.is_empty()).then_some(media),
-        online_services: (!online_services.is_empty()).then_some(online_services),
-        keywords: read_keywords(&card.entries),
-        // Keep only relations represented by mapped vCard lines on read.
-        // Keep other relation kinds in extras.
-        related_to: (!related_to.is_empty()).then_some(related_to),
-        crypto_keys: None,
-        directories: None,
-        personal_info: None,
-        speak_to_as: None,
-        preferred_languages: None,
-        localizations: None,
-        kind: None,
-        extra: BTreeMap::new(),
-        ..ContactCard::default()
-    })
+    let mut contact_card = ContactCard::default();
+    contact_card.id = text("UID").map(Into::into);
+    // Membership depends on the EDS source being served.
+    // The backend fills it in during create.
+    contact_card.address_book_ids = None;
+    contact_card.card_type = Some("Card".to_owned());
+    contact_card.version = Some("1.0".to_owned());
+    contact_card.uid = text(X_JMAP_UID);
+    contact_card.name = name;
+    contact_card.nicknames = (!nicknames.is_empty()).then_some(nicknames);
+    contact_card.emails = (!emails.is_empty()).then_some(emails);
+    contact_card.phones = (!phones.is_empty()).then_some(phones);
+    contact_card.addresses = (!addresses.is_empty()).then_some(addresses);
+    contact_card.organizations = (!organizations.is_empty()).then_some(organizations);
+    contact_card.titles = (!titles.is_empty()).then_some(titles);
+    contact_card.notes = (!notes.is_empty()).then_some(notes);
+    contact_card.anniversaries = (!anniversaries.is_empty()).then_some(anniversaries);
+    contact_card.links = (!links.is_empty()).then_some(links);
+    contact_card.calendars = (!calendars.is_empty()).then_some(calendars);
+    contact_card.scheduling_addresses =
+        (!scheduling_addresses.is_empty()).then_some(scheduling_addresses);
+    // vCard 3.0 exposes media through `PHOTO` only.
+    // Other media kinds stay absent here and stay in save-path extras.
+    contact_card.media = (!media.is_empty()).then_some(media);
+    contact_card.online_services = (!online_services.is_empty()).then_some(online_services);
+    contact_card.keywords = read_keywords(&card.entries);
+    // Keep only relations represented by mapped vCard lines on read.
+    // Keep other relation kinds in extras.
+    contact_card.related_to = (!related_to.is_empty()).then_some(related_to);
+    contact_card.crypto_keys = None;
+    contact_card.directories = None;
+    contact_card.personal_info = None;
+    contact_card.speak_to_as = None;
+    contact_card.preferred_languages = None;
+    contact_card.localizations = None;
+    contact_card.kind = None;
+    contact_card.extra = BTreeMap::new();
+    Ok(contact_card)
 }
 
 /// Decode one `PHOTO` line into one media entry.

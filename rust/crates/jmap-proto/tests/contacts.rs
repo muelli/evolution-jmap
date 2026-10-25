@@ -311,27 +311,25 @@ fn jscontact_crypto_keys_directories_personal_info_and_groups_roundtrip() {
     assert_eq!(personal_info_kind::HOBBY, "hobby");
     assert_eq!(personal_info_kind::INTEREST, "interest");
 
-    let card = ContactCard {
-        id: Some("C1".into()),
-        crypto_keys: Some(BTreeMap::from([(
-            "k1".to_owned(),
-            CryptoKey::new(crypto_key_kind::KEY, "https://example.com/pgp.asc")
-                .with_media_type("application/pgp-keys")
-                .with_pref(1),
-        )])),
-        directories: Some(BTreeMap::from([(
-            "d1".to_owned(),
-            Directory::new(
-                directory_kind::DIRECTORY,
-                "ldap://ldap.example.com/ou=people",
-            ),
-        )])),
-        personal_info: Some(BTreeMap::from([(
-            "pi1".to_owned(),
-            PersonalInfo::new(personal_info_kind::EXPERTISE, "Rust Programming").with_list_as(1),
-        )])),
-        ..ContactCard::default()
-    };
+    let mut card = ContactCard::default();
+    card.id = Some("C1".into());
+    card.crypto_keys = Some(BTreeMap::from([(
+        "k1".to_owned(),
+        CryptoKey::new(crypto_key_kind::KEY, "https://example.com/pgp.asc")
+            .with_media_type("application/pgp-keys")
+            .with_pref(1),
+    )]));
+    card.directories = Some(BTreeMap::from([(
+        "d1".to_owned(),
+        Directory::new(
+            directory_kind::DIRECTORY,
+            "ldap://ldap.example.com/ou=people",
+        ),
+    )]));
+    card.personal_info = Some(BTreeMap::from([(
+        "pi1".to_owned(),
+        PersonalInfo::new(personal_info_kind::EXPERTISE, "Rust Programming").with_list_as(1),
+    )]));
 
     let json = serde_json::to_value(&card).unwrap();
     assert_eq!(
@@ -411,12 +409,10 @@ fn contacts_capabilities_speak_to_as_and_languages_roundtrip_covers_rfc9610_rfc9
     let round_lang: LanguagePref = serde_json::from_value(l_val).unwrap();
     assert_eq!(round_lang, lang);
 
-    let card = ContactCard {
-        id: Some("C1".into()),
-        card_type: Some("Card".to_owned()),
-        kind: Some(card_kind::INDIVIDUAL.to_owned()),
-        ..ContactCard::default()
-    };
+    let mut card = ContactCard::default();
+    card.id = Some("C1".into());
+    card.card_type = Some("Card".to_owned());
+    card.kind = Some(card_kind::INDIVIDUAL.to_owned());
     let c_val = serde_json::to_value(&card).unwrap();
     assert_eq!(c_val["@type"], "Card");
     assert_eq!(c_val["kind"], "individual");
@@ -451,23 +447,21 @@ fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
     let round_book: AddressBook = serde_json::from_value(b_val).unwrap();
     assert_eq!(round_book, book);
 
-    let card = ContactCard {
-        id: Some("card_ext".into()),
-        speak_to_as: Some(
-            SpeakToAs::new()
-                .with_grammatical_gender(grammatical_gender::FEMININE)
-                .with_pronouns("she/her"),
-        ),
-        preferred_languages: Some(BTreeMap::from([(
-            "en".to_owned(),
-            LanguagePref::new("en").with_pref(1),
-        )])),
-        localizations: Some(BTreeMap::from([(
-            "de".to_owned(),
-            serde_json::json!({"name/full": "Erika Mustermann"}),
-        )])),
-        ..ContactCard::default()
-    };
+    let mut card = ContactCard::default();
+    card.id = Some("card_ext".into());
+    card.speak_to_as = Some(
+        SpeakToAs::new()
+            .with_grammatical_gender(grammatical_gender::FEMININE)
+            .with_pronouns("she/her"),
+    );
+    card.preferred_languages = Some(BTreeMap::from([(
+        "en".to_owned(),
+        LanguagePref::new("en").with_pref(1),
+    )]));
+    card.localizations = Some(BTreeMap::from([(
+        "de".to_owned(),
+        serde_json::json!({"name/full": "Erika Mustermann"}),
+    )]));
 
     let c_val = serde_json::to_value(&card).unwrap();
     assert_eq!(c_val["speakToAs"]["grammaticalGender"], "feminine");
@@ -514,115 +508,113 @@ fn jscontact_spec_properties_roundtrip() {
     let created_date = UtcDate::new("2026-08-29T12:00:00Z");
     let updated_date = UtcDate::new("2026-08-29T12:30:00Z");
 
-    let card = ContactCard {
-        id: Some("c_full_spec".into()),
-        created: Some(created_date.clone()),
-        updated: Some(updated_date.clone()),
-        name: Some(Name {
-            full: Some("Dr. Ada Lovelace".to_owned()),
+    let mut card = ContactCard::default();
+    card.id = Some("c_full_spec".into());
+    card.created = Some(created_date.clone());
+    card.updated = Some(updated_date.clone());
+    card.name = Some(Name {
+        full: Some("Dr. Ada Lovelace".to_owned()),
+        is_ordered: Some(true),
+        sort_as: Some(BTreeMap::from([(
+            "en".to_owned(),
+            "Lovelace, Ada".to_owned(),
+        )])),
+        ..Name::default()
+    });
+    card.nicknames = Some(BTreeMap::from([(
+        "k1".to_owned(),
+        Nickname {
+            name: "Enchantress of Numbers".to_owned(),
+            contexts: Some(serde_json::json!({"private": true})),
+            pref: Some(1),
+            ..Nickname::default()
+        },
+    )]));
+    card.organizations = Some(BTreeMap::from([(
+        "o1".to_owned(),
+        Organization {
+            name: Some("Analytical Engine Corp".to_owned()),
+            sort_as: Some("Analytical".to_owned()),
+            contexts: Some(serde_json::json!({"work": true})),
+            units: Some(vec![OrgUnit::new("Computing").with_sort_as("Comp")]),
+            ..Organization::default()
+        },
+    )]));
+    card.titles = Some(BTreeMap::from([(
+        "t1".to_owned(),
+        Title {
+            name: "Chief Mathematician".to_owned(),
+            kind: Some("title".to_owned()),
+            organization_id: Some("o1".to_owned()),
+            ..Title::default()
+        },
+    )]));
+    card.addresses = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        Address {
+            full: Some("12 St James's Square\nLondon\nUK".to_owned()),
             is_ordered: Some(true),
-            sort_as: Some(BTreeMap::from([(
-                "en".to_owned(),
-                "Lovelace, Ada".to_owned(),
-            )])),
-            ..Name::default()
-        }),
-        nicknames: Some(BTreeMap::from([(
-            "k1".to_owned(),
-            Nickname {
-                name: "Enchantress of Numbers".to_owned(),
-                contexts: Some(serde_json::json!({"private": true})),
-                pref: Some(1),
-                ..Nickname::default()
-            },
-        )])),
-        organizations: Some(BTreeMap::from([(
-            "o1".to_owned(),
-            Organization {
-                name: Some("Analytical Engine Corp".to_owned()),
-                sort_as: Some("Analytical".to_owned()),
-                contexts: Some(serde_json::json!({"work": true})),
-                units: Some(vec![OrgUnit::new("Computing").with_sort_as("Comp")]),
-                ..Organization::default()
-            },
-        )])),
-        titles: Some(BTreeMap::from([(
-            "t1".to_owned(),
-            Title {
-                name: "Chief Mathematician".to_owned(),
-                kind: Some("title".to_owned()),
-                organization_id: Some("o1".to_owned()),
-                ..Title::default()
-            },
-        )])),
-        addresses: Some(BTreeMap::from([(
-            "a1".to_owned(),
-            Address {
-                full: Some("12 St James's Square\nLondon\nUK".to_owned()),
-                is_ordered: Some(true),
-                country_code: Some("GB".to_owned()),
-                coordinates: Some("geo:51.5074,-0.1364".to_owned()),
-                time_zone: Some("Europe/London".to_owned()),
-                pref: Some(1),
-                ..Address::default()
-            },
-        )])),
-        notes: Some(BTreeMap::from([(
-            "n1".to_owned(),
-            Note::new("First computer programmer")
-                .with_created(created_date.clone())
-                .with_author(Author::new("Charles Babbage")),
-        )])),
-        links: Some(BTreeMap::from([(
-            "l1".to_owned(),
-            Link {
-                uri: "https://adalovelace.example.org".to_owned(),
-                kind: Some("website".to_owned()),
-                contexts: Some(serde_json::json!({"work": true})),
-                media_type: Some("text/html".to_owned()),
-                pref: Some(1),
-                label: Some("Personal Website".to_owned()),
-                ..Link::default()
-            },
-        )])),
-        calendars: Some(BTreeMap::from([(
-            "c1".to_owned(),
-            Calendar {
-                uri: "https://cal.example.org/ada.ics".to_owned(),
-                kind: Some("calendar".to_owned()),
-                contexts: Some(serde_json::json!({"work": true})),
-                media_type: Some("text/calendar".to_owned()),
-                pref: Some(1),
-                label: Some("Primary Schedule".to_owned()),
-                ..Calendar::default()
-            },
-        )])),
-        media: Some(BTreeMap::from([(
-            "m1".to_owned(),
-            Media {
-                uri: "https://example.org/portrait.jpg".to_owned(),
-                kind: Some("photo".to_owned()),
-                media_type: Some("image/jpeg".to_owned()),
-                contexts: Some(serde_json::json!({"work": true})),
-                pref: Some(1),
-                label: Some("1840 Portrait".to_owned()),
-                ..Media::default()
-            },
-        )])),
-        online_services: Some(BTreeMap::from([(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some("Matrix".to_owned()),
-                user: Some("@ada:example.org".to_owned()),
-                uri: Some("matrix:@ada:example.org".to_owned()),
-                contexts: Some(serde_json::json!({"work": true})),
-                pref: Some(1),
-                label: Some("Matrix Handle".to_owned()),
-                ..OnlineService::default()
-            },
-        )])),
-        ..ContactCard::default()
-    };
+            country_code: Some("GB".to_owned()),
+            coordinates: Some("geo:51.5074,-0.1364".to_owned()),
+            time_zone: Some("Europe/London".to_owned()),
+            pref: Some(1),
+            ..Address::default()
+        },
+    )]));
+    card.notes = Some(BTreeMap::from([(
+        "n1".to_owned(),
+        Note::new("First computer programmer")
+            .with_created(created_date.clone())
+            .with_author(Author::new("Charles Babbage")),
+    )]));
+    card.links = Some(BTreeMap::from([(
+        "l1".to_owned(),
+        Link {
+            uri: "https://adalovelace.example.org".to_owned(),
+            kind: Some("website".to_owned()),
+            contexts: Some(serde_json::json!({"work": true})),
+            media_type: Some("text/html".to_owned()),
+            pref: Some(1),
+            label: Some("Personal Website".to_owned()),
+            ..Link::default()
+        },
+    )]));
+    card.calendars = Some(BTreeMap::from([(
+        "c1".to_owned(),
+        Calendar {
+            uri: "https://cal.example.org/ada.ics".to_owned(),
+            kind: Some("calendar".to_owned()),
+            contexts: Some(serde_json::json!({"work": true})),
+            media_type: Some("text/calendar".to_owned()),
+            pref: Some(1),
+            label: Some("Primary Schedule".to_owned()),
+            ..Calendar::default()
+        },
+    )]));
+    card.media = Some(BTreeMap::from([(
+        "m1".to_owned(),
+        Media {
+            uri: "https://example.org/portrait.jpg".to_owned(),
+            kind: Some("photo".to_owned()),
+            media_type: Some("image/jpeg".to_owned()),
+            contexts: Some(serde_json::json!({"work": true})),
+            pref: Some(1),
+            label: Some("1840 Portrait".to_owned()),
+            ..Media::default()
+        },
+    )]));
+    card.online_services = Some(BTreeMap::from([(
+        "s1".to_owned(),
+        OnlineService {
+            service: Some("Matrix".to_owned()),
+            user: Some("@ada:example.org".to_owned()),
+            uri: Some("matrix:@ada:example.org".to_owned()),
+            contexts: Some(serde_json::json!({"work": true})),
+            pref: Some(1),
+            label: Some("Matrix Handle".to_owned()),
+            ..OnlineService::default()
+        },
+    )]));
 
     let c_json = serde_json::to_value(&card).unwrap();
     assert_eq!(c_json["created"], "2026-08-29T12:00:00Z");
@@ -679,10 +671,7 @@ fn contact_card_parse_and_set_error_roundtrip_covers_rfc9610() {
     let parse_resp = ContactCardParseResponse::new("A1")
         .with_parsed(BTreeMap::from([(
             "blob1".into(),
-            ContactCard {
-                id: Some("C1".into()),
-                ..ContactCard::default()
-            },
+            ContactCard::default().with_id("C1"),
         )]))
         .with_not_parsable(["blob2"])
         .with_not_found(["blob3"]);

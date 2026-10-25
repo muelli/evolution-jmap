@@ -18,10 +18,11 @@ fn card_with_email_key(key: &str) -> ContactCard {
             ..ContactEmail::default()
         },
     );
-    ContactCard {
-        id: Some("C1".into()),
-        emails: Some(emails),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.id = Some("C1".into());
+        card.emails = Some(emails);
+        card
     }
 }
 
@@ -36,10 +37,11 @@ fn card_with_photo_uri(uri: &str) -> ContactCard {
             ..Media::default()
         },
     );
-    ContactCard {
-        id: Some("C1".into()),
-        media: Some(media),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.id = Some("C1".into());
+        card.media = Some(media);
+        card
     }
 }
 
@@ -227,10 +229,11 @@ fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
             ..ContactPhone::default()
         },
     );
-    let card = ContactCard {
-        id: Some("C1".into()),
-        phones: Some(phones),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C1".into());
+        card.phones = Some(phones);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -244,9 +247,10 @@ fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
 /// Keep escaped value newlines as data text.
 #[test]
 fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
-    let mut card = ContactCard {
-        id: Some("C1".into()),
-        ..ContactCard::default()
+    let mut card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C1".into());
+        card
     };
     card.name = Some(jmap_proto::contacts::Name {
         full: Some("Vera\r\nFN:Mallory".to_owned()),
