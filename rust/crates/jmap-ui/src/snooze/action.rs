@@ -15,7 +15,7 @@
 //!   group. One call, `e_ui_manager_add_actions_with_eui_data`, adds the
 //!   actions and the menu placement.
 //!
-//! Both layers fill the same [`SnoozeState`] and use the same selection, gate
+//! Both layers fill the same `SnoozeState` and use the same selection, gate
 //! and activation logic. Only the registration and the setters are different.
 //!
 //! The gate has two levels. The first level is the provider protocol of the
