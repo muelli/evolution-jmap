@@ -22,9 +22,10 @@ fn hostile_card() -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
         "e1\r\nFN:Mallory <attacker@example.invalid>\r\nX-TAIL".to_owned(),
-        ContactEmail {
-            address: "vera@example.com".to_owned(),
-            ..ContactEmail::default()
+        {
+            let mut v = ContactEmail::default();
+            v.address = "vera@example.com".to_owned();
+            v
         },
     );
     {
@@ -69,9 +70,10 @@ fn a_map_key_cannot_terminate_the_card_early() {
     let mut emails = BTreeMap::new();
     emails.insert(
         "e1\r\nEND:VCARD\r\nBEGIN:VCARD\r\nFN:Mallory\r\nEND:VCARD\r\nX".to_owned(),
-        ContactEmail {
-            address: "vera@example.com".to_owned(),
-            ..ContactEmail::default()
+        {
+            let mut v = ContactEmail::default();
+            v.address = "vera@example.com".to_owned();
+            v
         },
     );
     let card = {

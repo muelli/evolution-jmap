@@ -1540,12 +1540,10 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                         }
                     }
                 }
-                let email = ContactEmail {
-                    address,
-                    contexts,
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra,
-                };
+                let mut email = ContactEmail::new(address);
+                email.contexts = contexts;
+                email.pref = entry_has_type(entry, "PREF").then_some(1);
+                email.extra = extra;
                 emails.insert(entry_key(entry, "e", &emails), email);
             }
             "TEL" => {
@@ -1629,13 +1627,11 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                         }
                     }
                 }
-                let phone = ContactPhone {
-                    number,
-                    contexts,
-                    features,
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra,
-                };
+                let mut phone = ContactPhone::new(number);
+                phone.contexts = contexts;
+                phone.features = features;
+                phone.pref = entry_has_type(entry, "PREF").then_some(1);
+                phone.extra = extra;
                 phones.insert(entry_key(entry, "p", &phones), phone);
             }
             "ADR" => {

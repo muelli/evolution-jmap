@@ -461,12 +461,10 @@ prop_compose! {
         pref in any::<Option<u32>>(),
         extra in arb_extra(),
     ) -> ContactEmail {
-        ContactEmail {
-            address,
-            contexts: None,
-            pref,
-            extra,
-        }
+        let mut v = ContactEmail::new(address);
+        v.pref = pref;
+        v.extra = extra;
+        v
     }
 }
 
@@ -476,13 +474,10 @@ prop_compose! {
         pref in any::<Option<u32>>(),
         extra in arb_extra(),
     ) -> ContactPhone {
-        ContactPhone {
-            number,
-            contexts: None,
-            features: None,
-            pref,
-            extra,
-        }
+        let mut v = ContactPhone::new(number);
+        v.pref = pref;
+        v.extra = extra;
+        v
     }
 }
 

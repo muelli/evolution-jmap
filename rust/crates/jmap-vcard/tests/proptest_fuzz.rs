@@ -109,12 +109,7 @@ prop_compose! {
         if let Some(l) = label {
             extra.insert("label".to_string(), json!(l));
         }
-        ContactEmail {
-            address,
-            contexts,
-            pref,
-            extra,
-        }
+        { let mut v = ContactEmail::default(); v.address = address; v.contexts = contexts; v.pref = pref; v.extra = extra; v }
     }
 }
 
@@ -156,13 +151,7 @@ prop_compose! {
         if let Some(l) = label {
             extra.insert("label".to_string(), json!(l));
         }
-        ContactPhone {
-            number,
-            features,
-            contexts,
-            pref,
-            extra,
-        }
+        { let mut v = ContactPhone::default(); v.number = number; v.features = features; v.contexts = contexts; v.pref = pref; v.extra = extra; v }
     }
 }
 

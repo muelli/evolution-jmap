@@ -11,13 +11,11 @@ use jmap_vcard::{card_to_vcard, vcard_to_card};
 /// Build a card with one email map entry under `key`.
 fn card_with_email_key(key: &str) -> ContactCard {
     let mut emails = BTreeMap::new();
-    emails.insert(
-        key.to_owned(),
-        ContactEmail {
-            address: "vera@example.com".to_owned(),
-            ..ContactEmail::default()
-        },
-    );
+    emails.insert(key.to_owned(), {
+        let mut v = ContactEmail::default();
+        v.address = "vera@example.com".to_owned();
+        v
+    });
     {
         let mut card = ContactCard::default();
         card.id = Some("C1".into());
@@ -222,13 +220,11 @@ fn x_jmap_key_caret_escapes_decode_on_read() {
 #[test]
 fn a_crlf_in_a_phone_map_key_cannot_add_a_property_either() {
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1\r\nTEL:+1000000000".to_owned(),
-        ContactPhone {
-            number: "+49301234567".to_owned(),
-            ..ContactPhone::default()
-        },
-    );
+    phones.insert("p1\r\nTEL:+1000000000".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+49301234567".to_owned();
+        v
+    });
     let card = {
         let mut card = ContactCard::default();
         card.id = Some("C1".into());

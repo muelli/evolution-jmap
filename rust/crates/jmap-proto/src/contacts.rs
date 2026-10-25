@@ -615,6 +615,7 @@ impl Nickname {
 /// JSContact EmailAddress (RFC 9553 §2.3.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ContactEmail {
     #[serde(default)]
     pub address: String,
@@ -658,6 +659,7 @@ impl ContactEmail {
 /// JSContact Phone (RFC 9553 §2.3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ContactPhone {
     #[serde(default)]
     pub number: String,

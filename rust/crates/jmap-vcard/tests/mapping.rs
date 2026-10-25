@@ -271,13 +271,11 @@ fn an_email_without_an_address_is_skipped_in_both_directions() {
         card.emails = Some(
             [
                 ("e1".to_owned(), ContactEmail::default()),
-                (
-                    "e2".to_owned(),
-                    ContactEmail {
-                        address: "vera@example.com".to_owned(),
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e2".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera@example.com".to_owned();
+                    v
+                }),
             ]
             .into(),
         );
@@ -1343,15 +1341,13 @@ fn an_address_at_home_and_at_work_states_one_slot_rather_than_both() {
 #[test]
 fn a_phone_at_home_and_at_work_states_one_slot_rather_than_both() {
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+49 30 111".to_owned(),
-            contexts: Some(json!({"work": true, "private": true})),
-            features: Some(json!({"voice": true})),
-            ..ContactPhone::default()
-        },
-    );
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+49 30 111".to_owned();
+        v.contexts = Some(json!({"work": true, "private": true}));
+        v.features = Some(json!({"voice": true}));
+        v
+    });
     let card = {
         let mut card = ContactCard::default();
         card.phones = Some(phones);
@@ -1370,15 +1366,13 @@ fn a_phone_at_home_and_at_work_states_one_slot_rather_than_both() {
 /// A phone with these `contexts` and `features`, written out.
 fn phone_line(contexts: Option<Value>, features: Option<Value>) -> String {
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+49 30 111".to_owned(),
-            contexts,
-            features,
-            ..ContactPhone::default()
-        },
-    );
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+49 30 111".to_owned();
+        v.contexts = contexts;
+        v.features = features;
+        v
+    });
     let vcard = card_to_vcard(&{
         let mut card = ContactCard::default();
         card.phones = Some(phones);
@@ -1458,14 +1452,12 @@ fn a_line_with_several_features_is_still_read_as_all_of_them() {
 #[test]
 fn an_email_at_home_and_at_work_still_states_both() {
     let mut emails = BTreeMap::new();
-    emails.insert(
-        "e1".to_owned(),
-        ContactEmail {
-            address: "vera@example.com".to_owned(),
-            contexts: Some(json!({"work": true, "private": true})),
-            ..ContactEmail::default()
-        },
-    );
+    emails.insert("e1".to_owned(), {
+        let mut v = ContactEmail::default();
+        v.address = "vera@example.com".to_owned();
+        v.contexts = Some(json!({"work": true, "private": true}));
+        v
+    });
     let card = {
         let mut card = ContactCard::default();
         card.emails = Some(emails);
@@ -3861,58 +3853,46 @@ fn maps_phones_with_multiple_types_features_and_pref_faithfully() {
         let mut card = ContactCard::default();
         card.phones = Some(
             [
-                (
-                    "p1".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 111111".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        features: Some(json!({"voice": true})),
-                        pref: Some(1),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p2".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 222222".to_owned(),
-                        contexts: Some(json!({"private": true})),
-                        features: Some(json!({"voice": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p3".to_owned(),
-                    ContactPhone {
-                        number: "+49 170 333333".to_owned(),
-                        features: Some(json!({"mobile": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p4".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 444444".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        features: Some(json!({"fax": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p5".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 555555".to_owned(),
-                        features: Some(json!({"pager": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p6".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 666666".to_owned(),
-                        features: Some(json!({"video": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
+                ("p1".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 111111".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.features = Some(json!({"voice": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("p2".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 222222".to_owned();
+                    v.contexts = Some(json!({"private": true}));
+                    v.features = Some(json!({"voice": true}));
+                    v
+                }),
+                ("p3".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 170 333333".to_owned();
+                    v.features = Some(json!({"mobile": true}));
+                    v
+                }),
+                ("p4".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 444444".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.features = Some(json!({"fax": true}));
+                    v
+                }),
+                ("p5".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 555555".to_owned();
+                    v.features = Some(json!({"pager": true}));
+                    v
+                }),
+                ("p6".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 666666".to_owned();
+                    v.features = Some(json!({"video": true}));
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
@@ -3987,33 +3967,27 @@ fn maps_emails_with_multiple_contexts_and_pref_faithfully() {
         let mut card = ContactCard::default();
         card.emails = Some(
             [
-                (
-                    "e1".to_owned(),
-                    ContactEmail {
-                        address: "vera.work@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e2".to_owned(),
-                    ContactEmail {
-                        address: "vera.home@example.com".to_owned(),
-                        contexts: Some(json!({"private": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e3".to_owned(),
-                    ContactEmail {
-                        address: "vera.direct@example.com".to_owned(),
-                        contexts: None,
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e1".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.work@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("e2".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.home@example.com".to_owned();
+                    v.contexts = Some(json!({"private": true}));
+                    v.pref = None;
+                    v
+                }),
+                ("e3".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.direct@example.com".to_owned();
+                    v.contexts = None;
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
@@ -5079,21 +5053,25 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
     );
 
     // Check simple field predicates and `title_kind`.
-    assert!(states_email(&ContactEmail {
-        address: "alice@example.com".into(),
-        ..ContactEmail::default()
+    assert!(states_email(&{
+        let mut v = ContactEmail::default();
+        v.address = "alice@example.com".into();
+        v
     }));
-    assert!(!states_email(&ContactEmail {
-        address: "".into(),
-        ..ContactEmail::default()
+    assert!(!states_email(&{
+        let mut v = ContactEmail::default();
+        v.address = "".into();
+        v
     }));
-    assert!(states_phone(&ContactPhone {
-        number: "+49 30 123456".into(),
-        ..ContactPhone::default()
+    assert!(states_phone(&{
+        let mut v = ContactPhone::default();
+        v.number = "+49 30 123456".into();
+        v
     }));
-    assert!(!states_phone(&ContactPhone {
-        number: "".into(),
-        ..ContactPhone::default()
+    assert!(!states_phone(&{
+        let mut v = ContactPhone::default();
+        v.number = "".into();
+        v
     }));
     assert!(states_note(&{
         let mut v = Note::default();
@@ -6567,42 +6545,34 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
         let mut card = ContactCard::default();
         card.emails = Some(
             [
-                (
-                    "e_sec".to_owned(),
-                    ContactEmail {
-                        address: "second@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(2),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_pri".to_owned(),
-                    ContactEmail {
-                        address: "first@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_ten".to_owned(),
-                    ContactEmail {
-                        address: "tenth@example.com".to_owned(),
-                        contexts: Some(json!({"home": true})),
-                        pref: Some(10),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_none".to_owned(),
-                    ContactEmail {
-                        address: "unranked@example.com".to_owned(),
-                        contexts: Some(json!({"other": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e_sec".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "second@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(2);
+                    v
+                }),
+                ("e_pri".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "first@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("e_ten".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "tenth@example.com".to_owned();
+                    v.contexts = Some(json!({"home": true}));
+                    v.pref = Some(10);
+                    v
+                }),
+                ("e_none".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "unranked@example.com".to_owned();
+                    v.contexts = Some(json!({"other": true}));
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
@@ -6644,22 +6614,18 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
         let mut card = ContactCard::default();
         card.emails = Some(
             [
-                (
-                    "e_beta".to_owned(),
-                    ContactEmail {
-                        address: "beta@example.com".to_owned(),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_alpha".to_owned(),
-                    ContactEmail {
-                        address: "alpha@example.com".to_owned(),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e_beta".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "beta@example.com".to_owned();
+                    v.pref = Some(1);
+                    v
+                }),
+                ("e_alpha".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "alpha@example.com".to_owned();
+                    v.pref = Some(1);
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
@@ -6680,22 +6646,18 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
         let mut card = ContactCard::default();
         card.emails = Some(
             [
-                (
-                    "e_z".to_owned(),
-                    ContactEmail {
-                        address: "z@example.com".to_owned(),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_a".to_owned(),
-                    ContactEmail {
-                        address: "a@example.com".to_owned(),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e_z".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "z@example.com".to_owned();
+                    v.pref = None;
+                    v
+                }),
+                ("e_a".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "a@example.com".to_owned();
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
@@ -6724,35 +6686,29 @@ fn phone_pref_ordering_primary_selection_and_slotting() {
         let mut card = ContactCard::default();
         card.phones = Some(
             [
-                (
-                    "p_work_sec".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0200".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        features: Some(json!({"voice": true})),
-                        pref: Some(2),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p_work_pri".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0100".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        features: Some(json!({"voice": true})),
-                        pref: Some(1),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p_home".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0300".to_owned(),
-                        contexts: Some(json!({"home": true})),
-                        pref: None,
-                        ..ContactPhone::default()
-                    },
-                ),
+                ("p_work_sec".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0200".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.features = Some(json!({"voice": true}));
+                    v.pref = Some(2);
+                    v
+                }),
+                ("p_work_pri".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0100".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.features = Some(json!({"voice": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("p_home".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0300".to_owned();
+                    v.contexts = Some(json!({"home": true}));
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
@@ -6788,22 +6744,18 @@ fn phone_pref_ordering_primary_selection_and_slotting() {
         let mut card = ContactCard::default();
         card.phones = Some(
             [
-                (
-                    "p_b".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0002".to_owned(),
-                        pref: Some(1),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p_a".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0001".to_owned(),
-                        pref: Some(1),
-                        ..ContactPhone::default()
-                    },
-                ),
+                ("p_b".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0002".to_owned();
+                    v.pref = Some(1);
+                    v
+                }),
+                ("p_a".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0001".to_owned();
+                    v.pref = Some(1);
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
@@ -7834,13 +7786,11 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
             ..Name::default()
         });
         card.emails = Some(
-            [(
-                "e1".to_owned(),
-                ContactEmail {
-                    address: "extra@example.com".to_owned(),
-                    ..ContactEmail::default()
-                },
-            )]
+            [("e1".to_owned(), {
+                let mut v = ContactEmail::default();
+                v.address = "extra@example.com".to_owned();
+                v
+            })]
             .into(),
         );
         card.notes = Some(
@@ -8602,27 +8552,23 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
     );
 
     let mut emails = BTreeMap::new();
-    emails.insert(
-        "e1".to_owned(),
-        ContactEmail {
-            address: "alice+tag,filter;opt=1\\test@example.com".to_owned(),
-            contexts: Some(json!({"work": true})),
-            pref: Some(1),
-            ..ContactEmail::default()
-        },
-    );
+    emails.insert("e1".to_owned(), {
+        let mut v = ContactEmail::default();
+        v.address = "alice+tag,filter;opt=1\\test@example.com".to_owned();
+        v.contexts = Some(json!({"work": true}));
+        v.pref = Some(1);
+        v
+    });
 
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+1 (555) 123-4567, ext; 890 \\ test".to_owned(),
-            contexts: Some(json!({"work": true})),
-            features: Some(json!({"voice": true})),
-            pref: Some(1),
-            ..ContactPhone::default()
-        },
-    );
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 (555) 123-4567, ext; 890 \\ test".to_owned();
+        v.contexts = Some(json!({"work": true}));
+        v.features = Some(json!({"voice": true}));
+        v.pref = Some(1);
+        v
+    });
 
     let mut links = BTreeMap::new();
     links.insert(
@@ -13029,9 +12975,10 @@ fn phone_whitespace_punctuation_and_uri_schemes_handling() {
 
     // Predicates: states_phone
     let empty_phone = ContactPhone::default();
-    let whitespace_phone = ContactPhone {
-        number: "   ".to_string(),
-        ..ContactPhone::default()
+    let whitespace_phone = {
+        let mut v = ContactPhone::default();
+        v.number = "   ".to_string();
+        v
     };
     assert!(!states_phone(&empty_phone));
     assert!(states_phone(&whitespace_phone)); // Non-empty string; states_phone checks !is_empty()
@@ -13439,60 +13386,48 @@ fn email_four_slots_and_attribute_list_matrix_roundtrip() {
         card.version = Some("1.0".to_owned());
         card.emails = Some(
             [
-                (
-                    "e_work_pri".to_owned(),
-                    ContactEmail {
-                        address: "vera.work@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_home".to_owned(),
-                    ContactEmail {
-                        address: "vera.home@example.com".to_owned(),
-                        contexts: Some(json!({"private": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_direct".to_owned(),
-                    ContactEmail {
-                        address: "vera.direct@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_billing".to_owned(),
-                    ContactEmail {
-                        address: "billing@example.com".to_owned(),
-                        contexts: Some(json!({"work": true, "private": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_support".to_owned(),
-                    ContactEmail {
-                        address: "support@example.com".to_owned(),
-                        contexts: None,
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_archive".to_owned(),
-                    ContactEmail {
-                        address: "archive@example.com".to_owned(),
-                        contexts: None,
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e_work_pri".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.work@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("e_home".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.home@example.com".to_owned();
+                    v.contexts = Some(json!({"private": true}));
+                    v.pref = None;
+                    v
+                }),
+                ("e_direct".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.direct@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = None;
+                    v
+                }),
+                ("e_billing".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "billing@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true, "private": true}));
+                    v.pref = None;
+                    v
+                }),
+                ("e_support".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "support@example.com".to_owned();
+                    v.contexts = None;
+                    v.pref = None;
+                    v
+                }),
+                ("e_archive".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "archive@example.com".to_owned();
+                    v.contexts = None;
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
@@ -13919,15 +13854,13 @@ fn email_and_address_label_edge_cases_and_parameter_permutations() {
             .collect(),
         );
         card.emails = Some(
-            [(
-                "e1".to_owned(),
-                ContactEmail {
-                    address: "complex+user@example.com".to_owned(),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    ..ContactEmail::default()
-                },
-            )]
+            [("e1".to_owned(), {
+                let mut v = ContactEmail::default();
+                v.address = "complex+user@example.com".to_owned();
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v
+            })]
             .into_iter()
             .collect(),
         );
@@ -16419,28 +16352,26 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
             ..Name::default()
         });
         card.emails = Some(
-            [(
-                "e1".to_string(),
-                ContactEmail {
-                    address: "support@example.com".into(),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    extra: email_extra,
-                },
-            )]
+            [("e1".to_string(), {
+                let mut v = ContactEmail::default();
+                v.address = "support@example.com".into();
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v.extra = email_extra;
+                v
+            })]
             .into(),
         );
         card.phones = Some(
-            [(
-                "p1".to_string(),
-                ContactPhone {
-                    number: "+1-555-0199".into(),
-                    features: Some(json!({"voice": true})),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    extra: phone_extra,
-                },
-            )]
+            [("p1".to_string(), {
+                let mut v = ContactPhone::default();
+                v.number = "+1-555-0199".into();
+                v.features = Some(json!({"voice": true}));
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v.extra = phone_extra;
+                v
+            })]
             .into(),
         );
         card.addresses = Some(
@@ -18882,49 +18813,45 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
         );
         card.emails = Some(
             [
-                (
-                    "e1".to_string(),
-                    ContactEmail {
-                        address: "selftest.work@example.com".into(),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(1),
-                        extra: BTreeMap::new(),
-                    },
-                ),
-                (
-                    "e2".to_string(),
-                    ContactEmail {
-                        address: "selftest.home@example.org".into(),
-                        contexts: Some(json!({"private": true})),
-                        pref: None,
-                        extra: BTreeMap::new(),
-                    },
-                ),
+                ("e1".to_string(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "selftest.work@example.com".into();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("e2".to_string(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "selftest.home@example.org".into();
+                    v.contexts = Some(json!({"private": true}));
+                    v.pref = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
         );
         card.phones = Some(
             [
-                (
-                    "p1".to_string(),
-                    ContactPhone {
-                        number: "+1 555 0100".into(),
-                        features: Some(json!({"voice": true, "mobile": true})),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(1),
-                        extra: BTreeMap::new(),
-                    },
-                ),
-                (
-                    "p2".to_string(),
-                    ContactPhone {
-                        number: "+1 555 0199".into(),
-                        features: Some(json!({"fax": true})),
-                        contexts: Some(json!({"work": true})),
-                        pref: None,
-                        extra: BTreeMap::new(),
-                    },
-                ),
+                ("p1".to_string(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0100".into();
+                    v.features = Some(json!({"voice": true, "mobile": true}));
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("p2".to_string(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0199".into();
+                    v.features = Some(json!({"fax": true}));
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
         );
@@ -19457,28 +19384,26 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
             ..Name::default()
         });
         card.emails = Some(
-            [(
-                "e1".to_string(),
-                ContactEmail {
-                    address: "fuzz@example.com".into(),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    extra: email_extra,
-                },
-            )]
+            [("e1".to_string(), {
+                let mut v = ContactEmail::default();
+                v.address = "fuzz@example.com".into();
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v.extra = email_extra;
+                v
+            })]
             .into(),
         );
         card.phones = Some(
-            [(
-                "p1".to_string(),
-                ContactPhone {
-                    number: "+1-555-0188".into(),
-                    features: Some(json!({"voice": true, "mobile": true})),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    extra: phone_extra,
-                },
-            )]
+            [("p1".to_string(), {
+                let mut v = ContactPhone::default();
+                v.number = "+1-555-0188".into();
+                v.features = Some(json!({"voice": true, "mobile": true}));
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v.extra = phone_extra;
+                v
+            })]
             .into(),
         );
         card.addresses = Some(
@@ -20154,15 +20079,13 @@ fn tel_type_home_voice_fax_and_unqualified_voice_fax_slot_narrowing_and_editor_v
     // 1. `TEL;TYPE=HOME,VOICE,FAX` narrows to `HOME,FAX` to avoid
     // aliasing `E_CONTACT_PHONE_HOME` and `E_CONTACT_PHONE_HOME_FAX`.
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+1 555 0200".to_owned(),
-            contexts: Some(json!({"private": true})),
-            features: Some(json!({"voice": true, "fax": true})),
-            ..ContactPhone::default()
-        },
-    );
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 0200".to_owned();
+        v.contexts = Some(json!({"private": true}));
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v
+    });
     let home_card = {
         let mut card = ContactCard::default();
         card.phones = Some(phones);
@@ -20180,15 +20103,13 @@ fn tel_type_home_voice_fax_and_unqualified_voice_fax_slot_narrowing_and_editor_v
     // 2. Bare `TEL;TYPE=VOICE,FAX` narrows to `FAX` so Evolution maps it to
     // "Other Fax" instead of dropping it as an ambiguous match.
     let mut bare_phones = BTreeMap::new();
-    bare_phones.insert(
-        "p2".to_owned(),
-        ContactPhone {
-            number: "+1 555 0300".to_owned(),
-            contexts: None,
-            features: Some(json!({"voice": true, "fax": true})),
-            ..ContactPhone::default()
-        },
-    );
+    bare_phones.insert("p2".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 0300".to_owned();
+        v.contexts = None;
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v
+    });
     let bare_card = {
         let mut card = ContactCard::default();
         card.phones = Some(bare_phones);
@@ -20291,15 +20212,13 @@ fn tel_multi_feature_hierarchy_complete_pairwise_and_composite_matrix() {
 
     for (features_json, expected_type, winning_feature, suppressed) in cases {
         let mut phones = BTreeMap::new();
-        phones.insert(
-            "p1".to_owned(),
-            ContactPhone {
-                number: "+1 555 0999".to_owned(),
-                contexts: None,
-                features: Some(features_json.clone()),
-                ..ContactPhone::default()
-            },
-        );
+        phones.insert("p1".to_owned(), {
+            let mut v = ContactPhone::default();
+            v.number = "+1 555 0999".to_owned();
+            v.contexts = None;
+            v.features = Some(features_json.clone());
+            v
+        });
         let card = {
             let mut card = ContactCard::default();
             card.phones = Some(phones);
@@ -20332,44 +20251,36 @@ fn tel_multi_feature_hierarchy_complete_pairwise_and_composite_matrix() {
 #[test]
 fn tel_multi_feature_and_multi_context_roundtrip_fixpoint_stability() {
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+1 555 1001".to_owned(),
-            contexts: Some(json!({"work": true})),
-            features: Some(json!({"voice": true, "fax": true})),
-            pref: Some(1),
-            ..ContactPhone::default()
-        },
-    );
-    phones.insert(
-        "p2".to_owned(),
-        ContactPhone {
-            number: "+1 555 1002".to_owned(),
-            contexts: Some(json!({"private": true})),
-            features: Some(json!({"voice": true, "fax": true})),
-            pref: Some(2),
-            ..ContactPhone::default()
-        },
-    );
-    phones.insert(
-        "p3".to_owned(),
-        ContactPhone {
-            number: "+1 555 1003".to_owned(),
-            contexts: Some(json!({"work": true})),
-            features: Some(json!({"mobile": true, "pager": true})),
-            ..ContactPhone::default()
-        },
-    );
-    phones.insert(
-        "p4".to_owned(),
-        ContactPhone {
-            number: "+1 555 1004".to_owned(),
-            contexts: None,
-            features: Some(json!({"voice": true, "fax": true})),
-            ..ContactPhone::default()
-        },
-    );
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 1001".to_owned();
+        v.contexts = Some(json!({"work": true}));
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v.pref = Some(1);
+        v
+    });
+    phones.insert("p2".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 1002".to_owned();
+        v.contexts = Some(json!({"private": true}));
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v.pref = Some(2);
+        v
+    });
+    phones.insert("p3".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 1003".to_owned();
+        v.contexts = Some(json!({"work": true}));
+        v.features = Some(json!({"mobile": true, "pager": true}));
+        v
+    });
+    phones.insert("p4".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 1004".to_owned();
+        v.contexts = None;
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v
+    });
     let card1 = {
         let mut card = ContactCard::default();
         card.phones = Some(phones);
