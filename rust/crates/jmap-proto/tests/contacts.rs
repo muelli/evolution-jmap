@@ -530,13 +530,10 @@ fn jscontact_spec_properties_roundtrip() {
     )]));
     card.organizations = Some(BTreeMap::from([(
         "o1".to_owned(),
-        Organization {
-            name: Some("Analytical Engine Corp".to_owned()),
-            sort_as: Some("Analytical".to_owned()),
-            contexts: Some(serde_json::json!({"work": true})),
-            units: Some(vec![OrgUnit::new("Computing").with_sort_as("Comp")]),
-            ..Organization::default()
-        },
+        Organization::new("Analytical Engine Corp")
+            .with_sort_as("Analytical")
+            .with_contexts(serde_json::json!({"work": true}))
+            .with_units(vec![OrgUnit::new("Computing").with_sort_as("Comp")]),
     )]));
     card.titles = Some(BTreeMap::from([("t1".to_owned(), {
         let mut title = Title::default();

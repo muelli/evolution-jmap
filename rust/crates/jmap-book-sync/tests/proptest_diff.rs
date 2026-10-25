@@ -404,18 +404,12 @@ fn arb_org_name() -> impl Strategy<Value = String> {
 }
 
 fn arb_organization_with_name() -> impl Strategy<Value = Organization> {
-    arb_org_name().prop_map(|name| Organization {
-        name: Some(name),
-        ..Organization::default()
-    })
+    arb_org_name().prop_map(Organization::new)
 }
 
 fn arb_organization_name_pair() -> impl Strategy<Value = (Organization, Organization)> {
     (arb_organization_with_name(), arb_org_name()).prop_map(|(old, name)| {
-        let new = Organization {
-            name: Some(name),
-            ..Organization::default()
-        };
+        let new = Organization::new(name);
         (old, new)
     })
 }
@@ -470,11 +464,9 @@ fn arb_units_pair() -> impl Strategy<Value = (Vec<OrgUnit>, Vec<OrgUnit>)> {
 const UNITS_ORG_NAME: &str = "Acme";
 
 fn organization_with_units(units: Vec<OrgUnit>) -> Organization {
-    Organization {
-        name: Some(UNITS_ORG_NAME.to_owned()),
-        units: (!units.is_empty()).then_some(units),
-        ..Organization::default()
-    }
+    let mut v = Organization::new(UNITS_ORG_NAME);
+    v.units = (!units.is_empty()).then_some(units);
+    v
 }
 
 fn arb_organization_units_stable() -> impl Strategy<Value = Organization> {

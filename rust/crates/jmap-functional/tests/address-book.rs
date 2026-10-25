@@ -1021,19 +1021,12 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
         [
             (
                 SEEDED_ORG_KEY.to_owned(),
-                Organization {
-                    name: Some(SEEDED_ORG_NAME.to_owned()),
-                    units: Some(vec![OrgUnit::new(SEEDED_ORG_UNIT)]),
-                    ..Organization::default()
-                },
+                Organization::new(SEEDED_ORG_NAME).with_units(vec![OrgUnit::new(SEEDED_ORG_UNIT)]),
             ),
             (
                 SEEDED_SECOND_ORG_KEY.to_owned(),
-                Organization {
-                    name: Some(SEEDED_SECOND_ORG_NAME.to_owned()),
-                    units: Some(vec![OrgUnit::new(SEEDED_SECOND_ORG_UNIT)]),
-                    ..Organization::default()
-                },
+                Organization::new(SEEDED_SECOND_ORG_NAME)
+                    .with_units(vec![OrgUnit::new(SEEDED_SECOND_ORG_UNIT)]),
             ),
         ]
         .into_iter()

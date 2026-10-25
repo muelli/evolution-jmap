@@ -711,6 +711,7 @@ impl ContactPhone {
 /// JSContact Organization (RFC 9553 §2.2.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Organization {
     /// The organisation's own name, which the `ORG` value states first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -742,6 +743,11 @@ impl Organization {
 
     pub fn with_sort_as(mut self, sort_as: impl Into<String>) -> Self {
         self.sort_as = Some(sort_as.into());
+        self
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
         self
     }
 }

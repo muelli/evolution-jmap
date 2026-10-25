@@ -161,12 +161,10 @@ prop_compose! {
         name in prop::option::of("\\PC*"),
         units in prop::option::of(prop::collection::vec(arb_org_unit(), 0..6)),
     ) -> Organization {
-        Organization {
-            name,
-            units,
-            extra: BTreeMap::new(),
-            ..Organization::default()
-        }
+        let mut v = Organization::default();
+        v.name = name;
+        v.units = units;
+        v
     }
 }
 
@@ -1142,12 +1140,7 @@ fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first
     let mut organizations = BTreeMap::new();
     organizations.insert(
         "o1".to_owned(),
-        Organization {
-            name: Some(String::new()),
-            units: Some(vec![OrgUnit::new("Engineering")]),
-            extra: BTreeMap::new(),
-            ..Organization::default()
-        },
+        Organization::new(String::new()).with_units(vec![OrgUnit::new("Engineering")]),
     );
     let card = {
         let mut card = ContactCard::default();
@@ -1178,15 +1171,7 @@ fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first
 #[test]
 fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
     let mut organizations = BTreeMap::new();
-    organizations.insert(
-        "o1".to_owned(),
-        Organization {
-            name: Some(String::new()),
-            units: None,
-            extra: BTreeMap::new(),
-            ..Organization::default()
-        },
-    );
+    organizations.insert("o1".to_owned(), Organization::new(String::new()));
     let card = {
         let mut card = ContactCard::default();
         card.organizations = Some(organizations);

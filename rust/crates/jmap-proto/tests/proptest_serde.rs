@@ -485,13 +485,9 @@ prop_compose! {
         name in "[A-Za-z0-9 ]{1,24}",
         extra in arb_extra(),
     ) -> Organization {
-        Organization {
-            name: Some(name),
-            units: None,
-            sort_as: None,
-            contexts: None,
-            extra,
-        }
+        let mut v = Organization::new(name);
+        v.extra = extra;
+        v
     }
 }
 

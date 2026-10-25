@@ -2341,11 +2341,11 @@ fn read_organization(entry: &VCardEntry) -> Option<Organization> {
     if name.is_none() && units.is_empty() {
         return None;
     }
-    Some(Organization {
-        name,
-        units: (!units.is_empty()).then_some(units),
-        extra: BTreeMap::new(),
-        ..Organization::default()
+    Some({
+        let mut v = Organization::default();
+        v.name = name;
+        v.units = (!units.is_empty()).then_some(units);
+        v
     })
 }
 
