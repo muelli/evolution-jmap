@@ -122,18 +122,16 @@ fn never_emit_reserved_or_obsoleted_names_in_serialized_types_and_ical_output() 
     assert_no_reserved_or_obsoleted_properties(&rrule_val, "RecurrenceRule");
 
     // 2. Alert with all fields populated
-    let alert = Alert {
-        alert_type: Some("Alert".to_owned()),
-        action: Some("display".to_owned()),
-        trigger: Some(serde_json::json!({
+    let alert = Alert::new(
+        "display",
+        serde_json::json!({
             "@type": "OffsetTrigger",
             "offset": "-PT15M",
             "relativeTo": "start"
-        })),
-        acknowledged: Some(UtcDate::new("2026-10-14T12:00:00Z")),
-        related_to: Some("alert-parent".to_owned()),
-        extra: BTreeMap::new(),
-    };
+        }),
+    )
+    .with_acknowledged(UtcDate::new("2026-10-14T12:00:00Z"))
+    .with_related_to("alert-parent");
     let alert_val = serde_json::to_value(&alert).expect("serializes Alert");
     assert_no_reserved_or_obsoleted_properties(&alert_val, "Alert");
 
@@ -153,64 +151,47 @@ fn never_emit_reserved_or_obsoleted_names_in_serialized_types_and_ical_output() 
     assert_no_reserved_or_obsoleted_properties(&link_val, "Link");
 
     // 4. Location with all fields populated (including obsoleted/reserved relativeTo, timeZone, description)
-    let location = Location {
-        location_type: Some("Location".to_owned()),
-        name: Some("Conference Room 1".to_owned()),
-        description: Some("Third floor next to elevators".to_owned()),
-        relative_to: Some("start".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        coordinates: Some("geo:52.5200,13.4050".to_owned()),
-        location_types: Some(BTreeMap::from([("room".to_owned(), true)])),
-        extra: BTreeMap::new(),
-    };
+    let location = Location::new("Conference Room 1")
+        .with_description("Third floor next to elevators")
+        .with_relative_to("start")
+        .with_time_zone("Europe/Berlin")
+        .with_coordinates("geo:52.5200,13.4050")
+        .with_location_types(BTreeMap::from([("room".to_owned(), true)]));
     let loc_val = serde_json::to_value(&location).expect("serializes Location");
     assert_no_reserved_or_obsoleted_properties(&loc_val, "Location");
 
     // 5. VirtualLocation with all fields populated (including reserved description)
-    let vlocation = VirtualLocation {
-        virtual_location_type: Some("VirtualLocation".to_owned()),
-        name: Some("Video Bridge".to_owned()),
-        description: Some("PIN: 4321".to_owned()),
-        uri: "https://meet.example.com/bridge".to_owned(),
-        features: Some(BTreeMap::from([("video".to_owned(), true)])),
-        extra: BTreeMap::new(),
-    };
+    let vlocation = VirtualLocation::new("https://meet.example.com/bridge")
+        .with_name("Video Bridge")
+        .with_description("PIN: 4321")
+        .with_features(BTreeMap::from([("video".to_owned(), true)]));
     let vloc_val = serde_json::to_value(&vlocation).expect("serializes VirtualLocation");
     assert_no_reserved_or_obsoleted_properties(&vloc_val, "VirtualLocation");
 
     // 6. Participant with all fields populated (including reserved/obsoleted sendTo, locationId, scheduleAgent, etc.)
-    let participant = Participant {
-        participant_type: Some("Participant".to_owned()),
-        name: Some("Alice Developer".to_owned()),
-        email: Some("alice@example.com".to_owned()),
-        description: Some("Core maintainer".to_owned()),
-        description_content_type: Some("text/plain".to_owned()),
-        calendar_address: Some("mailto:alice@example.com".to_owned()),
-        send_to: Some(BTreeMap::from([(
-            "imip".to_owned(),
-            "mailto:alice@example.com".to_owned(),
-        )])),
-        kind: Some("individual".to_owned()),
-        roles: Some(BTreeMap::from([("required".to_owned(), true)])),
-        location_id: Some("loc-1".to_owned()),
-        participation_status: Some("accepted".to_owned()),
-        participation_comment: Some("Will join online".to_owned()),
-        attendance: Some("required".to_owned()),
-        expect_reply: Some(true),
-        schedule_agent: Some("server".to_owned()),
-        schedule_sequence: Some(1),
-        schedule_status: Some(vec!["2.0".to_owned()]),
-        schedule_updated: Some(UtcDate::new("2026-10-14T10:00:00Z")),
-        delegated_to: Some(vec!["mailto:bob@example.com".to_owned()]),
-        delegated_from: Some(vec!["mailto:carol@example.com".to_owned()]),
-        member_of: Some(BTreeMap::from([(
+    let participant = Participant::new("Alice Developer", "alice@example.com")
+        .with_description("Core maintainer")
+        .with_description_content_type("text/plain")
+        .with_calendar_address("mailto:alice@example.com")
+        .with_kind("individual")
+        .with_roles(BTreeMap::from([("required".to_owned(), true)]))
+        .with_location_id("loc-1")
+        .with_participation_status("accepted")
+        .with_participation_comment("Will join online")
+        .with_attendance("required")
+        .expect_reply(true)
+        .with_schedule_agent("server")
+        .with_schedule_sequence(1)
+        .with_schedule_status(["2.0".to_owned()])
+        .with_schedule_updated(UtcDate::new("2026-10-14T10:00:00Z"))
+        .with_delegated_to(["mailto:bob@example.com".to_owned()])
+        .with_delegated_from(["mailto:carol@example.com".to_owned()])
+        .with_member_of(BTreeMap::from([(
             "mailto:team@example.com".to_owned(),
             true,
-        )])),
-        progress: Some("completed".to_owned()),
-        progress_updated: Some(UtcDate::new("2026-10-14T11:00:00Z")),
-        extra: BTreeMap::new(),
-    };
+        )]))
+        .with_progress("completed")
+        .with_progress_updated(UtcDate::new("2026-10-14T11:00:00Z"));
     let part_val = serde_json::to_value(&participant).expect("serializes Participant");
     assert_no_reserved_or_obsoleted_properties(&part_val, "Participant");
 

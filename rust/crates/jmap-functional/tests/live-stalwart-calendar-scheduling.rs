@@ -115,10 +115,7 @@ fn run_client(
 
 /// The copies of the meeting titled `title` in `account_id`.
 fn copies_titled(client: &Client, account_id: &Id, title: &str) -> Vec<CalendarEvent> {
-    let filter = CalendarEventQueryFilter {
-        title: Some(title.to_owned()),
-        ..CalendarEventQueryFilter::default()
-    };
+    let filter = CalendarEventQueryFilter::default().title(title.to_owned());
     let ids = client.event_query(account_id, filter).unwrap().ids;
     // A title filter is a substring match, so keep the exact titles only.
     client

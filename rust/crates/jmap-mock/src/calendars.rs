@@ -907,6 +907,7 @@ pub fn participant_identity_set(
     let ParticipantIdentitySetRequest {
         set,
         on_success_set_is_default,
+        ..
     } = request;
     let account_id = set.account_id.clone();
     let account = account_mut(state, &account_id)?;

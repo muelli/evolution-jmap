@@ -573,10 +573,7 @@ impl CalSync {
     /// Only this calendar: this calendar does not edit an event in a different
     /// calendar. Thus the create continues, and the server decides.
     fn holding(&self, uid: &str) -> Result<Option<String>, SyncError> {
-        let filter = CalendarEventQueryFilter {
-            uid: Some(uid.to_owned()),
-            ..CalendarEventQueryFilter::in_calendar(self.calendar_id.clone())
-        };
+        let filter = CalendarEventQueryFilter::in_calendar(self.calendar_id.clone()).uid(uid);
         let ids = self.client.event_query(&self.account_id, filter)?.ids;
         Ok(ids.into_iter().next().map(|id| id.to_string()))
     }

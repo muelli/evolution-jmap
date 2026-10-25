@@ -266,17 +266,15 @@ fn main() {
         let mut calendar_share_with = BTreeMap::new();
         calendar_share_with.insert(
             bob_principal_id.clone(),
-            CalendarRights {
-                may_read_free_busy: Some(true),
-                may_read_items: Some(true),
-                may_write_all: Some(false),
-                may_write_own: Some(false),
-                may_update_private: Some(false),
-                may_rsvp: Some(false),
-                may_share: Some(false),
-                may_delete: Some(false),
-                extra: BTreeMap::new(),
-            },
+            CalendarRights::default()
+                .with_may_read_free_busy(true)
+                .with_may_read_items(true)
+                .with_may_write_all(false)
+                .with_may_write_own(false)
+                .with_may_update_private(false)
+                .with_may_rsvp(false)
+                .with_may_share(false)
+                .with_may_delete(false),
         );
         let calendar_patch = json!({ "shareWith": calendar_share_with });
         let calendar_share_response = alice.single_call(

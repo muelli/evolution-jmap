@@ -442,11 +442,11 @@ mod tests {
         let calendar_own_only = Calendar {
             id: Some(Id::new("Cal1")),
             name: "Work".to_owned(),
-            my_rights: Some(CalendarRights {
-                may_write_all: Some(false),
-                may_write_own: Some(true),
-                ..CalendarRights::default()
-            }),
+            my_rights: Some(
+                CalendarRights::default()
+                    .with_may_write_all(false)
+                    .with_may_write_own(true),
+            ),
             ..Calendar::default()
         };
         assert_eq!(
@@ -477,10 +477,7 @@ mod tests {
         let calendar = Calendar {
             id: Some(Id::new("Cal1")),
             name: "Work".to_owned(),
-            my_rights: Some(CalendarRights {
-                may_delete: Some(true),
-                ..CalendarRights::default()
-            }),
+            my_rights: Some(CalendarRights::default().with_may_delete(true)),
             ..Calendar::default()
         };
         assert_eq!(
@@ -553,12 +550,12 @@ mod tests {
             name: "Beta".to_owned(),
             sort_order: Some(1),
             is_default: Some(true),
-            my_rights: Some(CalendarRights {
-                may_write_all: Some(false),
-                may_write_own: Some(false),
-                may_delete: Some(false),
-                ..CalendarRights::default()
-            }),
+            my_rights: Some(
+                CalendarRights::default()
+                    .with_may_write_all(false)
+                    .with_may_write_own(false)
+                    .with_may_delete(false),
+            ),
             ..Calendar::default()
         };
 

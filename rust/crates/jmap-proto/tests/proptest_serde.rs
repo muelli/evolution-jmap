@@ -689,17 +689,17 @@ prop_compose! {
         may_delete in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> CalendarRights {
-        CalendarRights {
-            may_read_free_busy,
-            may_read_items,
-            may_write_all,
-            may_write_own,
-            may_update_private,
-            may_rsvp,
-            may_share,
-            may_delete,
-            extra,
-        }
+        let mut rights = CalendarRights::default();
+        rights.may_read_free_busy = may_read_free_busy;
+        rights.may_read_items = may_read_items;
+        rights.may_write_all = may_write_all;
+        rights.may_write_own = may_write_own;
+        rights.may_update_private = may_update_private;
+        rights.may_rsvp = may_rsvp;
+        rights.may_share = may_share;
+        rights.may_delete = may_delete;
+        rights.extra = extra;
+        rights
     }
 }
 
@@ -1121,24 +1121,24 @@ fn arb_calendar_set_request() -> impl Strategy<Value = CalendarSetRequest> {
                 on_destroy_remove_contents,
                 on_success_set_is_default,
             )| {
-                CalendarSetRequest {
-                    account_id,
-                    if_in_state,
-                    create,
-                    update,
-                    destroy,
-                    on_destroy_remove_contents,
-                    on_success_set_is_default,
-                }
+                let mut request = CalendarSetRequest::new(account_id);
+                request.if_in_state = if_in_state;
+                request.create = create;
+                request.update = update;
+                request.destroy = destroy;
+                request.on_destroy_remove_contents = on_destroy_remove_contents;
+                request.on_success_set_is_default = on_success_set_is_default;
+                request
             },
         )
 }
 
 fn arb_calendar_event_set_request() -> impl Strategy<Value = CalendarEventSetRequest> {
     (arb_set_request(arb_calendar_event), any::<Option<bool>>()).prop_map(
-        |(set, send_scheduling_messages)| CalendarEventSetRequest {
-            set,
-            send_scheduling_messages,
+        |(set, send_scheduling_messages)| {
+            let mut request = CalendarEventSetRequest::new(set);
+            request.send_scheduling_messages = send_scheduling_messages;
+            request
         },
     )
 }

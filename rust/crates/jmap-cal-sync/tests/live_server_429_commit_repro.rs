@@ -51,10 +51,7 @@ use jmap_test_support::{connect_for_write, env_count, unique_suffix};
 /// The query uses the same rate-limit budget as the creates. Thus a 429 here
 /// means "not known", not a failure, and the poll loop of the caller tries again.
 fn uid_exists(client: &Client, account_id: &Id, uid: &str) -> bool {
-    let filter = CalendarEventQueryFilter {
-        uid: Some(uid.to_owned()),
-        ..CalendarEventQueryFilter::default()
-    };
+    let filter = CalendarEventQueryFilter::default().uid(uid);
     match client.event_query(account_id, filter) {
         Ok(response) => !response.ids.is_empty(),
         Err(ClientError::Http { status: 429, .. }) => false,

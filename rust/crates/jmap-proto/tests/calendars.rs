@@ -438,24 +438,15 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     assert_eq!(participant_attendance::OPTIONAL, "optional");
     assert_eq!(participant_attendance::INFORMATIONAL, "informational");
 
-    let participant = Participant {
-        participant_type: Some("Participant".to_owned()),
-        name: Some("Alice Example".to_owned()),
-        email: Some("alice@example.com".to_owned()),
-        description: Some("Project Lead".to_owned()),
-        calendar_address: Some("mailto:alice@example.com".to_owned()),
-        send_to: Some(BTreeMap::from([(
-            "imip".to_owned(),
-            "mailto:alice@example.com".to_owned(),
-        )])),
-        kind: Some("individual".to_owned()),
-        roles: Some(BTreeMap::from([("owner".to_owned(), true)])),
-        participation_status: Some("accepted".to_owned()),
-        attendance: Some(participant_attendance::REQUIRED.to_owned()),
-        expect_reply: Some(false),
-        progress: Some(participant_progress::IN_PROCESS.to_owned()),
-        ..Participant::default()
-    };
+    let participant = Participant::new("Alice Example", "alice@example.com")
+        .with_description("Project Lead")
+        .with_calendar_address("mailto:alice@example.com")
+        .with_kind("individual")
+        .with_roles(BTreeMap::from([("owner".to_owned(), true)]))
+        .with_participation_status("accepted")
+        .with_attendance(participant_attendance::REQUIRED.to_owned())
+        .expect_reply(false)
+        .with_progress(participant_progress::IN_PROCESS.to_owned());
 
     let p_val = serde_json::to_value(&participant).unwrap();
     assert_eq!(p_val["@type"], "Participant");
@@ -470,13 +461,9 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     let p_round_tripped: Participant = serde_json::from_value(p_val).unwrap();
     assert_eq!(p_round_tripped, participant);
 
-    let location = Location {
-        location_type: Some("Location".to_owned()),
-        name: Some("Conference Room A".to_owned()),
-        coordinates: Some("geo:51.5074,-0.1278".to_owned()),
-        location_types: Some(BTreeMap::from([("room".to_owned(), true)])),
-        ..Location::default()
-    };
+    let location = Location::new("Conference Room A")
+        .with_coordinates("geo:51.5074,-0.1278")
+        .with_location_types(BTreeMap::from([("room".to_owned(), true)]));
     let loc_val = serde_json::to_value(&location).unwrap();
     assert_eq!(loc_val["@type"], "Location");
     assert_eq!(loc_val["name"], "Conference Room A");
@@ -485,14 +472,9 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         location
     );
 
-    let vloc = VirtualLocation {
-        virtual_location_type: Some("VirtualLocation".to_owned()),
-        name: Some("Video Bridge".to_owned()),
-        uri: "https://meet.example.com/bridge".to_owned(),
-        features: Some(BTreeMap::from([("video".to_owned(), true)])),
-        extra: BTreeMap::new(),
-        description: None,
-    };
+    let vloc = VirtualLocation::new("https://meet.example.com/bridge")
+        .with_name("Video Bridge")
+        .with_features(BTreeMap::from([("video".to_owned(), true)]));
     let vloc_val = serde_json::to_value(&vloc).unwrap();
     assert_eq!(vloc_val["@type"], "VirtualLocation");
     assert_eq!(vloc_val["uri"], "https://meet.example.com/bridge");
@@ -501,29 +483,23 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         vloc
     );
 
-    let alert = Alert {
-        alert_type: Some("Alert".to_owned()),
-        action: Some("display".to_owned()),
-        trigger: Some(serde_json::json!({
+    let alert = Alert::new(
+        "display",
+        serde_json::json!({
             "@type": "OffsetTrigger",
             "offset": "-PT15M",
             "relativeTo": "start"
-        })),
-        acknowledged: Some(UtcDate::new("2026-09-01T09:00:00Z")),
-        related_to: Some("start".to_owned()),
-        extra: BTreeMap::new(),
-    };
+        }),
+    )
+    .with_acknowledged(UtcDate::new("2026-09-01T09:00:00Z"))
+    .with_related_to("start");
     let a_val = serde_json::to_value(&alert).unwrap();
     assert_eq!(a_val["@type"], "Alert");
     assert_eq!(a_val["action"], "display");
     assert_eq!(a_val["trigger"]["offset"], "-PT15M");
     assert_eq!(serde_json::from_value::<Alert>(a_val).unwrap(), alert);
 
-    let trigger = OffsetTrigger {
-        trigger_type: Some("OffsetTrigger".to_owned()),
-        offset: "-PT10M".to_owned(),
-        relative_to: Some("start".to_owned()),
-    };
+    let trigger = OffsetTrigger::new("-PT10M").relative_to("start");
     let t_val = serde_json::to_value(&trigger).unwrap();
     assert_eq!(t_val["@type"], "OffsetTrigger");
     assert_eq!(t_val["offset"], "-PT10M");
@@ -532,12 +508,10 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         trigger
     );
 
-    let prefs = CalendarPreferences {
-        id: Some("singleton".into()),
-        time_zone: Some("UTC".to_owned()),
-        first_day_of_week: Some("mo".to_owned()),
-        extra: BTreeMap::new(),
-    };
+    let prefs = CalendarPreferences::new()
+        .with_id("singleton")
+        .with_time_zone("UTC")
+        .with_first_day_of_week("mo");
     let prefs_val = serde_json::to_value(&prefs).unwrap();
     assert_eq!(prefs_val["timeZone"], "UTC");
     assert_eq!(prefs_val["firstDayOfWeek"], "mo");
@@ -546,11 +520,8 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         prefs
     );
 
-    let parse_req = CalendarEventParseRequest {
-        account_id: "A1".into(),
-        blob_ids: vec!["b1".into()],
-        properties: Some(vec!["id".to_owned(), "title".to_owned()]),
-    };
+    let parse_req = CalendarEventParseRequest::new("A1", ["b1"])
+        .properties(["id".to_owned(), "title".to_owned()]);
     let pr_val = serde_json::to_value(&parse_req).unwrap();
     assert_eq!(pr_val["accountId"], "A1");
     assert_eq!(pr_val["blobIds"], serde_json::json!(["b1"]));
@@ -559,19 +530,14 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         parse_req
     );
 
-    let parse_resp = CalendarEventParseResponse {
-        account_id: "A1".into(),
-        parsed: Some(BTreeMap::from([(
-            "b1".into(),
-            CalendarEvent {
-                id: Some("E1".into()),
-                title: Some("Standup".to_owned()),
-                ..CalendarEvent::default()
-            },
-        )])),
-        not_parsable: None,
-        not_found: None,
-    };
+    let parse_resp = CalendarEventParseResponse::new("A1").with_parsed(BTreeMap::from([(
+        "b1".into(),
+        CalendarEvent {
+            id: Some("E1".into()),
+            title: Some("Standup".to_owned()),
+            ..CalendarEvent::default()
+        },
+    )]));
     let pr_resp_val = serde_json::to_value(&parse_resp).unwrap();
     assert_eq!(pr_resp_val["parsed"]["b1"]["title"], "Standup");
     assert_eq!(
@@ -600,11 +566,9 @@ fn calendars_capabilities_absolute_trigger_and_event_relation_roundtrip_covers_d
     assert_eq!(priority::MEDIUM, 5);
     assert_eq!(priority::LOW, 9);
 
-    let cap = CalendarsCapability {
-        max_size_attachments_per_event: 25_000_000,
-        max_concurrent_availabilities: 10,
-        extra: BTreeMap::new(),
-    };
+    let cap = CalendarsCapability::new()
+        .with_max_size_attachments_per_event(25_000_000)
+        .with_max_concurrent_availabilities(10);
     let cap_val = serde_json::to_value(&cap).unwrap();
     assert_eq!(cap_val["maxSizeAttachmentsPerEvent"], 25_000_000);
     assert_eq!(cap_val["maxConcurrentAvailabilities"], 10);
@@ -612,23 +576,15 @@ fn calendars_capabilities_absolute_trigger_and_event_relation_roundtrip_covers_d
     let round_cap: CalendarsCapability = serde_json::from_value(cap_val).unwrap();
     assert_eq!(round_cap, cap);
 
-    let abs_trigger = AbsoluteTrigger {
-        trigger_type: Some("AbsoluteTrigger".to_owned()),
-        when: jmap_proto::UtcDate::new("2026-09-01T08:30:00Z"),
-        extra: BTreeMap::new(),
-    };
+    let abs_trigger = AbsoluteTrigger::new(jmap_proto::UtcDate::new("2026-09-01T08:30:00Z"));
     let at_val = serde_json::to_value(&abs_trigger).unwrap();
     assert_eq!(at_val["@type"], "AbsoluteTrigger");
     assert_eq!(at_val["when"], "2026-09-01T08:30:00Z");
 
-    let relation = EventRelation {
-        relation_type: Some("Relation".to_owned()),
-        relation: Some(BTreeMap::from([(
-            event_relation_type::PARENT.to_owned(),
-            true,
-        )])),
-        extra: BTreeMap::new(),
-    };
+    let relation = EventRelation::new(BTreeMap::from([(
+        event_relation_type::PARENT.to_owned(),
+        true,
+    )]));
     let rel_val = serde_json::to_value(&relation).unwrap();
     assert_eq!(rel_val["@type"], "Relation");
     assert_eq!(rel_val["relation"]["parent"], true);
@@ -665,15 +621,13 @@ fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
     assert_eq!(weekday::SA, "sa");
     assert_eq!(weekday::SU, "su");
 
-    let rights = CalendarRights {
-        may_read_items: Some(true),
-        may_write_all: Some(true),
-        may_write_own: Some(true),
-        may_rsvp: Some(true),
-        may_share: Some(false),
-        may_delete: Some(false),
-        ..CalendarRights::default()
-    };
+    let rights = CalendarRights::default()
+        .with_may_read_items(true)
+        .with_may_write_all(true)
+        .with_may_write_own(true)
+        .with_may_rsvp(true)
+        .with_may_share(false)
+        .with_may_delete(false);
 
     let cal = Calendar {
         id: Some("cal1".into()),
@@ -818,9 +772,9 @@ fn calendar_event_get_free_busy_and_set_error_roundtrip_covers_draft_spec() {
         req
     );
 
-    let resp = GetFreeBusyResponse {
-        account_id: "A1".into(),
-        list: vec![
+    let resp = GetFreeBusyResponse::new(
+        "A1",
+        [
             FreeBusyBlock::new(
                 UtcDate::new("2026-09-01T09:00:00Z"),
                 UtcDate::new("2026-09-01T10:00:00Z"),
@@ -834,7 +788,7 @@ fn calendar_event_get_free_busy_and_set_error_roundtrip_covers_draft_spec() {
                 "busy-tentative",
             ),
         ],
-    };
+    );
 
     let resp_json = serde_json::to_value(&resp).unwrap();
     assert_eq!(resp_json["accountId"], "A1");

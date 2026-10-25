@@ -46,10 +46,7 @@ fn default_calendar(client: &Client, account_id: &Id) -> Id {
 
 /// Returns the copies of the event with this iCalendar `UID` in `account_id`.
 fn guest_copies(guest: &Client, account_id: &Id, uid: &str) -> Vec<CalendarEvent> {
-    let filter = CalendarEventQueryFilter {
-        uid: Some(uid.to_owned()),
-        ..CalendarEventQueryFilter::default()
-    };
+    let filter = CalendarEventQueryFilter::default().uid(uid);
     let ids = guest.event_query(account_id, filter).unwrap().ids;
     guest.event_get(account_id, &ids).unwrap().list
 }
