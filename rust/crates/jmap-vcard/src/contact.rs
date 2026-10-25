@@ -279,7 +279,7 @@ fn feature_slot(features: Option<&Value>) -> Option<&'static str> {
 /// Whether the line written for a phone with these `features` states this
 /// feature.
 ///
-/// A feature omitted by [`feature_slot`] is preserved, not treated as deleted.
+/// A feature omitted by `feature_slot` is preserved, not treated as deleted.
 pub fn states_phone_feature(features: Option<&Value>, key: &str) -> bool {
     let Some(slot) = feature_slot(features) else {
         return false;
@@ -432,7 +432,7 @@ fn names_a_uri(value: &str) -> bool {
 /// Whether this media entry can be emitted as `PHOTO`.
 ///
 /// It must state photo kind and data that a `PHOTO` line can carry.
-/// [`photo`] shares this decision point with [`card_to_vcard`].
+/// The internal `photo` helper shares this decision point with [`card_to_vcard`].
 pub fn states_media(media: &Media) -> bool {
     photo(media).is_some()
 }
