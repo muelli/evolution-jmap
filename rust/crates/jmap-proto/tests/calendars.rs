@@ -526,11 +526,7 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
 
     let parse_resp = CalendarEventParseResponse::new("A1").with_parsed(BTreeMap::from([(
         "b1".into(),
-        CalendarEvent {
-            id: Some("E1".into()),
-            title: Some("Standup".to_owned()),
-            ..CalendarEvent::default()
-        },
+        CalendarEvent::new().with_id("E1").with_title("Standup"),
     )]));
     let pr_resp_val = serde_json::to_value(&parse_resp).unwrap();
     assert_eq!(pr_resp_val["parsed"]["b1"]["title"], "Standup");
@@ -693,14 +689,12 @@ fn calendar_and_event_spec_properties_roundtrip() {
     assert_eq!(c_val["color"], "#336699");
     assert_eq!(serde_json::from_value::<Calendar>(c_val).unwrap(), cal);
 
-    let event = CalendarEvent {
-        id: Some("evt_spec".into()),
-        title: Some("International Conference".to_owned()),
-        use_default_alerts: Some(true),
-        color: Some("#ff5500".to_owned()),
-        locale: Some("en-GB".to_owned()),
-        ..CalendarEvent::default()
-    };
+    let event = CalendarEvent::new()
+        .with_id("evt_spec")
+        .with_title("International Conference")
+        .use_default_alerts(true)
+        .with_color("#ff5500")
+        .with_locale("en-GB");
     let e_val = serde_json::to_value(&event).unwrap();
     assert_eq!(e_val["useDefaultAlerts"], true);
     assert_eq!(e_val["color"], "#ff5500");

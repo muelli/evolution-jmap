@@ -849,49 +849,49 @@ prop_compose! {
         (start, time_zone, duration, show_without_time, recurrence_rule) in arb_event_schedule(),
         (title, description, status, free_busy_status, priority) in arb_event_details(),
     ) -> CalendarEvent {
-        CalendarEvent {
-            id,
-            calendar_ids,
-            event_type: Some("Event".to_string()),
-            version: Some("2.0".to_string()),
-            uid,
-            created: None,
-            updated: None,
-            title,
-            description,
-            start,
-            time_zone,
-            duration,
-            show_without_time,
-            status,
-            free_busy_status,
-            priority,
-            privacy: None,
-            locations: None,
-            virtual_locations: None,
-            links: None,
-            keywords: None,
-            alerts: None,
-            participants: None,
-            organizer_calendar_address: None,
-            is_draft: None,
-            hide_attendees: None,
-            recurrence_rule,
-            recurrence_overrides: None,
-            time_zones: None,
-            use_default_alerts: None,
-            color: None,
-            locale: None,
-            localizations: None,
-            is_origin,
-            end_time_zone: None,
-            main_location_id,
-            schedule_sequence: None,
-            schedule_updated: None,
-            may_invite_self: None,
-            may_invite_others: None,
-            extra,
-        }
+        let mut event = CalendarEvent::default();
+        event.id = id;
+        event.calendar_ids = calendar_ids;
+        event.event_type = Some("Event".to_string());
+        event.version = Some("2.0".to_string());
+        event.uid = uid;
+        event.created = None;
+        event.updated = None;
+        event.title = title;
+        event.description = description;
+        event.start = start;
+        event.time_zone = time_zone;
+        event.duration = duration;
+        event.show_without_time = show_without_time;
+        event.status = status;
+        event.free_busy_status = free_busy_status;
+        event.priority = priority;
+        event.privacy = None;
+        event.locations = None;
+        event.virtual_locations = None;
+        event.links = None;
+        event.keywords = None;
+        event.alerts = None;
+        event.participants = None;
+        event.organizer_calendar_address = None;
+        event.is_draft = None;
+        event.hide_attendees = None;
+        event.recurrence_rule = recurrence_rule;
+        event.recurrence_overrides = None;
+        event.time_zones = None;
+        event.use_default_alerts = None;
+        event.color = None;
+        event.locale = None;
+        event.localizations = None;
+        event.is_origin = is_origin;
+        event.end_time_zone = None;
+        event.main_location_id = main_location_id;
+        event.schedule_sequence = None;
+        event.schedule_updated = None;
+        event.may_invite_self = None;
+        event.may_invite_others = None;
+        event.extra = extra;
+        event
     }
 }
 

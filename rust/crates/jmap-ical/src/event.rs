@@ -1776,40 +1776,38 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         return None;
     }
     let fields = patch.as_object()?;
-    let mut instance = CalendarEvent {
-        id: event.id.clone(),
-        uid: event.uid.clone(),
-        // Server-managed timestamps are inherited from the series.
-        created: event.created.clone(),
-        updated: event.updated.clone(),
-        title: event.title.clone(),
-        description: event.description.clone(),
-        start: Some(id.to_owned()),
-        time_zone: event.time_zone.clone(),
-        duration: event.duration.clone(),
-        show_without_time: event.show_without_time,
-        status: event.status.clone(),
-        free_busy_status: event.free_busy_status.clone(),
-        priority: event.priority,
-        privacy: event.privacy.clone(),
-        // Inherit baseline properties not modified by the override (RFC 8984 4.3.5).
-        locations: event.locations.clone(),
-        // Inherit virtual locations from the series.
-        virtual_locations: event.virtual_locations.clone(),
-        // Inherit external links from the series.
-        links: event.links.clone(),
-        keywords: event.keywords.clone(),
-        alerts: event.alerts.clone(),
-        // Inherit participants from the series.
-        participants: event.participants.clone(),
-        // Inherit unmodeled properties and alert settings from the series.
-        use_default_alerts: event.use_default_alerts,
-        color: event.color.clone(),
-        locale: event.locale.clone(),
-        localizations: event.localizations.clone(),
-        extra: event.extra.clone(),
-        ..CalendarEvent::default()
-    };
+    let mut instance = CalendarEvent::default();
+    instance.id = event.id.clone();
+    instance.uid = event.uid.clone();
+    // Server-managed timestamps are inherited from the series.
+    instance.created = event.created.clone();
+    instance.updated = event.updated.clone();
+    instance.title = event.title.clone();
+    instance.description = event.description.clone();
+    instance.start = Some(id.to_owned());
+    instance.time_zone = event.time_zone.clone();
+    instance.duration = event.duration.clone();
+    instance.show_without_time = event.show_without_time;
+    instance.status = event.status.clone();
+    instance.free_busy_status = event.free_busy_status.clone();
+    instance.priority = event.priority;
+    instance.privacy = event.privacy.clone();
+    // Inherit baseline properties not modified by the override (RFC 8984 4.3.5).
+    instance.locations = event.locations.clone();
+    // Inherit virtual locations from the series.
+    instance.virtual_locations = event.virtual_locations.clone();
+    // Inherit external links from the series.
+    instance.links = event.links.clone();
+    instance.keywords = event.keywords.clone();
+    instance.alerts = event.alerts.clone();
+    // Inherit participants from the series.
+    instance.participants = event.participants.clone();
+    // Inherit unmodeled properties and alert settings from the series.
+    instance.use_default_alerts = event.use_default_alerts;
+    instance.color = event.color.clone();
+    instance.locale = event.locale.clone();
+    instance.localizations = event.localizations.clone();
+    instance.extra = event.extra.clone();
 
     let mut modified = false;
     for (name, value) in fields {
@@ -2839,49 +2837,48 @@ fn read_vevent(
         .filter_map(|property| rrule_to_rule(&entry_raw_value(property), ends))
         .next();
 
-    CalendarEvent {
-        id: text("UID").map(Into::into),
-        // The backend populates calendar IDs on create.
-        calendar_ids: None,
-        event_type: Some("Event".to_owned()),
-        // Top-level version is set in [`ical_to_event`] (jscalendarbis §3.1.2).
-        version: None,
-        uid: text(X_JMAP_UID),
-        // Server metadata fields are not read from the document.
-        created: None,
-        updated: None,
-        title: text("SUMMARY"),
-        description: text("DESCRIPTION"),
-        start,
-        time_zone,
-        duration: read_duration(vevent),
-        show_without_time,
-        status: component_text(vevent, "STATUS").and_then(|status| {
-            STATUSES
-                .iter()
-                .find(|(_, ical)| ical.eq_ignore_ascii_case(&status))
-                .map(|(jscalendar, _)| (*jscalendar).to_owned())
-        }),
-        free_busy_status: read_transparency(vevent),
-        priority: read_priority(vevent),
-        privacy: read_privacy(vevent),
-        locations: read_locations(vevent),
-        // Preserve original keys for patch stability. See [`read_virtual_locations`].
-        virtual_locations: read_virtual_locations(vevent),
-        keywords: read_keywords(vevent),
-        alerts: read_alerts(vevent, components),
-        // Preserve participants across synchronization. See [`read_participants`].
-        participants: read_participants(vevent),
-        organizer_calendar_address: read_organizer(vevent),
-        // Preserve link keys for patch updates. See [`read_links`].
-        links: read_links(vevent),
-        recurrence_rule: rule,
-        recurrence_overrides: None,
-        // [`ical_to_event`] populates time zones once the event zone is known.
-        time_zones: None,
-        extra: Default::default(),
-        ..CalendarEvent::default()
-    }
+    let mut event = CalendarEvent::default();
+    event.id = text("UID").map(Into::into);
+    // The backend populates calendar IDs on create.
+    event.calendar_ids = None;
+    event.event_type = Some("Event".to_owned());
+    // Top-level version is set in [`ical_to_event`] (jscalendarbis §3.1.2).
+    event.version = None;
+    event.uid = text(X_JMAP_UID);
+    // Server metadata fields are not read from the document.
+    event.created = None;
+    event.updated = None;
+    event.title = text("SUMMARY");
+    event.description = text("DESCRIPTION");
+    event.start = start;
+    event.time_zone = time_zone;
+    event.duration = read_duration(vevent);
+    event.show_without_time = show_without_time;
+    event.status = component_text(vevent, "STATUS").and_then(|status| {
+        STATUSES
+            .iter()
+            .find(|(_, ical)| ical.eq_ignore_ascii_case(&status))
+            .map(|(jscalendar, _)| (*jscalendar).to_owned())
+    });
+    event.free_busy_status = read_transparency(vevent);
+    event.priority = read_priority(vevent);
+    event.privacy = read_privacy(vevent);
+    event.locations = read_locations(vevent);
+    // Preserve original keys for patch stability. See [`read_virtual_locations`].
+    event.virtual_locations = read_virtual_locations(vevent);
+    event.keywords = read_keywords(vevent);
+    event.alerts = read_alerts(vevent, components);
+    // Preserve participants across synchronization. See [`read_participants`].
+    event.participants = read_participants(vevent);
+    event.organizer_calendar_address = read_organizer(vevent);
+    // Preserve link keys for patch updates. See [`read_links`].
+    event.links = read_links(vevent);
+    event.recurrence_rule = rule;
+    event.recurrence_overrides = None;
+    // [`ical_to_event`] populates time zones once the event zone is known.
+    event.time_zones = None;
+    event.extra = Default::default();
+    event
 }
 
 /// Default key prefix for generated participant identifiers.

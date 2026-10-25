@@ -92,9 +92,11 @@ fn get_availability_returns_busy_periods_in_the_window_sorted_by_start() {
     let earlier = CalendarEvent::simple(calendar.clone(), "Earlier", "2026-09-01T09:00:00", "PT1H");
     let outside_window =
         CalendarEvent::simple(calendar.clone(), "Next week", "2026-09-08T09:00:00", "PT1H");
-    let free = CalendarEvent {
-        free_busy_status: Some("free".to_owned()),
-        ..CalendarEvent::simple(calendar, "Optional", "2026-09-01T12:00:00", "PT1H")
+    let free = {
+        let mut event_out =
+            CalendarEvent::simple(calendar, "Optional", "2026-09-01T12:00:00", "PT1H");
+        event_out.free_busy_status = Some("free".to_owned());
+        event_out
     };
     for event in [&later, &earlier, &outside_window, &free] {
         client.event_create(&account_id, event).unwrap();

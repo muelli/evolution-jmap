@@ -691,8 +691,9 @@ mod tests {
 
     #[test]
     fn only_the_override_own_answer_counts_as_pinned() {
-        let event = CalendarEvent {
-            participants: Some(
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.participants = Some(
                 [(
                     "carol".to_owned(),
                     json!({
@@ -701,8 +702,8 @@ mod tests {
                     }),
                 )]
                 .into(),
-            ),
-            recurrence_overrides: Some(
+            );
+            event_out.recurrence_overrides = Some(
                 [
                     (
                         "2026-06-08T10:00:00".to_owned(),
@@ -714,8 +715,8 @@ mod tests {
                     ),
                 ]
                 .into(),
-            ),
-            ..CalendarEvent::default()
+            );
+            event_out
         };
 
         assert_eq!(

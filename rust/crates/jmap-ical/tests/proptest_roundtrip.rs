@@ -157,19 +157,20 @@ fn arb_scalar_event() -> impl Strategy<Value = CalendarEvent> {
                 priority,
                 privacy,
             )| {
-                CalendarEvent {
-                    id,
-                    uid,
-                    title,
-                    description,
-                    start: Some(start),
-                    duration: Some(duration),
-                    time_zone,
-                    status,
-                    free_busy_status,
-                    priority,
-                    privacy,
-                    ..CalendarEvent::default()
+                {
+                    let mut event_out = CalendarEvent::default();
+                    event_out.id = id;
+                    event_out.uid = uid;
+                    event_out.title = title;
+                    event_out.description = description;
+                    event_out.start = Some(start);
+                    event_out.duration = Some(duration);
+                    event_out.time_zone = time_zone;
+                    event_out.status = status;
+                    event_out.free_busy_status = free_busy_status;
+                    event_out.priority = priority;
+                    event_out.privacy = privacy;
+                    event_out
                 }
             },
         )

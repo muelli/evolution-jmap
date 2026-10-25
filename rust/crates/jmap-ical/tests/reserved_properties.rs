@@ -228,48 +228,50 @@ fn never_emit_reserved_or_obsoleted_names_in_serialized_types_and_ical_output() 
     let mut localizations = BTreeMap::new();
     localizations.insert("de".to_owned(), serde_json::json!({"title": "Standup"}));
 
-    let event = CalendarEvent {
-        id: Some(Id::new("evt-1")),
-        calendar_ids: Some(cal_ids),
-        event_type: Some("Event".to_owned()),
-        version: Some("2.0".to_owned()),
-        uid: Some("uid-12345".to_owned()),
-        created: Some("2026-10-01T12:00:00Z".to_owned()),
-        updated: Some("2026-10-14T12:00:00Z".to_owned()),
-        title: Some("Sprint Planning".to_owned()),
-        description: Some("Sprint planning session".to_owned()),
-        start: Some("2026-10-15T09:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        show_without_time: Some(false),
-        status: Some("confirmed".to_owned()),
-        free_busy_status: Some("busy".to_owned()),
-        priority: Some(1),
-        privacy: Some("public".to_owned()),
-        locations: Some(locations),
-        virtual_locations: Some(virtual_locations),
-        links: Some(links),
-        keywords: Some(keywords),
-        alerts: Some(alerts),
-        participants: Some(participants),
-        organizer_calendar_address: Some("mailto:organizer@example.com".to_owned()),
-        is_draft: Some(false),
-        hide_attendees: Some(false),
-        recurrence_rule: Some(rrule),
-        recurrence_overrides: Some(recurrence_overrides),
-        time_zones: Some(time_zones),
-        use_default_alerts: Some(false),
-        color: Some("#aabbcc".to_owned()),
-        locale: Some("en".to_owned()),
-        localizations: Some(localizations),
-        is_origin: Some(true),
-        end_time_zone: Some("Europe/Berlin".to_owned()),
-        main_location_id: Some(Id::new("loc-1")),
-        schedule_sequence: Some(0),
-        schedule_updated: Some(UtcDate::new("2026-10-14T12:00:00Z")),
-        may_invite_self: Some(true),
-        may_invite_others: Some(true),
-        extra: BTreeMap::new(),
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some(Id::new("evt-1"));
+        event_out.calendar_ids = Some(cal_ids);
+        event_out.event_type = Some("Event".to_owned());
+        event_out.version = Some("2.0".to_owned());
+        event_out.uid = Some("uid-12345".to_owned());
+        event_out.created = Some("2026-10-01T12:00:00Z".to_owned());
+        event_out.updated = Some("2026-10-14T12:00:00Z".to_owned());
+        event_out.title = Some("Sprint Planning".to_owned());
+        event_out.description = Some("Sprint planning session".to_owned());
+        event_out.start = Some("2026-10-15T09:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.show_without_time = Some(false);
+        event_out.status = Some("confirmed".to_owned());
+        event_out.free_busy_status = Some("busy".to_owned());
+        event_out.priority = Some(1);
+        event_out.privacy = Some("public".to_owned());
+        event_out.locations = Some(locations);
+        event_out.virtual_locations = Some(virtual_locations);
+        event_out.links = Some(links);
+        event_out.keywords = Some(keywords);
+        event_out.alerts = Some(alerts);
+        event_out.participants = Some(participants);
+        event_out.organizer_calendar_address = Some("mailto:organizer@example.com".to_owned());
+        event_out.is_draft = Some(false);
+        event_out.hide_attendees = Some(false);
+        event_out.recurrence_rule = Some(rrule);
+        event_out.recurrence_overrides = Some(recurrence_overrides);
+        event_out.time_zones = Some(time_zones);
+        event_out.use_default_alerts = Some(false);
+        event_out.color = Some("#aabbcc".to_owned());
+        event_out.locale = Some("en".to_owned());
+        event_out.localizations = Some(localizations);
+        event_out.is_origin = Some(true);
+        event_out.end_time_zone = Some("Europe/Berlin".to_owned());
+        event_out.main_location_id = Some(Id::new("loc-1"));
+        event_out.schedule_sequence = Some(0);
+        event_out.schedule_updated = Some(UtcDate::new("2026-10-14T12:00:00Z"));
+        event_out.may_invite_self = Some(true);
+        event_out.may_invite_others = Some(true);
+        event_out.extra = BTreeMap::new();
+        event_out
     };
 
     let event_val = serde_json::to_value(&event).expect("serializes CalendarEvent");

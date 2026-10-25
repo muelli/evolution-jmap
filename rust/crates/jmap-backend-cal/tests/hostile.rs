@@ -30,18 +30,19 @@ unsafe fn vevent(calendar: *mut ICalComponent) -> *mut ICalComponent {
 /// rule's `frequency` all carry a line break and a property of the attacker's
 /// choosing. None of the three passes through `escape` on the way out.
 fn hostile_event() -> CalendarEvent {
-    CalendarEvent {
-        id: Some("E1".into()),
-        title: Some("Standup".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        duration: Some("PT1H\r\nSUMMARY:Cancelled".to_owned()),
-        time_zone: Some("Europe/Berlin\r\nDESCRIPTION:See attachment".to_owned()),
-        recurrence_rule: Some({
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E1".into());
+        event_out.title = Some("Standup".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.duration = Some("PT1H\r\nSUMMARY:Cancelled".to_owned());
+        event_out.time_zone = Some("Europe/Berlin\r\nDESCRIPTION:See attachment".to_owned());
+        event_out.recurrence_rule = Some({
             let mut __built = RecurrenceRule::default();
             __built.frequency = "daily\r\nLOCATION:Elsewhere".to_owned();
             __built
-        }),
-        ..CalendarEvent::default()
+        });
+        event_out
     }
 }
 
@@ -101,12 +102,13 @@ fn no_unescaped_value_can_add_a_property_to_the_component() {
 /// `BEGIN:VEVENT`, which would make one server-side event two appointments.
 #[test]
 fn no_unescaped_value_can_close_the_event_and_open_another() {
-    let ics = jmap_ical::event_to_ical(&CalendarEvent {
-        duration: Some(
+    let ics = jmap_ical::event_to_ical(&{
+        let mut event_out = hostile_event();
+        event_out.duration = Some(
             "PT1H\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:E2\r\nSUMMARY:Mallory\r\nEND:VEVENT\r\nX"
                 .to_owned(),
-        ),
-        ..hostile_event()
+        );
+        event_out
     });
 
     let lines = |name: &str| {

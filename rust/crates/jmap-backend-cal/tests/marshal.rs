@@ -868,13 +868,14 @@ fn a_zone_the_object_already_defines_is_not_defined_twice() {
 /// Calendar object fixture with a server-defined custom timezone.
 fn in_a_zone_only_the_server_can_name() -> String {
     let tzid = "/example.com/Europe-Berlin";
-    let event = jmap_proto::calendars::CalendarEvent {
-        id: Some("K1".into()),
-        title: Some("Standup".to_owned()),
-        start: Some("2026-08-10T09:00:00".to_owned()),
-        time_zone: Some(tzid.to_owned()),
-        duration: Some("PT1H".to_owned()),
-        time_zones: serde_json::from_value(serde_json::json!({tzid: {
+    let event = {
+        let mut event_out: jmap_proto::calendars::CalendarEvent = Default::default();
+        event_out.id = Some("K1".into());
+        event_out.title = Some("Standup".to_owned());
+        event_out.start = Some("2026-08-10T09:00:00".to_owned());
+        event_out.time_zone = Some(tzid.to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.time_zones = serde_json::from_value(serde_json::json!({tzid: {
             "@type": "TimeZone",
             "tzId": tzid,
             "standard": [{
@@ -904,8 +905,8 @@ fn in_a_zone_only_the_server_can_name() -> String {
                 "names": {"CEST": true},
             }],
         }}))
-        .expect("a map of time zones"),
-        ..Default::default()
+        .expect("a map of time zones");
+        event_out
     };
     jmap_ical::event_to_ical(&event)
 }

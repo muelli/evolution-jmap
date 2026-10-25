@@ -266,6 +266,7 @@ impl CalendarSetRequest {
 /// `calendarIds`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,

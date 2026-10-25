@@ -704,9 +704,10 @@ mod tests {
     use jmap_proto::error::{MethodError, SetError};
 
     fn organised_by(organizer: Option<&str>) -> CalendarEvent {
-        CalendarEvent {
-            organizer_calendar_address: organizer.map(str::to_owned),
-            ..CalendarEvent::default()
+        {
+            let mut event_out = CalendarEvent::default();
+            event_out.organizer_calendar_address = organizer.map(str::to_owned);
+            event_out
         }
     }
 

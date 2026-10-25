@@ -478,31 +478,32 @@ fn arb_calendar_event() -> impl Strategy<Value = CalendarEvent> {
                 (locations, virtual_locations, links, keywords, alerts, participants),
                 (recurrence_rule, recurrence_overrides, time_zones),
             )| {
-                CalendarEvent {
-                    id: id.map(Into::into),
-                    uid,
-                    event_type: Some("Event".to_string()),
-                    version: Some("2.0".to_string()),
-                    title,
-                    description,
-                    start,
-                    time_zone,
-                    duration,
-                    show_without_time,
-                    status,
-                    free_busy_status,
-                    priority,
-                    privacy,
-                    locations,
-                    virtual_locations,
-                    links,
-                    keywords,
-                    alerts,
-                    participants,
-                    recurrence_rule,
-                    recurrence_overrides,
-                    time_zones,
-                    ..CalendarEvent::default()
+                {
+                    let mut event_out = CalendarEvent::default();
+                    event_out.id = id.map(Into::into);
+                    event_out.uid = uid;
+                    event_out.event_type = Some("Event".to_string());
+                    event_out.version = Some("2.0".to_string());
+                    event_out.title = title;
+                    event_out.description = description;
+                    event_out.start = start;
+                    event_out.time_zone = time_zone;
+                    event_out.duration = duration;
+                    event_out.show_without_time = show_without_time;
+                    event_out.status = status;
+                    event_out.free_busy_status = free_busy_status;
+                    event_out.priority = priority;
+                    event_out.privacy = privacy;
+                    event_out.locations = locations;
+                    event_out.virtual_locations = virtual_locations;
+                    event_out.links = links;
+                    event_out.keywords = keywords;
+                    event_out.alerts = alerts;
+                    event_out.participants = participants;
+                    event_out.recurrence_rule = recurrence_rule;
+                    event_out.recurrence_overrides = recurrence_overrides;
+                    event_out.time_zones = time_zones;
+                    event_out
                 }
             },
         )
@@ -983,13 +984,12 @@ proptest! {
         time_zone in arb_time_zone_string(),
         show_without_time in any::<bool>(),
     ) {
-        let event = CalendarEvent {
-            id: Some("E-TZ".into()),
-            start: Some(start),
-            time_zone: Some(time_zone),
-            show_without_time: Some(show_without_time),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-TZ".into());
+                    event_out.start = Some(start);
+                    event_out.time_zone = Some(time_zone);
+                    event_out.show_without_time = Some(show_without_time);
+                    event_out };
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("dates/tz ical1 parse");
         let ical2 = event_to_ical(&parsed1);
@@ -1004,13 +1004,12 @@ proptest! {
     fn prop_fixpoint_recurrence_rule_domain(
         rule in arb_recurrence_rule(),
     ) {
-        let event = CalendarEvent {
-            id: Some("E-RRULE".into()),
-            start: Some("2026-01-15T10:00:00".to_string()),
-            time_zone: Some("Europe/Berlin".to_string()),
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-RRULE".into());
+                    event_out.start = Some("2026-01-15T10:00:00".to_string());
+                    event_out.time_zone = Some("Europe/Berlin".to_string());
+                    event_out.recurrence_rule = Some(rule);
+                    event_out };
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("rrule ical1 parse");
         let ical2 = event_to_ical(&parsed1);
@@ -1029,16 +1028,15 @@ proptest! {
             1..4,
         ),
     ) {
-        let event = CalendarEvent {
-            id: Some("E-OVR".into()),
-            title: Some("Series Title".to_string()),
-            start: Some("2026-01-15T10:00:00".to_string()),
-            time_zone: Some("Europe/Berlin".to_string()),
-            duration: Some("PT1H".to_string()),
-            recurrence_rule: Some(RecurrenceRule::new("weekly")),
-            recurrence_overrides: Some(overrides),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-OVR".into());
+                    event_out.title = Some("Series Title".to_string());
+                    event_out.start = Some("2026-01-15T10:00:00".to_string());
+                    event_out.time_zone = Some("Europe/Berlin".to_string());
+                    event_out.duration = Some("PT1H".to_string());
+                    event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+                    event_out.recurrence_overrides = Some(overrides);
+                    event_out };
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("overrides ical1 parse");
         let ical2 = event_to_ical(&parsed1);
@@ -1053,13 +1051,12 @@ proptest! {
     fn prop_fixpoint_alerts_and_valarm_domain(
         alerts in prop::collection::btree_map(arb_key(), arb_alert_value(), 1..4),
     ) {
-        let event = CalendarEvent {
-            id: Some("E-ALERTS".into()),
-            title: Some("Meeting Reminder".to_string()),
-            start: Some("2026-01-15T10:00:00".to_string()),
-            alerts: Some(alerts),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-ALERTS".into());
+                    event_out.title = Some("Meeting Reminder".to_string());
+                    event_out.start = Some("2026-01-15T10:00:00".to_string());
+                    event_out.alerts = Some(alerts);
+                    event_out };
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("alerts ical1 parse");
         let ical2 = event_to_ical(&parsed1);
@@ -1074,13 +1071,12 @@ proptest! {
     fn prop_fixpoint_participants_and_organizer_domain(
         participants in prop::collection::btree_map(arb_key(), arb_participant_value(), 1..5),
     ) {
-        let event = CalendarEvent {
-            id: Some("E-PART".into()),
-            title: Some("Board Meeting".to_string()),
-            start: Some("2026-01-15T10:00:00".to_string()),
-            participants: Some(participants),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-PART".into());
+                    event_out.title = Some("Board Meeting".to_string());
+                    event_out.start = Some("2026-01-15T10:00:00".to_string());
+                    event_out.participants = Some(participants);
+                    event_out };
         let ical1 = event_to_ical(&event);
         // Participants are drawn for output and not read back into JSCalendar.
         let parsed1 = ical_to_event(&ical1).expect("participants ical1 parse");
@@ -1097,14 +1093,13 @@ proptest! {
         locations in prop::collection::btree_map(arb_key(), arb_location_value(), 1..3),
         virtual_locations in prop::collection::btree_map(arb_key(), arb_virtual_location_value(), 1..3),
     ) {
-        let event = CalendarEvent {
-            id: Some("E-LOC".into()),
-            title: Some("Hybrid Planning Session".to_string()),
-            start: Some("2026-01-15T10:00:00".to_string()),
-            locations: Some(locations),
-            virtual_locations: Some(virtual_locations),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-LOC".into());
+                    event_out.title = Some("Hybrid Planning Session".to_string());
+                    event_out.start = Some("2026-01-15T10:00:00".to_string());
+                    event_out.locations = Some(locations);
+                    event_out.virtual_locations = Some(virtual_locations);
+                    event_out };
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("locations ical1 parse");
         let ical2 = event_to_ical(&parsed1);
@@ -1119,13 +1114,12 @@ proptest! {
     fn prop_fixpoint_attachments_and_links_domain(
         links in prop::collection::btree_map(arb_key(), arb_link_value(), 1..4),
     ) {
-        let event = CalendarEvent {
-            id: Some("E-LINKS".into()),
-            title: Some("Presentation with Attachments".to_string()),
-            start: Some("2026-01-15T10:00:00".to_string()),
-            links: Some(links),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-LINKS".into());
+                    event_out.title = Some("Presentation with Attachments".to_string());
+                    event_out.start = Some("2026-01-15T10:00:00".to_string());
+                    event_out.links = Some(links);
+                    event_out };
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("links ical1 parse");
         let ical2 = event_to_ical(&parsed1);
@@ -1144,13 +1138,12 @@ proptest! {
             1..6,
         ),
     ) {
-        let event = CalendarEvent {
-            id: Some("E-CAT".into()),
-            title: Some("Categorized Event".to_string()),
-            start: Some("2026-01-15T10:00:00".to_string()),
-            keywords: Some(keywords),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-CAT".into());
+                    event_out.title = Some("Categorized Event".to_string());
+                    event_out.start = Some("2026-01-15T10:00:00".to_string());
+                    event_out.keywords = Some(keywords);
+                    event_out };
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("categories ical1 parse");
         let ical2 = event_to_ical(&parsed1);
@@ -1179,16 +1172,15 @@ proptest! {
             Just("secret".to_string()),
         ],
     ) {
-        let event = CalendarEvent {
-            id: Some("E-META".into()),
-            title: Some("Metadata Audit".to_string()),
-            start: Some("2026-01-15T10:00:00".to_string()),
-            status: Some(status),
-            free_busy_status: Some(free_busy_status),
-            priority: Some(priority),
-            privacy: Some(privacy),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-META".into());
+                    event_out.title = Some("Metadata Audit".to_string());
+                    event_out.start = Some("2026-01-15T10:00:00".to_string());
+                    event_out.status = Some(status);
+                    event_out.free_busy_status = Some(free_busy_status);
+                    event_out.priority = Some(priority);
+                    event_out.privacy = Some(privacy);
+                    event_out };
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("metadata ical1 parse");
         let ical2 = event_to_ical(&parsed1);
@@ -1273,13 +1265,12 @@ proptest! {
         suffix in "[a-zA-Z0-9 ]{0,10}",
     ) {
         let text = format!("{prefix}{}{suffix}", escapes.join(""));
-        let event = CalendarEvent {
-            id: Some("E-PROP-ESC".into()),
-            title: Some(text.clone()),
-            description: Some(text.clone()),
-            start: Some("2026-01-15T13:00:00".to_string()),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-PROP-ESC".into());
+                    event_out.title = Some(text.clone());
+                    event_out.description = Some(text.clone());
+                    event_out.start = Some("2026-01-15T13:00:00".to_string());
+                    event_out };
 
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("parse emitted escaped ical");
@@ -1312,13 +1303,12 @@ proptest! {
             "\\PC{1,50}",
         ],
     ) {
-        let event = CalendarEvent {
-            id: Some("E-UNICODE".into()),
-            title: Some(title.clone()),
-            description: Some(desc_text.clone()),
-            start: Some("2026-01-15T13:00:00".to_string()),
-            ..CalendarEvent::default()
-        };
+        let event = { let mut event_out = CalendarEvent::default();
+                    event_out.id = Some("E-UNICODE".into());
+                    event_out.title = Some(title.clone());
+                    event_out.description = Some(desc_text.clone());
+                    event_out.start = Some("2026-01-15T13:00:00".to_string());
+                    event_out };
 
         let ical1 = event_to_ical(&event);
         let parsed1 = ical_to_event(&ical1).expect("parse non-ascii unicode ical");
