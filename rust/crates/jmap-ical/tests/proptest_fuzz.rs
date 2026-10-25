@@ -85,26 +85,7 @@ prop_compose! {
             Just("su".to_string()),
         ]),
     ) -> RecurrenceRule {
-        RecurrenceRule {
-            rule_type: Some("RecurrenceRule".to_string()),
-            frequency,
-            interval,
-            count,
-            until,
-            by_second,
-            by_minute,
-            by_hour,
-            by_day,
-            by_month_day,
-            by_year_day,
-            by_week_no,
-            by_month,
-            by_set_position,
-            first_day_of_week,
-            rscale: None,
-            skip: None,
-            extra: BTreeMap::new(),
-        }
+        { let mut __built = RecurrenceRule::default(); __built.rule_type = Some("RecurrenceRule".to_string()); __built.frequency = frequency; __built.interval = interval; __built.count = count; __built.until = until; __built.by_second = by_second; __built.by_minute = by_minute; __built.by_hour = by_hour; __built.by_day = by_day; __built.by_month_day = by_month_day; __built.by_year_day = by_year_day; __built.by_week_no = by_week_no; __built.by_month = by_month; __built.by_set_position = by_set_position; __built.first_day_of_week = first_day_of_week; __built.rscale = None; __built.skip = None; __built.extra = BTreeMap::new(); __built }
     }
 }
 

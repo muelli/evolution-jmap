@@ -549,6 +549,7 @@ impl CalendarEvent {
 /// JSCalendar RecurrenceRule (RFC 8984 §4.3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RecurrenceRule {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub rule_type: Option<String>,
@@ -663,13 +664,53 @@ impl RecurrenceRule {
         self
     }
 
+    pub fn with_by_second(mut self, by_second: impl IntoIterator<Item = u32>) -> Self {
+        self.by_second = Some(by_second.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_minute(mut self, by_minute: impl IntoIterator<Item = u32>) -> Self {
+        self.by_minute = Some(by_minute.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_hour(mut self, by_hour: impl IntoIterator<Item = u32>) -> Self {
+        self.by_hour = Some(by_hour.into_iter().collect());
+        self
+    }
+
     pub fn with_by_day(mut self, by_day: impl IntoIterator<Item = NDay>) -> Self {
         self.by_day = Some(by_day.into_iter().collect());
         self
     }
 
+    pub fn with_by_month_day(mut self, by_month_day: impl IntoIterator<Item = i32>) -> Self {
+        self.by_month_day = Some(by_month_day.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_year_day(mut self, by_year_day: impl IntoIterator<Item = i32>) -> Self {
+        self.by_year_day = Some(by_year_day.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_week_no(mut self, by_week_no: impl IntoIterator<Item = i32>) -> Self {
+        self.by_week_no = Some(by_week_no.into_iter().collect());
+        self
+    }
+
     pub fn with_by_month(mut self, by_month: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.by_month = Some(by_month.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_by_set_position(mut self, by_set_position: impl IntoIterator<Item = i32>) -> Self {
+        self.by_set_position = Some(by_set_position.into_iter().collect());
+        self
+    }
+
+    pub fn with_first_day_of_week(mut self, first_day_of_week: impl Into<String>) -> Self {
+        self.first_day_of_week = Some(first_day_of_week.into());
         self
     }
 
@@ -680,6 +721,11 @@ impl RecurrenceRule {
 
     pub fn with_skip(mut self, skip: impl Into<String>) -> Self {
         self.skip = Some(skip.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

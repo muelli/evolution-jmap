@@ -98,25 +98,27 @@ fn assert_no_reserved_or_obsoleted_properties(val: &Value, path: &str) {
 #[test]
 fn never_emit_reserved_or_obsoleted_names_in_serialized_types_and_ical_output() {
     // 1. RecurrenceRule with all fields populated
-    let rrule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_owned()),
-        frequency: "monthly".to_owned(),
-        interval: Some(2),
-        count: Some(10),
-        until: Some("2026-12-31T23:59:59Z".to_owned()),
-        by_second: Some(vec![0, 30]),
-        by_minute: Some(vec![15, 45]),
-        by_hour: Some(vec![9, 17]),
-        by_day: Some(vec![NDay::new("mo")]),
-        by_month_day: Some(vec![1, -1]),
-        by_year_day: Some(vec![100, -100]),
-        by_week_no: Some(vec![1, 52]),
-        by_month: Some(vec!["3".to_owned(), "9".to_owned()]),
-        by_set_position: Some(vec![1, -1]),
-        first_day_of_week: Some("mo".to_owned()),
-        rscale: Some("gregorian".to_owned()),
-        skip: Some("omit".to_owned()),
-        extra: BTreeMap::new(),
+    let rrule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_owned());
+        __built.frequency = "monthly".to_owned();
+        __built.interval = Some(2);
+        __built.count = Some(10);
+        __built.until = Some("2026-12-31T23:59:59Z".to_owned());
+        __built.by_second = Some(vec![0, 30]);
+        __built.by_minute = Some(vec![15, 45]);
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built.by_month_day = Some(vec![1, -1]);
+        __built.by_year_day = Some(vec![100, -100]);
+        __built.by_week_no = Some(vec![1, 52]);
+        __built.by_month = Some(vec!["3".to_owned(), "9".to_owned()]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built.rscale = Some("gregorian".to_owned());
+        __built.skip = Some("omit".to_owned());
+        __built.extra = BTreeMap::new();
+        __built
     };
     let rrule_val = serde_json::to_value(&rrule).expect("serializes RecurrenceRule");
     assert_no_reserved_or_obsoleted_properties(&rrule_val, "RecurrenceRule");

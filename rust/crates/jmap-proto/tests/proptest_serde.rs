@@ -779,26 +779,7 @@ prop_compose! {
         first_day_of_week in prop::option::of(Just("mo".to_string())),
         extra in arb_extra(),
     ) -> RecurrenceRule {
-        RecurrenceRule {
-            rule_type: Some("RecurrenceRule".to_string()),
-            frequency,
-            interval,
-            count,
-            until,
-            by_day,
-            by_month: None,
-            by_month_day: None,
-            by_year_day: None,
-            by_week_no: None,
-            by_hour: None,
-            by_minute: None,
-            by_second: None,
-            by_set_position: None,
-            first_day_of_week,
-            rscale: None,
-            skip: None,
-            extra,
-        }
+        { let mut __built = RecurrenceRule::default(); __built.rule_type = Some("RecurrenceRule".to_string()); __built.frequency = frequency; __built.interval = interval; __built.count = count; __built.until = until; __built.by_day = by_day; __built.by_month = None; __built.by_month_day = None; __built.by_year_day = None; __built.by_week_no = None; __built.by_hour = None; __built.by_minute = None; __built.by_second = None; __built.by_set_position = None; __built.first_day_of_week = first_day_of_week; __built.rscale = None; __built.skip = None; __built.extra = extra; __built }
     }
 }
 

@@ -641,12 +641,13 @@ fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
     let round_cal: Calendar = serde_json::from_value(c_val).unwrap();
     assert_eq!(round_cal, cal);
 
-    let rrule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_owned()),
-        frequency: frequency::MONTHLY.to_owned(),
-        rscale: Some("hebrew".to_owned()),
-        skip: Some(recurrence_skip::FORWARD.to_owned()),
-        ..RecurrenceRule::default()
+    let rrule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_owned());
+        __built.frequency = frequency::MONTHLY.to_owned();
+        __built.rscale = Some("hebrew".to_owned());
+        __built.skip = Some(recurrence_skip::FORWARD.to_owned());
+        __built
     };
 
     let r_val = serde_json::to_value(&rrule).unwrap();

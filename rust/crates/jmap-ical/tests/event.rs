@@ -1403,9 +1403,10 @@ fn an_edited_instance_is_drawn_at_the_series_place() {
     // override does not patch. A component that left the place off would show
     // the user an occurrence that happens nowhere.
     let mut event = placed("loc1", json!({"@type": "Location", "name": "Room 42"}));
-    event.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        ..RecurrenceRule::default()
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built
     });
     event.recurrence_overrides = Some(
         [(
@@ -1620,9 +1621,10 @@ fn an_edited_instance_is_drawn_with_the_series_tags() {
     // and, now that an override *may* restate them (see OVERRIDE_PROPERTIES),
     // would read back as the user having unfiled that one occurrence.
     let mut event = tagged([("offsite", json!(true))]);
-    event.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        ..RecurrenceRule::default()
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built
     });
     event.recurrence_overrides = Some(
         [(
@@ -2305,9 +2307,10 @@ fn a_recurrence_rule_carries_freq_interval_and_count() {
 #[test]
 fn an_interval_of_one_is_left_implicit() {
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            interval: Some(1),
-            ..RecurrenceRule::new("daily")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.interval = Some(1);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -2321,9 +2324,10 @@ fn until_is_a_date_time_in_the_events_own_zone() {
     let event = CalendarEvent {
         start: Some("2026-01-15T13:00:00".to_owned()),
         time_zone: Some("Etc/UTC".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            until: Some("2026-12-31T09:00:00".to_owned()),
-            ..RecurrenceRule::new("monthly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.until = Some("2026-12-31T09:00:00".to_owned());
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -2347,9 +2351,10 @@ fn an_all_day_events_until_is_a_date_like_its_start() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            until: Some("2026-12-31T00:00:00".to_owned()),
-            ..RecurrenceRule::new("weekly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.until = Some("2026-12-31T00:00:00".to_owned());
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -2371,9 +2376,10 @@ fn an_all_day_event_whose_recurrence_ends_at_a_time_stays_a_date_time() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            until: Some("2026-12-31T09:00:00".to_owned()),
-            ..RecurrenceRule::new("weekly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.until = Some("2026-12-31T09:00:00".to_owned());
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -2393,9 +2399,10 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
     // all is the smaller lie, and the save path is told so: recurrenceRule is
     // patched only when every rule the server holds survives the trip.
     for until in ["2026-13-31T09:00:00", "whenever", "2026-02-30T09:00:00"] {
-        let rule = RecurrenceRule {
-            until: Some(until.to_owned()),
-            ..RecurrenceRule::new("weekly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.until = Some(until.to_owned());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{until}");
 
@@ -3289,10 +3296,11 @@ fn a_weekly_rule_names_the_days_it_repeats_on() {
     // to start, which is the wrong day for every Monday-and-Thursday standup
     // created anywhere but on a Monday.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("mo"), NDay::new("th")]),
-            count: Some(6),
-            ..RecurrenceRule::new("weekly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.by_day = Some(vec![NDay::new("mo"), NDay::new("th")]);
+            __built.count = Some(6);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3320,9 +3328,10 @@ fn a_monthly_rule_names_which_of_those_days_it_means() {
         NDay::new("fr").with_nth_of_period(-1),
     ];
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(days.clone()),
-            ..RecurrenceRule::new("monthly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_day = Some(days.clone());
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3367,9 +3376,10 @@ fn an_ordinal_weekday_is_refused_where_the_recurrence_has_no_period_to_count_in(
     // narrowing an unmodeled rule part gets, and the save path is told the
     // rule was seen in part.
     for frequency in ["weekly", "daily", "hourly"] {
-        let rule = RecurrenceRule {
-            by_day: Some(vec![NDay::new("mo").with_nth_of_period(2)]),
-            ..RecurrenceRule::new(frequency)
+        let rule = {
+            let mut __built = RecurrenceRule::new(frequency);
+            __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(2)]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
 
@@ -3404,9 +3414,10 @@ fn a_day_no_weekday_names_is_flagged_rather_than_written() {
         // No day at all is not a set of days a BYDAY can name.
         vec![],
     ] {
-        let rule = RecurrenceRule {
-            by_day: Some(days.clone()),
-            ..RecurrenceRule::new("monthly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_day = Some(days.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{days:?}");
 
@@ -3428,10 +3439,11 @@ fn a_monthly_rule_names_the_days_of_the_month_it_repeats_on() {
     // Wednesday" but "the 15th", and RFC 8984 §4.3.3's negative value for the
     // last day of the month, whichever day of the week that lands on.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_month_day: Some(vec![15, -1]),
-            count: Some(6),
-            ..RecurrenceRule::new("monthly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_month_day = Some(vec![15, -1]);
+            __built.count = Some(6);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3452,10 +3464,11 @@ fn the_days_of_the_month_are_written_after_the_days_of_the_week() {
     // Both parts at once, in the order libical writes them, so that a rule read
     // back out of EDS's own cache compares equal to the one that went in.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("we")]),
-            by_month_day: Some(vec![15]),
-            ..RecurrenceRule::new("yearly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_day = Some(vec![NDay::new("we")]);
+            __built.by_month_day = Some(vec![15]);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3489,9 +3502,10 @@ fn days_of_the_month_are_refused_where_a_week_is_the_period() {
     // a week does not sit inside a month. As with an ordinal weekday, the part
     // is left off whole and the save path told the rule was seen in part, rather
     // than writing a line libical is entitled to refuse.
-    let rule = RecurrenceRule {
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::new("weekly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("weekly");
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(!maps_recurrence_rule(&rule));
 
@@ -3509,9 +3523,10 @@ fn a_day_no_month_has_is_flagged_rather_than_written() {
     // whole, because a BYMONTHDAY holding the rest is a different recurrence
     // rather than a narrower view of this one.
     for days in [vec![0], vec![32], vec![-32], vec![15, 0], vec![]] {
-        let rule = RecurrenceRule {
-            by_month_day: Some(days.clone()),
-            ..RecurrenceRule::new("monthly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_month_day = Some(days.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{days:?}");
 
@@ -3565,10 +3580,11 @@ fn a_yearly_rule_names_the_days_of_the_year_it_repeats_on() {
     // iCalendar's `BYYEARDAY`, whose negative value counts back from the end of
     // the year the way `byMonthDay`'s does from the end of the month.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_year_day: Some(vec![1, -1]),
-            count: Some(4),
-            ..RecurrenceRule::new("yearly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_year_day = Some(vec![1, -1]);
+            __built.count = Some(4);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3590,12 +3606,13 @@ fn the_days_of_the_year_are_written_after_the_days_of_the_month() {
     // `BYYEARDAY` between `BYMONTHDAY` and `BYMONTH`, so that a rule read back
     // out of EDS's own cache compares equal to the one that went in.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("we")]),
-            by_month_day: Some(vec![15]),
-            by_year_day: Some(vec![100]),
-            by_month: Some(vec!["3".to_owned()]),
-            ..RecurrenceRule::new("yearly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_day = Some(vec![NDay::new("we")]);
+            __built.by_month_day = Some(vec![15]);
+            __built.by_year_day = Some(vec![100]);
+            __built.by_month = Some(vec!["3".to_owned()]);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3635,9 +3652,10 @@ fn days_of_the_year_are_refused_where_the_period_is_shorter_than_one() {
     // off whole and the save path told the rule was seen in part, rather than
     // writing a line libical is entitled to refuse.
     for frequency in ["daily", "weekly", "monthly"] {
-        let rule = RecurrenceRule {
-            by_year_day: Some(vec![100]),
-            ..RecurrenceRule::new(frequency)
+        let rule = {
+            let mut __built = RecurrenceRule::new(frequency);
+            __built.by_year_day = Some(vec![100]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
 
@@ -3661,9 +3679,10 @@ fn a_day_of_the_year_is_carried_at_a_frequency_shorter_than_a_day() {
     // three frequencies the RFC excludes rather than allowing `YEARLY` alone.
     for frequency in ["hourly", "minutely", "secondly", "yearly"] {
         let event = CalendarEvent {
-            recurrence_rule: Some(RecurrenceRule {
-                by_year_day: Some(vec![100]),
-                ..RecurrenceRule::new(frequency)
+            recurrence_rule: Some({
+                let mut __built = RecurrenceRule::new(frequency);
+                __built.by_year_day = Some(vec![100]);
+                __built
             }),
             ..CalendarEvent::default()
         };
@@ -3684,9 +3703,10 @@ fn a_day_no_year_has_is_flagged_rather_than_written() {
     // holding one such value is refused whole, because a `BYYEARDAY` holding the
     // rest is a different recurrence rather than a narrower view of this one.
     for days in [vec![0], vec![367], vec![-367], vec![100, 0], vec![]] {
-        let rule = RecurrenceRule {
-            by_year_day: Some(days.clone()),
-            ..RecurrenceRule::new("yearly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_year_day = Some(days.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{days:?}");
 
@@ -3734,10 +3754,11 @@ fn a_yearly_rule_names_the_months_it_repeats_in() {
     // `BYMONTH`. JSCalendar holds each month as a string; the numbers 1 to 12 of
     // the Gregorian calendar are spelled the same in both formats.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_month: Some(vec!["3".to_owned(), "9".to_owned()]),
-            count: Some(4),
-            ..RecurrenceRule::new("yearly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_month = Some(vec!["3".to_owned(), "9".to_owned()]);
+            __built.count = Some(4);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3762,11 +3783,12 @@ fn the_months_are_written_after_the_days_of_the_month() {
     // (`BYMONTH` last) so that a rule read back out of EDS's own cache
     // compares equal to the one that went in.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("we")]),
-            by_month_day: Some(vec![15]),
-            by_month: Some(vec!["3".to_owned()]),
-            ..RecurrenceRule::new("yearly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_day = Some(vec![NDay::new("we")]);
+            __built.by_month_day = Some(vec![15]);
+            __built.by_month = Some(vec!["3".to_owned()]);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3784,9 +3806,10 @@ fn a_month_is_carried_at_any_frequency() {
     // frequency gate here, and a weekly rule keeps its months.
     for frequency in ["daily", "weekly", "monthly", "yearly"] {
         let event = CalendarEvent {
-            recurrence_rule: Some(RecurrenceRule {
-                by_month: Some(vec!["1".to_owned()]),
-                ..RecurrenceRule::new(frequency)
+            recurrence_rule: Some({
+                let mut __built = RecurrenceRule::new(frequency);
+                __built.by_month = Some(vec!["1".to_owned()]);
+                __built
             }),
             ..CalendarEvent::default()
         };
@@ -3847,9 +3870,10 @@ fn a_month_no_year_has_is_flagged_rather_than_written() {
         vec![""],
         vec![],
     ] {
-        let rule = RecurrenceRule {
-            by_month: Some(months.iter().map(|m| (*m).to_owned()).collect()),
-            ..RecurrenceRule::new("yearly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_month = Some(months.iter().map(|m| (*m).to_owned()).collect());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{months:?}");
 
@@ -3872,9 +3896,10 @@ fn a_leap_month_is_flagged_rather_than_written() {
     // RFC 7529's `RSCALE`, which this mapping does not write: the event's
     // calendar system is not modeled, so writing `BYMONTH=5L` beside a
     // Gregorian series would name a month the series does not have.
-    let rule = RecurrenceRule {
-        by_month: Some(vec!["5L".to_owned()]),
-        ..RecurrenceRule::new("yearly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("yearly");
+        __built.by_month = Some(vec!["5L".to_owned()]);
+        __built
     };
     assert!(!maps_recurrence_rule(&rule));
 
@@ -3920,11 +3945,12 @@ fn a_weekly_rule_names_the_day_its_weeks_start_on() {
     // fortnightly series begins, so the same `BYDAY` counted from Monday and from
     // Sunday produces different dates.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            interval: Some(2),
-            by_day: Some(vec![NDay::new("tu")]),
-            first_day_of_week: Some("su".to_owned()),
-            ..RecurrenceRule::new("weekly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.interval = Some(2);
+            __built.by_day = Some(vec![NDay::new("tu")]);
+            __built.first_day_of_week = Some("su".to_owned());
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3946,13 +3972,14 @@ fn the_day_the_week_starts_on_is_written_last() {
     // them (`WKST` after `BYMONTH`, last of all) so that a rule read back out
     // of EDS's own cache compares equal to the one that went in.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("we")]),
-            by_month_day: Some(vec![15]),
-            by_year_day: Some(vec![100]),
-            by_month: Some(vec!["3".to_owned()]),
-            first_day_of_week: Some("su".to_owned()),
-            ..RecurrenceRule::new("yearly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_day = Some(vec![NDay::new("we")]);
+            __built.by_month_day = Some(vec![15]);
+            __built.by_year_day = Some(vec![100]);
+            __built.by_month = Some(vec!["3".to_owned()]);
+            __built.first_day_of_week = Some("su".to_owned());
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -3971,9 +3998,10 @@ fn a_week_starting_on_monday_is_left_off_the_rule() {
     //
     // The rule still maps: the day is not *refused*, it is the one value
     // iCalendar says by saying nothing.
-    let rule = RecurrenceRule {
-        first_day_of_week: Some("mo".to_owned()),
-        ..RecurrenceRule::new("weekly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("weekly");
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&rule));
 
@@ -3995,9 +4023,10 @@ fn the_day_the_week_starts_on_is_carried_at_any_frequency() {
     // gate: the day the server named is carried as it came.
     for frequency in ["daily", "weekly", "monthly", "yearly"] {
         let event = CalendarEvent {
-            recurrence_rule: Some(RecurrenceRule {
-                first_day_of_week: Some("su".to_owned()),
-                ..RecurrenceRule::new(frequency)
+            recurrence_rule: Some({
+                let mut __built = RecurrenceRule::new(frequency);
+                __built.first_day_of_week = Some("su".to_owned());
+                __built
             }),
             ..CalendarEvent::default()
         };
@@ -4027,9 +4056,10 @@ fn every_day_of_the_week_can_start_one() {
         ("su", "SU"),
     ] {
         let event = CalendarEvent {
-            recurrence_rule: Some(RecurrenceRule {
-                first_day_of_week: Some(day.to_owned()),
-                ..RecurrenceRule::new("weekly")
+            recurrence_rule: Some({
+                let mut __built = RecurrenceRule::new("weekly");
+                __built.first_day_of_week = Some(day.to_owned());
+                __built
             }),
             ..CalendarEvent::default()
         };
@@ -4083,9 +4113,10 @@ fn a_day_no_week_starts_on_is_flagged_rather_than_written() {
     // differently reads as an edit the user never made. The parser can only
     // produce the canonical spelling, so nothing legitimate is lost.
     for day in ["xx", "", "monday", "MO", "SU", "1", "mo,tu"] {
-        let rule = RecurrenceRule {
-            first_day_of_week: Some(day.to_owned()),
-            ..RecurrenceRule::new("weekly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.first_day_of_week = Some(day.to_owned());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{day}");
 
@@ -4112,11 +4143,12 @@ fn a_yearly_rule_names_the_weeks_of_the_year_it_repeats_in() {
     // name different days. That day is modeled now, which is what makes this part
     // safe to carry at all.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_week_no: Some(vec![1, -1]),
-            first_day_of_week: Some("su".to_owned()),
-            count: Some(4),
-            ..RecurrenceRule::new("yearly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_week_no = Some(vec![1, -1]);
+            __built.first_day_of_week = Some("su".to_owned());
+            __built.count = Some(4);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -4141,14 +4173,15 @@ fn the_weeks_of_the_year_are_written_after_the_days_of_the_year() {
     // The sixth part is what first pushes an `RRULE` past 75 octets, so this is
     // also the first rule the emitter folds; the assertion is on the unfolded line
     // because that is the one a reader reconstructs.
-    let rule = RecurrenceRule {
-        by_day: Some(vec![NDay::new("we")]),
-        by_month_day: Some(vec![15]),
-        by_year_day: Some(vec![100]),
-        by_week_no: Some(vec![20]),
-        by_month: Some(vec!["3".to_owned()]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::new("yearly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("yearly");
+        __built.by_day = Some(vec![NDay::new("we")]);
+        __built.by_month_day = Some(vec![15]);
+        __built.by_year_day = Some(vec![100]);
+        __built.by_week_no = Some(vec![20]);
+        __built.by_month = Some(vec!["3".to_owned()]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
     let event = CalendarEvent {
         recurrence_rule: Some(rule.clone()),
@@ -4237,9 +4270,10 @@ fn weeks_of_the_year_are_refused_at_every_frequency_but_yearly() {
     for frequency in [
         "daily", "weekly", "monthly", "hourly", "minutely", "secondly",
     ] {
-        let rule = RecurrenceRule {
-            by_week_no: Some(vec![20]),
-            ..RecurrenceRule::new(frequency)
+        let rule = {
+            let mut __built = RecurrenceRule::new(frequency);
+            __built.by_week_no = Some(vec![20]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
 
@@ -4266,9 +4300,10 @@ fn a_week_no_year_has_is_flagged_rather_than_written() {
     // the rule (`jmap-backend-cal/tests/marshal.rs` measures that) so nothing
     // below this mapping would catch it.
     for weeks in [vec![0], vec![54], vec![-54], vec![20, 0], vec![]] {
-        let rule = RecurrenceRule {
-            by_week_no: Some(weeks.clone()),
-            ..RecurrenceRule::new("yearly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_week_no = Some(weeks.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{weeks:?}");
 
@@ -4320,11 +4355,12 @@ fn a_monthly_rule_names_which_occurrence_of_the_set_it_takes() {
     // `BYDAY=FR;BYSETPOS=-1` and `BYDAY=-1FR` name the same Fridays, but a server
     // is entitled to spell it either way and only one of them was carried before.
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("fr")]),
-            by_set_position: Some(vec![-1]),
-            count: Some(4),
-            ..RecurrenceRule::new("monthly")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_day = Some(vec![NDay::new("fr")]);
+            __built.by_set_position = Some(vec![-1]);
+            __built.count = Some(4);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -4345,15 +4381,16 @@ fn the_position_in_the_set_is_written_after_the_months() {
     // Every modeled part at once, in the order libical writes them: `BYSETPOS`
     // after `BYMONTH` and before `WKST`, so that a rule read back out of EDS's
     // own cache compares equal to the one that went in.
-    let rule = RecurrenceRule {
-        by_day: Some(vec![NDay::new("we")]),
-        by_month_day: Some(vec![15]),
-        by_year_day: Some(vec![100]),
-        by_week_no: Some(vec![20]),
-        by_month: Some(vec!["3".to_owned()]),
-        by_set_position: Some(vec![2]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::new("yearly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("yearly");
+        __built.by_day = Some(vec![NDay::new("we")]);
+        __built.by_month_day = Some(vec![15]);
+        __built.by_year_day = Some(vec![100]);
+        __built.by_week_no = Some(vec![20]);
+        __built.by_month = Some(vec!["3".to_owned()]);
+        __built.by_set_position = Some(vec![2]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
     let event = CalendarEvent {
         recurrence_rule: Some(rule.clone()),
@@ -4404,14 +4441,16 @@ fn a_position_with_nothing_to_select_from_is_flagged_rather_than_written() {
     // off, so a `BYSETPOS` written next to it would be selecting from a set the
     // reader cannot see either.
     for rule in [
-        RecurrenceRule {
-            by_set_position: Some(vec![-1]),
-            ..RecurrenceRule::new("monthly")
+        {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_set_position = Some(vec![-1]);
+            __built
         },
-        RecurrenceRule {
-            by_week_no: Some(vec![20]),
-            by_set_position: Some(vec![-1]),
-            ..RecurrenceRule::new("monthly")
+        {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_week_no = Some(vec![20]);
+            __built.by_set_position = Some(vec![-1]);
+            __built
         },
     ] {
         assert!(!maps_recurrence_rule(&rule), "{rule:?}");
@@ -4439,10 +4478,11 @@ fn a_position_no_set_has_is_flagged_rather_than_written() {
     // dropping the rule (`jmap-backend-cal/tests/marshal.rs` measures that) so
     // nothing below this mapping would catch it.
     for positions in [vec![0], vec![367], vec![-367], vec![1, 0], vec![]] {
-        let rule = RecurrenceRule {
-            by_day: Some(vec![NDay::new("fr")]),
-            by_set_position: Some(positions.clone()),
-            ..RecurrenceRule::new("monthly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_day = Some(vec![NDay::new("fr")]);
+            __built.by_set_position = Some(positions.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{positions:?}");
 
@@ -4489,9 +4529,10 @@ fn carries_the_hours_of_the_day_a_rule_repeats_at() {
     // RFC 8984 §4.3.3's `byHour` is RFC 5545 §3.3.10's BYHOUR: the hours within
     // each interval the series happens at, 0 to 23. The first part modeled here
     // that names a time of day rather than a date.
-    let rule = RecurrenceRule {
-        by_hour: Some(vec![9, 17]),
-        ..RecurrenceRule::new("daily")
+    let rule = {
+        let mut __built = RecurrenceRule::new("daily");
+        __built.by_hour = Some(vec![9, 17]);
+        __built
     };
     let event = CalendarEvent {
         recurrence_rule: Some(rule.clone()),
@@ -4515,18 +4556,19 @@ fn the_times_of_day_are_written_before_every_other_part() {
     // a rule that went out in another order comes back out of EDS's own cache
     // reordered and compares unequal to itself, which the save path reads as an
     // edit.
-    let rule = RecurrenceRule {
-        by_second: Some(vec![0]),
-        by_minute: Some(vec![30]),
-        by_hour: Some(vec![9]),
-        by_day: Some(vec![NDay::new("we")]),
-        by_month_day: Some(vec![15]),
-        by_year_day: Some(vec![100]),
-        by_week_no: Some(vec![20]),
-        by_month: Some(vec!["3".to_owned()]),
-        by_set_position: Some(vec![2]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::new("yearly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("yearly");
+        __built.by_second = Some(vec![0]);
+        __built.by_minute = Some(vec![30]);
+        __built.by_hour = Some(vec![9]);
+        __built.by_day = Some(vec![NDay::new("we")]);
+        __built.by_month_day = Some(vec![15]);
+        __built.by_year_day = Some(vec![100]);
+        __built.by_week_no = Some(vec![20]);
+        __built.by_month = Some(vec!["3".to_owned()]);
+        __built.by_set_position = Some(vec![2]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
     let event = CalendarEvent {
         recurrence_rule: Some(rule.clone()),
@@ -4581,10 +4623,11 @@ fn an_hour_no_day_has_is_flagged_rather_than_written() {
     // And it answers an *empty* `BYHOUR` by inventing `BYHOUR=0`, which would
     // move the whole series to midnight, so the empty set is refused too.
     for hours in [vec![24], vec![99], vec![9, 24], vec![]] {
-        let rule = RecurrenceRule {
-            by_hour: Some(hours.clone()),
-            by_day: Some(vec![NDay::new("fr")]),
-            ..RecurrenceRule::new("daily")
+        let rule = {
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_hour = Some(hours.clone());
+            __built.by_day = Some(vec![NDay::new("fr")]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{hours:?}");
 
@@ -4641,9 +4684,10 @@ fn an_all_day_event_whose_rule_names_hours_is_drawn_as_a_timed_one() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            by_hour: Some(vec![9]),
-            ..RecurrenceRule::new("daily")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_hour = Some(vec![9]);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -4668,9 +4712,10 @@ fn an_all_day_event_whose_hours_are_unwritable_stays_a_date() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            by_hour: Some(vec![24]),
-            ..RecurrenceRule::new("daily")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_hour = Some(vec![24]);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -4688,10 +4733,11 @@ fn carries_the_minutes_and_seconds_a_rule_repeats_at() {
     // BYMINUTE and BYSECOND: "on the hour and the half hour, on the second".
     // With these the rule is modeled to the bottom of §4.3.3 but for `rscale`
     // and `skip`.
-    let rule = RecurrenceRule {
-        by_minute: Some(vec![0, 30]),
-        by_second: Some(vec![0]),
-        ..RecurrenceRule::new("hourly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("hourly");
+        __built.by_minute = Some(vec![0, 30]);
+        __built.by_second = Some(vec![0]);
+        __built
     };
     let event = CalendarEvent {
         recurrence_rule: Some(rule.clone()),
@@ -4743,9 +4789,10 @@ fn the_sixtieth_second_is_written_and_the_sixtieth_minute_is_not() {
     // `minutes` stops at 59. libical enforces exactly that (measured in
     // `jmap-backend-cal/tests/marshal.rs`), so the mapping does too rather than
     // treating the two parts as one range.
-    let leap = RecurrenceRule {
-        by_second: Some(vec![60]),
-        ..RecurrenceRule::new("minutely")
+    let leap = {
+        let mut __built = RecurrenceRule::new("minutely");
+        __built.by_second = Some(vec![60]);
+        __built
     };
     assert!(maps_recurrence_rule(&leap));
     let event = CalendarEvent {
@@ -4772,11 +4819,12 @@ fn the_sixtieth_second_is_written_and_the_sixtieth_minute_is_not() {
         (None, Some(vec![0, 61])),
         (None, Some(vec![])),
     ] {
-        let rule = RecurrenceRule {
-            by_minute: minutes.clone(),
-            by_second: seconds.clone(),
-            by_day: Some(vec![NDay::new("fr")]),
-            ..RecurrenceRule::new("daily")
+        let rule = {
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_minute = minutes.clone();
+            __built.by_second = seconds.clone();
+            __built.by_day = Some(vec![NDay::new("fr")]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{minutes:?} {seconds:?}");
 
@@ -4837,10 +4885,11 @@ fn an_all_day_event_whose_rule_names_minutes_is_drawn_as_a_timed_one() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            by_minute: Some(vec![30]),
-            by_second: Some(vec![15]),
-            ..RecurrenceRule::new("daily")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_minute = Some(vec![30]);
+            __built.by_second = Some(vec![15]);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -4868,9 +4917,10 @@ fn an_all_day_event_whose_minutes_are_unwritable_stays_a_date() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            by_minute: Some(vec![60]),
-            ..RecurrenceRule::new("daily")
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_minute = Some(vec![60]);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -7003,9 +7053,10 @@ fn a_value_that_is_no_offset_defines_no_zone() {
 #[test]
 fn an_instance_names_no_zone_the_series_did_not() {
     let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_owned(),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_owned();
+            __built
         }),
         recurrence_overrides: serde_json::from_value(json!({
             "2026-01-16T13:00:00": {"timeZone": "/example.com/Elsewhere", "title": "Moved"},
@@ -8739,10 +8790,11 @@ fn event_with_unsupported_or_custom_alarm_action_drops_or_sanitizes_safely() {
 #[test]
 fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
     let mut event = fixture_event();
-    event.recurrence_rule = Some(RecurrenceRule {
-        interval: Some(2),
-        count: Some(8),
-        by_day: Some(vec![
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::new("weekly");
+        __built.interval = Some(2);
+        __built.count = Some(8);
+        __built.by_day = Some(vec![
             {
                 let mut nday = NDay::default();
                 nday.day = "mo".to_owned();
@@ -8753,8 +8805,8 @@ fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
                 nday.day = "fr".to_owned();
                 nday
             },
-        ]),
-        ..RecurrenceRule::new("weekly")
+        ]);
+        __built
     });
     event.recurrence_overrides = Some(
         [
@@ -8791,9 +8843,10 @@ fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
 #[test]
 fn recurring_event_with_instance_overrides_emits_multiple_vevents_with_recurrence_id() {
     let mut event = fixture_event();
-    event.recurrence_rule = Some(RecurrenceRule {
-        interval: Some(1),
-        ..RecurrenceRule::new("daily")
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::new("daily");
+        __built.interval = Some(1);
+        __built
     });
     event.recurrence_overrides = Some(
         [(
@@ -9248,12 +9301,13 @@ fn emits_a_comprehensive_icalendar_via_calcard_and_roundtrips() {
         keywords: Some(keywords),
         participants: Some(participants),
         alerts: Some(alerts),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".to_owned(),
-            interval: Some(2),
-            by_day: Some(vec![NDay::new("tu"), NDay::new("th")]),
-            count: Some(10),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_owned();
+            __built.interval = Some(2);
+            __built.by_day = Some(vec![NDay::new("tu"), NDay::new("th")]);
+            __built.count = Some(10);
+            __built
         }),
         recurrence_overrides: Some(overrides),
         ..CalendarEvent::default()
@@ -9870,9 +9924,10 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
     allday_event.show_without_time = Some(true);
     allday_event.start = Some("2026-01-01T00:00:00".to_owned());
     allday_event.time_zone = None;
-    allday_event.recurrence_rule = Some(RecurrenceRule {
-        by_hour: Some(vec![10]),
-        ..RecurrenceRule::new("daily")
+    allday_event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::new("daily");
+        __built.by_hour = Some(vec![10]);
+        __built
     });
     let ics_allday_byhour = event_to_ical(&allday_event);
     assert!(!ics_allday_byhour.contains("VALUE=DATE:"));
@@ -9988,9 +10043,10 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
         let event_century = CalendarEvent {
             start: Some(format!("{year}-02-28T10:00:00")),
             time_zone: Some("Etc/UTC".to_owned()),
-            recurrence_rule: Some(RecurrenceRule {
-                until: Some(format!("{year}-03-02T10:00:00")),
-                ..RecurrenceRule::new("daily")
+            recurrence_rule: Some({
+                let mut __built = RecurrenceRule::new("daily");
+                __built.until = Some(format!("{year}-03-02T10:00:00"));
+                __built
             }),
             ..CalendarEvent::default()
         };
@@ -10172,11 +10228,12 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
         start: Some("2026-09-01T10:00:00".to_owned()),
         duration: Some("PT1H".to_owned()),
         time_zone: Some("Europe/Berlin".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            rule_type: Some("RecurrenceRule".to_owned()),
-            frequency: "monthly".to_owned(),
-            interval: Some(2),
-            by_day: Some(vec![
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.rule_type = Some("RecurrenceRule".to_owned());
+            __built.frequency = "monthly".to_owned();
+            __built.interval = Some(2);
+            __built.by_day = Some(vec![
                 NDay::new("mo").with_nth_of_period(1),
                 NDay::new("tu").with_nth_of_period(2),
                 NDay::new("we").with_nth_of_period(3),
@@ -10184,8 +10241,8 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
                 NDay::new("fr").with_nth_of_period(5),
                 NDay::new("sa").with_nth_of_period(-1),
                 NDay::new("su").with_nth_of_period(-2),
-            ]),
-            by_month: Some(vec![
+            ]);
+            __built.by_month = Some(vec![
                 "1".to_owned(),
                 "2".to_owned(),
                 "3".to_owned(),
@@ -10198,9 +10255,9 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
                 "10".to_owned(),
                 "11".to_owned(),
                 "12".to_owned(),
-            ]),
-            by_set_position: Some(vec![1, 2, 3, -1, -2]),
-            ..RecurrenceRule::default()
+            ]);
+            __built.by_set_position = Some(vec![1, 2, 3, -1, -2]);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -11586,13 +11643,14 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
             ]
             .into(),
         ),
-        recurrence_rule: Some(RecurrenceRule {
-            rule_type: Some("RecurrenceRule".into()),
-            frequency: "weekly".into(),
-            interval: Some(2),
-            by_day: Some(vec![NDay::new("th")]),
-            count: Some(10),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.rule_type = Some("RecurrenceRule".into());
+            __built.frequency = "weekly".into();
+            __built.interval = Some(2);
+            __built.by_day = Some(vec![NDay::new("th")]);
+            __built.count = Some(10);
+            __built
         }),
         recurrence_overrides: Some(
             [
@@ -14836,10 +14894,11 @@ fn recurrence_until_parser_refusal_and_unstateable_canary_matrix() {
 
     // 2. Unstateable local date-times on export (e.g. month 13, day 30 of Feb)
     for invalid_until in ["2026-13-31T09:00:00", "whenever", "2026-02-30T09:00:00"] {
-        let bad_rule = RecurrenceRule {
-            frequency: "weekly".to_owned(),
-            until: Some(invalid_until.to_owned()),
-            ..RecurrenceRule::default()
+        let bad_rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_owned();
+            __built.until = Some(invalid_until.to_owned());
+            __built
         };
         assert!(
             !maps_recurrence_rule(&bad_rule),
@@ -14865,10 +14924,11 @@ fn recurrence_until_parser_refusal_and_unstateable_canary_matrix() {
     }
 
     // 3. Valid UNTIL converts and passes maps_recurrence_rule
-    let valid_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        until: Some("2026-12-31T09:00:00".to_owned()),
-        ..RecurrenceRule::default()
+    let valid_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.until = Some("2026-12-31T09:00:00".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&valid_rule));
     assert_eq!(unstateable_until(&valid_rule), None);
@@ -14934,15 +14994,16 @@ fn recurrence_complex_rrule_bysetpos_and_byday_ordinals_matrix() {
     assert!(ics1.contains("RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\r\n"));
 
     // 2. BYSETPOS combined with BYDAY ordinals and multiple set positions (first and last)
-    let complex_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![
+    let complex_rule = {
+        let mut __built = RecurrenceRule::new("monthly");
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![
             NDay::new("mo").with_nth_of_period(1),
             NDay::new("mo").with_nth_of_period(3),
             NDay::new("fr").with_nth_of_period(-1),
-        ]),
-        by_set_position: Some(vec![1, -1]),
-        ..RecurrenceRule::new("monthly")
+        ]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&complex_rule));
     let event2 = CalendarEvent {
@@ -14958,11 +15019,12 @@ fn recurrence_complex_rrule_bysetpos_and_byday_ordinals_matrix() {
     assert_eq!(parsed2.recurrence_rule.as_ref(), Some(&complex_rule));
 
     // 3. BYSETPOS combined with BYMONTHDAY
-    let monthday_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_month_day: Some(vec![1, 15, 31]),
-        by_set_position: Some(vec![-1]),
-        ..RecurrenceRule::new("monthly")
+    let monthday_rule = {
+        let mut __built = RecurrenceRule::new("monthly");
+        __built.frequency = "monthly".to_owned();
+        __built.by_month_day = Some(vec![1, 15, 31]);
+        __built.by_set_position = Some(vec![-1]);
+        __built
     };
     assert!(maps_recurrence_rule(&monthday_rule));
     let event3 = CalendarEvent {
@@ -14978,11 +15040,12 @@ fn recurrence_complex_rrule_bysetpos_and_byday_ordinals_matrix() {
     assert_eq!(parsed3.recurrence_rule.as_ref(), Some(&monthday_rule));
 
     // 4. BYSETPOS combined with BYHOUR and BYMINUTE
-    let time_rule = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![9, 13, 17]),
-        by_set_position: Some(vec![1, -1]),
-        ..RecurrenceRule::default()
+    let time_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![9, 13, 17]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&time_rule));
     let event4 = CalendarEvent {
@@ -14997,29 +15060,32 @@ fn recurrence_complex_rrule_bysetpos_and_byday_ordinals_matrix() {
 
     // 5. Boundary limits and refusal
     for valid_pos in [1, -1, 366, -366] {
-        let rule = RecurrenceRule {
-            frequency: "yearly".to_owned(),
-            by_month: Some(vec!["1".to_owned()]),
-            by_set_position: Some(vec![valid_pos]),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "yearly".to_owned();
+            __built.by_month = Some(vec!["1".to_owned()]);
+            __built.by_set_position = Some(vec![valid_pos]);
+            __built
         };
         assert!(maps_recurrence_rule(&rule), "pos {valid_pos} is valid");
     }
     for invalid_pos in [0, 367, -367] {
-        let rule = RecurrenceRule {
-            frequency: "yearly".to_owned(),
-            by_month: Some(vec!["1".to_owned()]),
-            by_set_position: Some(vec![invalid_pos]),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "yearly".to_owned();
+            __built.by_month = Some(vec!["1".to_owned()]);
+            __built.by_set_position = Some(vec![invalid_pos]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "pos {invalid_pos} is refused");
     }
 
     // 6. Orphan BYSETPOS refusal (without expanding parts)
-    let orphan_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_set_position: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let orphan_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_set_position = Some(vec![1]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&orphan_rule),
@@ -15060,10 +15126,11 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
     assert!(ics1.contains("RRULE:FREQ=MONTHLY;BYDAY=1MO,-1FR,3WE\r\n"));
 
     // 2. Mixed ordinals and bare weekdays
-    let mixed_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay::new("tu").with_nth_of_period(2), NDay::new("th")]),
-        ..RecurrenceRule::new("monthly")
+    let mixed_rule = {
+        let mut __built = RecurrenceRule::new("monthly");
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("tu").with_nth_of_period(2), NDay::new("th")]);
+        __built
     };
     assert!(maps_recurrence_rule(&mixed_rule));
     let event2 = CalendarEvent {
@@ -15080,18 +15147,20 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
 
     // 3. Frequency gating for ordinals: valid on monthly and yearly, refused on weekly and daily
     for valid_freq in ["monthly", "yearly"] {
-        let rule = RecurrenceRule {
-            frequency: valid_freq.to_owned(),
-            by_day: Some(vec![NDay::new("mo").with_nth_of_period(1)]),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = valid_freq.to_owned();
+            __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(1)]);
+            __built
         };
         assert!(maps_recurrence_rule(&rule), "{valid_freq} allows ordinals");
     }
     for invalid_freq in ["weekly", "daily", "hourly"] {
-        let rule = RecurrenceRule {
-            frequency: invalid_freq.to_owned(),
-            by_day: Some(vec![NDay::new("mo").with_nth_of_period(1)]),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = invalid_freq.to_owned();
+            __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(1)]);
+            __built
         };
         assert!(
             !maps_recurrence_rule(&rule),
@@ -15100,12 +15169,13 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
     }
 
     // 4. WKST non-default emission (SU) and default omission (MO)
-    let wkst_su_rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        interval: Some(2),
-        by_day: Some(vec![NDay::new("tu"), NDay::new("su")]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::default()
+    let wkst_su_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.interval = Some(2);
+        __built.by_day = Some(vec![NDay::new("tu"), NDay::new("su")]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&wkst_su_rule));
     let event_su = CalendarEvent {
@@ -15118,12 +15188,13 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
     let ics_su = event_to_ical(&event_su);
     assert!(ics_su.contains("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,SU;WKST=SU\r\n"));
 
-    let wkst_mo_rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        interval: Some(2),
-        by_day: Some(vec![NDay::new("tu"), NDay::new("su")]),
-        first_day_of_week: Some("mo".to_owned()),
-        ..RecurrenceRule::default()
+    let wkst_mo_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.interval = Some(2);
+        __built.by_day = Some(vec![NDay::new("tu"), NDay::new("su")]);
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&wkst_mo_rule));
     let event_mo = CalendarEvent {
@@ -15137,11 +15208,12 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
     assert!(!line(&ics_mo, "RRULE:").contains("WKST"));
 
     // 5. WKST interaction with BYWEEKNO
-    let weekno_rule = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_week_no: Some(vec![1, 52]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::default()
+    let weekno_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_week_no = Some(vec![1, 52]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&weekno_rule));
     let event_weekno = CalendarEvent {
@@ -15156,10 +15228,11 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
 
     // 6. firstDayOfWeek validation: uppercase and invalid strings are refused
     for bad_wkst in ["MO", "SU", "monday", "sunday", ""] {
-        let rule = RecurrenceRule {
-            frequency: "weekly".to_owned(),
-            first_day_of_week: Some(bad_wkst.to_owned()),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_owned();
+            __built.first_day_of_week = Some(bad_wkst.to_owned());
+            __built
         };
         assert!(
             !maps_recurrence_rule(&rule),
@@ -15296,10 +15369,11 @@ fn recurrence_rdate_exdate_and_override_interactions_matrix() {
         start: Some("2026-01-01T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "monthly".to_owned(),
-            by_day: Some(vec![NDay::new("mo").with_nth_of_period(1)]),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "monthly".to_owned();
+            __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(1)]);
+            __built
         }),
         recurrence_overrides: Some(BTreeMap::from([
             ("2026-02-02T00:00:00".to_owned(), json!({"excluded": true})),
@@ -16052,10 +16126,11 @@ fn custom_solidus_vtimezone_multiple_observances_roundtrip_and_recurrence() {
     });
 
     let mut event = defining(custom_tzid, json!({custom_tzid: custom_multi_zone}));
-    event.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        until: Some("2026-06-15T08:00:00".to_owned()),
-        ..Default::default()
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.until = Some("2026-06-15T08:00:00".to_owned());
+        __built
     });
 
     // 1. Serialization to iCalendar
@@ -19561,11 +19636,12 @@ END:VCALENDAR\r\n";
     );
 
     // BYMONTHDAY on weekly frequency is refused by by_month_day_part and maps_recurrence_rule
-    let weekly_monthday_rule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_string()),
-        frequency: "weekly".to_string(),
-        by_month_day: Some(vec![15]),
-        ..Default::default()
+    let weekly_monthday_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_string());
+        __built.frequency = "weekly".to_string();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&weekly_monthday_rule),
@@ -19573,11 +19649,12 @@ END:VCALENDAR\r\n";
     );
 
     // BYYEARDAY on daily, weekly, or monthly frequency is refused by by_year_day_part and maps_recurrence_rule
-    let daily_yearday_rule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_string()),
-        frequency: "daily".to_string(),
-        by_year_day: Some(vec![100]),
-        ..Default::default()
+    let daily_yearday_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_string());
+        __built.frequency = "daily".to_string();
+        __built.by_year_day = Some(vec![100]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&daily_yearday_rule),
@@ -19692,10 +19769,11 @@ END:VCALENDAR\r\n";
     assert!(!until_out.contains("COUNT="));
 
     // Unbounded recurrence: neither count nor until is present
-    let unbounded_rule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_string()),
-        frequency: "monthly".to_string(),
-        ..Default::default()
+    let unbounded_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_string());
+        __built.frequency = "monthly".to_string();
+        __built
     };
     assert!(maps_recurrence_rule(&unbounded_rule));
     let mut unbounded_ev = count_ev.clone();
@@ -24107,10 +24185,11 @@ fn differential_oracle_all_day_multi_property_invariant_gating() {
         time_zone: None,
         start: Some("2026-09-05T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_owned(),
-            by_hour: Some(vec![9]),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_owned();
+            __built.by_hour = Some(vec![9]);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -27087,24 +27166,27 @@ fn differential_oracle_unstateable_until_endpoint_isolation_and_error_decoupling
     // Compared with Stalwart's own CalendarEvent/parse:
     // unstateable_until diagnostic isolation: extracts unstateable UNTIL timestamps without
     // conflating them with other recurrence rule structural errors.
-    let valid_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("2026-10-15T10:00:00".to_string()),
-        ..Default::default()
+    let valid_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("2026-10-15T10:00:00".to_string());
+        __built
     };
     assert_eq!(unstateable_until(&valid_rule), None);
 
-    let no_until_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: None,
-        ..Default::default()
+    let no_until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = None;
+        __built
     };
     assert_eq!(unstateable_until(&no_until_rule), None);
 
-    let invalid_until_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("not-a-valid-datetime".to_string()),
-        ..Default::default()
+    let invalid_until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("not-a-valid-datetime".to_string());
+        __built
     };
     assert_eq!(
         unstateable_until(&invalid_until_rule),
@@ -27113,11 +27195,12 @@ fn differential_oracle_unstateable_until_endpoint_isolation_and_error_decoupling
 
     // If a rule is refused for structural reasons (e.g. invalid byMonth component)
     // but until is valid, unstateable_until returns None, preserving error isolation.
-    let bad_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("2026-10-15T10:00:00".to_string()),
-        by_month: Some(vec!["13".to_string()]),
-        ..Default::default()
+    let bad_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("2026-10-15T10:00:00".to_string());
+        __built.by_month = Some(vec!["13".to_string()]);
+        __built
     };
     assert!(!maps_recurrence_rule(&bad_rule));
     assert_eq!(unstateable_until(&bad_rule), None);
@@ -27129,11 +27212,12 @@ fn differential_oracle_rrule_entry_synthetic_envelope_parsing_and_syntax_verific
     // rrule_entry and Parser::entry synthetic component envelope AST parsing: validates serialized
     // recurrence rules through synthetic component envelope AST parsing before emission.
     let mut ev = fixture_event();
-    ev.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_string(),
-        interval: Some(2),
-        count: Some(5),
-        ..Default::default()
+    ev.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.interval = Some(2);
+        __built.count = Some(5);
+        __built
     });
 
     let ics = event_to_ical(&ev);
@@ -27366,10 +27450,11 @@ fn differential_oracle_shows_without_time_all_day_gating_and_override_consistenc
 
     // 5. Recurrence rule with time-of-day part (BYHOUR) falls back to timed representation
     let mut ev_rrule_hour = ev.clone();
-    ev_rrule_hour.recurrence_rule = Some(RecurrenceRule {
-        frequency: "DAILY".to_owned(),
-        by_hour: Some(vec![10]),
-        ..RecurrenceRule::default()
+    ev_rrule_hour.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "DAILY".to_owned();
+        __built.by_hour = Some(vec![10]);
+        __built
     });
     let ics_rh = event_to_ical(&ev_rrule_hour);
     assert!(
@@ -28158,15 +28243,16 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     // Ordinal Zero Refusal, Signed Prefix Parsing (+3TU), and Extension Rejection.
 
     // 1. Ordinal permitted on monthly rule
-    let monthly_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![{
+    let monthly_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![{
             let mut nday = NDay::default();
             nday.day = "mo".to_owned();
             nday.nth_of_period = Some(2);
             nday
-        }]),
-        ..RecurrenceRule::default()
+        }]);
+        __built
     };
     assert!(
         maps_recurrence_rule(&monthly_rule),
@@ -28187,15 +28273,16 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     );
 
     // 2. Ordinal permitted on yearly rule
-    let yearly_rule = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_day: Some(vec![{
+    let yearly_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_day = Some(vec![{
             let mut nday = NDay::default();
             nday.day = "fr".to_owned();
             nday.nth_of_period = Some(-1);
             nday
-        }]),
-        ..RecurrenceRule::default()
+        }]);
+        __built
     };
     assert!(
         maps_recurrence_rule(&yearly_rule),
@@ -28216,15 +28303,16 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     );
 
     // 3. Ordinal strictly refused on weekly rule per RFC 5545 section 3.3.10
-    let weekly_rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        by_day: Some(vec![{
+    let weekly_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.by_day = Some(vec![{
             let mut nday = NDay::default();
             nday.day = "mo".to_owned();
             nday.nth_of_period = Some(1);
             nday
-        }]),
-        ..RecurrenceRule::default()
+        }]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&weekly_rule),
@@ -28245,15 +28333,16 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     );
 
     // 4. Ordinal zero is refused
-    let zero_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![{
+    let zero_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![{
             let mut nday = NDay::default();
             nday.day = "tu".to_owned();
             nday.nth_of_period = Some(0);
             nday
-        }]),
-        ..RecurrenceRule::default()
+        }]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_rule), "ordinal zero is refused");
 
@@ -28283,16 +28372,17 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     // 6. Day extra properties cause refusal
     let mut extra_map = std::collections::BTreeMap::new();
     extra_map.insert("vendor".to_owned(), serde_json::Value::Bool(true));
-    let extra_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![{
+    let extra_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![{
             let mut nday = NDay::default();
             nday.day = "we".to_owned();
             nday.nth_of_period = Some(1);
             nday.extra = extra_map;
             nday
-        }]),
-        ..RecurrenceRule::default()
+        }]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&extra_rule),
@@ -29536,12 +29626,13 @@ fn differential_oracle_recurrence_set_position_and_wkst_default_handling() {
     // Default Monday Suppression (WKST=MO Omission for Libical/EDS Cache Stability), and Strict Lowercase Weekday Parsing.
 
     // 1. BYSETPOS with set selector (BYDAY) -> emitted cleanly
-    let rule_with_set = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_day: Some(vec![NDay::new("mo"), NDay::new("fr")]),
-        by_set_position: Some(vec![1, -1]),
-        first_day_of_week: Some("su".to_string()),
-        ..RecurrenceRule::default()
+    let rule_with_set = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo"), NDay::new("fr")]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built.first_day_of_week = Some("su".to_string());
+        __built
     };
     assert!(maps_recurrence_rule(&rule_with_set));
 
@@ -29557,10 +29648,11 @@ fn differential_oracle_recurrence_set_position_and_wkst_default_handling() {
     assert!(rrule_line.contains("WKST=SU"));
 
     // 2. BYSETPOS WITHOUT set selector (no BYDAY, BYMONTHDAY, etc.) -> omitted per RFC 5545 Section 3.3.10
-    let rule_without_set = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_set_position: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let rule_without_set = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_set_position = Some(vec![1]);
+        __built
     };
     let event_no_set = CalendarEvent {
         uid: Some("rrule-174-b".to_string()),
@@ -29573,19 +29665,21 @@ fn differential_oracle_recurrence_set_position_and_wkst_default_handling() {
     assert!(!rrule_line_b.contains("BYSETPOS="));
 
     // 3. BYSETPOS = 0 is invalid and rejected
-    let rule_zero_pos = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_day: Some(vec![NDay::new("mo")]),
-        by_set_position: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let rule_zero_pos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built.by_set_position = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&rule_zero_pos));
 
     // 4. Default Monday week start (WKST=MO) is suppressed on outbound emission
-    let rule_monday_wkst = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("mo".to_string()),
-        ..RecurrenceRule::default()
+    let rule_monday_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("mo".to_string());
+        __built
     };
     assert!(maps_recurrence_rule(&rule_monday_wkst));
     let event_monday = CalendarEvent {
@@ -29599,10 +29693,11 @@ fn differential_oracle_recurrence_set_position_and_wkst_default_handling() {
     assert!(!rrule_line_c.contains("WKST="));
 
     // 5. Non-lowercase or invalid weekday token is rejected
-    let rule_invalid_wkst = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("MO".to_string()),
-        ..RecurrenceRule::default()
+    let rule_invalid_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("MO".to_string());
+        __built
     };
     assert!(!maps_recurrence_rule(&rule_invalid_wkst));
 }
@@ -29623,9 +29718,10 @@ fn differential_oracle_modified_instances_override_expansion_and_dated_types() {
         time_zone: Some("Etc/UTC".to_string()),
         duration: Some("PT30M".to_string()),
         priority: Some(3),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".to_string(),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_string();
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -29669,9 +29765,10 @@ fn differential_oracle_modified_instances_override_expansion_and_dated_types() {
         start: Some("2026-10-01T00:00:00".to_string()),
         duration: Some("P1D".to_string()),
         show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "yearly".to_string(),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "yearly".to_string();
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -30335,20 +30432,22 @@ fn differential_oracle_all_day_invariants_and_time_of_day_prohibition() {
     assert!(!jmap_ical::event::is_utc("GMT"));
 
     // 4. names_a_time_of_day helper: checks if rule specifies BYHOUR, BYMINUTE, or BYSECOND
-    let rule_subday = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_hour: Some(vec![9, 17]),
-        ..RecurrenceRule::default()
+    let rule_subday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_hour = Some(vec![9, 17]);
+        __built
     };
     assert!(
         jmap_ical::event::names_a_time_of_day(&rule_subday),
         "rule naming BYHOUR carries time of day"
     );
 
-    let rule_day_only = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_day: Some(vec![NDay::new("mo"), NDay::new("we")]),
-        ..RecurrenceRule::default()
+    let rule_day_only = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo"), NDay::new("we")]);
+        __built
     };
     assert!(
         !jmap_ical::event::names_a_time_of_day(&rule_day_only),
@@ -30472,20 +30571,22 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
     // and BYSETPOS Exclusion.
 
     // 1. by_second_part: admits 0..=60 including leap second 60 per RFC 5545 Section 3.3.12
-    let rule_leap = RecurrenceRule {
-        frequency: "minutely".to_string(),
-        by_second: Some(vec![0, 30, 60]),
-        ..RecurrenceRule::default()
+    let rule_leap = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "minutely".to_string();
+        __built.by_second = Some(vec![0, 30, 60]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&rule_leap),
         Some("BYSECOND=0,30,60".to_string())
     );
 
-    let rule_second_overflow = RecurrenceRule {
-        frequency: "minutely".to_string(),
-        by_second: Some(vec![61]),
-        ..RecurrenceRule::default()
+    let rule_second_overflow = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "minutely".to_string();
+        __built.by_second = Some(vec![61]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&rule_second_overflow),
@@ -30493,10 +30594,11 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
         "second 61 is out of range"
     );
 
-    let rule_second_empty = RecurrenceRule {
-        frequency: "minutely".to_string(),
-        by_second: Some(vec![]),
-        ..RecurrenceRule::default()
+    let rule_second_empty = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "minutely".to_string();
+        __built.by_second = Some(vec![]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&rule_second_empty),
@@ -30505,20 +30607,22 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
     );
 
     // 2. by_minute_part: admits 0..=59
-    let rule_minute = RecurrenceRule {
-        frequency: "hourly".to_string(),
-        by_minute: Some(vec![15, 45]),
-        ..RecurrenceRule::default()
+    let rule_minute = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "hourly".to_string();
+        __built.by_minute = Some(vec![15, 45]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_minute_part(&rule_minute),
         Some("BYMINUTE=15,45".to_string())
     );
 
-    let rule_minute_overflow = RecurrenceRule {
-        frequency: "hourly".to_string(),
-        by_minute: Some(vec![60]),
-        ..RecurrenceRule::default()
+    let rule_minute_overflow = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "hourly".to_string();
+        __built.by_minute = Some(vec![60]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_minute_part(&rule_minute_overflow),
@@ -30527,20 +30631,22 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
     );
 
     // 3. by_hour_part: admits 0..=23
-    let rule_hour = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_hour: Some(vec![9, 17]),
-        ..RecurrenceRule::default()
+    let rule_hour = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_hour = Some(vec![9, 17]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_hour_part(&rule_hour),
         Some("BYHOUR=9,17".to_string())
     );
 
-    let rule_hour_overflow = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_hour: Some(vec![24]),
-        ..RecurrenceRule::default()
+    let rule_hour_overflow = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_hour = Some(vec![24]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_hour_part(&rule_hour_overflow),
@@ -30550,15 +30656,16 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
 
     // 4. named_by_parts: libical canonical ordering puts time-of-day finest-first
     // (BYSECOND, BYMINUTE, BYHOUR), followed by calendar date parts. Excludes BYSETPOS.
-    let full_rule = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        by_second: Some(vec![0]),
-        by_minute: Some(vec![30]),
-        by_hour: Some(vec![10]),
-        by_day: Some(vec![NDay::new("mo")]),
-        by_month: Some(vec!["10".to_string()]),
-        by_set_position: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let full_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.by_second = Some(vec![0]);
+        __built.by_minute = Some(vec![30]);
+        __built.by_hour = Some(vec![10]);
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built.by_month = Some(vec!["10".to_string()]);
+        __built.by_set_position = Some(vec![1]);
+        __built
     };
     let parts = jmap_ical::event::named_by_parts(&full_rule);
     assert_eq!(
@@ -30582,29 +30689,33 @@ fn differential_oracle_recurrence_writability_type_and_year_scope() {
     // RFC 8984 Implied Optional @type Validation, and Yearly Frequency Span Verification.
 
     // 1. writable: frequency cannot be empty, until must be valid date-time
-    let empty_freq = RecurrenceRule {
-        frequency: "".to_string(),
-        ..RecurrenceRule::default()
+    let empty_freq = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "".to_string();
+        __built
     };
     assert!(!jmap_ical::event::writable(&empty_freq));
 
-    let valid_freq_no_until = RecurrenceRule {
-        frequency: "daily".to_string(),
-        ..RecurrenceRule::default()
+    let valid_freq_no_until = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built
     };
     assert!(jmap_ical::event::writable(&valid_freq_no_until));
 
-    let valid_until = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-12-31T23:59:59".to_string()),
-        ..RecurrenceRule::default()
+    let valid_until = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-12-31T23:59:59".to_string());
+        __built
     };
     assert!(jmap_ical::event::writable(&valid_until));
 
-    let invalid_until = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("invalid-date".to_string()),
-        ..RecurrenceRule::default()
+    let invalid_until = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("invalid-date".to_string());
+        __built
     };
     assert!(!jmap_ical::event::writable(&invalid_until));
 
@@ -32060,25 +32171,27 @@ fn differential_oracle_maps_recurrence_rule_gating_and_part_ordering() {
     // Default Value Suppression (INTERVAL=1), and Unstateable UNTIL Endpoint Diagnostics.
 
     // 1. Basic conforming rule passes validation
-    let mut rule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_owned()),
-        frequency: "weekly".to_owned(),
-        interval: Some(2),
-        rscale: None,
-        skip: None,
-        first_day_of_week: Some("mo".to_owned()),
-        by_day: Some(vec![NDay::new("tu")]),
-        by_month_day: None,
-        by_month: None,
-        by_year_day: None,
-        by_week_no: None,
-        by_hour: None,
-        by_minute: None,
-        by_second: None,
-        by_set_position: None,
-        count: Some(5),
-        until: None,
-        extra: Default::default(),
+    let mut rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_owned());
+        __built.frequency = "weekly".to_owned();
+        __built.interval = Some(2);
+        __built.rscale = None;
+        __built.skip = None;
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built.by_day = Some(vec![NDay::new("tu")]);
+        __built.by_month_day = None;
+        __built.by_month = None;
+        __built.by_year_day = None;
+        __built.by_week_no = None;
+        __built.by_hour = None;
+        __built.by_minute = None;
+        __built.by_second = None;
+        __built.by_set_position = None;
+        __built.count = Some(5);
+        __built.until = None;
+        __built.extra = Default::default();
+        __built
     };
     assert!(maps_recurrence_rule(&rule));
 
@@ -32108,10 +32221,11 @@ fn differential_oracle_maps_recurrence_rule_gating_and_part_ordering() {
     let event_interval_1 = CalendarEvent {
         id: Some("interval-1".into()),
         start: Some("2026-09-05T10:00:00".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_owned(),
-            interval: Some(1),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_owned();
+            __built.interval = Some(1);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -32128,10 +32242,11 @@ fn differential_oracle_maps_recurrence_rule_gating_and_part_ordering() {
     let event_interval_3 = CalendarEvent {
         id: Some("interval-3".into()),
         start: Some("2026-09-05T10:00:00".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_owned(),
-            interval: Some(3),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_owned();
+            __built.interval = Some(3);
+            __built
         }),
         ..CalendarEvent::default()
     };
@@ -32209,18 +32324,20 @@ fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
     // and Weekly BYMONTHDAY Prohibition.
 
     // 1. BYDAY with ordinal is valid under MONTHLY or YEARLY
-    let monthly_with_ordinal = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay::new("mo").with_nth_of_period(2)]),
-        ..RecurrenceRule::default()
+    let monthly_with_ordinal = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(2)]);
+        __built
     };
     assert!(maps_recurrence_rule(&monthly_with_ordinal));
 
     // 2. BYDAY with ordinal is prohibited under WEEKLY (RFC 5545 Section 3.3.10)
-    let weekly_with_ordinal = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        by_day: Some(vec![NDay::new("mo").with_nth_of_period(2)]),
-        ..RecurrenceRule::default()
+    let weekly_with_ordinal = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(2)]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&weekly_with_ordinal),
@@ -32228,26 +32345,29 @@ fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
     );
 
     // 3. Ordinal 0 is rejected (RFC 8984 Section 4.3.3 and RFC 5545 ordwk 1-based)
-    let zero_ordinal = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay::new("mo").with_nth_of_period(0)]),
-        ..RecurrenceRule::default()
+    let zero_ordinal = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(0)]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_ordinal));
 
     // 4. BYMONTHDAY is valid under MONTHLY or YEARLY, with positive and negative day bounds
-    let valid_mday = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_month_day: Some(vec![15, -1]),
-        ..RecurrenceRule::default()
+    let valid_mday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_month_day = Some(vec![15, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&valid_mday));
 
     // 5. BYMONTHDAY is prohibited under WEEKLY (RFC 5545 Section 3.3.10)
-    let weekly_with_mday = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::default()
+    let weekly_with_mday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&weekly_with_mday),
@@ -32255,18 +32375,20 @@ fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
     );
 
     // 6. Day 0 in BYMONTHDAY is rejected
-    let zero_mday = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_month_day: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let zero_mday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_month_day = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_mday));
 
     // 7. Out-of-bounds day in BYMONTHDAY is rejected (> 31 or < -31)
-    let oob_mday = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_month_day: Some(vec![32]),
-        ..RecurrenceRule::default()
+    let oob_mday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_month_day = Some(vec![32]);
+        __built
     };
     assert!(!maps_recurrence_rule(&oob_mday));
 }
@@ -32280,18 +32402,20 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     // and Canonical Month String Normalization.
 
     // 1. BYYEARDAY is valid under YEARLY, HOURLY, MINUTELY, SECONDLY
-    let yearly_yday = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_year_day: Some(vec![100, -1]),
-        ..RecurrenceRule::default()
+    let yearly_yday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_year_day = Some(vec![100, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&yearly_yday));
 
     // BYYEARDAY is prohibited under DAILY, WEEKLY, MONTHLY (holds_a_year)
-    let monthly_yday = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_year_day: Some(vec![100]),
-        ..RecurrenceRule::default()
+    let monthly_yday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_year_day = Some(vec![100]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&monthly_yday),
@@ -32299,25 +32423,28 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     );
 
     // BYYEARDAY with 0 is rejected
-    let zero_yday = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_year_day: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let zero_yday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_year_day = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_yday));
 
     // 2. BYWEEKNO is strictly restricted to YEARLY frequency
-    let yearly_week = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_week_no: Some(vec![20, -1]),
-        ..RecurrenceRule::default()
+    let yearly_week = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_week_no = Some(vec![20, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&yearly_week));
 
-    let monthly_week = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_week_no: Some(vec![20]),
-        ..RecurrenceRule::default()
+    let monthly_week = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_week_no = Some(vec![20]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&monthly_week),
@@ -32325,26 +32452,29 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     );
 
     // BYWEEKNO with 0 is rejected
-    let zero_week = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_week_no: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let zero_week = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_week_no = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_week));
 
     // 3. BYMONTH requires exact canonical numbers 1..=12 without leading zeros
-    let valid_month = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_month: Some(vec!["3".to_owned(), "12".to_owned()]),
-        ..RecurrenceRule::default()
+    let valid_month = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_month = Some(vec!["3".to_owned(), "12".to_owned()]);
+        __built
     };
     assert!(maps_recurrence_rule(&valid_month));
 
     // Leading zero in BYMONTH is rejected (causes round-trip diff noise with libical)
-    let leading_zero_month = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_month: Some(vec!["03".to_owned()]),
-        ..RecurrenceRule::default()
+    let leading_zero_month = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_month = Some(vec!["03".to_owned()]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&leading_zero_month),
@@ -32352,10 +32482,11 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     );
 
     // Non-Gregorian leap month without RSCALE is rejected
-    let leap_month = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_month: Some(vec!["5L".to_owned()]),
-        ..RecurrenceRule::default()
+    let leap_month = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_month = Some(vec!["5L".to_owned()]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&leap_month),
@@ -32363,10 +32494,11 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     );
 
     // Out-of-bounds month (> 12 or 0) is rejected
-    let oob_month = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_month: Some(vec!["13".to_owned()]),
-        ..RecurrenceRule::default()
+    let oob_month = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_month = Some(vec!["13".to_owned()]);
+        __built
     };
     assert!(!maps_recurrence_rule(&oob_month));
 }
@@ -32380,80 +32512,89 @@ fn differential_oracle_by_set_position_and_wkst_part_generation() {
     // Zero Rejection, Monday Default Suppression (WKST=MO), and Lowercase Weekday Spelling Normalization.
 
     // 1. Valid by_set_position with by_day (selects_from_a_set = true)
-    let valid_setpos = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay::new("fr")]),
-        by_set_position: Some(vec![1, -1]),
-        ..RecurrenceRule::default()
+    let valid_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("fr")]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&valid_setpos));
 
     // 2. by_set_position with 0 is rejected (RFC 5545 Section 3.3.10)
-    let zero_setpos = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay::new("fr")]),
-        by_set_position: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let zero_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("fr")]);
+        __built.by_set_position = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_setpos));
 
     // 3. by_set_position out of bounds (> 366 or < -366) is rejected
-    let oob_setpos = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_day: Some(vec![NDay::new("fr")]),
-        by_set_position: Some(vec![367]),
-        ..RecurrenceRule::default()
+    let oob_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_day = Some(vec![NDay::new("fr")]);
+        __built.by_set_position = Some(vec![367]);
+        __built
     };
     assert!(!maps_recurrence_rule(&oob_setpos));
 
     // 4. by_set_position empty array is rejected
-    let empty_setpos = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay::new("fr")]),
-        by_set_position: Some(vec![]),
-        ..RecurrenceRule::default()
+    let empty_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("fr")]);
+        __built.by_set_position = Some(vec![]);
+        __built
     };
     assert!(!maps_recurrence_rule(&empty_setpos));
 
     // 5. firstDayOfWeek: lowercase weekdays are valid
-    let valid_wkst = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::default()
+    let valid_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&valid_wkst));
 
     // 6. firstDayOfWeek with uppercase or full day name is rejected
-    let upper_wkst = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("SU".to_owned()),
-        ..RecurrenceRule::default()
+    let upper_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("SU".to_owned());
+        __built
     };
     assert!(!maps_recurrence_rule(&upper_wkst));
 
-    let long_wkst = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("sunday".to_owned()),
-        ..RecurrenceRule::default()
+    let long_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("sunday".to_owned());
+        __built
     };
     assert!(!maps_recurrence_rule(&long_wkst));
 
     // 7. rule serialization suppresses WKST=MO (libical drops it) and emits WKST=SU
     let mut event_su = fixture_event();
-    event_su.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::default()
+    event_su.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     });
     let ics_su = event_to_ical(&event_su);
     let rrule_su = content_line(&ics_su, "RRULE:");
     assert!(rrule_su.contains("WKST=SU"));
 
     let mut event_mo = fixture_event();
-    event_mo.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("mo".to_owned()),
-        ..RecurrenceRule::default()
+    event_mo.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     });
     let ics_mo = event_to_ical(&event_mo);
     let rrule_mo = content_line(&ics_mo, "RRULE:");
@@ -32674,12 +32815,13 @@ fn differential_oracle_by_hour_minute_second_sub_day_parts_and_ordering() {
     // Empty Array Rejection, and Libical Finest-Outward Order Assembly.
 
     // 1. Valid sub-day parts formatted correctly
-    let rule_valid = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![9, 17]),
-        by_minute: Some(vec![0, 30]),
-        by_second: Some(vec![0, 60]),
-        ..RecurrenceRule::default()
+    let rule_valid = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_minute = Some(vec![0, 30]);
+        __built.by_second = Some(vec![0, 60]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_hour_part(&rule_valid),
@@ -32702,34 +32844,38 @@ fn differential_oracle_by_hour_minute_second_sub_day_parts_and_ordering() {
     assert_eq!(parts[2], "BYHOUR=9,17");
 
     // 3. Out-of-bounds rejection: hour > 23, minute > 59, second > 60
-    let rule_bad_hour = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![24]),
-        ..RecurrenceRule::default()
+    let rule_bad_hour = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![24]);
+        __built
     };
     assert_eq!(jmap_ical::event::by_hour_part(&rule_bad_hour), None);
 
-    let rule_bad_minute = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_minute: Some(vec![60]),
-        ..RecurrenceRule::default()
+    let rule_bad_minute = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_minute = Some(vec![60]);
+        __built
     };
     assert_eq!(jmap_ical::event::by_minute_part(&rule_bad_minute), None);
 
-    let rule_bad_second = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_second: Some(vec![61]),
-        ..RecurrenceRule::default()
+    let rule_bad_second = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_second = Some(vec![61]);
+        __built
     };
     assert_eq!(jmap_ical::event::by_second_part(&rule_bad_second), None);
 
     // 4. Empty arrays rejected to prevent libical reading BYHOUR= as BYHOUR=0
-    let rule_empty = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![]),
-        by_minute: Some(vec![]),
-        by_second: Some(vec![]),
-        ..RecurrenceRule::default()
+    let rule_empty = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![]);
+        __built.by_minute = Some(vec![]);
+        __built.by_second = Some(vec![]);
+        __built
     };
     assert_eq!(jmap_ical::event::by_hour_part(&rule_empty), None);
     assert_eq!(jmap_ical::event::by_minute_part(&rule_empty), None);
@@ -34285,9 +34431,10 @@ fn differential_oracle_all_day_date_invariants_and_time_exclusion() {
 
     // Recurrence rule with by_hour prevents VALUE=DATE:
     let mut rrule_allday = valid_allday.clone();
-    rrule_allday.recurrence_rule = Some(RecurrenceRule {
-        by_hour: Some(vec![10]),
-        ..RecurrenceRule::new("daily")
+    rrule_allday.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::new("daily");
+        __built.by_hour = Some(vec![10]);
+        __built
     });
     assert!(!jmap_ical::event::shows_without_time(
         &rrule_allday,
@@ -35260,9 +35407,10 @@ fn differential_oracle_outbound_itip_scheduling_ical_and_instance_scope() {
         start: Some("2026-09-10T10:00:00".into()),
         time_zone: Some("America/New_York".into()),
         duration: Some("PT1H".into()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".into(),
-            ..Default::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".into();
+            __built
         }),
         ..Default::default()
     };
@@ -37460,10 +37608,11 @@ fn differential_oracle_shows_without_time_all_day_gating_and_override_elevation(
     event.duration = Some("P1D".to_owned());
 
     // 5. Recurrence rule with sub-day time part disqualification (RFC 5545 Section 3.3.10)
-    let rule_with_time = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![10]),
-        ..Default::default()
+    let rule_with_time = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![10]);
+        __built
     };
     event.recurrence_rule = Some(rule_with_time);
     assert!(
@@ -38092,14 +38241,15 @@ fn differential_oracle_drawn_alerts_default_suppression_and_valarm() {
 #[test]
 fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() {
     // 1. Libical subpart ordering: FREQ -> COUNT -> INTERVAL -> BYSECOND -> BYMINUTE -> BYHOUR
-    let rule = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        count: Some(5),
-        interval: Some(2),
-        by_hour: Some(vec![9, 17]),
-        by_minute: Some(vec![30]),
-        by_second: Some(vec![0]),
-        ..Default::default()
+    let rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.count = Some(5);
+        __built.interval = Some(2);
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_minute = Some(vec![30]);
+        __built.by_second = Some(vec![0]);
+        __built
     };
     let rrule = jmap_ical::event::rule_to_rrule(
         &rule,
@@ -38113,10 +38263,11 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
     );
 
     // 2. Default INTERVAL=1 suppression
-    let rule_unit = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        interval: Some(1),
-        ..Default::default()
+    let rule_unit = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.interval = Some(1);
+        __built
     };
     let rrule_unit = jmap_ical::event::rule_to_rrule(
         &rule_unit,
@@ -38128,9 +38279,10 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
     assert!(!rrule_unit.contains("INTERVAL"));
 
     // 3. Hour bounds: 0..=23
-    let mut hour_rule = RecurrenceRule {
-        by_hour: Some(vec![0, 23]),
-        ..Default::default()
+    let mut hour_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_hour = Some(vec![0, 23]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_hour_part(&hour_rule).as_deref(),
@@ -38140,9 +38292,10 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
     assert_eq!(jmap_ical::event::by_hour_part(&hour_rule), None);
 
     // 4. Minute bounds: 0..=59
-    let mut min_rule = RecurrenceRule {
-        by_minute: Some(vec![0, 59]),
-        ..Default::default()
+    let mut min_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_minute = Some(vec![0, 59]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_minute_part(&min_rule).as_deref(),
@@ -38152,9 +38305,10 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
     assert_eq!(jmap_ical::event::by_minute_part(&min_rule), None);
 
     // 5. Second bounds: 0..=60 (leap second 60 permitted per RFC 5545 and libical)
-    let mut sec_rule = RecurrenceRule {
-        by_second: Some(vec![0, 59, 60]),
-        ..Default::default()
+    let mut sec_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_second = Some(vec![0, 59, 60]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&sec_rule).as_deref(),
@@ -38199,10 +38353,11 @@ fn differential_oracle_by_day_part_frequency_period_scoping_and_month_day() {
     assert_eq!(jmap_ical::event::by_day_token(&nday_zero, "monthly"), None);
 
     // 4. by_month_day_part forbidden on WEEKLY frequency
-    let mut mday_rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        by_month_day: Some(vec![15]),
-        ..Default::default()
+    let mut mday_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_month_day_part(&mday_rule),
@@ -38232,10 +38387,11 @@ fn differential_oracle_by_day_part_frequency_period_scoping_and_month_day() {
 #[test]
 fn differential_oracle_by_year_day_week_no_and_month_tokens() {
     // 1. by_year_day_part and holds_a_year frequency gating
-    let mut yday_rule = RecurrenceRule {
-        by_year_day: Some(vec![100, -1]),
-        frequency: "yearly".to_owned(),
-        ..Default::default()
+    let mut yday_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_year_day = Some(vec![100, -1]);
+        __built.frequency = "yearly".to_owned();
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_year_day_part(&yday_rule).as_deref(),
@@ -38270,10 +38426,11 @@ fn differential_oracle_by_year_day_week_no_and_month_tokens() {
     assert_eq!(jmap_ical::event::year_day_token(-367), None);
 
     // 3. by_week_no_part strictly yearly
-    let mut wno_rule = RecurrenceRule {
-        by_week_no: Some(vec![20, -1]),
-        frequency: "yearly".to_owned(),
-        ..Default::default()
+    let mut wno_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_week_no = Some(vec![20, -1]);
+        __built.frequency = "yearly".to_owned();
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_week_no_part(&wno_rule).as_deref(),
@@ -38301,9 +38458,10 @@ fn differential_oracle_by_year_day_week_no_and_month_tokens() {
 #[test]
 fn differential_oracle_set_position_wkst_default_and_read_until_offset() {
     // 1. by_set_position_part dependency gating
-    let setpos_rule = RecurrenceRule {
-        by_set_position: Some(vec![1, -1]),
-        ..Default::default()
+    let setpos_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     // When selects_from_a_set is false (no other BYxxx parts)
     assert_eq!(
@@ -38333,9 +38491,10 @@ fn differential_oracle_set_position_wkst_default_and_read_until_offset() {
     assert_eq!(jmap_ical::event::set_position_token(367), None);
 
     // 3. first_day_of_week_part: Monday suppressed
-    let mut wkst_rule = RecurrenceRule {
-        first_day_of_week: Some("mo".to_owned()),
-        ..Default::default()
+    let mut wkst_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     };
     assert_eq!(jmap_ical::event::first_day_of_week_part(&wkst_rule), None);
 
@@ -38965,10 +39124,11 @@ fn differential_oracle_all_day_dtstart_midnight_and_subday_rrule_gating() {
     ));
 
     // Sub-day recurrence part (BYHOUR) prohibits all-day representation
-    let rrule_with_hour = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![10]),
-        ..Default::default()
+    let rrule_with_hour = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![10]);
+        __built
     };
     assert!(jmap_ical::event::names_a_time_of_day(&rrule_with_hour));
     all_day_ev.recurrence_rule = Some(rrule_with_hour);
@@ -39131,11 +39291,12 @@ fn differential_oracle_inbound_alert_valarm_display_and_offset_triggers() {
 
 #[test]
 fn differential_oracle_maps_recurrence_rule_gating_and_unstateable_until() {
-    let mut rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        interval: Some(2),
-        first_day_of_week: Some("mo".to_owned()),
-        ..RecurrenceRule::default()
+    let mut rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.interval = Some(2);
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&rule));
 
@@ -40422,17 +40583,19 @@ fn differential_oracle_drawn_alerts_default_masking_and_valarm_synthesis() {
 #[test]
 fn differential_oracle_rrule_serialization_libical_subparts_and_ordering() {
     // Canonical libical subpart ordering: FREQ, COUNT, UNTIL, INTERVAL, time parts, day parts, BYSETPOS, WKST
-    let rule = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        count: Some(5),
-        interval: Some(2),
-        by_second: Some(vec![0, 30, 60]), // leap second 60 permitted
-        by_minute: Some(vec![15, 45]),
-        by_hour: Some(vec![9, 17]),
-        by_month: Some(vec!["3".to_string(), "10".to_string()]),
-        by_set_position: Some(vec![1, -1]),
-        first_day_of_week: Some("su".to_string()),
-        ..RecurrenceRule::default()
+    let rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.count = Some(5);
+        __built.interval = Some(2);
+        __built.by_second = Some(vec![0, 30, 60]);
+        __built.// leap second 60 permitted
+        by_minute = Some(vec![15, 45]);
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_month = Some(vec!["3".to_string(), "10".to_string()]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built.first_day_of_week = Some("su".to_string());
+        __built
     };
 
     let rrule_str = jmap_ical::event::rule_to_rrule(
@@ -40447,11 +40610,12 @@ fn differential_oracle_rrule_serialization_libical_subparts_and_ordering() {
     );
 
     // Default INTERVAL=1 suppression and WKST=MO suppression
-    let default_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        interval: Some(1),
-        first_day_of_week: Some("mo".to_string()),
-        ..RecurrenceRule::default()
+    let default_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.interval = Some(1);
+        __built.first_day_of_week = Some("mo".to_string());
+        __built
     };
     let default_rrule = jmap_ical::event::rule_to_rrule(
         &default_rule,
@@ -40465,26 +40629,29 @@ fn differential_oracle_rrule_serialization_libical_subparts_and_ordering() {
 
     // Frequency constraints:
     // BYMONTHDAY forbidden on WEEKLY
-    let invalid_weekly = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::default()
+    let invalid_weekly = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(jmap_ical::event::by_month_day_part(&invalid_weekly).is_none());
 
     // BYWEEKNO allowed ONLY on YEARLY
-    let invalid_monthly_weekno = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_week_no: Some(vec![12]),
-        ..RecurrenceRule::default()
+    let invalid_monthly_weekno = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_week_no = Some(vec![12]);
+        __built
     };
     assert!(jmap_ical::event::by_week_no_part(&invalid_monthly_weekno).is_none());
 
     // BYYEARDAY forbidden on DAILY/WEEKLY/MONTHLY
-    let invalid_daily_yearday = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_year_day: Some(vec![100]),
-        ..RecurrenceRule::default()
+    let invalid_daily_yearday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_year_day = Some(vec![100]);
+        __built
     };
     assert!(jmap_ical::event::by_year_day_part(&invalid_daily_yearday).is_none());
 
@@ -40544,11 +40711,12 @@ fn differential_oracle_rrule_parsing_token_decomposition_and_sentinels() {
 #[test]
 fn differential_oracle_recurrence_rule_capability_gating_and_extension_shielding() {
     // 1. Valid conforming rule passes maps_recurrence_rule
-    let valid_rule = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        interval: Some(1),
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::default()
+    let valid_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.interval = Some(1);
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(jmap_ical::event::maps_recurrence_rule(&valid_rule));
     assert!(jmap_ical::event::writable(&valid_rule));
@@ -40570,18 +40738,20 @@ fn differential_oracle_recurrence_rule_capability_gating_and_extension_shielding
     assert!(!jmap_ical::event::maps_recurrence_rule(&extra_rule));
 
     // 3. Missing frequency fails writable
-    let empty_freq = RecurrenceRule {
-        frequency: "".to_string(),
-        ..RecurrenceRule::default()
+    let empty_freq = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "".to_string();
+        __built
     };
     assert!(!jmap_ical::event::writable(&empty_freq));
     assert!(!jmap_ical::event::maps_recurrence_rule(&empty_freq));
 
     // 4. Unstateable until is flagged
-    let unstateable = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("not-a-valid-date-time".to_string()),
-        ..RecurrenceRule::default()
+    let unstateable = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("not-a-valid-date-time".to_string());
+        __built
     };
     assert!(!jmap_ical::event::writable(&unstateable));
     assert_eq!(
@@ -40590,10 +40760,11 @@ fn differential_oracle_recurrence_rule_capability_gating_and_extension_shielding
     );
 
     // 5. Dependent BYSETPOS requires companion expanding part
-    let orphan_setpos = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_set_position: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let orphan_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_set_position = Some(vec![1]);
+        __built
     };
     assert!(!jmap_ical::event::maps_recurrence_rule(&orphan_setpos));
 }
@@ -41351,10 +41522,11 @@ fn differential_oracle_read_until_zoned_projection_and_unstateable_diagnostic() 
     );
 
     // 4. Actionable outbound capability diagnostics via unstateable_until
-    let unstateable_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-06-01T12:00:00Z".to_string()),
-        ..RecurrenceRule::default()
+    let unstateable_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-06-01T12:00:00Z".to_string());
+        __built
     };
     // Trailing Z sentinel is flagged as unstateable endpoint
     assert_eq!(
@@ -41363,10 +41535,11 @@ fn differential_oracle_read_until_zoned_projection_and_unstateable_diagnostic() 
     );
     assert!(!jmap_ical::event::maps_recurrence_rule(&unstateable_rule));
 
-    let clean_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-06-01T14:00:00".to_string()),
-        ..RecurrenceRule::default()
+    let clean_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-06-01T14:00:00".to_string());
+        __built
     };
     assert_eq!(jmap_ical::event::unstateable_until(&clean_rule), None);
     assert!(jmap_ical::event::maps_recurrence_rule(&clean_rule));
@@ -41736,31 +41909,35 @@ fn differential_oracle_shows_without_time_all_day_gating_preconditions() {
     assert!(!jmap_ical::event::whole_days("-P1D"));
 
     // 2. names_a_time_of_day detection
-    let rule_with_hour = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_hour: Some(vec![9]),
-        ..RecurrenceRule::default()
+    let rule_with_hour = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_hour = Some(vec![9]);
+        __built
     };
     assert!(jmap_ical::event::names_a_time_of_day(&rule_with_hour));
 
-    let rule_with_minute = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_minute: Some(vec![30]),
-        ..RecurrenceRule::default()
+    let rule_with_minute = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_minute = Some(vec![30]);
+        __built
     };
     assert!(jmap_ical::event::names_a_time_of_day(&rule_with_minute));
 
-    let rule_with_second = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_second: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let rule_with_second = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_second = Some(vec![0]);
+        __built
     };
     assert!(jmap_ical::event::names_a_time_of_day(&rule_with_second));
 
-    let pure_calendar_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_day: Some(vec![NDay::new("mo")]),
-        ..RecurrenceRule::default()
+    let pure_calendar_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built
     };
     assert!(!jmap_ical::event::names_a_time_of_day(&pure_calendar_rule));
 
@@ -41805,10 +41982,11 @@ fn differential_oracle_shows_without_time_all_day_gating_preconditions() {
 
     // Refuses recurrence rule naming time of day
     let timed_rule_event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_string(),
-            by_hour: Some(vec![10]),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_string();
+            __built.by_hour = Some(vec![10]);
+            __built
         }),
         ..valid_all_day.clone()
     };
@@ -41840,10 +42018,11 @@ fn differential_oracle_scheduling_ical_itip_methods_and_instance_narrowing() {
         start: Some("2026-06-01T14:00:00".into()),
         duration: Some("PT1H".into()),
         time_zone: Some("UTC".into()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".to_string(),
-            count: Some(5),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_string();
+            __built.count = Some(5);
+            __built
         }),
         recurrence_overrides: Some(BTreeMap::from([(
             "2026-06-08T14:00:00".to_string(),
@@ -42500,13 +42679,14 @@ fn differential_oracle_recurrence_rule_time_of_day_parts_and_zero_values() {
     // zero as valid instant value versus u32::MAX sentinel refusal.
 
     // 1. Component ordering: named_by_parts emits bySecond, byMinute, byHour before days
-    let full_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_second: Some(vec![0, 30]),
-        by_minute: Some(vec![0, 15, 45]),
-        by_hour: Some(vec![9, 17]),
-        by_day: Some(vec![NDay::new("mo")]),
-        ..RecurrenceRule::default()
+    let full_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_second = Some(vec![0, 30]);
+        __built.by_minute = Some(vec![0, 15, 45]);
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built
     };
     let parts = jmap_ical::event::named_by_parts(&full_rule);
     assert_eq!(
@@ -42520,12 +42700,13 @@ fn differential_oracle_recurrence_rule_time_of_day_parts_and_zero_values() {
     );
 
     // 2. Zero is a valid time-of-day value (midnight, zeroth minute, zeroth second)
-    let midnight_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_second: Some(vec![0]),
-        by_minute: Some(vec![0]),
-        by_hour: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let midnight_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_second = Some(vec![0]);
+        __built.by_minute = Some(vec![0]);
+        __built.by_hour = Some(vec![0]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&midnight_rule).as_deref(),
@@ -42541,12 +42722,13 @@ fn differential_oracle_recurrence_rule_time_of_day_parts_and_zero_values() {
     );
 
     // 3. Exact range bounds: hour <= 23, minute <= 59, second <= 60 (leap second per RFC 5545)
-    let valid_bounds_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_second: Some(vec![60]),
-        by_minute: Some(vec![59]),
-        by_hour: Some(vec![23]),
-        ..RecurrenceRule::default()
+    let valid_bounds_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_second = Some(vec![60]);
+        __built.by_minute = Some(vec![59]);
+        __built.by_hour = Some(vec![23]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&valid_bounds_rule).as_deref(),
@@ -42562,24 +42744,27 @@ fn differential_oracle_recurrence_rule_time_of_day_parts_and_zero_values() {
     );
 
     // Out-of-range values return None
-    let bad_hour_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_hour: Some(vec![24]),
-        ..RecurrenceRule::default()
+    let bad_hour_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_hour = Some(vec![24]);
+        __built
     };
     assert!(jmap_ical::event::by_hour_part(&bad_hour_rule).is_none());
 
-    let bad_minute_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_minute: Some(vec![60]),
-        ..RecurrenceRule::default()
+    let bad_minute_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_minute = Some(vec![60]);
+        __built
     };
     assert!(jmap_ical::event::by_minute_part(&bad_minute_rule).is_none());
 
-    let bad_second_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_second: Some(vec![61]),
-        ..RecurrenceRule::default()
+    let bad_second_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_second = Some(vec![61]);
+        __built
     };
     assert!(jmap_ical::event::by_second_part(&bad_second_rule).is_none());
 
@@ -42612,10 +42797,11 @@ fn differential_oracle_recurrence_rule_period_bounding_and_setpos_prerequisites(
     assert_eq!(jmap_ical::event::month_token("13"), None); // out of range
     assert_eq!(jmap_ical::event::month_token("0"), None);
 
-    let month_rule = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        by_month: Some(vec!["3".to_string(), "9".to_string()]),
-        ..RecurrenceRule::default()
+    let month_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.by_month = Some(vec!["3".to_string(), "9".to_string()]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_month_part(&month_rule).as_deref(),
@@ -42629,20 +42815,22 @@ fn differential_oracle_recurrence_rule_period_bounding_and_setpos_prerequisites(
     assert!(!jmap_ical::event::holds_a_year("weekly"));
     assert!(!jmap_ical::event::holds_a_year("monthly"));
 
-    let yearday_rule_valid = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        by_year_day: Some(vec![1, 100, -1]),
-        ..RecurrenceRule::default()
+    let yearday_rule_valid = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.by_year_day = Some(vec![1, 100, -1]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_year_day_part(&yearday_rule_valid).as_deref(),
         Some("BYYEARDAY=1,100,-1")
     );
 
-    let yearday_rule_invalid_freq = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_year_day: Some(vec![1, 100]),
-        ..RecurrenceRule::default()
+    let yearday_rule_invalid_freq = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_year_day = Some(vec![1, 100]);
+        __built
     };
     assert!(jmap_ical::event::by_year_day_part(&yearday_rule_invalid_freq).is_none());
 
@@ -42658,20 +42846,22 @@ fn differential_oracle_recurrence_rule_period_bounding_and_setpos_prerequisites(
     assert_eq!(jmap_ical::event::year_day_token(367), None);
 
     // 3. by_week_no_part: restricted to YEARLY only
-    let week_rule_yearly = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        by_week_no: Some(vec![1, 26, -1]),
-        ..RecurrenceRule::default()
+    let week_rule_yearly = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.by_week_no = Some(vec![1, 26, -1]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_week_no_part(&week_rule_yearly).as_deref(),
         Some("BYWEEKNO=1,26,-1")
     );
 
-    let week_rule_monthly = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_week_no: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let week_rule_monthly = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_week_no = Some(vec![1]);
+        __built
     };
     assert!(jmap_ical::event::by_week_no_part(&week_rule_monthly).is_none());
 
@@ -42681,11 +42871,12 @@ fn differential_oracle_recurrence_rule_period_bounding_and_setpos_prerequisites(
     assert_eq!(jmap_ical::event::week_no_token(54), None);
 
     // 4. by_set_position_part: requires selects_from_a_set to be true
-    let setpos_rule = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_day: Some(vec![NDay::new("mo"), NDay::new("fr")]),
-        by_set_position: Some(vec![1, -1]),
-        ..RecurrenceRule::default()
+    let setpos_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo"), NDay::new("fr")]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_set_position_part(&setpos_rule, true).as_deref(),
@@ -42712,10 +42903,11 @@ fn differential_oracle_recurrence_rule_weekday_normalization_and_wkst_default() 
     // precedence over frequency intervals.
 
     // 1. first_day_of_week_part: default "mo" is omitted to preserve libical round-trip stability
-    let rule_wkst_mo = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("mo".to_string()),
-        ..RecurrenceRule::default()
+    let rule_wkst_mo = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("mo".to_string());
+        __built
     };
     assert_eq!(
         jmap_ical::event::first_day_of_week_part(&rule_wkst_mo),
@@ -42723,20 +42915,22 @@ fn differential_oracle_recurrence_rule_weekday_normalization_and_wkst_default() 
     );
 
     // Non-Monday days are explicitly rendered as WKST=<DAY>
-    let rule_wkst_su = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("su".to_string()),
-        ..RecurrenceRule::default()
+    let rule_wkst_su = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("su".to_string());
+        __built
     };
     assert_eq!(
         jmap_ical::event::first_day_of_week_part(&rule_wkst_su).as_deref(),
         Some("WKST=SU")
     );
 
-    let rule_wkst_tu = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("tu".to_string()),
-        ..RecurrenceRule::default()
+    let rule_wkst_tu = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("tu".to_string());
+        __built
     };
     assert_eq!(
         jmap_ical::event::first_day_of_week_part(&rule_wkst_tu).as_deref(),
@@ -42859,20 +43053,22 @@ fn differential_oracle_recurrence_rule_ordinal_days_and_month_day_bounding() {
     assert_eq!(jmap_ical::event::month_day_token(-32), None);
 
     // 5. by_month_day_part: RFC 5545 Section 3.3.10 prohibits BYMONTHDAY on weekly frequency
-    let month_day_rule = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_month_day: Some(vec![1, 15, -1]),
-        ..RecurrenceRule::default()
+    let month_day_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_month_day = Some(vec![1, 15, -1]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_month_day_part(&month_day_rule).as_deref(),
         Some("BYMONTHDAY=1,15,-1")
     );
 
-    let weekly_month_day_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::default()
+    let weekly_month_day_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(jmap_ical::event::by_month_day_part(&weekly_month_day_rule).is_none());
 
@@ -42890,10 +43086,11 @@ fn differential_oracle_recurrence_rule_endpoints_count_until_and_utc_projection(
     // and in-document zone offset projection.
 
     // 1. rule_to_rrule: all-day event serializes UNTIL in DATE format YYYYMMDD
-    let until_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("2026-09-30T00:00:00".to_string()),
-        ..RecurrenceRule::default()
+    let until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("2026-09-30T00:00:00".to_string());
+        __built
     };
     let rrule_date = jmap_ical::event::rule_to_rrule(
         &until_rule,
@@ -42919,17 +43116,19 @@ fn differential_oracle_recurrence_rule_endpoints_count_until_and_utc_projection(
     assert_eq!(rrule_offset, "FREQ=DAILY;UNTIL=20260929T220000Z");
 
     // 4. unstateable_until: isolates unconvertible timestamps without confusing other rule errors
-    let valid_until_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-09-30T10:00:00".to_string()),
-        ..RecurrenceRule::default()
+    let valid_until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-09-30T10:00:00".to_string());
+        __built
     };
     assert_eq!(jmap_ical::event::unstateable_until(&valid_until_rule), None);
 
-    let malformed_until_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-09-30T10:00:00Z".to_string()),
-        ..RecurrenceRule::default()
+    let malformed_until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-09-30T10:00:00Z".to_string());
+        __built
     };
     assert_eq!(
         jmap_ical::event::unstateable_until(&malformed_until_rule),
@@ -43192,10 +43391,11 @@ fn differential_oracle_itip_scheduling_payload_series_and_instance_assembly() {
 
     let mut event = fixture_event();
     event.title = Some("Sprint Review".to_string());
-    event.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_string(),
-        count: Some(4),
-        ..RecurrenceRule::default()
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.count = Some(4);
+        __built
     });
 
     // 1. Series-wide scheduling payload carries METHOD:REQUEST and full recurrence rules
@@ -44444,12 +44644,13 @@ fn differential_oracle_recurrence_rules_plurality_type_stamping_and_nday_offsets
     let ev_out = CalendarEvent {
         id: Some("rrule-test-3".into()),
         start: Some("2026-10-15T10:00:00Z".to_string()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".to_string(),
-            interval: Some(2),
-            count: Some(6),
-            by_day: Some(vec![NDay::new("mo")]),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_string();
+            __built.interval = Some(2);
+            __built.count = Some(6);
+            __built.by_day = Some(vec![NDay::new("mo")]);
+            __built
         }),
         ..CalendarEvent::default()
     };

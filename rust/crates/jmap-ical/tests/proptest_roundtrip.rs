@@ -220,12 +220,13 @@ fn arb_valid_recurrence_rule() -> impl Strategy<Value = RecurrenceRule> {
     prop_oneof![
         // Daily rule
         (prop::option::of(2..=30u32), prop::option::of(1..=100u32),).prop_map(
-            |(interval, count)| RecurrenceRule {
-                rule_type: Some("RecurrenceRule".to_owned()),
-                frequency: "daily".to_owned(),
-                interval,
-                count,
-                ..RecurrenceRule::default()
+            |(interval, count)| {
+                let mut __built = RecurrenceRule::default();
+                __built.rule_type = Some("RecurrenceRule".to_owned());
+                __built.frequency = "daily".to_owned();
+                __built.interval = interval;
+                __built.count = count;
+                __built
             }
         ),
         // Weekly rule (BYDAY with plain weekdays only per RFC 5545 3.3.10).
@@ -235,17 +236,16 @@ fn arb_valid_recurrence_rule() -> impl Strategy<Value = RecurrenceRule> {
             prop::option::of(prop::collection::vec(arb_plain_weekday(), 1..=3)),
             prop_oneof![Just(None), Just(Some("su".to_string()))],
         )
-            .prop_map(
-                |(interval, count, by_day, first_day_of_week)| RecurrenceRule {
-                    rule_type: Some("RecurrenceRule".to_owned()),
-                    frequency: "weekly".to_owned(),
-                    interval,
-                    count,
-                    by_day,
-                    first_day_of_week,
-                    ..RecurrenceRule::default()
-                }
-            ),
+            .prop_map(|(interval, count, by_day, first_day_of_week)| {
+                let mut __built = RecurrenceRule::default();
+                __built.rule_type = Some("RecurrenceRule".to_owned());
+                __built.frequency = "weekly".to_owned();
+                __built.interval = interval;
+                __built.count = count;
+                __built.by_day = by_day;
+                __built.first_day_of_week = first_day_of_week;
+                __built
+            }),
         // Monthly rule (BYDAY with optional ordinal, or BYMONTHDAY)
         (
             prop::option::of(2..=30u32),
@@ -259,14 +259,15 @@ fn arb_valid_recurrence_rule() -> impl Strategy<Value = RecurrenceRule> {
                 Just(None),
             ],
         )
-            .prop_map(|(interval, count, by_day, by_month_day)| RecurrenceRule {
-                rule_type: Some("RecurrenceRule".to_owned()),
-                frequency: "monthly".to_owned(),
-                interval,
-                count,
-                by_day,
-                by_month_day,
-                ..RecurrenceRule::default()
+            .prop_map(|(interval, count, by_day, by_month_day)| {
+                let mut __built = RecurrenceRule::default();
+                __built.rule_type = Some("RecurrenceRule".to_owned());
+                __built.frequency = "monthly".to_owned();
+                __built.interval = interval;
+                __built.count = count;
+                __built.by_day = by_day;
+                __built.by_month_day = by_month_day;
+                __built
             }),
         // Yearly rule (BYMONTH, BYDAY with optional ordinal)
         (
@@ -281,14 +282,15 @@ fn arb_valid_recurrence_rule() -> impl Strategy<Value = RecurrenceRule> {
                 Just(None),
             ],
         )
-            .prop_map(|(interval, count, by_month, by_day)| RecurrenceRule {
-                rule_type: Some("RecurrenceRule".to_owned()),
-                frequency: "yearly".to_owned(),
-                interval,
-                count,
-                by_month,
-                by_day,
-                ..RecurrenceRule::default()
+            .prop_map(|(interval, count, by_month, by_day)| {
+                let mut __built = RecurrenceRule::default();
+                __built.rule_type = Some("RecurrenceRule".to_owned());
+                __built.frequency = "yearly".to_owned();
+                __built.interval = interval;
+                __built.count = count;
+                __built.by_month = by_month;
+                __built.by_day = by_day;
+                __built
             }),
     ]
 }

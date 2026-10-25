@@ -57,9 +57,10 @@ fn a_crlf_in_the_duration_cannot_add_a_property() {
 #[test]
 fn a_crlf_in_a_recurrence_frequency_cannot_add_a_property() {
     let ics = event_to_ical(&CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily\r\nLOCATION:Elsewhere".to_owned(),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily\r\nLOCATION:Elsewhere".to_owned();
+            __built
         }),
         ..event()
     });
@@ -92,9 +93,10 @@ fn a_bare_lf_or_cr_is_stripped_as_well() {
     for injected in ["\nSUMMARY:x", "\rSUMMARY:x", "\n\rSUMMARY:x"] {
         let ics = event_to_ical(&CalendarEvent {
             duration: Some(format!("PT1H{injected}")),
-            recurrence_rule: Some(RecurrenceRule {
-                frequency: format!("daily{injected}"),
-                ..RecurrenceRule::default()
+            recurrence_rule: Some({
+                let mut __built = RecurrenceRule::default();
+                __built.frequency = format!("daily{injected}");
+                __built
             }),
             ..event()
         });

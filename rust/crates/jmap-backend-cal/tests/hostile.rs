@@ -36,9 +36,10 @@ fn hostile_event() -> CalendarEvent {
         start: Some("2026-01-15T13:00:00".to_owned()),
         duration: Some("PT1H\r\nSUMMARY:Cancelled".to_owned()),
         time_zone: Some("Europe/Berlin\r\nDESCRIPTION:See attachment".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily\r\nLOCATION:Elsewhere".to_owned(),
-            ..RecurrenceRule::default()
+        recurrence_rule: Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily\r\nLOCATION:Elsewhere".to_owned();
+            __built
         }),
         ..CalendarEvent::default()
     }
