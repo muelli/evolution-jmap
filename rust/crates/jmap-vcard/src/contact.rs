@@ -1724,16 +1724,14 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 if uri.is_empty() {
                     continue;
                 }
-                let calendar = Calendar {
-                    kind: calendar_kind(&name_upper).map(str::to_owned),
-                    uri,
-                    media_type: entry_param(entry, "MEDIATYPE")
-                        .map(|value| value.trim().to_owned())
-                        .filter(|value| !value.is_empty()),
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra: BTreeMap::new(),
-                    ..Calendar::default()
-                };
+                let mut calendar = Calendar::default();
+                calendar.kind = calendar_kind(&name_upper).map(str::to_owned);
+                calendar.uri = uri;
+                calendar.media_type = entry_param(entry, "MEDIATYPE")
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty());
+                calendar.pref = entry_has_type(entry, "PREF").then_some(1);
+                calendar.extra = BTreeMap::new();
                 calendars.insert(entry_key(entry, "c", &calendars), calendar);
             }
             "CALADRURI" => {
@@ -2128,12 +2126,11 @@ fn read_title(entry: &VCardEntry) -> Option<Title> {
         .find(|(_, mapped)| mapped.eq_ignore_ascii_case(entry.name.as_str()))
         .map(|(kind, _)| *kind)
         .filter(|kind| *kind != DEFAULT_TITLE_KIND);
-    Some(Title {
-        name,
-        kind: kind.map(str::to_owned),
-        extra: BTreeMap::new(),
-        ..Title::default()
-    })
+    let mut title = Title::default();
+    title.name = name;
+    title.kind = kind.map(str::to_owned);
+    title.extra = BTreeMap::new();
+    Some(title)
 }
 
 /// The anniversary a calendar-property line states, or `None` when no day parses.

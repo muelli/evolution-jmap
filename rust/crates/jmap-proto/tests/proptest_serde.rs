@@ -506,12 +506,10 @@ prop_compose! {
         name in "[A-Za-z ]{1,24}",
         extra in arb_extra(),
     ) -> Title {
-        Title {
-            name,
-            kind: None,
-            organization_id: None,
-            extra,
-        }
+        let mut title = Title::default();
+        title.name = name;
+        title.extra = extra;
+        title
     }
 }
 

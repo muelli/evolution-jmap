@@ -537,15 +537,13 @@ fn jscontact_spec_properties_roundtrip() {
             ..Organization::default()
         },
     )]));
-    card.titles = Some(BTreeMap::from([(
-        "t1".to_owned(),
-        Title {
-            name: "Chief Mathematician".to_owned(),
-            kind: Some("title".to_owned()),
-            organization_id: Some("o1".to_owned()),
-            ..Title::default()
-        },
-    )]));
+    card.titles = Some(BTreeMap::from([("t1".to_owned(), {
+        let mut title = Title::default();
+        title.name = "Chief Mathematician".to_owned();
+        title.kind = Some("title".to_owned());
+        title.organization_id = Some("o1".to_owned());
+        title
+    })]));
     card.addresses = Some(BTreeMap::from([(
         "a1".to_owned(),
         Address {
@@ -576,18 +574,16 @@ fn jscontact_spec_properties_roundtrip() {
             ..Link::default()
         },
     )]));
-    card.calendars = Some(BTreeMap::from([(
-        "c1".to_owned(),
-        Calendar {
-            uri: "https://cal.example.org/ada.ics".to_owned(),
-            kind: Some("calendar".to_owned()),
-            contexts: Some(serde_json::json!({"work": true})),
-            media_type: Some("text/calendar".to_owned()),
-            pref: Some(1),
-            label: Some("Primary Schedule".to_owned()),
-            ..Calendar::default()
-        },
-    )]));
+    card.calendars = Some(BTreeMap::from([("c1".to_owned(), {
+        let mut calendar = Calendar::default();
+        calendar.uri = "https://cal.example.org/ada.ics".to_owned();
+        calendar.kind = Some("calendar".to_owned());
+        calendar.contexts = Some(serde_json::json!({"work": true}));
+        calendar.media_type = Some("text/calendar".to_owned());
+        calendar.pref = Some(1);
+        calendar.label = Some("Primary Schedule".to_owned());
+        calendar
+    })]));
     card.media = Some(BTreeMap::from([(
         "m1".to_owned(),
         Media {

@@ -476,14 +476,12 @@ fn a_title_of_a_kind_vcard_has_no_property_for_is_dropped() {
     let card = {
         let mut card = ContactCard::default();
         card.titles = Some(
-            [(
-                "t1".to_owned(),
-                Title {
-                    name: "Knight of the Realm".to_owned(),
-                    kind: Some("x-honour".to_owned()),
-                    ..Title::default()
-                },
-            )]
+            [("t1".to_owned(), {
+                let mut title = Title::default();
+                title.name = "Knight of the Realm".to_owned();
+                title.kind = Some("x-honour".to_owned());
+                title
+            })]
             .into(),
         );
         card
@@ -576,38 +574,30 @@ fn multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip() {
         let mut card = ContactCard::default();
         card.titles = Some(
             [
-                (
-                    "t1".to_owned(),
-                    Title {
-                        name: "Research Scientist".to_owned(),
-                        kind: None,
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "t2".to_owned(),
-                    Title {
-                        name: "Director of Engineering".to_owned(),
-                        kind: None,
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r1".to_owned(),
-                    Title {
-                        name: "Lead Investigator".to_owned(),
-                        kind: Some("role".to_owned()),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r2".to_owned(),
-                    Title {
-                        name: "Project Manager".to_owned(),
-                        kind: Some("role".to_owned()),
-                        ..Title::default()
-                    },
-                ),
+                ("t1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Research Scientist".to_owned();
+                    title.kind = None;
+                    title
+                }),
+                ("t2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Director of Engineering".to_owned();
+                    title.kind = None;
+                    title
+                }),
+                ("r1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Lead Investigator".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title
+                }),
+                ("r2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Project Manager".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title
+                }),
             ]
             .into(),
         );
@@ -819,46 +809,36 @@ fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
         );
         card.titles = Some(
             [
-                (
-                    "t1".to_owned(),
-                    Title {
-                        name: "Chief Scientist".to_owned(),
-                        kind: None,
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "t2".to_owned(),
-                    Title {
-                        name: "Distinguished Engineer".to_owned(),
-                        kind: Some("title".to_owned()),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r1".to_owned(),
-                    Title {
-                        name: "Technical Lead".to_owned(),
-                        kind: Some("role".to_owned()),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r2".to_owned(),
-                    Title {
-                        name: "Steering Committee Member".to_owned(),
-                        kind: Some("role".to_owned()),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "x1".to_owned(),
-                    Title {
-                        name: "Honorary Fellow".to_owned(),
-                        kind: Some("x-honour".to_owned()),
-                        ..Title::default()
-                    },
-                ),
+                ("t1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Chief Scientist".to_owned();
+                    title.kind = None;
+                    title
+                }),
+                ("t2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Distinguished Engineer".to_owned();
+                    title.kind = Some("title".to_owned());
+                    title
+                }),
+                ("r1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Technical Lead".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title
+                }),
+                ("r2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Steering Committee Member".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title
+                }),
+                ("x1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Honorary Fellow".to_owned();
+                    title.kind = Some("x-honour".to_owned());
+                    title
+                }),
             ]
             .into(),
         );
@@ -907,38 +887,30 @@ fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
     // Expect four title keys after roundtrip: t1, t2, r1, r2.
     // Canonical kind is None for default titles.
     let expected_titles = [
-        (
-            "t1".to_owned(),
-            Title {
-                name: "Chief Scientist".to_owned(),
-                kind: None,
-                ..Title::default()
-            },
-        ),
-        (
-            "t2".to_owned(),
-            Title {
-                name: "Distinguished Engineer".to_owned(),
-                kind: None,
-                ..Title::default()
-            },
-        ),
-        (
-            "r1".to_owned(),
-            Title {
-                name: "Technical Lead".to_owned(),
-                kind: Some("role".to_owned()),
-                ..Title::default()
-            },
-        ),
-        (
-            "r2".to_owned(),
-            Title {
-                name: "Steering Committee Member".to_owned(),
-                kind: Some("role".to_owned()),
-                ..Title::default()
-            },
-        ),
+        ("t1".to_owned(), {
+            let mut title = Title::default();
+            title.name = "Chief Scientist".to_owned();
+            title.kind = None;
+            title
+        }),
+        ("t2".to_owned(), {
+            let mut title = Title::default();
+            title.name = "Distinguished Engineer".to_owned();
+            title.kind = None;
+            title
+        }),
+        ("r1".to_owned(), {
+            let mut title = Title::default();
+            title.name = "Technical Lead".to_owned();
+            title.kind = Some("role".to_owned());
+            title
+        }),
+        ("r2".to_owned(), {
+            let mut title = Title::default();
+            title.name = "Steering Committee Member".to_owned();
+            title.kind = Some("role".to_owned());
+            title
+        }),
     ]
     .into();
     assert_eq!(back.titles, Some(expected_titles));
@@ -2123,14 +2095,12 @@ fn one_calendar(key: &str, kind: Option<&str>, uri: &str) -> ContactCard {
     {
         let mut card = ContactCard::default();
         card.calendars = Some(
-            [(
-                key.to_owned(),
-                Calendar {
-                    kind: kind.map(str::to_owned),
-                    uri: uri.to_owned(),
-                    ..Calendar::default()
-                },
-            )]
+            [(key.to_owned(), {
+                let mut calendar = Calendar::default();
+                calendar.kind = kind.map(str::to_owned);
+                calendar.uri = uri.to_owned();
+                calendar
+            })]
             .into(),
         );
         card
@@ -2247,26 +2217,22 @@ fn calendars_read_pref_and_media_type_parameters() {
 #[test]
 fn calendars_emit_the_eds_profile_without_pref_or_media_type_parameters() {
     let mut calendars = BTreeMap::new();
-    calendars.insert(
-        "c1".to_owned(),
-        Calendar {
-            kind: Some("calendar".to_owned()),
-            uri: "https://vera.example/cal/vera.ics".to_owned(),
-            media_type: Some("text/calendar".to_owned()),
-            pref: Some(1),
-            ..Calendar::default()
-        },
-    );
-    calendars.insert(
-        "c2".to_owned(),
-        Calendar {
-            kind: Some("freeBusy".to_owned()),
-            uri: "https://vera.example/fb/vera.ifb".to_owned(),
-            media_type: Some("text/calendar".to_owned()),
-            pref: Some(1),
-            ..Calendar::default()
-        },
-    );
+    calendars.insert("c1".to_owned(), {
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("calendar".to_owned());
+        calendar.uri = "https://vera.example/cal/vera.ics".to_owned();
+        calendar.media_type = Some("text/calendar".to_owned());
+        calendar.pref = Some(1);
+        calendar
+    });
+    calendars.insert("c2".to_owned(), {
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("freeBusy".to_owned());
+        calendar.uri = "https://vera.example/fb/vera.ifb".to_owned();
+        calendar.media_type = Some("text/calendar".to_owned());
+        calendar.pref = Some(1);
+        calendar
+    });
     let card = {
         let mut card = ContactCard::default();
         card.calendars = Some(calendars);
@@ -3757,22 +3723,18 @@ fn maps_calendars_freebusy_and_links_faithfully() {
     };
     card.calendars = Some(
         [
-            (
-                "c1".to_owned(),
-                Calendar {
-                    kind: Some("calendar".to_owned()),
-                    uri: "https://example.com/team-calendar.ics".to_owned(),
-                    ..Calendar::default()
-                },
-            ),
-            (
-                "f1".to_owned(),
-                Calendar {
-                    kind: Some("freeBusy".to_owned()),
-                    uri: "https://example.com/busy-schedule.ifb".to_owned(),
-                    ..Calendar::default()
-                },
-            ),
+            ("c1".to_owned(), {
+                let mut calendar = Calendar::default();
+                calendar.kind = Some("calendar".to_owned());
+                calendar.uri = "https://example.com/team-calendar.ics".to_owned();
+                calendar
+            }),
+            ("f1".to_owned(), {
+                let mut calendar = Calendar::default();
+                calendar.kind = Some("freeBusy".to_owned());
+                calendar.uri = "https://example.com/busy-schedule.ifb".to_owned();
+                calendar
+            }),
         ]
         .into_iter()
         .collect(),
@@ -5168,35 +5130,41 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
 #[test]
 fn calendar_and_spouse_predicates_fidelity() {
     // `states_calendar` needs a non-empty URI and a mapped kind.
-    assert!(states_calendar(&Calendar {
-        kind: Some("calendar".into()),
-        uri: "https://calendar.example.com".into(),
-        ..Calendar::default()
+    assert!(states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("calendar".into());
+        calendar.uri = "https://calendar.example.com".into();
+        calendar
     }));
-    assert!(states_calendar(&Calendar {
-        kind: Some("freeBusy".into()),
-        uri: "https://fb.example.com".into(),
-        ..Calendar::default()
+    assert!(states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("freeBusy".into());
+        calendar.uri = "https://fb.example.com".into();
+        calendar
     }));
-    assert!(!states_calendar(&Calendar {
-        kind: Some("calendar".into()),
-        uri: "".into(),
-        ..Calendar::default()
+    assert!(!states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("calendar".into());
+        calendar.uri = "".into();
+        calendar
     }));
-    assert!(!states_calendar(&Calendar {
-        kind: Some("unmapped_kind".into()),
-        uri: "https://calendar.example.com".into(),
-        ..Calendar::default()
+    assert!(!states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("unmapped_kind".into());
+        calendar.uri = "https://calendar.example.com".into();
+        calendar
     }));
-    assert!(!states_calendar(&Calendar {
-        kind: None,
-        uri: "https://calendar.example.com".into(),
-        ..Calendar::default()
+    assert!(!states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = None;
+        calendar.uri = "https://calendar.example.com".into();
+        calendar
     }));
-    assert!(!states_calendar(&Calendar {
-        kind: None,
-        uri: "".into(),
-        ..Calendar::default()
+    assert!(!states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = None;
+        calendar.uri = "".into();
+        calendar
     }));
 
     // Check `states_spouse` and `states_nothing_but_the_marriage`.
@@ -6533,14 +6501,12 @@ fn jscontact_server_localizations_and_preferred_languages_characterization() {
             ..Name::default()
         });
         card.titles = Some(
-            [(
-                "t1".to_owned(),
-                Title {
-                    name: "Chief Architect".to_owned(),
-                    kind: Some("title".to_owned()),
-                    ..Title::default()
-                },
-            )]
+            [("t1".to_owned(), {
+                let mut title = Title::default();
+                title.name = "Chief Architect".to_owned();
+                title.kind = Some("title".to_owned());
+                title
+            })]
             .into_iter()
             .collect(),
         );
@@ -8611,24 +8577,20 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
     });
 
     let mut titles = BTreeMap::new();
-    titles.insert(
-        "t1".to_owned(),
-        Title {
-            name: "Director, Architecture; Core \\ Systems\nLead".to_owned(),
-            kind: Some("title".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
-    titles.insert(
-        "t2".to_owned(),
-        Title {
-            name: "Lead, Quality; Assurance \\ Test\nSpecialist".to_owned(),
-            kind: Some("role".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
+    titles.insert("t1".to_owned(), {
+        let mut title = Title::default();
+        title.name = "Director, Architecture; Core \\ Systems\nLead".to_owned();
+        title.kind = Some("title".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
+    titles.insert("t2".to_owned(), {
+        let mut title = Title::default();
+        title.name = "Lead, Quality; Assurance \\ Test\nSpecialist".to_owned();
+        title.kind = Some("role".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
 
     let mut related_to = BTreeMap::new();
     related_to.insert(
@@ -9916,24 +9878,20 @@ fn url_and_calendar_properties_coexistence_and_slotting() {
     );
 
     let mut cals = BTreeMap::new();
-    cals.insert(
-        "c1".to_owned(),
-        Calendar {
-            uri: "https://cal.example.com/alice.ics".to_owned(),
-            kind: Some("calendar".to_owned()),
-            extra: BTreeMap::new(),
-            ..Calendar::default()
-        },
-    );
-    cals.insert(
-        "c2".to_owned(),
-        Calendar {
-            uri: "https://cal.example.com/fb/alice.ifb".to_owned(),
-            kind: Some("freeBusy".to_owned()),
-            extra: BTreeMap::new(),
-            ..Calendar::default()
-        },
-    );
+    cals.insert("c1".to_owned(), {
+        let mut calendar = Calendar::default();
+        calendar.uri = "https://cal.example.com/alice.ics".to_owned();
+        calendar.kind = Some("calendar".to_owned());
+        calendar.extra = BTreeMap::new();
+        calendar
+    });
+    cals.insert("c2".to_owned(), {
+        let mut calendar = Calendar::default();
+        calendar.uri = "https://cal.example.com/fb/alice.ifb".to_owned();
+        calendar.kind = Some("freeBusy".to_owned());
+        calendar.extra = BTreeMap::new();
+        calendar
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -10225,33 +10183,27 @@ fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
     );
 
     let mut titles = BTreeMap::new();
-    titles.insert(
-        "t1".to_owned(),
-        Title {
-            name: "Directeur Général Adjoint".to_owned(),
-            kind: Some("title".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
-    titles.insert(
-        "t2".to_owned(),
-        Title {
-            name: "Главный архитектор систем".to_owned(),
-            kind: Some("role".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
-    titles.insert(
-        "t3".to_owned(),
-        Title {
-            name: "開発最高責任者".to_owned(),
-            kind: Some("title".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
+    titles.insert("t1".to_owned(), {
+        let mut title = Title::default();
+        title.name = "Directeur Général Adjoint".to_owned();
+        title.kind = Some("title".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
+    titles.insert("t2".to_owned(), {
+        let mut title = Title::default();
+        title.name = "Главный архитектор систем".to_owned();
+        title.kind = Some("role".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
+    titles.insert("t3".to_owned(), {
+        let mut title = Title::default();
+        title.name = "開発最高責任者".to_owned();
+        title.kind = Some("title".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -19009,24 +18961,20 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
         );
         card.titles = Some(
             [
-                (
-                    "t1".to_string(),
-                    Title {
-                        name: "Chief Architect".into(),
-                        kind: Some("title".into()),
-                        extra: BTreeMap::new(),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "t2".to_string(),
-                    Title {
-                        name: "Principal Investigator".into(),
-                        kind: Some("role".into()),
-                        extra: BTreeMap::new(),
-                        ..Title::default()
-                    },
-                ),
+                ("t1".to_string(), {
+                    let mut title = Title::default();
+                    title.name = "Chief Architect".into();
+                    title.kind = Some("title".into());
+                    title.extra = BTreeMap::new();
+                    title
+                }),
+                ("t2".to_string(), {
+                    let mut title = Title::default();
+                    title.name = "Principal Investigator".into();
+                    title.kind = Some("role".into());
+                    title.extra = BTreeMap::new();
+                    title
+                }),
             ]
             .into(),
         );
@@ -19780,42 +19728,35 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
         );
         card.titles = Some(
             [
-                (
-                    "t1".to_owned(),
-                    Title {
-                        name: "Principal Optical Engineer".to_owned(),
-                        kind: None, // default kind is "title"
-                        extra: [("organizationId".to_string(), json!("o1"))].into(),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "t2".to_owned(),
-                    Title {
-                        name: "Senior Research Fellow".to_owned(),
-                        kind: Some("title".to_owned()),
-                        extra: [("organizationId".to_string(), json!("o2"))].into(),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r1".to_owned(),
-                    Title {
-                        name: "Chief Architect & Science Lead".to_owned(),
-                        kind: Some("role".to_owned()),
-                        extra: [("organizationId".to_string(), json!("o1"))].into(),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r2".to_owned(),
-                    Title {
-                        name: "Advisory Council Member".to_owned(),
-                        kind: Some("role".to_owned()),
-                        extra: [("organizationId".to_string(), json!("o2"))].into(),
-                        ..Title::default()
-                    },
-                ),
+                ("t1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Principal Optical Engineer".to_owned();
+                    title.kind = None;
+                    // default kind is "title"
+                    title.extra = [("organizationId".to_string(), json!("o1"))].into();
+                    title
+                }),
+                ("t2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Senior Research Fellow".to_owned();
+                    title.kind = Some("title".to_owned());
+                    title.extra = [("organizationId".to_string(), json!("o2"))].into();
+                    title
+                }),
+                ("r1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Chief Architect & Science Lead".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title.extra = [("organizationId".to_string(), json!("o1"))].into();
+                    title
+                }),
+                ("r2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Advisory Council Member".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title.extra = [("organizationId".to_string(), json!("o2"))].into();
+                    title
+                }),
             ]
             .into(),
         );

@@ -775,6 +775,7 @@ impl OrgUnit {
 /// role it plays.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Title {
     #[serde(default)]
     pub name: String,
@@ -1284,6 +1285,7 @@ impl Link {
 /// contact: a calendar of theirs, or the free/busy data drawn from one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Calendar {
     /// What the resource is: `calendar` or `freeBusy` per RFC 9553 §2.4.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]

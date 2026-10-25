@@ -270,19 +270,21 @@ fn arb_title_kind() -> impl Strategy<Value = Option<String>> {
 }
 
 fn arb_title() -> impl Strategy<Value = Title> {
-    ("[a-zA-Z ]{1,12}", arb_title_kind()).prop_map(|(name, kind)| Title {
-        name,
-        kind,
-        ..Title::default()
+    ("[a-zA-Z ]{1,12}", arb_title_kind()).prop_map(|(name, kind)| {
+        let mut title = Title::default();
+        title.name = name;
+        title.kind = kind;
+        title
     })
 }
 
 fn arb_title_pair() -> impl Strategy<Value = (Title, Title)> {
     (arb_title(), "[a-zA-Z ]{1,12}", arb_title_kind()).prop_map(|(old, name, kind)| {
-        let new = Title {
-            name,
-            kind,
-            ..old.clone()
+        let new = {
+            let mut title = old.clone();
+            title.name = name;
+            title.kind = kind;
+            title
         };
         (old, new)
     })
@@ -343,19 +345,21 @@ fn arb_calendar_kind() -> impl Strategy<Value = Option<String>> {
 }
 
 fn arb_calendar() -> impl Strategy<Value = Calendar> {
-    (arb_uri(), arb_calendar_kind()).prop_map(|(uri, kind)| Calendar {
-        uri,
-        kind,
-        ..Calendar::default()
+    (arb_uri(), arb_calendar_kind()).prop_map(|(uri, kind)| {
+        let mut calendar = Calendar::default();
+        calendar.uri = uri;
+        calendar.kind = kind;
+        calendar
     })
 }
 
 fn arb_calendar_pair() -> impl Strategy<Value = (Calendar, Calendar)> {
     (arb_calendar(), arb_uri(), arb_calendar_kind()).prop_map(|(old, uri, kind)| {
-        let new = Calendar {
-            uri,
-            kind,
-            ..old.clone()
+        let new = {
+            let mut calendar = old.clone();
+            calendar.uri = uri;
+            calendar.kind = kind;
+            calendar
         };
         (old, new)
     })

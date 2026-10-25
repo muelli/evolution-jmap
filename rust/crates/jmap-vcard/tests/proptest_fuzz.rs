@@ -196,11 +196,12 @@ prop_compose! {
             "[a-z]{1,6}",
         ]),
     ) -> Title {
-        Title {
-            name,
-            kind,
-            extra: BTreeMap::new(),
-            ..Title::default()
+        {
+            let mut title = Title::default();
+            title.name = name;
+            title.kind = kind;
+            title.extra = BTreeMap::new();
+            title
         }
     }
 }
@@ -341,11 +342,12 @@ prop_compose! {
             "[a-z]{1,8}",
         ]),
     ) -> Calendar {
-        Calendar {
-            kind,
-            uri,
-            extra: BTreeMap::new(),
-            ..Calendar::default()
+        {
+            let mut calendar = Calendar::default();
+            calendar.kind = kind;
+            calendar.uri = uri;
+            calendar.extra = BTreeMap::new();
+            calendar
         }
     }
 }

@@ -897,10 +897,11 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // one map on lines with *different* names, so the reader's key counter must
     // give them different keys. No line can hold the `pref`; see
     // [`SEEDED_CALENDAR_PREF`].
-    let mut calendar = Calendar {
-        kind: Some("calendar".to_owned()),
-        uri: SEEDED_CALENDAR_URI.to_owned(),
-        ..Calendar::default()
+    let mut calendar = {
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("calendar".to_owned());
+        calendar.uri = SEEDED_CALENDAR_URI.to_owned();
+        calendar
     };
     calendar
         .extra
@@ -908,14 +909,12 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     card.calendars = Some(
         [
             (SEEDED_CALENDAR_KEY.to_owned(), calendar),
-            (
-                SEEDED_FREEBUSY_KEY.to_owned(),
-                Calendar {
-                    kind: Some("freeBusy".to_owned()),
-                    uri: SEEDED_FREEBUSY_URI.to_owned(),
-                    ..Calendar::default()
-                },
-            ),
+            (SEEDED_FREEBUSY_KEY.to_owned(), {
+                let mut calendar = Calendar::default();
+                calendar.kind = Some("freeBusy".to_owned());
+                calendar.uri = SEEDED_FREEBUSY_URI.to_owned();
+                calendar
+            }),
         ]
         .into_iter()
         .collect(),
@@ -1053,38 +1052,30 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     );
     card.titles = Some(
         [
-            (
-                SEEDED_TITLE_KEY.to_owned(),
-                Title {
-                    name: SEEDED_TITLE_NAME.to_owned(),
-                    kind: None,
-                    ..Title::default()
-                },
-            ),
-            (
-                SEEDED_SECOND_TITLE_KEY.to_owned(),
-                Title {
-                    name: SEEDED_SECOND_TITLE_NAME.to_owned(),
-                    kind: None,
-                    ..Title::default()
-                },
-            ),
-            (
-                SEEDED_ROLE_KEY.to_owned(),
-                Title {
-                    name: SEEDED_ROLE_NAME.to_owned(),
-                    kind: Some("role".to_owned()),
-                    ..Title::default()
-                },
-            ),
-            (
-                SEEDED_SECOND_ROLE_KEY.to_owned(),
-                Title {
-                    name: SEEDED_SECOND_ROLE_NAME.to_owned(),
-                    kind: Some("role".to_owned()),
-                    ..Title::default()
-                },
-            ),
+            (SEEDED_TITLE_KEY.to_owned(), {
+                let mut title = Title::default();
+                title.name = SEEDED_TITLE_NAME.to_owned();
+                title.kind = None;
+                title
+            }),
+            (SEEDED_SECOND_TITLE_KEY.to_owned(), {
+                let mut title = Title::default();
+                title.name = SEEDED_SECOND_TITLE_NAME.to_owned();
+                title.kind = None;
+                title
+            }),
+            (SEEDED_ROLE_KEY.to_owned(), {
+                let mut title = Title::default();
+                title.name = SEEDED_ROLE_NAME.to_owned();
+                title.kind = Some("role".to_owned());
+                title
+            }),
+            (SEEDED_SECOND_ROLE_KEY.to_owned(), {
+                let mut title = Title::default();
+                title.name = SEEDED_SECOND_ROLE_NAME.to_owned();
+                title.kind = Some("role".to_owned());
+                title
+            }),
         ]
         .into_iter()
         .collect(),
