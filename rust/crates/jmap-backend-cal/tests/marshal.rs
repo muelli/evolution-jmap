@@ -1731,6 +1731,13 @@ impl TestSource {
         )))
     }
 
+    fn add_calendar_extension(&self) {
+        // SAFETY: Source pointer is valid; calling get_extension creates the extension on the source.
+        unsafe {
+            e_source_get_extension(self.0.as_ptr(), E_SOURCE_EXTENSION_CALENDAR.as_ptr());
+        }
+    }
+
     fn set_color(&self, color: &str) {
         let color = CString::new(color).unwrap();
         // SAFETY: Source pointer is valid. The extension is owned by the source. `set_color` copies the string.
@@ -1758,8 +1765,51 @@ fn selectable_color_reads_the_calendar_extensions_color() {
 #[test]
 fn selectable_color_of_an_uncoloured_source_is_the_built_in_default_not_none() {
     let source = TestSource::new();
+    source.add_calendar_extension();
 
     // SAFETY: Source pointer is valid and carries a calendar extension.
     let color = unsafe { marshal::selectable_color(source.0.as_ptr()) };
     assert_eq!(color.as_deref(), Some("#62a0ea"));
+}
+
+/// Verify that a source without the calendar extension returns None and does not create it.
+#[test]
+fn selectable_color_returns_none_and_does_not_create_extension_when_extension_absent() {
+    let source = TestSource::new();
+
+    // SAFETY: Source pointer is valid.
+    let color = unsafe { marshal::selectable_color(source.0.as_ptr()) };
+    assert_eq!(color, None);
+
+    // Verify the extension was not created on the source.
+    let has_ext = unsafe {
+        eds_sys::e_source_has_extension(
+            source.0.as_ptr(),
+            eds_sys::E_SOURCE_EXTENSION_CALENDAR.as_ptr(),
+        )
+    };
+    assert_eq!(has_ext, glib_sys::GFALSE);
+}
+
+/// Verify that take_string maps an empty string to None per core marshal semantics.
+#[test]
+fn take_string_maps_empty_string_to_none() {
+    let empty = unsafe { glib_sys::g_strdup(c"".as_ptr()) };
+    assert_eq!(unsafe { marshal::take_string(empty) }, None);
+}
+
+/// Verify that take_string maps NULL to None.
+#[test]
+fn take_string_maps_null_to_none() {
+    assert_eq!(unsafe { marshal::take_string(ptr::null_mut()) }, None);
+}
+
+/// Verify that take_string returns and frees a non-empty string.
+#[test]
+fn take_string_returns_and_frees_non_empty_string() {
+    let non_empty = unsafe { glib_sys::g_strdup(c"test-value".as_ptr()) };
+    assert_eq!(
+        unsafe { marshal::take_string(non_empty) }.as_deref(),
+        Some("test-value")
+    );
 }

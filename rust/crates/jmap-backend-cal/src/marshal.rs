@@ -13,22 +13,22 @@ use eds_sys::{
     ETimezoneCache, I_CAL_ANY_PROPERTY, I_CAL_RECURRENCEID_PROPERTY, I_CAL_TZID_PARAMETER,
     I_CAL_TZID_PROPERTY, I_CAL_VCALENDAR_COMPONENT, I_CAL_VEVENT_COMPONENT, ICalComponent,
     ICalComponentKind, ICalTimezone, e_cal_component_get_icalcomponent,
-    e_cal_meta_backend_info_new, e_source_get_extension, e_source_selectable_get_color,
-    e_timezone_cache_get_timezone, i_cal_component_as_ical_string, i_cal_component_clone,
-    i_cal_component_get_first_component, i_cal_component_get_first_property,
-    i_cal_component_get_next_component, i_cal_component_get_next_property,
-    i_cal_component_get_timezone, i_cal_component_get_uid, i_cal_component_isa,
-    i_cal_component_new_from_string, i_cal_component_new_vcalendar, i_cal_component_take_component,
-    i_cal_parameter_get_tzid, i_cal_property_get_first_parameter, i_cal_property_set_tzid,
-    i_cal_timezone_get_builtin_timezone, i_cal_timezone_get_builtin_timezone_from_tzid,
-    i_cal_timezone_get_component, time_t,
+    e_cal_meta_backend_info_new, e_source_selectable_dup_color, e_timezone_cache_get_timezone,
+    i_cal_component_as_ical_string, i_cal_component_clone, i_cal_component_get_first_component,
+    i_cal_component_get_first_property, i_cal_component_get_next_component,
+    i_cal_component_get_next_property, i_cal_component_get_timezone, i_cal_component_get_uid,
+    i_cal_component_isa, i_cal_component_new_from_string, i_cal_component_new_vcalendar,
+    i_cal_component_take_component, i_cal_parameter_get_tzid, i_cal_property_get_first_parameter,
+    i_cal_property_set_tzid, i_cal_timezone_get_builtin_timezone,
+    i_cal_timezone_get_builtin_timezone_from_tzid, i_cal_timezone_get_component, time_t,
 };
 use glib_sys::{
     GSList, g_date_time_format, g_date_time_new_from_unix_utc, g_date_time_unref, g_free,
     g_slist_prepend, gchar,
 };
 use jmap_backend_core::error::cstring_lossy;
-use jmap_backend_core::marshal::{dup_string, read_string};
+pub use jmap_backend_core::marshal::take_string;
+use jmap_backend_core::marshal::{dup_string, extension_if_present, read_string};
 use jmap_backend_core::owned::Owned;
 use jmap_cal_sync::{ComponentInfo, FreeBusy, edit_base};
 
@@ -462,23 +462,6 @@ unsafe fn referenced_tzids(components: &[*mut ICalComponent]) -> Vec<String> {
     tzids
 }
 
-/// Reads an owned `gchar *` and frees it.
-///
-/// # Safety
-///
-/// `raw` must be NULL or a GLib-allocated NUL-terminated string owned by caller.
-unsafe fn take_string(raw: *mut gchar) -> Option<String> {
-    if raw.is_null() {
-        return None;
-    }
-    // SAFETY: Caller guarantees owned NUL-terminated string.
-    unsafe {
-        let value = CStr::from_ptr(raw).to_string_lossy().into_owned();
-        g_free(raw.cast());
-        Some(value)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // free/busy
 
@@ -518,17 +501,20 @@ pub fn free_busy_list(answers: &[FreeBusy]) -> *mut GSList {
 // ---------------------------------------------------------------------------
 // the ESource itself
 
-/// Reads calendar color from `source`'s "Calendar" extension.
+/// Reads calendar color from `source`'s "Calendar" extension, if present.
 ///
 /// # Safety
 ///
-/// `source` must be a valid `ESource` carrying a "Calendar" extension.
+/// `source` must be NULL or a valid `ESource`.
 pub unsafe fn selectable_color(source: *mut ESource) -> Option<String> {
-    // SAFETY: Caller guarantees source carries the extension; returned string is borrowed.
+    if source.is_null() {
+        return None;
+    }
+    // SAFETY: Caller guarantees source is a valid ESource; extension_if_present does not create it if absent.
     unsafe {
         let selectable: *mut ESourceSelectable =
-            e_source_get_extension(source, E_SOURCE_EXTENSION_CALENDAR.as_ptr()).cast();
-        read_string(e_source_selectable_get_color(selectable))
+            extension_if_present(source, E_SOURCE_EXTENSION_CALENDAR)?;
+        take_string(e_source_selectable_dup_color(selectable))
     }
 }
 
