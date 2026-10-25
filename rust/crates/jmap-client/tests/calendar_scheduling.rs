@@ -33,40 +33,42 @@ fn participant(address: &str, status: &str) -> Value {
 }
 
 fn meeting(calendar_id: &Id) -> CalendarEvent {
-    CalendarEvent {
-        calendar_ids: Some([(calendar_id.clone(), true)].into()),
-        version: Some("2.0".to_owned()),
-        start: Some("2026-06-01T10:00:00".to_owned()),
-        title: Some("Design review".to_owned()),
-        organizer_calendar_address: Some(ALICE.to_owned()),
-        participants: Some(
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.calendar_ids = Some([(calendar_id.clone(), true)].into());
+        event_out.version = Some("2.0".to_owned());
+        event_out.start = Some("2026-06-01T10:00:00".to_owned());
+        event_out.title = Some("Design review".to_owned());
+        event_out.organizer_calendar_address = Some(ALICE.to_owned());
+        event_out.participants = Some(
             [
                 ("alice".to_owned(), participant(ALICE, "accepted")),
                 ("bob".to_owned(), participant(BOB, "needs-action")),
                 ("carol".to_owned(), participant(CAROL, "needs-action")),
             ]
             .into(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     }
 }
 
 /// An event this account did not organise: Bob invited Alice.
 fn invitation(calendar_id: &Id) -> CalendarEvent {
-    CalendarEvent {
-        calendar_ids: Some([(calendar_id.clone(), true)].into()),
-        version: Some("2.0".to_owned()),
-        start: Some("2026-06-02T10:00:00".to_owned()),
-        title: Some("Bob's meeting".to_owned()),
-        organizer_calendar_address: Some(BOB.to_owned()),
-        participants: Some(
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.calendar_ids = Some([(calendar_id.clone(), true)].into());
+        event_out.version = Some("2.0".to_owned());
+        event_out.start = Some("2026-06-02T10:00:00".to_owned());
+        event_out.title = Some("Bob's meeting".to_owned());
+        event_out.organizer_calendar_address = Some(BOB.to_owned());
+        event_out.participants = Some(
             [
                 ("bob".to_owned(), participant(BOB, "accepted")),
                 ("alice".to_owned(), participant(ALICE, "needs-action")),
             ]
             .into(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     }
 }
 

@@ -119,7 +119,9 @@ pub fn blob_upload(
     arguments: Value,
 ) -> Result<Value, MethodError> {
     let request: BlobUploadRequest = parse_arguments(arguments)?;
-    let BlobUploadRequest { account_id, create } = request;
+    let BlobUploadRequest {
+        account_id, create, ..
+    } = request;
     account_mut(state, &account_id)?;
 
     let mut created = BTreeMap::new();
@@ -191,6 +193,7 @@ pub fn blob_copy(
         from_account_id,
         account_id,
         blob_ids,
+        ..
     } = request;
 
     let source = state

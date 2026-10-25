@@ -14,7 +14,7 @@ use jmap_backend_core::error::{
 };
 use jmap_backend_core::i18n::translate_with;
 use jmap_backend_core::marshal::{dup_string, read_string, set_out_string};
-use jmap_book_sync::{Base, BookSync, OnConflict, SyncError};
+use jmap_book_sync::{Base, BookSync, OnConflict, SyncError, edit_base};
 use jmap_proto::State;
 
 use crate::marshal;
@@ -186,12 +186,16 @@ pub unsafe fn get_changes(
 
 /// Loads a contact by UID for `load_contact_sync`.
 ///
+/// The contact carries the stamp of its server version. The new extra keeps the
+/// versions of `extra`, the cached one, for an editor that is still open.
+///
 /// # Safety
 ///
-/// As [`list_existing`], and `uid` must be NULL or a valid NUL-terminated string.
+/// As [`list_existing`], and `uid` and `extra` must be NULL or a valid NUL-terminated string.
 pub unsafe fn load_contact(
     sync: &BookSync,
     uid: *const gchar,
+    extra: *const gchar,
     out_contact: *mut *mut EContact,
     out_extra: *mut *mut gchar,
     error: *mut *mut GError,
@@ -231,7 +235,7 @@ pub unsafe fn load_contact(
         }
     };
 
-    let contact = marshal::contact_from_vcard(&info.vcard);
+    let contact = marshal::contact_from_vcard(&marshal::stamped(&info));
     if contact.is_null() {
         tracing::debug!(
             account_id,
@@ -264,17 +268,20 @@ pub unsafe fn load_contact(
             *out_contact = contact;
         }
         // EDS stores the extra with the contact and gives it back as the base of an edit.
-        set_out_string(out_extra, &info.vcard);
+        let previous = read_string(extra);
+        set_out_string(
+            out_extra,
+            &edit_base::extra(&info.vcard, previous.as_deref()),
+        );
     }
     GTRUE
 }
 
 /// Creates or updates a contact for `save_contact_sync`.
 ///
-/// # Safety
-///
-/// An edit with `extra` (the vCard that [`load_contact`] stored) patches only the
-/// properties that the user changed, and resolves a conflict as `conflict_resolution` asks.
+/// An edit with `extra` (the versions that [`load_contact`] stored) patches only the
+/// properties that the user changed since the version that the stamp of the edit
+/// names. It resolves a conflict as `conflict_resolution` asks.
 ///
 /// # Safety
 ///
@@ -296,7 +303,7 @@ pub unsafe fn save_contact(
     let is_overwrite = overwrite_existing != GFALSE;
 
     // SAFETY: the caller guarantees a valid EContact or NULL.
-    let Some(vcard) = (unsafe { marshal::vcard_from_contact(contact) }) else {
+    let Some(stamped) = (unsafe { marshal::vcard_from_contact(contact) }) else {
         tracing::debug!(
             account_id,
             address_book_id,
@@ -305,6 +312,8 @@ pub unsafe fn save_contact(
         // SAFETY: `error` satisfies the contract by this function's own.
         return unsafe { fail_invalid(error, "the contact to save is not a vCard") };
     };
+    // The stamp never goes to the server.
+    let (vcard, stamp) = edit_base::unstamp(&stamped);
 
     let existing_uid = if !is_overwrite {
         // A create. Local UID is ignored; the server assigns the identifier.
@@ -328,10 +337,24 @@ pub unsafe fn save_contact(
         }
     };
 
+    // SAFETY: the caller guarantees a valid string or NULL.
+    let extra = unsafe { read_string(extra) };
     // A create has no base.
-    let base_vcard = match existing_uid {
-        // SAFETY: the caller guarantees a valid string or NULL.
-        Some(_) => unsafe { read_string(extra) },
+    let base_vcard = match &existing_uid {
+        Some(uid) => match edit_base::base_for(extra.as_deref(), stamp.as_deref()) {
+            Ok(base) => base,
+            Err(_) => {
+                tracing::debug!(
+                    account_id,
+                    address_book_id,
+                    uid = uid.as_str(),
+                    stamp = stamp.as_deref(),
+                    "the edited copy names a version that the cache no longer keeps"
+                );
+                // SAFETY: `error` satisfies the contract by this function's own.
+                return unsafe { fail_bool(error, &SyncError::OutOfSync(uid.clone()), to_gerror) };
+            }
+        },
         None => None,
     };
     let base = base_vcard.as_deref().map(|vcard| Base {
@@ -376,7 +399,10 @@ pub unsafe fn save_contact(
     // ownership of the duplicates passes through them.
     unsafe {
         set_out_string(out_new_uid, &info.uid);
-        set_out_string(out_new_extra, &info.vcard);
+        set_out_string(
+            out_new_extra,
+            &edit_base::extra(&info.vcard, extra.as_deref()),
+        );
     }
     GTRUE
 }

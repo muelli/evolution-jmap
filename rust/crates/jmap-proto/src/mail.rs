@@ -17,6 +17,7 @@ use crate::state::UtcDate;
 /// A mailbox (folder/label), RFC 8621 §2.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Mailbox {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -56,6 +57,11 @@ impl Mailbox {
         }
     }
 
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     pub fn with_parent_id(mut self, parent_id: impl Into<Id>) -> Self {
         self.parent_id = Some(parent_id.into());
         self
@@ -71,8 +77,33 @@ impl Mailbox {
         self
     }
 
+    pub fn with_total_emails(mut self, total_emails: u64) -> Self {
+        self.total_emails = Some(total_emails);
+        self
+    }
+
+    pub fn with_unread_emails(mut self, unread_emails: u64) -> Self {
+        self.unread_emails = Some(unread_emails);
+        self
+    }
+
+    pub fn with_total_threads(mut self, total_threads: u64) -> Self {
+        self.total_threads = Some(total_threads);
+        self
+    }
+
+    pub fn with_unread_threads(mut self, unread_threads: u64) -> Self {
+        self.unread_threads = Some(unread_threads);
+        self
+    }
+
     pub fn is_subscribed(mut self, subscribed: bool) -> Self {
         self.is_subscribed = Some(subscribed);
+        self
+    }
+
+    pub fn with_my_rights(mut self, my_rights: MailboxRights) -> Self {
+        self.my_rights = Some(my_rights);
         self
     }
 
@@ -96,6 +127,7 @@ impl Mailbox {
 /// Mail sharing capability properties (draft-ietf-jmap-mail-sharing §1.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MailShareCapability {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -115,6 +147,7 @@ impl MailShareCapability {
 /// `Mailbox.myRights`, RFC 8621 §2.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MailboxRights {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_read_items: Option<bool>,
@@ -165,8 +198,57 @@ impl MailboxRights {
         }
     }
 
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn may_share(&self) -> bool {
         self.may_share.unwrap_or(false)
+    }
+
+    pub fn with_may_read_items(mut self, may: bool) -> Self {
+        self.may_read_items = Some(may);
+        self
+    }
+
+    pub fn with_may_add_items(mut self, may: bool) -> Self {
+        self.may_add_items = Some(may);
+        self
+    }
+
+    pub fn with_may_remove_items(mut self, may: bool) -> Self {
+        self.may_remove_items = Some(may);
+        self
+    }
+
+    pub fn with_may_set_seen(mut self, may: bool) -> Self {
+        self.may_set_seen = Some(may);
+        self
+    }
+
+    pub fn with_may_set_keywords(mut self, may: bool) -> Self {
+        self.may_set_keywords = Some(may);
+        self
+    }
+
+    pub fn with_may_create_child(mut self, may: bool) -> Self {
+        self.may_create_child = Some(may);
+        self
+    }
+
+    pub fn with_may_rename(mut self, may: bool) -> Self {
+        self.may_rename = Some(may);
+        self
+    }
+
+    pub fn with_may_delete(mut self, may: bool) -> Self {
+        self.may_delete = Some(may);
+        self
+    }
+
+    pub fn with_may_submit(mut self, may: bool) -> Self {
+        self.may_submit = Some(may);
+        self
     }
 
     pub fn with_may_share(mut self, may_share: bool) -> Self {
@@ -178,6 +260,7 @@ impl MailboxRights {
 /// A thread of emails (RFC 8621 §3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Thread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -220,6 +303,7 @@ impl Thread {
 /// Vacation response auto-responder settings (RFC 8621 §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct VacationResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -297,6 +381,7 @@ impl VacationResponse {
 /// Vacation response capability properties (RFC 8621 §1.5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct VacationResponseCapability {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -345,6 +430,7 @@ pub mod role {
 /// at `until` and applies `set_keywords`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SnoozeDetails {
     pub until: UtcDate,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -381,6 +467,7 @@ impl SnoozeDetails {
 /// what the client provides.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Email {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -506,6 +593,40 @@ impl Email {
         self
     }
 
+    pub fn with_sender(mut self, sender: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.sender = Some(sender.into_iter().collect());
+        self
+    }
+
+    pub fn with_message_id(
+        mut self,
+        message_id: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.message_id = Some(message_id.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_in_reply_to(
+        mut self,
+        in_reply_to: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.in_reply_to = Some(in_reply_to.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_references(
+        mut self,
+        references: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.references = Some(references.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_snoozed(mut self, snoozed: SnoozeDetails) -> Self {
+        self.snoozed = Some(snoozed);
+        self
+    }
+
     pub fn with_from(mut self, from: impl IntoIterator<Item = EmailAddress>) -> Self {
         self.from = Some(from.into_iter().collect());
         self
@@ -614,6 +735,7 @@ impl Email {
 /// Fields are optional on deserialization to isolate per-message invalidProperties errors.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailImport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob_id: Option<Id>,
@@ -649,11 +771,22 @@ impl EmailImport {
         self.received_at = Some(received_at.into());
         self
     }
+
+    pub fn with_blob_id(mut self, blob_id: impl Into<Id>) -> Self {
+        self.blob_id = Some(blob_id.into());
+        self
+    }
+
+    pub fn with_mailbox_ids(mut self, mailbox_ids: BTreeMap<Id, bool>) -> Self {
+        self.mailbox_ids = Some(mailbox_ids);
+        self
+    }
 }
 
 /// `Email/import` arguments (RFC 8621 §4.8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailImportRequest {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -687,6 +820,7 @@ impl EmailImportRequest {
 /// as an [`Email`] with optional fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailImportResponse {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -731,6 +865,7 @@ impl EmailImportResponse {
 /// `Email/get` arguments (RFC 8621 §4.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailGetRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<Id>,
@@ -811,6 +946,7 @@ impl EmailGetRequest {
 /// `Email/parse` arguments (RFC 8621 §4.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailParseRequest {
     pub account_id: Id,
     pub blob_ids: Vec<Id>,
@@ -890,6 +1026,7 @@ impl EmailParseRequest {
 /// `Email/parse` response (RFC 8621 §4.7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailParseResponse {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -949,6 +1086,7 @@ pub mod keyword {
 
 /// A parsed email header (RFC 8621 §4.1.2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct EmailHeader {
     pub name: String,
     pub value: String,
@@ -976,6 +1114,7 @@ impl EmailHeader {
 /// A name/address pair (RFC 8621 §4.1.2.3). `name` is nullable but always
 /// present on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct EmailAddress {
     #[serde(default)]
     pub name: Option<String>,
@@ -1010,6 +1149,7 @@ impl EmailAddress {
 
 /// An RFC 5322 address group (RFC 8621 §4.1.2.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct EmailAddressGroup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -1044,6 +1184,7 @@ impl EmailAddressGroup {
 /// A node in the MIME tree (RFC 8621 §4.1.4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailBodyPart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub part_id: Option<String>,
@@ -1162,6 +1303,7 @@ impl EmailBodyPart {
 /// Decoded body content addressed by `partId` (RFC 8621 §4.1.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailBodyValue {
     pub value: String,
     #[serde(default)]
@@ -1185,6 +1327,7 @@ impl EmailBodyValue {
 /// (RFC 8620 §5.5) on top of it, which `Email/query`'s request type uses.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_mailbox: Option<Id>,
@@ -1360,6 +1503,7 @@ impl EmailQueryFilter {
 /// A sending identity (RFC 8621 §6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Identity {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -1394,6 +1538,11 @@ impl Identity {
         }
     }
 
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     pub fn with_reply_to(mut self, reply_to: impl IntoIterator<Item = EmailAddress>) -> Self {
         self.reply_to = Some(reply_to.into_iter().collect());
         self
@@ -1423,11 +1572,17 @@ impl Identity {
         self.may_send = Some(may_send);
         self
     }
+
+    pub fn with_may_delete(mut self, may_delete: bool) -> Self {
+        self.may_delete = Some(may_delete);
+        self
+    }
 }
 
 /// A submission of an email for delivery (RFC 8621 §7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailSubmission {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -1458,6 +1613,11 @@ impl EmailSubmission {
         }
     }
 
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     pub fn with_thread_id(mut self, thread_id: impl Into<Id>) -> Self {
         self.thread_id = Some(thread_id.into());
         self
@@ -1472,11 +1632,20 @@ impl EmailSubmission {
         self.undo_status = Some(undo_status.into());
         self
     }
+
+    pub fn with_delivery_status(
+        mut self,
+        delivery_status: BTreeMap<String, DeliveryStatus>,
+    ) -> Self {
+        self.delivery_status = Some(delivery_status);
+        self
+    }
 }
 
 /// The delivery status of an email submission to one recipient (RFC 8621 §7.1.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DeliveryStatus {
     #[serde(default)]
     pub smtp_reply: String,
@@ -1555,6 +1724,7 @@ pub mod displayed {
 /// `EmailSubmission/query` filter conditions (RFC 8621 §7.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailSubmissionQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_ids: Option<Vec<Id>>,
@@ -1618,6 +1788,7 @@ impl EmailSubmissionQueryFilter {
 /// Snippet of matching text in an email search (RFC 8621 §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SearchSnippet {
     pub email_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1654,6 +1825,7 @@ impl SearchSnippet {
 /// condition, so it can be an AND/OR/NOT tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SearchSnippetGetRequest {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1685,6 +1857,7 @@ impl SearchSnippetGetRequest {
 /// `SearchSnippet/get` response (RFC 8621 §5.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SearchSnippetGetResponse {
     pub account_id: Id,
     #[serde(default)]
@@ -1713,6 +1886,7 @@ impl SearchSnippetGetResponse {
 /// are submission ids or `#`-prefixed creation ids from the same call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EmailSubmissionSetRequest {
     #[serde(flatten)]
     pub set: crate::methods::SetRequest<EmailSubmission>,
@@ -1756,6 +1930,7 @@ impl EmailSubmissionSetRequest {
 /// SMTP envelope (RFC 8621 §7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Envelope {
     pub mail_from: EnvelopeAddress,
     #[serde(default)]
@@ -1792,6 +1967,7 @@ impl Envelope {
 /// One envelope address; `parameters` (SMTP extensions) is nullable and
 /// always present on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct EnvelopeAddress {
     pub email: String,
     #[serde(default)]
@@ -1886,6 +2062,7 @@ pub mod undo_status {
 /// Mail capability properties (RFC 8621 §1.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MailCapability {
     #[serde(default)]
     pub max_size_attachments_per_email: u64,
@@ -1947,6 +2124,7 @@ impl MailCapability {
 /// Submission capability properties (RFC 8621 §1.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SubmissionCapability {
     #[serde(default)]
     pub max_delayed_send: u64,
@@ -1988,6 +2166,7 @@ impl SubmissionCapability {
 /// A Message Disposition Notification (RFC 9007 §2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MDN {
     pub for_email_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2093,6 +2272,7 @@ impl MDN {
 /// The disposition information of an MDN (RFC 9007 §2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MDNDisposition {
     pub action_mode: String,
     pub sending_mode: String,
@@ -2144,6 +2324,7 @@ impl MDNDisposition {
 /// `MDN/send` arguments (RFC 9007 §3.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MDNSendRequest {
     pub account_id: Id,
     pub send: BTreeMap<String, MDN>,
@@ -2172,6 +2353,7 @@ impl MDNSendRequest {
 /// `MDN/send` response (RFC 9007 §3.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MDNSendResponse {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2229,6 +2411,7 @@ pub mod mdn_set_error {
 /// MDN capability properties (RFC 9007 §1.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MDNCapability {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -2250,6 +2433,7 @@ impl MDNCapability {
 /// S/MIME Signature Verification capability (RFC 9219 §3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SmimeVerifyCapability {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,

@@ -226,10 +226,7 @@ fn a_card_moved_to_another_address_book_is_reported_as_removed_against_the_real_
     let other_book = client
         .address_book_create(
             &account_id,
-            &AddressBook {
-                name: format!("agent-booksync-move-target-{}", unique_suffix()),
-                ..AddressBook::default()
-            },
+            &AddressBook::new(format!("agent-booksync-move-target-{}", unique_suffix())),
         )
         .expect("AddressBook/set create failed against the real server");
     let other_book_id = other_book

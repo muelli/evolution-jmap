@@ -22,6 +22,7 @@ pub const CAPABILITY_TASKS: &str = "urn:ietf:params:jmap:tasks";
 /// Tasks capability properties (draft-ietf-jmap-tasks §1.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TasksCapability {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tasks_per_get: Option<u64>,
@@ -62,6 +63,7 @@ impl TasksCapability {
 /// A TaskList collection (draft-ietf-jmap-tasks §2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TaskList {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -144,6 +146,7 @@ impl TaskList {
 /// Permissions on a task list (draft-ietf-jmap-tasks §2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TaskListRights {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_read_items: Option<bool>,
@@ -203,6 +206,7 @@ impl TaskListRights {
 /// A Task object (draft-ietf-jmap-tasks §4, RFC 8984 §2.2 / §5.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -402,6 +406,7 @@ impl Task {
 /// `Task/query` filter (draft-ietf-jmap-tasks §4.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TaskQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_list_id: Option<Id>,

@@ -22,7 +22,9 @@
 //! needs a running `evolution-source-registry`. Thus the tests drive the pump
 //! with a counting closure, and the backends pass a closure that calls
 //! `e_book_meta_backend_schedule_refresh` through a
-//! [`WeakBackend`](crate::weak::WeakBackend).
+//! [`WeakBackend`](crate::weak::WeakBackend). The address book backend is the
+//! exception: it queues its own refresh, because the EDS scheduled refresh can
+//! deadlock with a manual-query book view.
 //!
 //! Push makes refreshes faster, but correctness never depends on it. The
 //! periodic refresh of EDS still runs if the stream never connects, if the

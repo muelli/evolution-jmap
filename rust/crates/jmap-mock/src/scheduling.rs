@@ -678,15 +678,16 @@ mod tests {
     #[test]
     fn scheduling_messages_are_skipped_when_parse_feature_is_disabled() {
         let mut account = AccountState::new("test");
-        let event = CalendarEvent {
-            participants: Some(
+        let event = {
+            let mut event = CalendarEvent::default();
+            event.participants = Some(
                 [(
                     "carol".to_owned(),
                     json!({"calendarAddress": "mailto:carol@example.org"}),
                 )]
                 .into(),
-            ),
-            ..CalendarEvent::default()
+            );
+            event
         };
         let change = EventChange {
             id: jmap_proto::Id::new("E1"),
@@ -749,8 +750,9 @@ mod tests {
 
     #[test]
     fn only_the_override_own_answer_counts_as_pinned() {
-        let event = CalendarEvent {
-            participants: Some(
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.participants = Some(
                 [(
                     "carol".to_owned(),
                     json!({
@@ -759,8 +761,8 @@ mod tests {
                     }),
                 )]
                 .into(),
-            ),
-            recurrence_overrides: Some(
+            );
+            event_out.recurrence_overrides = Some(
                 [
                     (
                         "2026-06-08T10:00:00".to_owned(),
@@ -772,8 +774,8 @@ mod tests {
                     ),
                 ]
                 .into(),
-            ),
-            ..CalendarEvent::default()
+            );
+            event_out
         };
 
         assert_eq!(

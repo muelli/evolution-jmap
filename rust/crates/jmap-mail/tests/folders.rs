@@ -60,7 +60,7 @@ use jmap_mail::folder_info::FolderInfoChain;
 use jmap_mail::folders::Request;
 use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail::subscribe;
-use jmap_mail_sync::{FolderInfo, FolderTree, MailSync};
+use jmap_mail_sync::{FolderInfo, FolderListChange, FolderTree, MailSync};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{Mailbox, role};
@@ -217,15 +217,15 @@ fn a_rebuilt_listing_is_what_the_next_refresh_is_measured_against() {
 }
 
 /// `jmap_mail::push` checks a pushed `Mailbox` change against
-/// `JmapStore::folder_list_changed_structurally` before it tells Camel the
-/// folder list is stale. See that module's own docs for details. With
+/// `JmapStore::pushed_folder_list_change` before it tells Camel about the
+/// folders. See that module's own docs for details. With
 /// nothing listed yet, there is nothing to compare against, so this reports
 /// no change instead of forcing a listing of its own.
 #[test]
 fn with_no_cached_listing_nothing_is_reported_as_structural() {
     let (_server, store) = connected();
 
-    assert!(!store.folder_list_changed_structurally());
+    assert_eq!(store.pushed_folder_list_change(), FolderListChange::Same);
 }
 
 /// RFC 8621 puts `totalEmails` and `unreadEmails` on the `Mailbox` object
@@ -266,9 +266,10 @@ fn a_delivery_that_only_moves_counts_is_not_structural() {
         });
     });
 
-    assert!(
-        !store.folder_list_changed_structurally(),
-        "a delivery's count bump alone must not be reported as structural"
+    assert_eq!(
+        store.pushed_folder_list_change(),
+        FolderListChange::Same,
+        "a delivery's count bump alone must not be reported as a folder change"
     );
 }
 
@@ -283,7 +284,10 @@ fn a_new_mailbox_is_structural() {
         account.create_mailbox("Receipts", None, None)
     });
 
-    assert!(store.folder_list_changed_structurally());
+    assert!(matches!(
+        store.pushed_folder_list_change(),
+        FolderListChange::Delta(delta) if delta.created.len() == 1
+    ));
 }
 
 /// A listing belongs to the connection it was read over. Camel reconnects a
@@ -405,11 +409,12 @@ fn the_listing_is_the_connected_accounts() {
 /// the server. Sibling order follows RFC 8621: `sortOrder`, then name. So
 /// `Personal` comes before `Work`.
 fn hand_built() -> FolderTree {
-    let mailbox = |id: &str, name: &str, parent: Option<&str>| Mailbox {
-        id: Some(Id::new(id)),
-        name: name.to_owned(),
-        parent_id: parent.map(Id::new),
-        ..Mailbox::default()
+    let mailbox = |id: &str, name: &str, parent: Option<&str>| {
+        let mut mailbox = Mailbox::new(name).with_id(Id::new(id));
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(Id::new(parent));
+        }
+        mailbox
     };
     FolderTree::from_mailboxes(&[
         mailbox("M1", "Work", None),
@@ -546,12 +551,14 @@ fn the_refresh_flag_does_not_change_which_folders_are_asked_for() {
 /// `jmap-mail-sync` reads a missing value as a tick. Omitting it here would
 /// give the opposite of what a test about unsubscribed folders wants.
 fn ticked(subscribed: &[&str]) -> FolderTree {
-    let mailbox = |id: &str, name: &str, parent: Option<&str>| Mailbox {
-        id: Some(Id::new(id)),
-        name: name.to_owned(),
-        parent_id: parent.map(Id::new),
-        is_subscribed: Some(subscribed.contains(&name)),
-        ..Mailbox::default()
+    let mailbox = |id: &str, name: &str, parent: Option<&str>| {
+        let mut mailbox = Mailbox::new(name)
+            .with_id(Id::new(id))
+            .is_subscribed(subscribed.contains(&name));
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(Id::new(parent));
+        }
+        mailbox
     };
     FolderTree::from_mailboxes(&[
         mailbox("M1", "Work", None),
@@ -1182,11 +1189,13 @@ fn a_mailbox_created_since_the_listing_is_found_by_looking_again() {
 }
 
 /// The other NULL, told apart from the one above by the error alone.
-/// `NOT_CONNECTED` is what makes Camel connect and ask again, instead of
-/// showing the account as broken.
+/// `NOT_CONNECTED` does not show the account as broken. Online, the store
+/// connects first (`tests/reconnect.rs`).
 #[test]
 fn a_disconnected_store_has_no_folder_to_open() {
     let account = Account::open();
+    // Offline, so the store does not try to connect.
+    account.set_online(false);
 
     let opened = Opened::of(account.store, "Inbox");
 
@@ -1467,6 +1476,8 @@ fn an_inbox_that_appeared_since_the_listing_is_found_by_looking_again() {
 #[test]
 fn a_disconnected_store_has_no_inbox_to_open() {
     let account = Account::open();
+    // Offline, so the store does not try to connect.
+    account.set_online(false);
 
     let opened = Purpose::inbox(account.store);
 
@@ -1659,6 +1670,8 @@ fn a_trash_that_appeared_since_the_listing_is_found_by_looking_again() {
 #[test]
 fn a_disconnected_store_has_no_trash_or_junk_to_open() {
     let account = Account::open();
+    // Offline, so the store does not try to connect.
+    account.set_online(false);
 
     for opened in [Purpose::trash(account.store), Purpose::junk(account.store)] {
         assert!(opened.folder.is_null(), "a disconnected store opened one");
@@ -1911,15 +1924,18 @@ fn a_null_store_has_nothing_to_set_up_either() {
 /// Every mailbox states whether it is subscribed, rather than leaving the
 /// property out, for the reason [`ticked`] gives.
 fn checkable() -> FolderTree {
-    let mailbox =
-        |id: &str, name: &str, parent: Option<&str>, role: Option<&str>, ticked| Mailbox {
-            id: Some(Id::new(id)),
-            name: name.to_owned(),
-            parent_id: parent.map(Id::new),
-            role: role.map(str::to_owned),
-            is_subscribed: Some(ticked),
-            ..Mailbox::default()
-        };
+    let mailbox = |id: &str, name: &str, parent: Option<&str>, role: Option<&str>, ticked| {
+        let mut mailbox = Mailbox::new(name)
+            .with_id(Id::new(id))
+            .is_subscribed(ticked);
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(Id::new(parent));
+        }
+        if let Some(role) = role {
+            mailbox = mailbox.with_role(role);
+        }
+        mailbox
+    };
     FolderTree::from_mailboxes(&[
         mailbox("M1", "Inbox", None, Some(role::INBOX), true),
         mailbox("M2", "Lists", None, None, true),
@@ -2003,13 +2019,10 @@ fn send_receive_checks_the_inbox_and_the_folders_the_user_ticked() {
 #[test]
 fn the_inbox_is_checked_even_when_the_user_unticked_it() {
     let account = Account::open();
-    let tree = FolderTree::from_mailboxes(&[Mailbox {
-        id: Some(Id::new("M1")),
-        name: "Inbox".to_owned(),
-        role: Some(role::INBOX.to_owned()),
-        is_subscribed: Some(false),
-        ..Mailbox::default()
-    }])
+    let tree = FolderTree::from_mailboxes(&[Mailbox::new("Inbox")
+        .with_id(Id::new("M1"))
+        .with_role(role::INBOX)
+        .is_subscribed(false)])
     .expect("a well-formed mailbox list");
 
     assert_eq!(checked(&tree, account.store), ["Inbox"]);

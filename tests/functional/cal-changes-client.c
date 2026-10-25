@@ -17,7 +17,14 @@
  * and saves it. `rust/crates/jmap-functional/tests/calendar-offline-edit.rs`
  * uses this edit while the server is out of reach.
  *
+ * With `--save`, it writes the event as EDS gives it to `<path>`, as an editor
+ * keeps it open. With `--modify-from`, it waits until a refresh replaces the
+ * cached event, then sets the summary of the old copy in `<path>` and saves it.
+ * `rust/crates/jmap-functional/tests/calendar-stale-edit.rs` uses the two runs.
+ *
  *   usage: functional-cal-changes-client <source-uid> [<event-uid> <summary>]
+ *          functional-cal-changes-client <source-uid> --save <event-uid> <path>
+ *          functional-cal-changes-client <source-uid> --modify-from <path> <summary>
  */
 
 #include <libecal/libecal.h>
@@ -39,7 +46,7 @@ main (int argc,
 	guint index = 0;
 	const gchar *source_uid;
 
-	if (argc != 2 && argc != 4) {
+	if (argc != 2 && argc != 4 && argc != 5) {
 		g_printerr ("usage: %s <source-uid> [<event-uid> <summary>]\n", argv[0]);
 		return 2;
 	}
@@ -108,7 +115,61 @@ main (int argc,
 	g_list_free_full (summaries, g_free);
 	g_slist_free_full (components, g_object_unref);
 
-	if (argc == 4) {
+	if (argc == 5 && g_str_equal (argv[2], "--save")) {
+		ICalComponent *event = NULL;
+		gchar *text;
+
+		if (!e_cal_client_get_object_sync (cal, argv[3], NULL, &event, NULL, &error))
+			return functional_fail ("get", error);
+
+		text = i_cal_component_as_ical_string (event);
+		if (!g_file_set_contents (argv[4], text, -1, &error))
+			return functional_fail ("save", error);
+		g_free (text);
+		g_object_unref (event);
+	} else if (argc == 5 && g_str_equal (argv[2], "--modify-from")) {
+		ICalComponent *event;
+		gchar *old = NULL;
+		gboolean replaced = FALSE;
+		guint attempt;
+
+		if (!g_file_get_contents (argv[3], &old, NULL, &error))
+			return functional_fail ("load", error);
+		event = i_cal_component_new_from_string (old);
+		if (!event) {
+			g_printerr ("load: '%s' is not an iCalendar component\n", argv[3]);
+			return 1;
+		}
+
+		/* The connect starts a refresh. Wait until it replaces the cached event. */
+		for (attempt = 0; attempt < 80 && !replaced; attempt++) {
+			ICalComponent *cached = NULL;
+
+			if (e_cal_client_get_object_sync (cal, i_cal_component_get_uid (event), NULL,
+							  &cached, NULL, NULL)) {
+				gchar *text = i_cal_component_as_ical_string (cached);
+
+				replaced = g_strcmp0 (text, old) != 0;
+				g_free (text);
+				g_object_unref (cached);
+			}
+			if (!replaced)
+				g_usleep (G_USEC_PER_SEC / 4);
+		}
+		if (!replaced) {
+			g_printerr ("refresh: the cached event did not change\n");
+			return 1;
+		}
+
+		i_cal_component_set_summary (event, argv[4]);
+		if (!e_cal_client_modify_object_sync (cal, event, E_CAL_OBJ_MOD_ALL,
+						      E_CAL_OPERATION_FLAG_NONE, NULL, &error)) {
+			g_object_unref (event);
+			return functional_fail ("modify", error);
+		}
+		g_object_unref (event);
+		g_free (old);
+	} else if (argc == 4) {
 		ICalComponent *event = NULL;
 
 		if (!e_cal_client_get_object_sync (cal, argv[2], NULL, &event, NULL, &error))

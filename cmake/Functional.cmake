@@ -497,6 +497,36 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
+	# An edit of a copy that an editor kept open across a refresh. See
+	# `tests/book-stale-edit.rs`.
+	add_test(
+		NAME functional-book-stale-edit
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test book-stale-edit
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-stale-edit PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
+	# Saves in a row while the mock pushes after each write. See
+	# `tests/book-save-during-push.rs`.
+	add_test(
+		NAME functional-book-save-during-push
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test book-save-during-push
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-save-during-push PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
 	# The same `functional-book-client` binary and module, against a real
 	# Stalwart instead of the in-process mock. The Rust source marks it
 	# `#[ignore]`: it needs `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/
@@ -684,6 +714,21 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 	)
 	set_tests_properties(functional-cal-offline-edit PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CHANGES_CLIENT=$<TARGET_FILE:functional-cal-changes-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# An edit of a copy that an editor kept open across a refresh. See
+	# `tests/calendar-stale-edit.rs`.
+	add_test(
+		NAME functional-cal-stale-edit
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar-stale-edit
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-stale-edit PROPERTIES
 		LABELS functional
 		TIMEOUT 300
 		ENVIRONMENT

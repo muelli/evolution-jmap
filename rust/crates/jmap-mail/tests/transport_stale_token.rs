@@ -66,10 +66,10 @@ impl Fixture {
     }
 
     fn envelope(&self) -> Envelope {
-        Envelope {
-            mail_from: EnvelopeAddress::new(SENDER),
-            rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
-        }
+        Envelope::new(
+            EnvelopeAddress::new(SENDER),
+            [EnvelopeAddress::new("bob@example.com")],
+        )
     }
 
     fn send(&self, transport: &JmapTransport) -> Result<(), jmap_mail::connect::StoreError> {

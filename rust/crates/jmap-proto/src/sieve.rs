@@ -20,6 +20,7 @@ pub const CAPABILITY_SIEVE: &str = "urn:ietf:params:jmap:sieve";
 /// Sieve capability properties (RFC 9661 §1.2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SieveCapability {
     pub max_size_script: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,6 +84,7 @@ where
 /// A Sieve script object (RFC 9661 §2.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SieveScript {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -136,6 +138,7 @@ impl SieveScript {
 /// Extends `/set` with `onSuccessActivateScript` to activate or deactivate scripts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SieveScriptSetRequest {
     #[serde(flatten)]
     pub set: SetRequest<SieveScript>,
@@ -186,6 +189,7 @@ impl SieveScriptSetRequest {
 /// `SieveScript/query` filter (RFC 9661 §2.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SieveScriptQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -220,6 +224,7 @@ impl SieveScriptQueryFilter {
 /// Requires `accountId` and the `blobId` of the uploaded script content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SieveScriptValidateRequest {
     pub account_id: Id,
     pub blob_id: Id,
@@ -246,6 +251,7 @@ impl SieveScriptValidateRequest {
 /// Contains `accountId` and an optional `error` detail.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SieveScriptValidateResponse {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]

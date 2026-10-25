@@ -861,10 +861,11 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // The server sets a uid. The mock's `ContactCard/set` sets the same shape,
     // but seeding does not go through it.
     card.uid = Some(format!("urn:example:card:{}", id.as_str()));
-    card.name = Some(Name {
-        full: Some(EDITED_FULL_NAME.to_owned()),
-        components: Some(components),
-        ..Name::default()
+    card.name = Some({
+        let mut name_val = Name::default();
+        name_val.full = Some(EDITED_FULL_NAME.to_owned());
+        name_val.components = Some(components);
+        name_val
     });
     // A picture under a key that only a server would select. Like the
     // pronunciations, the user does not edit it, so the save must return it
@@ -897,10 +898,11 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // one map on lines with *different* names, so the reader's key counter must
     // give them different keys. No line can hold the `pref`; see
     // [`SEEDED_CALENDAR_PREF`].
-    let mut calendar = Calendar {
-        kind: Some("calendar".to_owned()),
-        uri: SEEDED_CALENDAR_URI.to_owned(),
-        ..Calendar::default()
+    let mut calendar = {
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("calendar".to_owned());
+        calendar.uri = SEEDED_CALENDAR_URI.to_owned();
+        calendar
     };
     calendar
         .extra
@@ -908,14 +910,12 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     card.calendars = Some(
         [
             (SEEDED_CALENDAR_KEY.to_owned(), calendar),
-            (
-                SEEDED_FREEBUSY_KEY.to_owned(),
-                Calendar {
-                    kind: Some("freeBusy".to_owned()),
-                    uri: SEEDED_FREEBUSY_URI.to_owned(),
-                    ..Calendar::default()
-                },
-            ),
+            (SEEDED_FREEBUSY_KEY.to_owned(), {
+                let mut calendar = Calendar::default();
+                calendar.kind = Some("freeBusy".to_owned());
+                calendar.uri = SEEDED_FREEBUSY_URI.to_owned();
+                calendar
+            }),
         ]
         .into_iter()
         .collect(),
@@ -935,21 +935,20 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // user can see one entry and not the other: Evolution shows only the first
     // `NOTE` line. No line can hold the `created`; see [`SEEDED_NOTE_CREATED`].
     // The caller selects the number of notes; see [`SeededNotes`].
-    let mut note = Note {
-        note: SEEDED_NOTE.to_owned(),
-        ..Note::default()
+    let mut note = {
+        let mut v = Note::default();
+        v.note = SEEDED_NOTE.to_owned();
+        v
     };
     note.extra
         .insert("created".to_owned(), serde_json::json!(SEEDED_NOTE_CREATED));
     let mut notes: BTreeMap<String, Note> = [(SEEDED_NOTE_KEY.to_owned(), note)].into();
     if matches!(seeded_notes, SeededNotes::Both) {
-        notes.insert(
-            SEEDED_SECOND_NOTE_KEY.to_owned(),
-            Note {
-                note: SEEDED_SECOND_NOTE.to_owned(),
-                ..Note::default()
-            },
-        );
+        notes.insert(SEEDED_SECOND_NOTE_KEY.to_owned(), {
+            let mut v = Note::default();
+            v.note = SEEDED_SECOND_NOTE.to_owned();
+            v
+        });
     }
     card.notes = Some(notes);
     // Three online services. The Jabber and Skype entries state only a URI (see
@@ -957,75 +956,63 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // Skype and Matrix entries also have contexts.
     card.online_services = Some(
         [
-            (
-                SEEDED_SERVICE_KEY.to_owned(),
-                OnlineService {
-                    service: Some(SEEDED_SERVICE.to_owned()),
-                    uri: Some(SEEDED_SERVICE_URI.to_owned()),
-                    ..OnlineService::default()
-                },
-            ),
-            (
-                SEEDED_SKYPE_SERVICE_KEY.to_owned(),
-                OnlineService {
-                    service: Some(SEEDED_SKYPE_SERVICE.to_owned()),
-                    uri: Some(SEEDED_SKYPE_SERVICE_URI.to_owned()),
-                    extra: [("contexts".to_owned(), serde_json::json!({"private": true}))].into(),
-                    ..OnlineService::default()
-                },
-            ),
-            (
-                SEEDED_MATRIX_SERVICE_KEY.to_owned(),
-                OnlineService {
-                    service: Some(SEEDED_MATRIX_SERVICE.to_owned()),
-                    user: Some(SEEDED_MATRIX_SERVICE_HANDLE.to_owned()),
-                    extra: [("contexts".to_owned(), serde_json::json!({"work": true}))].into(),
-                    ..OnlineService::default()
-                },
-            ),
+            (SEEDED_SERVICE_KEY.to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = Some(SEEDED_SERVICE.to_owned());
+                v.uri = Some(SEEDED_SERVICE_URI.to_owned());
+                v
+            }),
+            (SEEDED_SKYPE_SERVICE_KEY.to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = Some(SEEDED_SKYPE_SERVICE.to_owned());
+                v.uri = Some(SEEDED_SKYPE_SERVICE_URI.to_owned());
+                v.extra = [("contexts".to_owned(), serde_json::json!({"private": true}))].into();
+                v
+            }),
+            (SEEDED_MATRIX_SERVICE_KEY.to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = Some(SEEDED_MATRIX_SERVICE.to_owned());
+                v.user = Some(SEEDED_MATRIX_SERVICE_HANDLE.to_owned());
+                v.extra = [("contexts".to_owned(), serde_json::json!({"work": true}))].into();
+                v
+            }),
         ]
         .into_iter()
         .collect(),
     );
     card.anniversaries = Some(
         [
-            (
-                SEEDED_WEDDING_KEY.to_owned(),
-                Anniversary {
-                    kind: "wedding".to_owned(),
-                    date: Some(serde_json::json!({
-                        "@type": "PartialDate",
-                        "year": SEEDED_WEDDING_YEAR,
-                        "month": SEEDED_WEDDING_MONTH,
-                        "day": SEEDED_WEDDING_DAY,
-                    })),
-                    ..Anniversary::default()
-                },
-            ),
-            (
-                SEEDED_YEAR_BIRTHDAY_KEY.to_owned(),
-                Anniversary {
-                    kind: "birth".to_owned(),
-                    date: Some(serde_json::json!({
-                        "@type": "PartialDate",
-                        "year": SEEDED_BIRTH_YEAR,
-                    })),
-                    ..Anniversary::default()
-                },
-            ),
-            (
-                SEEDED_DEATHDAY_KEY.to_owned(),
-                Anniversary {
-                    kind: "death".to_owned(),
-                    date: Some(serde_json::json!({
-                        "@type": "PartialDate",
-                        "year": SEEDED_DEATH_YEAR,
-                        "month": SEEDED_DEATH_MONTH,
-                        "day": SEEDED_DEATH_DAY,
-                    })),
-                    ..Anniversary::default()
-                },
-            ),
+            (SEEDED_WEDDING_KEY.to_owned(), {
+                let mut v = Anniversary::default();
+                v.kind = "wedding".to_owned();
+                v.date = Some(serde_json::json!({
+                    "@type": "PartialDate",
+                    "year": SEEDED_WEDDING_YEAR,
+                    "month": SEEDED_WEDDING_MONTH,
+                    "day": SEEDED_WEDDING_DAY,
+                }));
+                v
+            }),
+            (SEEDED_YEAR_BIRTHDAY_KEY.to_owned(), {
+                let mut v = Anniversary::default();
+                v.kind = "birth".to_owned();
+                v.date = Some(serde_json::json!({
+                    "@type": "PartialDate",
+                    "year": SEEDED_BIRTH_YEAR,
+                }));
+                v
+            }),
+            (SEEDED_DEATHDAY_KEY.to_owned(), {
+                let mut v = Anniversary::default();
+                v.kind = "death".to_owned();
+                v.date = Some(serde_json::json!({
+                    "@type": "PartialDate",
+                    "year": SEEDED_DEATH_YEAR,
+                    "month": SEEDED_DEATH_MONTH,
+                    "day": SEEDED_DEATH_DAY,
+                }));
+                v
+            }),
         ]
         .into_iter()
         .collect(),
@@ -1054,72 +1041,60 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     );
     card.titles = Some(
         [
-            (
-                SEEDED_TITLE_KEY.to_owned(),
-                Title {
-                    name: SEEDED_TITLE_NAME.to_owned(),
-                    kind: None,
-                    ..Title::default()
-                },
-            ),
-            (
-                SEEDED_SECOND_TITLE_KEY.to_owned(),
-                Title {
-                    name: SEEDED_SECOND_TITLE_NAME.to_owned(),
-                    kind: None,
-                    ..Title::default()
-                },
-            ),
-            (
-                SEEDED_ROLE_KEY.to_owned(),
-                Title {
-                    name: SEEDED_ROLE_NAME.to_owned(),
-                    kind: Some("role".to_owned()),
-                    ..Title::default()
-                },
-            ),
-            (
-                SEEDED_SECOND_ROLE_KEY.to_owned(),
-                Title {
-                    name: SEEDED_SECOND_ROLE_NAME.to_owned(),
-                    kind: Some("role".to_owned()),
-                    ..Title::default()
-                },
-            ),
+            (SEEDED_TITLE_KEY.to_owned(), {
+                let mut title = Title::default();
+                title.name = SEEDED_TITLE_NAME.to_owned();
+                title.kind = None;
+                title
+            }),
+            (SEEDED_SECOND_TITLE_KEY.to_owned(), {
+                let mut title = Title::default();
+                title.name = SEEDED_SECOND_TITLE_NAME.to_owned();
+                title.kind = None;
+                title
+            }),
+            (SEEDED_ROLE_KEY.to_owned(), {
+                let mut title = Title::default();
+                title.name = SEEDED_ROLE_NAME.to_owned();
+                title.kind = Some("role".to_owned());
+                title
+            }),
+            (SEEDED_SECOND_ROLE_KEY.to_owned(), {
+                let mut title = Title::default();
+                title.name = SEEDED_SECOND_ROLE_NAME.to_owned();
+                title.kind = Some("role".to_owned());
+                title
+            }),
         ]
         .into_iter()
         .collect(),
     );
     card.addresses = Some(
         [
-            (
-                SEEDED_WORK_ADDR_KEY.to_owned(),
-                Address {
-                    contexts: Some(serde_json::json!({"work": true})),
-                    components: Some(vec![
-                        AddressComponent::new("name", SEEDED_WORK_STREET),
-                        AddressComponent::new("locality", SEEDED_WORK_LOCALITY),
-                        AddressComponent::new("postcode", SEEDED_WORK_POSTCODE),
-                        AddressComponent::new("country", SEEDED_WORK_COUNTRY),
-                    ]),
-                    full: Some(SEEDED_WORK_LABEL.to_owned()),
-                    ..Address::default()
-                },
-            ),
-            (
-                SEEDED_HOME_ADDR_KEY.to_owned(),
-                Address {
-                    contexts: Some(serde_json::json!({"private": true})),
-                    components: Some(vec![
-                        AddressComponent::new("name", SEEDED_HOME_STREET),
-                        AddressComponent::new("locality", SEEDED_HOME_LOCALITY),
-                        AddressComponent::new("postcode", SEEDED_HOME_POSTCODE),
-                        AddressComponent::new("country", SEEDED_HOME_COUNTRY),
-                    ]),
-                    full: Some(SEEDED_HOME_LABEL.to_owned()),
-                    ..Address::default()
-                },
-            ),
+            (SEEDED_WORK_ADDR_KEY.to_owned(), {
+                let mut address_val = Address::default();
+                address_val.contexts = Some(serde_json::json!({"work": true}));
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", SEEDED_WORK_STREET),
+                    AddressComponent::new("locality", SEEDED_WORK_LOCALITY),
+                    AddressComponent::new("postcode", SEEDED_WORK_POSTCODE),
+                    AddressComponent::new("country", SEEDED_WORK_COUNTRY),
+                ]);
+                address_val.full = Some(SEEDED_WORK_LABEL.to_owned());
+                address_val
+            }),
+            (SEEDED_HOME_ADDR_KEY.to_owned(), {
+                let mut address_val = Address::default();
+                address_val.contexts = Some(serde_json::json!({"private": true}));
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", SEEDED_HOME_STREET),
+                    AddressComponent::new("locality", SEEDED_HOME_LOCALITY),
+                    AddressComponent::new("postcode", SEEDED_HOME_POSTCODE),
+                    AddressComponent::new("country", SEEDED_HOME_COUNTRY),
+                ]);
+                address_val.full = Some(SEEDED_HOME_LABEL.to_owned());
+                address_val
+            }),
         ]
         .into_iter()
         .collect(),
@@ -1131,10 +1106,9 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
 /// A `relatedTo` value with one relation type, as the Set of RFC 9553 §2.1.8:
 /// the type is a key and its value is `true`.
 fn relation_of(kind: &str) -> Relation {
-    Relation {
-        relation: Some([(kind.to_owned(), serde_json::json!(true))].into()),
-        ..Relation::default()
-    }
+    let mut v = Relation::default();
+    v.relation = Some([(kind.to_owned(), serde_json::json!(true))].into());
+    v
 }
 
 /// Check that the card on the server still has the seeded sibling, under the

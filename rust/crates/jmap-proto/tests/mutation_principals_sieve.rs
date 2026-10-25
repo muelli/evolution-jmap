@@ -138,10 +138,7 @@ fn get_availability_request_and_response() {
         serde_json::from_value(val).expect("deserialize GetAvailabilityRequest");
     assert_eq!(roundtripped, request);
 
-    let event = CalendarEvent {
-        title: Some("Sprint Review".to_string()),
-        ..CalendarEvent::default()
-    };
+    let event = CalendarEvent::new().with_title("Sprint Review");
 
     let period = BusyPeriod::new(
         UtcDate::new("2026-10-01T10:00:00Z"),

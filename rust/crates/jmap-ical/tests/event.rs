@@ -98,10 +98,11 @@ fn uid_is_the_jmap_id_and_the_jscalendar_uid_is_kept_aside() {
 
 #[test]
 fn an_event_without_a_jscalendar_uid_falls_back_to_the_id_alone() {
-    let event = CalendarEvent {
-        id: Some("E9".into()),
-        title: Some("Retro".to_owned()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E9".into());
+        event_out.title = Some("Retro".to_owned());
+        event_out
     };
     let ics = event_to_ical(&event);
 
@@ -114,9 +115,10 @@ fn an_event_without_a_jscalendar_uid_falls_back_to_the_id_alone() {
 fn a_new_event_with_no_id_is_identified_by_its_jscalendar_uid() {
     // Before the first CalendarEvent/set there is no server id, and EDS still
     // needs a UID to key the component on.
-    let event = CalendarEvent {
-        uid: Some("urn:uuid:fresh".to_owned()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("urn:uuid:fresh".to_owned());
+        event_out
     };
     let ics = event_to_ical(&event);
 
@@ -162,10 +164,11 @@ fn a_named_time_zone_becomes_the_tzid_parameter() {
 
 #[test]
 fn utc_is_spelled_with_a_trailing_z_and_no_tzid() {
-    let event = CalendarEvent {
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T130000Z");
@@ -178,9 +181,10 @@ fn utc_is_spelled_with_a_trailing_z_and_no_tzid() {
 
 #[test]
 fn an_event_without_a_time_zone_stays_floating() {
-    let event = CalendarEvent {
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out
     };
     let ics = event_to_ical(&event);
     // No TZID and no Z: RFC 5545 form 1, a local time in whatever zone the
@@ -392,12 +396,13 @@ fn a_duration_that_states_no_length_lets_a_dtend_state_it_instead() {
 /// An event of one length, with nothing else that would change how it is
 /// written.
 fn lasting(duration: &str) -> CalendarEvent {
-    CalendarEvent {
-        id: Some("E19".into()),
-        title: Some("Standup".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        duration: Some(duration.to_owned()),
-        ..CalendarEvent::default()
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E19".into());
+        event_out.title = Some("Standup".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.duration = Some(duration.to_owned());
+        event_out
     }
 }
 
@@ -503,11 +508,12 @@ fn a_timed_dtstart_says_nothing_about_showing_without_time() {
 
 #[test]
 fn an_all_day_event_is_written_as_a_date_and_survives_the_trip_back() {
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P2D".to_owned()),
-        show_without_time: Some(true),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P2D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out
     };
     let ics = event_to_ical(&event);
 
@@ -561,12 +567,13 @@ fn an_all_day_event_the_date_form_cannot_hold_stays_a_date_time() {
             Some("Europe/Berlin"),
         ),
     ] {
-        let event = CalendarEvent {
-            start: Some(start.to_owned()),
-            duration: duration.map(str::to_owned),
-            time_zone: zone.map(str::to_owned),
-            show_without_time: Some(true),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.start = Some(start.to_owned());
+            event_out.duration = duration.map(str::to_owned);
+            event_out.time_zone = zone.map(str::to_owned);
+            event_out.show_without_time = Some(true);
+            event_out
         };
         let ics = event_to_ical(&event);
         assert!(line(&ics, "DTSTART").contains("20260115T"), "{why}: {ics}");
@@ -584,10 +591,11 @@ fn an_all_day_event_with_no_length_is_still_written_as_a_date() {
     // §3.6.1, where RFC 8984 would call it zero-length. A day is what an event
     // shown without a time means, and the reverse: a midnight appointment of
     // no duration: is not something a calendar can draw.
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        show_without_time: Some(true),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
@@ -606,10 +614,11 @@ fn a_start_that_is_not_a_date_time_is_left_out_rather_than_mangled() {
     // the whole component, and a truncated value would silently move the
     // event. Both directions therefore check the shape before converting.
     for start in ["next tuesday", "2026-01-15", "202X-01-15T13:00:00"] {
-        let event = CalendarEvent {
-            start: Some(start.to_owned()),
-            time_zone: Some("Etc/UTC".to_owned()),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.start = Some(start.to_owned());
+            event_out.time_zone = Some("Etc/UTC".to_owned());
+            event_out
         };
         let ics = event_to_ical(&event);
         assert!(without(&ics, "DTSTART"), "{start}: {ics}");
@@ -679,10 +688,11 @@ fn a_start_that_names_no_real_instant_is_left_out_rather_than_passed_on() {
         "2026-01-15T13:60:00",
         "2026-01-15T13:00:61",
     ] {
-        let event = CalendarEvent {
-            start: Some(start.to_owned()),
-            time_zone: Some("Etc/UTC".to_owned()),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.start = Some(start.to_owned());
+            event_out.time_zone = Some("Etc/UTC".to_owned());
+            event_out
         };
         assert!(without(&event_to_ical(&event), "DTSTART"), "{start}");
     }
@@ -716,9 +726,10 @@ fn a_leap_day_and_a_leap_second_are_real_and_survive() {
     // not: 29 February of a leap year, and the leap second RFC 5545 §3.3.12 and
     // RFC 3339 both spell as :60.
     for start in ["2024-02-29T13:00:00", "2026-06-30T23:59:60"] {
-        let event = CalendarEvent {
-            start: Some(start.to_owned()),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.start = Some(start.to_owned());
+            event_out
         };
         let ics = event_to_ical(&event);
         assert!(!without(&ics, "DTSTART"), "{start}: {ics}");
@@ -729,15 +740,17 @@ fn a_leap_day_and_a_leap_second_are_real_and_survive() {
         );
     }
     // And 2000 was a leap year where 1900 and 2100 were not.
-    let event = CalendarEvent {
-        start: Some("2000-02-29T00:00:00".to_owned()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2000-02-29T00:00:00".to_owned());
+        event_out
     };
     assert!(!without(&event_to_ical(&event), "DTSTART"));
     for start in ["1900-02-29T00:00:00", "2100-02-29T00:00:00"] {
-        let event = CalendarEvent {
-            start: Some(start.to_owned()),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.start = Some(start.to_owned());
+            event_out
         };
         assert!(without(&event_to_ical(&event), "DTSTART"), "{start}");
     }
@@ -750,9 +763,10 @@ fn status_changes_case_between_the_two_formats() {
         ("cancelled", "CANCELLED"),
         ("tentative", "TENTATIVE"),
     ] {
-        let event = CalendarEvent {
-            status: Some(jscalendar.to_owned()),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.status = Some(jscalendar.to_owned());
+            event_out
         };
         let ics = event_to_ical(&event);
         assert_eq!(line(&ics, "STATUS:"), format!("STATUS:{ical}"));
@@ -767,9 +781,10 @@ fn status_changes_case_between_the_two_formats() {
 fn an_unknown_status_is_dropped_rather_than_passed_through() {
     // A STATUS libical does not know is worse than no STATUS at all, and
     // JSCalendar's set is closed.
-    let event = CalendarEvent {
-        status: Some("dithering".to_owned()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.status = Some("dithering".to_owned());
+        event_out
     };
     assert!(without(&event_to_ical(&event), "STATUS"), "{event:?}");
 }
@@ -781,9 +796,10 @@ fn whether_an_event_blocks_time_is_the_transparency_of_the_component() {
     // are closed and both spell the same two states, so this is a table and not
     // a judgement.
     for (jscalendar, ical) in [("free", "TRANSPARENT"), ("busy", "OPAQUE")] {
-        let event = CalendarEvent {
-            free_busy_status: Some(jscalendar.to_owned()),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.free_busy_status = Some(jscalendar.to_owned());
+            event_out
         };
         let ics = event_to_ical(&event);
         assert_eq!(line(&ics, "TRANSP:"), format!("TRANSP:{ical}"));
@@ -802,9 +818,10 @@ fn whether_an_event_blocks_time_is_the_transparency_of_the_component() {
 fn an_unknown_free_busy_status_is_dropped_rather_than_passed_through() {
     // The same closed-vocabulary rule STATUS follows: a TRANSP libical does not
     // know costs the whole component, and JSCalendar admits only the two states.
-    let event = CalendarEvent {
-        free_busy_status: Some("maybe".to_owned()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.free_busy_status = Some("maybe".to_owned());
+        event_out
     };
     assert!(without(&event_to_ical(&event), "TRANSP"), "{event:?}");
 
@@ -875,9 +892,10 @@ fn the_importance_of_an_event_is_the_priority_of_the_component() {
     // same integer with the same meaning (0 undefined, 1 highest, 9 lowest) so
     // the whole range crosses unchanged, digit for digit.
     for priority in 0..=9 {
-        let event = CalendarEvent {
-            priority: Some(priority),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.priority = Some(priority);
+            event_out
         };
         let ics = event_to_ical(&event);
         assert_eq!(line(&ics, "PRIORITY:"), format!("PRIORITY:{priority}"));
@@ -895,9 +913,10 @@ fn a_priority_outside_the_range_the_two_formats_share_is_dropped() {
     // rather than passed through in the other's clothes: the rule STATUS and
     // TRANSP follow, one type over.
     for priority in [-1, 10, 100] {
-        let event = CalendarEvent {
-            priority: Some(priority),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.priority = Some(priority);
+            event_out
         };
         assert!(without(&event_to_ical(&event), "PRIORITY"), "{priority}");
     }
@@ -986,9 +1005,10 @@ fn who_may_see_an_event_is_the_class_of_the_component() {
         ("private", "PRIVATE"),
         ("secret", "CONFIDENTIAL"),
     ] {
-        let event = CalendarEvent {
-            privacy: Some(jscalendar.to_owned()),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.privacy = Some(jscalendar.to_owned());
+            event_out
         };
         let ics = event_to_ical(&event);
         assert_eq!(line(&ics, "CLASS:"), format!("CLASS:{ical}"));
@@ -1008,9 +1028,10 @@ fn an_unknown_privacy_is_dropped_rather_than_passed_through() {
     // STATUS and TRANSP follow: passing it through in the other format's clothes
     // would state a classification nobody wrote.
     for privacy in ["deniable", "x-eyes-only", "CONFIDENTIAL"] {
-        let event = CalendarEvent {
-            privacy: Some(privacy.to_owned()),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.privacy = Some(privacy.to_owned());
+            event_out
         };
         assert!(without(&event_to_ical(&event), "CLASS"), "{privacy}");
     }
@@ -1104,10 +1125,11 @@ fn an_edited_instance_is_drawn_at_the_series_privacy() {
 
 /// An event carrying the two timestamps a server keeps for it.
 fn stamped(created: &str, updated: &str) -> CalendarEvent {
-    CalendarEvent {
-        created: Some(created.to_owned()),
-        updated: Some(updated.to_owned()),
-        ..CalendarEvent::default()
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.created = Some(created.to_owned());
+        event_out.updated = Some(updated.to_owned());
+        event_out
     }
 }
 
@@ -1203,11 +1225,12 @@ fn the_timestamps_are_written_and_never_read_back() {
 
 /// An event happening at one place, keyed the way a server keys it.
 fn placed(key: &str, location: Value) -> CalendarEvent {
-    CalendarEvent {
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        locations: Some([(key.to_owned(), location)].into()),
-        ..CalendarEvent::default()
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.locations = Some([(key.to_owned(), location)].into());
+        event_out
     }
 }
 
@@ -1403,9 +1426,10 @@ fn an_edited_instance_is_drawn_at_the_series_place() {
     // override does not patch. A component that left the place off would show
     // the user an occurrence that happens nowhere.
     let mut event = placed("loc1", json!({"@type": "Location", "name": "Room 42"}));
-    event.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        ..RecurrenceRule::default()
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built
     });
     event.recurrence_overrides = Some(
         [(
@@ -1433,16 +1457,17 @@ fn an_edited_instance_is_drawn_at_the_series_place() {
 /// An event tagged the way a server tags it: RFC 8984 §4.2.9's `keywords` is an
 /// RFC 8984 §4.2.9 Set, so the keys are the tags and every value is `true`.
 fn tagged<const N: usize>(keywords: [(&str, Value); N]) -> CalendarEvent {
-    CalendarEvent {
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        keywords: Some(
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.keywords = Some(
             keywords
                 .into_iter()
                 .map(|(keyword, set)| (keyword.to_owned(), set))
                 .collect(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     }
 }
 
@@ -1620,9 +1645,10 @@ fn an_edited_instance_is_drawn_with_the_series_tags() {
     // and, now that an override *may* restate them (see OVERRIDE_PROPERTIES),
     // would read back as the user having unfiled that one occurrence.
     let mut event = tagged([("offsite", json!(true))]);
-    event.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        ..RecurrenceRule::default()
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built
     });
     event.recurrence_overrides = Some(
         [(
@@ -1770,18 +1796,19 @@ fn a_tag_an_instance_cannot_show_leaves_the_override_flagged() {
 /// An event reminded the way a server reminds: RFC 8984 §4.5.2's `alerts` is a
 /// map of Alerts keyed by an RFC 8984 §1.4.4 Id.
 fn reminded<const N: usize>(alerts: [(&str, Value); N]) -> CalendarEvent {
-    CalendarEvent {
-        title: Some("Sprint planning".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        alerts: Some(
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Sprint planning".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.alerts = Some(
             alerts
                 .into_iter()
                 .map(|(key, alert)| (key.to_owned(), alert))
                 .collect(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     }
 }
 
@@ -2304,12 +2331,14 @@ fn a_recurrence_rule_carries_freq_interval_and_count() {
 
 #[test]
 fn an_interval_of_one_is_left_implicit() {
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            interval: Some(1),
-            ..RecurrenceRule::new("daily")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.interval = Some(1);
+            __built
+        });
+        event_out
     };
     // INTERVAL=1 is the RFC 5545 default; writing it out only makes the line
     // longer, and it comes back as None.
@@ -2318,14 +2347,16 @@ fn an_interval_of_one_is_left_implicit() {
 
 #[test]
 fn until_is_a_date_time_in_the_events_own_zone() {
-    let event = CalendarEvent {
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            until: Some("2026-12-31T09:00:00".to_owned()),
-            ..RecurrenceRule::new("monthly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.until = Some("2026-12-31T09:00:00".to_owned());
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -2343,15 +2374,17 @@ fn an_all_day_events_until_is_a_date_like_its_start() {
     // written as a DATE cannot carry a DATE-TIME end to its recurrence. The
     // time dropped here is midnight, which is the only time an event shown
     // without one has.
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            until: Some("2026-12-31T00:00:00".to_owned()),
-            ..RecurrenceRule::new("weekly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.until = Some("2026-12-31T00:00:00".to_owned());
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=WEEKLY;UNTIL=20261231");
@@ -2367,15 +2400,17 @@ fn an_all_day_event_whose_recurrence_ends_at_a_time_stays_a_date_time() {
     // without moving the day the recurrence stops, and it cannot stay a
     // DATE-TIME beside a DATE start either. So the event keeps its DATE-TIME
     // form, showing as timed rather than lying about when it ends.
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            until: Some("2026-12-31T09:00:00".to_owned()),
-            ..RecurrenceRule::new("weekly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.until = Some("2026-12-31T09:00:00".to_owned());
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T000000");
@@ -2393,15 +2428,17 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
     // all is the smaller lie, and the save path is told so: recurrenceRule is
     // patched only when every rule the server holds survives the trip.
     for until in ["2026-13-31T09:00:00", "whenever", "2026-02-30T09:00:00"] {
-        let rule = RecurrenceRule {
-            until: Some(until.to_owned()),
-            ..RecurrenceRule::new("weekly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.until = Some(until.to_owned());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{until}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert!(without(&event_to_ical(&event), "RRULE"), "{until}");
     }
@@ -3288,13 +3325,15 @@ fn a_weekly_rule_names_the_days_it_repeats_on() {
     // Without BYDAY a weekly meeting lands on whatever day the series happens
     // to start, which is the wrong day for every Monday-and-Thursday standup
     // created anywhere but on a Monday.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("mo"), NDay::new("th")]),
-            count: Some(6),
-            ..RecurrenceRule::new("weekly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.by_day = Some(vec![NDay::new("mo"), NDay::new("th")]);
+            __built.count = Some(6);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -3316,21 +3355,17 @@ fn a_monthly_rule_names_which_of_those_days_it_means() {
     // RFC 5545 §3.3.10's ordinal, and RFC 8984 §4.3.3's `nthOfPeriod`: the
     // second Wednesday and the last Friday of the month, not every one of them.
     let days = vec![
-        NDay {
-            nth_of_period: Some(2),
-            ..NDay::new("we")
-        },
-        NDay {
-            nth_of_period: Some(-1),
-            ..NDay::new("fr")
-        },
+        NDay::new("we").with_nth_of_period(2),
+        NDay::new("fr").with_nth_of_period(-1),
     ];
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(days.clone()),
-            ..RecurrenceRule::new("monthly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_day = Some(days.clone());
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=MONTHLY;BYDAY=2WE,-1FR");
@@ -3359,12 +3394,7 @@ fn reads_the_days_off_a_rule_written_by_hand() {
         .expect("a rule came back");
     assert_eq!(
         rules.by_day.as_deref(),
-        Some(
-            &[NDay {
-                nth_of_period: Some(3),
-                ..NDay::new("tu")
-            }][..]
-        )
+        Some(&[NDay::new("tu").with_nth_of_period(3)][..])
     );
 }
 
@@ -3378,18 +3408,17 @@ fn an_ordinal_weekday_is_refused_where_the_recurrence_has_no_period_to_count_in(
     // narrowing an unmodeled rule part gets, and the save path is told the
     // rule was seen in part.
     for frequency in ["weekly", "daily", "hourly"] {
-        let rule = RecurrenceRule {
-            by_day: Some(vec![NDay {
-                nth_of_period: Some(2),
-                ..NDay::new("mo")
-            }]),
-            ..RecurrenceRule::new(frequency)
+        let rule = {
+            let mut __built = RecurrenceRule::new(frequency);
+            __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(2)]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         let ics = event_to_ical(&event);
         assert_eq!(
@@ -3411,28 +3440,24 @@ fn a_day_no_weekday_names_is_flagged_rather_than_written() {
         vec![NDay::new("mo,tu")],
         // Zero is no occurrence of a weekday; RFC 8984 §4.3.3 forbids it and
         // RFC 5545's ordwk starts at 1.
-        vec![NDay {
-            nth_of_period: Some(0),
-            ..NDay::new("mo")
-        }],
+        vec![NDay::new("mo").with_nth_of_period(0)],
         // An NDay carrying more than this mapping reads is as unseen as a rule
         // that does.
-        vec![NDay {
-            extra: [("weekOfMonth".to_owned(), json!(2))].into(),
-            ..NDay::new("mo")
-        }],
+        vec![NDay::new("mo").with_extra([("weekOfMonth".to_owned(), json!(2))].into())],
         // No day at all is not a set of days a BYDAY can name.
         vec![],
     ] {
-        let rule = RecurrenceRule {
-            by_day: Some(days.clone()),
-            ..RecurrenceRule::new("monthly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_day = Some(days.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{days:?}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -3447,13 +3472,15 @@ fn a_monthly_rule_names_the_days_of_the_month_it_repeats_on() {
     // The other half of Evolution's monthly recurrence page: not "the second
     // Wednesday" but "the 15th", and RFC 8984 §4.3.3's negative value for the
     // last day of the month, whichever day of the week that lands on.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_month_day: Some(vec![15, -1]),
-            count: Some(6),
-            ..RecurrenceRule::new("monthly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_month_day = Some(vec![15, -1]);
+            __built.count = Some(6);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -3471,13 +3498,15 @@ fn a_monthly_rule_names_the_days_of_the_month_it_repeats_on() {
 fn the_days_of_the_month_are_written_after_the_days_of_the_week() {
     // Both parts at once, in the order libical writes them, so that a rule read
     // back out of EDS's own cache compares equal to the one that went in.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("we")]),
-            by_month_day: Some(vec![15]),
-            ..RecurrenceRule::new("yearly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_day = Some(vec![NDay::new("we")]);
+            __built.by_month_day = Some(vec![15]);
+            __built
+        });
+        event_out
     };
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
@@ -3509,15 +3538,17 @@ fn days_of_the_month_are_refused_where_a_week_is_the_period() {
     // a week does not sit inside a month. As with an ordinal weekday, the part
     // is left off whole and the save path told the rule was seen in part, rather
     // than writing a line libical is entitled to refuse.
-    let rule = RecurrenceRule {
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::new("weekly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("weekly");
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(!maps_recurrence_rule(&rule));
 
-    let event = CalendarEvent {
-        recurrence_rule: Some(rule),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some(rule);
+        event_out
     };
     assert_eq!(line(&event_to_ical(&event), "RRULE:"), "RRULE:FREQ=WEEKLY");
 }
@@ -3529,15 +3560,17 @@ fn a_day_no_month_has_is_flagged_rather_than_written() {
     // whole, because a BYMONTHDAY holding the rest is a different recurrence
     // rather than a narrower view of this one.
     for days in [vec![0], vec![32], vec![-32], vec![15, 0], vec![]] {
-        let rule = RecurrenceRule {
-            by_month_day: Some(days.clone()),
-            ..RecurrenceRule::new("monthly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_month_day = Some(days.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{days:?}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -3584,13 +3617,15 @@ fn a_yearly_rule_names_the_days_of_the_year_it_repeats_on() {
     // "Every 1 January and every 31 December": RFC 8984 §4.3.3's `byYearDay`,
     // iCalendar's `BYYEARDAY`, whose negative value counts back from the end of
     // the year the way `byMonthDay`'s does from the end of the month.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_year_day: Some(vec![1, -1]),
-            count: Some(4),
-            ..RecurrenceRule::new("yearly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_year_day = Some(vec![1, -1]);
+            __built.count = Some(4);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -3609,15 +3644,17 @@ fn the_days_of_the_year_are_written_after_the_days_of_the_month() {
     // Every modeled part at once, in the order libical writes them :
     // `BYYEARDAY` between `BYMONTHDAY` and `BYMONTH`, so that a rule read back
     // out of EDS's own cache compares equal to the one that went in.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("we")]),
-            by_month_day: Some(vec![15]),
-            by_year_day: Some(vec![100]),
-            by_month: Some(vec!["3".to_owned()]),
-            ..RecurrenceRule::new("yearly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_day = Some(vec![NDay::new("we")]);
+            __built.by_month_day = Some(vec![15]);
+            __built.by_year_day = Some(vec![100]);
+            __built.by_month = Some(vec!["3".to_owned()]);
+            __built
+        });
+        event_out
     };
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
@@ -3655,15 +3692,17 @@ fn days_of_the_year_are_refused_where_the_period_is_shorter_than_one() {
     // off whole and the save path told the rule was seen in part, rather than
     // writing a line libical is entitled to refuse.
     for frequency in ["daily", "weekly", "monthly"] {
-        let rule = RecurrenceRule {
-            by_year_day: Some(vec![100]),
-            ..RecurrenceRule::new(frequency)
+        let rule = {
+            let mut __built = RecurrenceRule::new(frequency);
+            __built.by_year_day = Some(vec![100]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -3680,12 +3719,14 @@ fn a_day_of_the_year_is_carried_at_a_frequency_shorter_than_a_day() {
     // "the ninth hour of every hundredth day of the year", so the gate names the
     // three frequencies the RFC excludes rather than allowing `YEARLY` alone.
     for frequency in ["hourly", "minutely", "secondly", "yearly"] {
-        let event = CalendarEvent {
-            recurrence_rule: Some(RecurrenceRule {
-                by_year_day: Some(vec![100]),
-                ..RecurrenceRule::new(frequency)
-            }),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some({
+                let mut __built = RecurrenceRule::new(frequency);
+                __built.by_year_day = Some(vec![100]);
+                __built
+            });
+            event_out
         };
         let ics = event_to_ical(&event);
         assert!(
@@ -3704,15 +3745,17 @@ fn a_day_no_year_has_is_flagged_rather_than_written() {
     // holding one such value is refused whole, because a `BYYEARDAY` holding the
     // rest is a different recurrence rather than a narrower view of this one.
     for days in [vec![0], vec![367], vec![-367], vec![100, 0], vec![]] {
-        let rule = RecurrenceRule {
-            by_year_day: Some(days.clone()),
-            ..RecurrenceRule::new("yearly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_year_day = Some(days.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{days:?}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -3753,13 +3796,15 @@ fn a_yearly_rule_names_the_months_it_repeats_in() {
     // "Every March and September": RFC 8984 §4.3.3's `byMonth`, iCalendar's
     // `BYMONTH`. JSCalendar holds each month as a string; the numbers 1 to 12 of
     // the Gregorian calendar are spelled the same in both formats.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_month: Some(vec!["3".to_owned(), "9".to_owned()]),
-            count: Some(4),
-            ..RecurrenceRule::new("yearly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_month = Some(vec!["3".to_owned(), "9".to_owned()]);
+            __built.count = Some(4);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -3781,14 +3826,16 @@ fn the_months_are_written_after_the_days_of_the_month() {
     // All three parts at once, in the order libical and calcard both write them
     // (`BYMONTH` last) so that a rule read back out of EDS's own cache
     // compares equal to the one that went in.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("we")]),
-            by_month_day: Some(vec![15]),
-            by_month: Some(vec!["3".to_owned()]),
-            ..RecurrenceRule::new("yearly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_day = Some(vec![NDay::new("we")]);
+            __built.by_month_day = Some(vec![15]);
+            __built.by_month = Some(vec!["3".to_owned()]);
+            __built
+        });
+        event_out
     };
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
@@ -3803,12 +3850,14 @@ fn a_month_is_carried_at_any_frequency() {
     // shorter period produces rather than expanding them. So there is no
     // frequency gate here, and a weekly rule keeps its months.
     for frequency in ["daily", "weekly", "monthly", "yearly"] {
-        let event = CalendarEvent {
-            recurrence_rule: Some(RecurrenceRule {
-                by_month: Some(vec!["1".to_owned()]),
-                ..RecurrenceRule::new(frequency)
-            }),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some({
+                let mut __built = RecurrenceRule::new(frequency);
+                __built.by_month = Some(vec!["1".to_owned()]);
+                __built
+            });
+            event_out
         };
         let ics = event_to_ical(&event);
         assert!(line(&ics, "RRULE:").ends_with(";BYMONTH=1"), "{frequency}");
@@ -3867,15 +3916,17 @@ fn a_month_no_year_has_is_flagged_rather_than_written() {
         vec![""],
         vec![],
     ] {
-        let rule = RecurrenceRule {
-            by_month: Some(months.iter().map(|m| (*m).to_owned()).collect()),
-            ..RecurrenceRule::new("yearly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_month = Some(months.iter().map(|m| (*m).to_owned()).collect());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{months:?}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -3892,15 +3943,17 @@ fn a_leap_month_is_flagged_rather_than_written() {
     // RFC 7529's `RSCALE`, which this mapping does not write: the event's
     // calendar system is not modeled, so writing `BYMONTH=5L` beside a
     // Gregorian series would name a month the series does not have.
-    let rule = RecurrenceRule {
-        by_month: Some(vec!["5L".to_owned()]),
-        ..RecurrenceRule::new("yearly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("yearly");
+        __built.by_month = Some(vec!["5L".to_owned()]);
+        __built
     };
     assert!(!maps_recurrence_rule(&rule));
 
-    let event = CalendarEvent {
-        recurrence_rule: Some(rule),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some(rule);
+        event_out
     };
     assert_eq!(line(&event_to_ical(&event), "RRULE:"), "RRULE:FREQ=YEARLY");
 }
@@ -3939,14 +3992,16 @@ fn a_weekly_rule_names_the_day_its_weeks_start_on() {
     // §3.3.10 says the day the week starts on decides where the second week of a
     // fortnightly series begins, so the same `BYDAY` counted from Monday and from
     // Sunday produces different dates.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            interval: Some(2),
-            by_day: Some(vec![NDay::new("tu")]),
-            first_day_of_week: Some("su".to_owned()),
-            ..RecurrenceRule::new("weekly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.interval = Some(2);
+            __built.by_day = Some(vec![NDay::new("tu")]);
+            __built.first_day_of_week = Some("su".to_owned());
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -3965,16 +4020,18 @@ fn the_day_the_week_starts_on_is_written_last() {
     // Every modeled part at once, in the order libical and calcard both write
     // them (`WKST` after `BYMONTH`, last of all) so that a rule read back out
     // of EDS's own cache compares equal to the one that went in.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("we")]),
-            by_month_day: Some(vec![15]),
-            by_year_day: Some(vec![100]),
-            by_month: Some(vec!["3".to_owned()]),
-            first_day_of_week: Some("su".to_owned()),
-            ..RecurrenceRule::new("yearly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_day = Some(vec![NDay::new("we")]);
+            __built.by_month_day = Some(vec![15]);
+            __built.by_year_day = Some(vec![100]);
+            __built.by_month = Some(vec!["3".to_owned()]);
+            __built.first_day_of_week = Some("su".to_owned());
+            __built
+        });
+        event_out
     };
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
@@ -3991,15 +4048,17 @@ fn a_week_starting_on_monday_is_left_off_the_rule() {
     //
     // The rule still maps: the day is not *refused*, it is the one value
     // iCalendar says by saying nothing.
-    let rule = RecurrenceRule {
-        first_day_of_week: Some("mo".to_owned()),
-        ..RecurrenceRule::new("weekly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("weekly");
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&rule));
 
-    let event = CalendarEvent {
-        recurrence_rule: Some(rule),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some(rule);
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=WEEKLY");
@@ -4014,12 +4073,14 @@ fn the_day_the_week_starts_on_is_carried_at_any_frequency() {
     // writer's, and libical keeps it beside every one. So there is no frequency
     // gate: the day the server named is carried as it came.
     for frequency in ["daily", "weekly", "monthly", "yearly"] {
-        let event = CalendarEvent {
-            recurrence_rule: Some(RecurrenceRule {
-                first_day_of_week: Some("su".to_owned()),
-                ..RecurrenceRule::new(frequency)
-            }),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some({
+                let mut __built = RecurrenceRule::new(frequency);
+                __built.first_day_of_week = Some("su".to_owned());
+                __built
+            });
+            event_out
         };
         let ics = event_to_ical(&event);
         assert!(line(&ics, "RRULE:").ends_with(";WKST=SU"), "{frequency}");
@@ -4046,12 +4107,14 @@ fn every_day_of_the_week_can_start_one() {
         ("sa", "SA"),
         ("su", "SU"),
     ] {
-        let event = CalendarEvent {
-            recurrence_rule: Some(RecurrenceRule {
-                first_day_of_week: Some(day.to_owned()),
-                ..RecurrenceRule::new("weekly")
-            }),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some({
+                let mut __built = RecurrenceRule::new("weekly");
+                __built.first_day_of_week = Some(day.to_owned());
+                __built
+            });
+            event_out
         };
         let ics = event_to_ical(&event);
         assert_eq!(
@@ -4103,15 +4166,17 @@ fn a_day_no_week_starts_on_is_flagged_rather_than_written() {
     // differently reads as an edit the user never made. The parser can only
     // produce the canonical spelling, so nothing legitimate is lost.
     for day in ["xx", "", "monday", "MO", "SU", "1", "mo,tu"] {
-        let rule = RecurrenceRule {
-            first_day_of_week: Some(day.to_owned()),
-            ..RecurrenceRule::new("weekly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("weekly");
+            __built.first_day_of_week = Some(day.to_owned());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{day}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -4131,14 +4196,16 @@ fn a_yearly_rule_names_the_weeks_of_the_year_it_repeats_in() {
     // ISO 8601 from `WKST`, so "week 1" counted from Sunday and from Monday can
     // name different days. That day is modeled now, which is what makes this part
     // safe to carry at all.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_week_no: Some(vec![1, -1]),
-            first_day_of_week: Some("su".to_owned()),
-            count: Some(4),
-            ..RecurrenceRule::new("yearly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_week_no = Some(vec![1, -1]);
+            __built.first_day_of_week = Some("su".to_owned());
+            __built.count = Some(4);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -4161,18 +4228,20 @@ fn the_weeks_of_the_year_are_written_after_the_days_of_the_year() {
     // The sixth part is what first pushes an `RRULE` past 75 octets, so this is
     // also the first rule the emitter folds; the assertion is on the unfolded line
     // because that is the one a reader reconstructs.
-    let rule = RecurrenceRule {
-        by_day: Some(vec![NDay::new("we")]),
-        by_month_day: Some(vec![15]),
-        by_year_day: Some(vec![100]),
-        by_week_no: Some(vec![20]),
-        by_month: Some(vec!["3".to_owned()]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::new("yearly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("yearly");
+        __built.by_day = Some(vec![NDay::new("we")]);
+        __built.by_month_day = Some(vec![15]);
+        __built.by_year_day = Some(vec![100]);
+        __built.by_week_no = Some(vec![20]);
+        __built.by_month = Some(vec!["3".to_owned()]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
-    let event = CalendarEvent {
-        recurrence_rule: Some(rule.clone()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some(rule.clone());
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -4257,15 +4326,17 @@ fn weeks_of_the_year_are_refused_at_every_frequency_but_yearly() {
     for frequency in [
         "daily", "weekly", "monthly", "hourly", "minutely", "secondly",
     ] {
-        let rule = RecurrenceRule {
-            by_week_no: Some(vec![20]),
-            ..RecurrenceRule::new(frequency)
+        let rule = {
+            let mut __built = RecurrenceRule::new(frequency);
+            __built.by_week_no = Some(vec![20]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -4286,15 +4357,17 @@ fn a_week_no_year_has_is_flagged_rather_than_written() {
     // the rule (`jmap-backend-cal/tests/marshal.rs` measures that) so nothing
     // below this mapping would catch it.
     for weeks in [vec![0], vec![54], vec![-54], vec![20, 0], vec![]] {
-        let rule = RecurrenceRule {
-            by_week_no: Some(weeks.clone()),
-            ..RecurrenceRule::new("yearly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("yearly");
+            __built.by_week_no = Some(weeks.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{weeks:?}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -4339,14 +4412,16 @@ fn a_monthly_rule_names_which_occurrence_of_the_set_it_takes() {
     //
     // `BYDAY=FR;BYSETPOS=-1` and `BYDAY=-1FR` name the same Fridays, but a server
     // is entitled to spell it either way and only one of them was carried before.
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            by_day: Some(vec![NDay::new("fr")]),
-            by_set_position: Some(vec![-1]),
-            count: Some(4),
-            ..RecurrenceRule::new("monthly")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_day = Some(vec![NDay::new("fr")]);
+            __built.by_set_position = Some(vec![-1]);
+            __built.count = Some(4);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -4365,19 +4440,21 @@ fn the_position_in_the_set_is_written_after_the_months() {
     // Every modeled part at once, in the order libical writes them: `BYSETPOS`
     // after `BYMONTH` and before `WKST`, so that a rule read back out of EDS's
     // own cache compares equal to the one that went in.
-    let rule = RecurrenceRule {
-        by_day: Some(vec![NDay::new("we")]),
-        by_month_day: Some(vec![15]),
-        by_year_day: Some(vec![100]),
-        by_week_no: Some(vec![20]),
-        by_month: Some(vec!["3".to_owned()]),
-        by_set_position: Some(vec![2]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::new("yearly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("yearly");
+        __built.by_day = Some(vec![NDay::new("we")]);
+        __built.by_month_day = Some(vec![15]);
+        __built.by_year_day = Some(vec![100]);
+        __built.by_week_no = Some(vec![20]);
+        __built.by_month = Some(vec!["3".to_owned()]);
+        __built.by_set_position = Some(vec![2]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
-    let event = CalendarEvent {
-        recurrence_rule: Some(rule.clone()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some(rule.clone());
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -4424,21 +4501,24 @@ fn a_position_with_nothing_to_select_from_is_flagged_rather_than_written() {
     // off, so a `BYSETPOS` written next to it would be selecting from a set the
     // reader cannot see either.
     for rule in [
-        RecurrenceRule {
-            by_set_position: Some(vec![-1]),
-            ..RecurrenceRule::new("monthly")
+        {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_set_position = Some(vec![-1]);
+            __built
         },
-        RecurrenceRule {
-            by_week_no: Some(vec![20]),
-            by_set_position: Some(vec![-1]),
-            ..RecurrenceRule::new("monthly")
+        {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_week_no = Some(vec![20]);
+            __built.by_set_position = Some(vec![-1]);
+            __built
         },
     ] {
         assert!(!maps_recurrence_rule(&rule), "{rule:?}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule.clone()),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule.clone());
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -4459,16 +4539,18 @@ fn a_position_no_set_has_is_flagged_rather_than_written() {
     // dropping the rule (`jmap-backend-cal/tests/marshal.rs` measures that) so
     // nothing below this mapping would catch it.
     for positions in [vec![0], vec![367], vec![-367], vec![1, 0], vec![]] {
-        let rule = RecurrenceRule {
-            by_day: Some(vec![NDay::new("fr")]),
-            by_set_position: Some(positions.clone()),
-            ..RecurrenceRule::new("monthly")
+        let rule = {
+            let mut __built = RecurrenceRule::new("monthly");
+            __built.by_day = Some(vec![NDay::new("fr")]);
+            __built.by_set_position = Some(positions.clone());
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{positions:?}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -4509,13 +4591,15 @@ fn carries_the_hours_of_the_day_a_rule_repeats_at() {
     // RFC 8984 §4.3.3's `byHour` is RFC 5545 §3.3.10's BYHOUR: the hours within
     // each interval the series happens at, 0 to 23. The first part modeled here
     // that names a time of day rather than a date.
-    let rule = RecurrenceRule {
-        by_hour: Some(vec![9, 17]),
-        ..RecurrenceRule::new("daily")
+    let rule = {
+        let mut __built = RecurrenceRule::new("daily");
+        __built.by_hour = Some(vec![9, 17]);
+        __built
     };
-    let event = CalendarEvent {
-        recurrence_rule: Some(rule.clone()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some(rule.clone());
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=DAILY;BYHOUR=9,17");
@@ -4535,22 +4619,24 @@ fn the_times_of_day_are_written_before_every_other_part() {
     // a rule that went out in another order comes back out of EDS's own cache
     // reordered and compares unequal to itself, which the save path reads as an
     // edit.
-    let rule = RecurrenceRule {
-        by_second: Some(vec![0]),
-        by_minute: Some(vec![30]),
-        by_hour: Some(vec![9]),
-        by_day: Some(vec![NDay::new("we")]),
-        by_month_day: Some(vec![15]),
-        by_year_day: Some(vec![100]),
-        by_week_no: Some(vec![20]),
-        by_month: Some(vec!["3".to_owned()]),
-        by_set_position: Some(vec![2]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::new("yearly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("yearly");
+        __built.by_second = Some(vec![0]);
+        __built.by_minute = Some(vec![30]);
+        __built.by_hour = Some(vec![9]);
+        __built.by_day = Some(vec![NDay::new("we")]);
+        __built.by_month_day = Some(vec![15]);
+        __built.by_year_day = Some(vec![100]);
+        __built.by_week_no = Some(vec![20]);
+        __built.by_month = Some(vec!["3".to_owned()]);
+        __built.by_set_position = Some(vec![2]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
-    let event = CalendarEvent {
-        recurrence_rule: Some(rule.clone()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some(rule.clone());
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -4601,16 +4687,18 @@ fn an_hour_no_day_has_is_flagged_rather_than_written() {
     // And it answers an *empty* `BYHOUR` by inventing `BYHOUR=0`, which would
     // move the whole series to midnight, so the empty set is refused too.
     for hours in [vec![24], vec![99], vec![9, 24], vec![]] {
-        let rule = RecurrenceRule {
-            by_hour: Some(hours.clone()),
-            by_day: Some(vec![NDay::new("fr")]),
-            ..RecurrenceRule::new("daily")
+        let rule = {
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_hour = Some(hours.clone());
+            __built.by_day = Some(vec![NDay::new("fr")]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{hours:?}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -4657,15 +4745,17 @@ fn an_all_day_event_whose_rule_names_hours_is_drawn_as_a_timed_one() {
     // day-ness but right about when it happens. Refusing the hours instead
     // would draw an all-day series every day where the real one is at 09:00,
     // and hide the difference from the user.
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            by_hour: Some(vec![9]),
-            ..RecurrenceRule::new("daily")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_hour = Some(vec![9]);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T000000");
@@ -4684,15 +4774,17 @@ fn an_all_day_event_whose_hours_are_unwritable_stays_a_date() {
     // leaves nothing for the DATE form to contradict, so the event keeps its
     // day-ness. `maps_recurrence_rule` is what stops the save path patching the
     // recurrence it was shown only in part.
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            by_hour: Some(vec![24]),
-            ..RecurrenceRule::new("daily")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_hour = Some(vec![24]);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
@@ -4708,14 +4800,16 @@ fn carries_the_minutes_and_seconds_a_rule_repeats_at() {
     // BYMINUTE and BYSECOND: "on the hour and the half hour, on the second".
     // With these the rule is modeled to the bottom of §4.3.3 but for `rscale`
     // and `skip`.
-    let rule = RecurrenceRule {
-        by_minute: Some(vec![0, 30]),
-        by_second: Some(vec![0]),
-        ..RecurrenceRule::new("hourly")
+    let rule = {
+        let mut __built = RecurrenceRule::new("hourly");
+        __built.by_minute = Some(vec![0, 30]);
+        __built.by_second = Some(vec![0]);
+        __built
     };
-    let event = CalendarEvent {
-        recurrence_rule: Some(rule.clone()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some(rule.clone());
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(
@@ -4763,14 +4857,16 @@ fn the_sixtieth_second_is_written_and_the_sixtieth_minute_is_not() {
     // `minutes` stops at 59. libical enforces exactly that (measured in
     // `jmap-backend-cal/tests/marshal.rs`), so the mapping does too rather than
     // treating the two parts as one range.
-    let leap = RecurrenceRule {
-        by_second: Some(vec![60]),
-        ..RecurrenceRule::new("minutely")
+    let leap = {
+        let mut __built = RecurrenceRule::new("minutely");
+        __built.by_second = Some(vec![60]);
+        __built
     };
     assert!(maps_recurrence_rule(&leap));
-    let event = CalendarEvent {
-        recurrence_rule: Some(leap),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.recurrence_rule = Some(leap);
+        event_out
     };
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
@@ -4792,17 +4888,19 @@ fn the_sixtieth_second_is_written_and_the_sixtieth_minute_is_not() {
         (None, Some(vec![0, 61])),
         (None, Some(vec![])),
     ] {
-        let rule = RecurrenceRule {
-            by_minute: minutes.clone(),
-            by_second: seconds.clone(),
-            by_day: Some(vec![NDay::new("fr")]),
-            ..RecurrenceRule::new("daily")
+        let rule = {
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_minute = minutes.clone();
+            __built.by_second = seconds.clone();
+            __built.by_day = Some(vec![NDay::new("fr")]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "{minutes:?} {seconds:?}");
 
-        let event = CalendarEvent {
-            recurrence_rule: Some(rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.recurrence_rule = Some(rule);
+            event_out
         };
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
@@ -4853,16 +4951,18 @@ fn an_all_day_event_whose_rule_names_minutes_is_drawn_as_a_timed_one() {
     // minute to repeat at. Resolved the way the hours are: the DATE form is
     // dropped and the event drawn timed, so all three parts are asked about
     // together rather than one at a time.
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            by_minute: Some(vec![30]),
-            by_second: Some(vec![15]),
-            ..RecurrenceRule::new("daily")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_minute = Some(vec![30]);
+            __built.by_second = Some(vec![15]);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "DTSTART"), "DTSTART:20260115T000000");
@@ -4884,15 +4984,17 @@ fn an_all_day_event_whose_minutes_are_unwritable_stays_a_date() {
     // the minutes anyway leaves nothing for the DATE form to contradict, so the
     // event keeps its day-ness and `maps_recurrence_rule` stops the save path
     // patching the recurrence it was shown only in part.
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            by_minute: Some(vec![60]),
-            ..RecurrenceRule::new("daily")
-        }),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::new("daily");
+            __built.by_minute = Some(vec![60]);
+            __built
+        });
+        event_out
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
@@ -4917,23 +5019,24 @@ fn maps_override(id: &str, patch: &Value) -> bool {
 
 /// A recurring event in one zone, with `overrides` naming single instances.
 fn recurring_with(overrides: Value) -> CalendarEvent {
-    CalendarEvent {
+    {
+        let mut event_out = CalendarEvent::default();
         // A detached instance is tied to its series by the UID they share, so
         // the series needs one.
-        id: Some("E11".into()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        recurrence_overrides: Some(
+        event_out.id = Some("E11".into());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.recurrence_overrides = Some(
             overrides
                 .as_object()
                 .expect("an object")
                 .iter()
                 .map(|(id, patch)| (id.clone(), patch.clone()))
                 .collect(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     }
 }
 
@@ -5015,15 +5118,15 @@ fn a_utc_events_excluded_instance_carries_the_z_its_start_does() {
 fn an_all_day_events_excluded_instance_is_a_date_like_its_start() {
     // RFC 5545 §3.8.5.1, as for UNTIL: the value type has to match DTSTART's,
     // so an event written as a DATE excludes a day rather than an instant.
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        recurrence_overrides: Some(
-            [("2026-01-29T00:00:00".to_owned(), json!({"excluded": true}))].into(),
-        ),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.recurrence_overrides =
+            Some([("2026-01-29T00:00:00".to_owned(), json!({"excluded": true}))].into());
+        event_out
     };
     let ics = event_to_ical(&event);
 
@@ -5040,15 +5143,15 @@ fn an_all_day_event_whose_excluded_instance_has_a_time_stays_a_date_time() {
     // The same trade as an UNTIL at 09:00: truncating the exclusion to a date
     // would drop an instance the server still holds, so the event keeps its
     // DATE-TIME form and shows as timed instead.
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        recurrence_overrides: Some(
-            [("2026-01-29T09:00:00".to_owned(), json!({"excluded": true}))].into(),
-        ),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.recurrence_overrides =
+            Some([("2026-01-29T09:00:00".to_owned(), json!({"excluded": true}))].into());
+        event_out
     };
     let ics = event_to_ical(&event);
 
@@ -5225,20 +5328,21 @@ fn an_all_day_event_whose_instance_takes_a_zone_stays_a_date_time() {
     // The same trade as an instance that took a time: RFC 5545 §3.2.19 says a
     // DATE value carries no TZID, so writing the event as a date would drop the
     // zone the instance moved into. It is written as the timed event it half is.
-    let event = CalendarEvent {
-        id: Some("E12".into()),
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        recurrence_overrides: Some(
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E12".into());
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.recurrence_overrides = Some(
             [(
                 "2026-01-29T00:00:00".to_owned(),
                 json!({"timeZone": "America/New_York"}),
             )]
             .into(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     };
     let ics = event_to_ical(&event);
 
@@ -5383,20 +5487,21 @@ fn an_all_day_events_edited_instance_is_written_as_a_date() {
     // RFC 5545 §3.8.4.4, as for EXDATE and UNTIL: a RECURRENCE-ID's value type
     // has to match DTSTART's, or it names an instant the series never
     // generated and the edit attaches to nothing.
-    let event = CalendarEvent {
-        id: Some("E12".into()),
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        recurrence_overrides: Some(
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E12".into());
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.recurrence_overrides = Some(
             [(
                 "2026-01-29T00:00:00".to_owned(),
                 json!({"title": "Company day"}),
             )]
             .into(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     };
     let ics = event_to_ical(&event);
 
@@ -5418,20 +5523,21 @@ fn an_all_day_event_whose_edited_instance_takes_a_time_stays_a_date_time() {
     // The same trade as an excluded instance at 09:00: a DATE value cannot hold
     // the time the instance moved to, and truncating it would move the
     // appointment, so the whole event is written as the timed one it half is.
-    let event = CalendarEvent {
-        id: Some("E12".into()),
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        recurrence_overrides: Some(
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E12".into());
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.recurrence_overrides = Some(
             [(
                 "2026-01-29T00:00:00".to_owned(),
                 json!({"start": "2026-01-29T09:00:00", "duration": "PT2H"}),
             )]
             .into(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     };
     let ics = event_to_ical(&event);
 
@@ -6077,13 +6183,14 @@ const CUSTOM_DEFINITION: &str = "BEGIN:VTIMEZONE\r\n\
 /// An event at 13:00 in `zone`, carrying `definitions` as its RFC 8984 §4.7.2
 /// `timeZones`.
 fn defining(zone: &str, definitions: Value) -> CalendarEvent {
-    CalendarEvent {
-        id: Some("E9".into()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some(zone.to_owned()),
-        duration: Some("PT1H".to_owned()),
-        time_zones: serde_json::from_value(definitions).expect("a map of time zones"),
-        ..CalendarEvent::default()
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E9".into());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some(zone.to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.time_zones = serde_json::from_value(definitions).expect("a map of time zones");
+        event_out
     }
 }
 
@@ -6507,9 +6614,10 @@ fn windows_time_zone_names_are_refused_as_unsendable_by_design() {
             "{windows_tz} should not be recognized as IANA name"
         );
 
-        let event_without_defs = CalendarEvent {
-            time_zone: Some(windows_tz.to_owned()),
-            ..CalendarEvent::default()
+        let event_without_defs = {
+            let mut event_out = CalendarEvent::default();
+            event_out.time_zone = Some(windows_tz.to_owned());
+            event_out
         };
         assert!(!defines_time_zone(&event_without_defs, windows_tz));
         assert!(!maps_time_zone(&event_without_defs));
@@ -6651,26 +6759,27 @@ fn a_custom_zone_with_no_definition_is_named_and_left_undefined() {
 /// The identifier is [`CUSTOM_TZID`], defined once in the event's own
 /// `timeZones`: one description of one zone, whichever component refers to it.
 fn instance_in_a_custom_zone() -> CalendarEvent {
-    CalendarEvent {
-        id: Some("E9".into()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: serde_json::from_value(json!({
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E9".into());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = serde_json::from_value(json!({
             "@type": "RecurrenceRule",
             "frequency": "weekly",
         }))
-        .expect("a recurrence rule"),
-        recurrence_overrides: serde_json::from_value(json!({
+        .expect("a recurrence rule");
+        event_out.recurrence_overrides = serde_json::from_value(json!({
             "2026-01-22T13:00:00": {
                 "start": "2026-01-22T09:00:00",
                 "timeZone": CUSTOM_TZID,
             },
         }))
-        .expect("a map of overrides"),
-        time_zones: serde_json::from_value(json!({CUSTOM_TZID: custom_zone()}))
-            .expect("a map of time zones"),
-        ..CalendarEvent::default()
+        .expect("a map of overrides");
+        event_out.time_zones = serde_json::from_value(json!({CUSTOM_TZID: custom_zone()}))
+            .expect("a map of time zones");
+        event_out
     }
 }
 
@@ -6802,12 +6911,13 @@ fn an_occurrences_custom_zone_is_sendable_only_beside_its_definition() {
 /// honest: what the override names is undefined, not the whole event.
 #[test]
 fn an_occurrence_naming_an_undefined_zone_is_sendable_by_neither_rule() {
-    let event = CalendarEvent {
-        recurrence_overrides: serde_json::from_value(json!({
+    let event = {
+        let mut event_out = defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()}));
+        event_out.recurrence_overrides = serde_json::from_value(json!({
             "2026-01-22T13:00:00": {"timeZone": "/example.com/Elsewhere"},
         }))
-        .expect("a map of overrides"),
-        ..defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()}))
+        .expect("a map of overrides");
+        event_out
     };
     let (id, patch) = event
         .recurrence_overrides
@@ -7022,16 +7132,18 @@ fn a_value_that_is_no_offset_defines_no_zone() {
 /// object, and two of them would be two definitions of the same zone.
 #[test]
 fn an_instance_names_no_zone_the_series_did_not() {
-    let event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_owned(),
-            ..RecurrenceRule::default()
-        }),
-        recurrence_overrides: serde_json::from_value(json!({
+    let event = {
+        let mut event_out = defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()}));
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_owned();
+            __built
+        });
+        event_out.recurrence_overrides = serde_json::from_value(json!({
             "2026-01-16T13:00:00": {"timeZone": "/example.com/Elsewhere", "title": "Moved"},
         }))
-        .expect("a map of overrides"),
-        ..defining(CUSTOM_TZID, json!({CUSTOM_TZID: custom_zone()}))
+        .expect("a map of overrides");
+        event_out
     };
 
     let ics = event_to_ical(&event);
@@ -7053,14 +7165,15 @@ fn an_instance_names_no_zone_the_series_did_not() {
 /// 5545 §3.2.19 gives no `TZID` to carry one on, so there is nothing to define.
 #[test]
 fn an_event_written_as_a_date_defines_no_zone() {
-    let event = CalendarEvent {
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        time_zone: None,
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        time_zones: serde_json::from_value(json!({CUSTOM_TZID: custom_zone()}))
-            .expect("a map of time zones"),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.time_zone = None;
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.time_zones = serde_json::from_value(json!({CUSTOM_TZID: custom_zone()}))
+            .expect("a map of time zones");
+        event_out
     };
 
     let ics = event_to_ical(&event);
@@ -7073,29 +7186,29 @@ fn an_event_written_as_a_date_defines_no_zone() {
 fn the_fixture_survives_a_round_trip() {
     let event = ical_to_event(&event_to_ical(&fixture_event())).expect("parse");
 
-    assert_eq!(
-        event,
-        CalendarEvent {
-            // Membership follows from which EDS source is being served, not
-            // from the component, so the backend fills it in on create.
-            calendar_ids: None,
-            // Re-import stamps the standalone object's JSCalendar version
-            // (jscalendarbis §3.1.2) regardless of what the fixture carried.
-            version: Some("2.0".to_owned()),
-            ..fixture_event()
-        }
-    );
+    assert_eq!(event, {
+        let mut event_out = fixture_event();
+        // Membership follows from which EDS source is being served, not
+        // from the component, so the backend fills it in on create.
+        event_out.calendar_ids = None;
+        // Re-import stamps the standalone object's JSCalendar version
+        // (jscalendarbis §3.1.2) regardless of what the fixture carried.
+        event_out.version = Some("2.0".to_owned());
+        event_out
+    });
 }
 
 /// An event whose guest list is the given map of RFC 8984 §4.4.6 Participants.
 fn attended(participants: Value) -> CalendarEvent {
-    CalendarEvent {
-        title: Some("Sprint planning".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        participants: serde_json::from_value(participants).expect("a map of participants"),
-        ..CalendarEvent::default()
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Sprint planning".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.participants =
+            serde_json::from_value(participants).expect("a map of participants");
+        event_out
     }
 }
 
@@ -7583,14 +7696,15 @@ fn an_edited_instance_carries_the_guest_list_of_the_series() {
 
 /// An event held online at whatever virtual locations are passed.
 fn held_online(virtual_locations: Value) -> CalendarEvent {
-    CalendarEvent {
-        title: Some("Sprint planning".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        virtual_locations: serde_json::from_value(virtual_locations)
-            .expect("a map of virtual locations"),
-        ..CalendarEvent::default()
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Sprint planning".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.virtual_locations =
+            serde_json::from_value(virtual_locations).expect("a map of virtual locations");
+        event_out
     }
 }
 
@@ -7927,13 +8041,14 @@ fn an_edited_instance_carries_the_conferences_of_the_series() {
 
 /// An event pointing at whatever external resources are passed.
 fn points_at(links: Value) -> CalendarEvent {
-    CalendarEvent {
-        title: Some("Sprint planning".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        links: serde_json::from_value(links).expect("a map of links"),
-        ..CalendarEvent::default()
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Sprint planning".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.links = serde_json::from_value(links).expect("a map of links");
+        event_out
     }
 }
 
@@ -8467,32 +8582,33 @@ END:VCALENDAR\r\n";
 
 #[test]
 fn event_with_categories_classification_transparency_status_and_url_roundtrips_faithfully() {
-    let event = CalendarEvent {
-        title: Some("Sprint Review".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        privacy: Some("secret".to_owned()),
-        free_busy_status: Some("free".to_owned()),
-        status: Some("confirmed".to_owned()),
-        priority: Some(1),
-        keywords: Some(
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Sprint Review".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.privacy = Some("secret".to_owned());
+        event_out.free_busy_status = Some("free".to_owned());
+        event_out.status = Some("confirmed".to_owned());
+        event_out.priority = Some(1);
+        event_out.keywords = Some(
             [
                 ("offsite".to_owned(), json!(true)),
                 ("planning".to_owned(), json!(true)),
             ]
             .into_iter()
             .collect(),
-        ),
-        locations: Some(
+        );
+        event_out.locations = Some(
             [(
                 "loc1".to_owned(),
                 json!({"@type": "Location", "name": "Room 42"}),
             )]
             .into_iter()
             .collect(),
-        ),
-        links: Some(
+        );
+        event_out.links = Some(
             [(
                 "l1".to_owned(),
                 json!({
@@ -8503,8 +8619,8 @@ fn event_with_categories_classification_transparency_status_and_url_roundtrips_f
             )]
             .into_iter()
             .collect(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     };
 
     let ics = event_to_ical(&event);
@@ -8541,14 +8657,15 @@ fn event_with_categories_classification_transparency_status_and_url_roundtrips_f
 
 #[test]
 fn event_with_custom_privacy_and_freebusy_drops_unmodeled_lines_gracefully() {
-    let event = CalendarEvent {
-        title: Some("Custom Event".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        privacy: Some("x-custom-classification".to_owned()),
-        free_busy_status: Some("x-tentative-free".to_owned()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Custom Event".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.privacy = Some("x-custom-classification".to_owned());
+        event_out.free_busy_status = Some("x-tentative-free".to_owned());
+        event_out
     };
 
     let ics = event_to_ical(&event);
@@ -8603,13 +8720,14 @@ fn event_with_chair_and_multiple_participants_emits_accurate_attendees_and_organ
 
 #[test]
 fn event_with_priority_and_geo_coordinates_roundtrips_faithfully() {
-    let mut event = CalendarEvent {
-        title: Some("Global Standup".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        priority: Some(1),
-        ..CalendarEvent::default()
+    let mut event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Global Standup".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.priority = Some(1);
+        event_out
     };
     event.locations = Some(
         [(
@@ -8638,12 +8756,13 @@ fn event_with_priority_and_geo_coordinates_roundtrips_faithfully() {
 
 #[test]
 fn event_with_multiple_alerts_roundtrips_faithfully_to_valarms() {
-    let mut event = CalendarEvent {
-        title: Some("Architecture Review".to_owned()),
-        start: Some("2026-01-15T15:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let mut event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Architecture Review".to_owned());
+        event_out.start = Some("2026-01-15T15:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     event.alerts = Some(
         [
@@ -8759,20 +8878,23 @@ fn event_with_unsupported_or_custom_alarm_action_drops_or_sanitizes_safely() {
 #[test]
 fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
     let mut event = fixture_event();
-    event.recurrence_rule = Some(RecurrenceRule {
-        interval: Some(2),
-        count: Some(8),
-        by_day: Some(vec![
-            NDay {
-                day: "mo".to_owned(),
-                ..Default::default()
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::new("weekly");
+        __built.interval = Some(2);
+        __built.count = Some(8);
+        __built.by_day = Some(vec![
+            {
+                let mut nday = NDay::default();
+                nday.day = "mo".to_owned();
+                nday
             },
-            NDay {
-                day: "fr".to_owned(),
-                ..Default::default()
+            {
+                let mut nday = NDay::default();
+                nday.day = "fr".to_owned();
+                nday
             },
-        ]),
-        ..RecurrenceRule::new("weekly")
+        ]);
+        __built
     });
     event.recurrence_overrides = Some(
         [
@@ -8809,9 +8931,10 @@ fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
 #[test]
 fn recurring_event_with_instance_overrides_emits_multiple_vevents_with_recurrence_id() {
     let mut event = fixture_event();
-    event.recurrence_rule = Some(RecurrenceRule {
-        interval: Some(1),
-        ..RecurrenceRule::new("daily")
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::new("daily");
+        __built.interval = Some(1);
+        __built
     });
     event.recurrence_overrides = Some(
         [(
@@ -9243,38 +9366,40 @@ fn emits_a_comprehensive_icalendar_via_calcard_and_roundtrips() {
         }),
     );
 
-    let event = CalendarEvent {
-        id: Some("event-calcard-1".into()),
-        uid: Some("urn:uuid:calcard-event-uuid-1".to_owned()),
-        created: Some("2026-08-18T10:00:00Z".to_owned()),
-        updated: Some("2026-08-18T11:00:00Z".to_owned()),
-        title: Some("Calcard Migration All-Hands".to_owned()),
-        description: Some(
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("event-calcard-1".into());
+        event_out.uid = Some("urn:uuid:calcard-event-uuid-1".to_owned());
+        event_out.created = Some("2026-08-18T10:00:00Z".to_owned());
+        event_out.updated = Some("2026-08-18T11:00:00Z".to_owned());
+        event_out.title = Some("Calcard Migration All-Hands".to_owned());
+        event_out.description = Some(
             "Discussing multi-session migration progress,\nsyntax deletion, and gate verification."
                 .to_owned(),
-        ),
-        start: Some("2026-08-18T14:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        status: Some("confirmed".to_owned()),
-        free_busy_status: Some("busy".to_owned()),
-        priority: Some(1),
-        privacy: Some("private".to_owned()),
-        locations: Some(locations),
-        virtual_locations: Some(virtual_locations),
-        links: Some(links),
-        keywords: Some(keywords),
-        participants: Some(participants),
-        alerts: Some(alerts),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".to_owned(),
-            interval: Some(2),
-            by_day: Some(vec![NDay::new("tu"), NDay::new("th")]),
-            count: Some(10),
-            ..RecurrenceRule::default()
-        }),
-        recurrence_overrides: Some(overrides),
-        ..CalendarEvent::default()
+        );
+        event_out.start = Some("2026-08-18T14:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.status = Some("confirmed".to_owned());
+        event_out.free_busy_status = Some("busy".to_owned());
+        event_out.priority = Some(1);
+        event_out.privacy = Some("private".to_owned());
+        event_out.locations = Some(locations);
+        event_out.virtual_locations = Some(virtual_locations);
+        event_out.links = Some(links);
+        event_out.keywords = Some(keywords);
+        event_out.participants = Some(participants);
+        event_out.alerts = Some(alerts);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_owned();
+            __built.interval = Some(2);
+            __built.by_day = Some(vec![NDay::new("tu"), NDay::new("th")]);
+            __built.count = Some(10);
+            __built
+        });
+        event_out.recurrence_overrides = Some(overrides);
+        event_out
     };
 
     let ics = event_to_ical(&event);
@@ -9888,9 +10013,10 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
     allday_event.show_without_time = Some(true);
     allday_event.start = Some("2026-01-01T00:00:00".to_owned());
     allday_event.time_zone = None;
-    allday_event.recurrence_rule = Some(RecurrenceRule {
-        by_hour: Some(vec![10]),
-        ..RecurrenceRule::new("daily")
+    allday_event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::new("daily");
+        __built.by_hour = Some(vec![10]);
+        __built
     });
     let ics_allday_byhour = event_to_ical(&allday_event);
     assert!(!ics_allday_byhour.contains("VALUE=DATE:"));
@@ -10003,14 +10129,16 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
 
     // 16. Century and era leap year roundtrips in proleptic Gregorian calendar
     for year in [1900, 2000, 2100, 2400] {
-        let event_century = CalendarEvent {
-            start: Some(format!("{year}-02-28T10:00:00")),
-            time_zone: Some("Etc/UTC".to_owned()),
-            recurrence_rule: Some(RecurrenceRule {
-                until: Some(format!("{year}-03-02T10:00:00")),
-                ..RecurrenceRule::new("daily")
-            }),
-            ..CalendarEvent::default()
+        let event_century = {
+            let mut event_out = CalendarEvent::default();
+            event_out.start = Some(format!("{year}-02-28T10:00:00"));
+            event_out.time_zone = Some("Etc/UTC".to_owned());
+            event_out.recurrence_rule = Some({
+                let mut __built = RecurrenceRule::new("daily");
+                __built.until = Some(format!("{year}-03-02T10:00:00"));
+                __built
+            });
+            event_out
         };
         let ics_cent = event_to_ical(&event_century);
         let parsed_cent = ical_to_event(&ics_cent).expect("century parse");
@@ -10184,61 +10312,28 @@ fn timezone_advanced_transition_permutations_and_boundary_fidelity() {
 #[test]
 fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
     // 1. Long RRULE exceeding 75 octets must be folded strictly to <= 75 octets
-    let long_rrule_event = CalendarEvent {
-        uid: Some("long-rrule-uid-1".to_owned()),
-        title: Some("Team Planning Session".to_owned()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            rule_type: Some("RecurrenceRule".to_owned()),
-            frequency: "monthly".to_owned(),
-            interval: Some(2),
-            by_day: Some(vec![
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "mo".to_owned(),
-                    nth_of_period: Some(1),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "tu".to_owned(),
-                    nth_of_period: Some(2),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "we".to_owned(),
-                    nth_of_period: Some(3),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "th".to_owned(),
-                    nth_of_period: Some(4),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "fr".to_owned(),
-                    nth_of_period: Some(5),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "sa".to_owned(),
-                    nth_of_period: Some(-1),
-                    extra: Default::default(),
-                },
-                NDay {
-                    day_type: Some("NDay".to_owned()),
-                    day: "su".to_owned(),
-                    nth_of_period: Some(-2),
-                    extra: Default::default(),
-                },
-            ]),
-            by_month: Some(vec![
+    let long_rrule_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("long-rrule-uid-1".to_owned());
+        event_out.title = Some("Team Planning Session".to_owned());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.rule_type = Some("RecurrenceRule".to_owned());
+            __built.frequency = "monthly".to_owned();
+            __built.interval = Some(2);
+            __built.by_day = Some(vec![
+                NDay::new("mo").with_nth_of_period(1),
+                NDay::new("tu").with_nth_of_period(2),
+                NDay::new("we").with_nth_of_period(3),
+                NDay::new("th").with_nth_of_period(4),
+                NDay::new("fr").with_nth_of_period(5),
+                NDay::new("sa").with_nth_of_period(-1),
+                NDay::new("su").with_nth_of_period(-2),
+            ]);
+            __built.by_month = Some(vec![
                 "1".to_owned(),
                 "2".to_owned(),
                 "3".to_owned(),
@@ -10251,11 +10346,11 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
                 "10".to_owned(),
                 "11".to_owned(),
                 "12".to_owned(),
-            ]),
-            by_set_position: Some(vec![1, 2, 3, -1, -2]),
-            ..RecurrenceRule::default()
-        }),
-        ..CalendarEvent::default()
+            ]);
+            __built.by_set_position = Some(vec![1, 2, 3, -1, -2]);
+            __built
+        });
+        event_out
     };
 
     let ics = event_to_ical(&long_rrule_event);
@@ -10277,13 +10372,17 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
     assert_eq!(ics, re_emitted, "emission must reach fixed point");
 
     // 2. Multibyte unicode character sequences near 75-octet fold boundary
-    let multibyte_event = CalendarEvent {
-        uid: Some("multibyte-uid-1".to_owned()),
-        title: Some("ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প Event Title Multibyte Boundary Test".to_owned()),
-        description: Some("Long description with 🌟 emojis and special chars: ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প".to_owned()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let multibyte_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("multibyte-uid-1".to_owned());
+        event_out.title = Some(
+            "ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প Event Title Multibyte Boundary Test"
+                .to_owned(),
+        );
+        event_out.description = Some("Long description with 🌟 emojis and special chars: ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প".to_owned());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
 
     let ics_mb = event_to_ical(&multibyte_event);
@@ -10314,11 +10413,12 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
         .map(|i| format!("2026-09-{:02}T18:00:00Z", i))
         .collect::<Vec<_>>();
     let periods = (0..10)
-        .map(|i| jmap_proto::principals::BusyPeriod {
-            busy_status: "confirmed".to_owned(),
-            utc_start: jmap_proto::state::UtcDate::new(&starts[i]),
-            utc_end: jmap_proto::state::UtcDate::new(&ends[i]),
-            event: None,
+        .map(|i| {
+            jmap_proto::principals::BusyPeriod::new(
+                jmap_proto::state::UtcDate::new(&starts[i]),
+                jmap_proto::state::UtcDate::new(&ends[i]),
+                "confirmed".to_owned(),
+            )
         })
         .collect::<Vec<_>>();
     let fb_ics = jmap_ical::busy_periods_to_vfreebusy(
@@ -11569,24 +11669,25 @@ fn real_exporter_fixture_cyrus_caldav_detailed_roundtrip() {
 
 #[test]
 fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
-    let event = CalendarEvent {
-        id: Some("E-SELF-CONSISTENCY-1".into()),
-        uid: Some("urn:uuid:12345678-1234-5678-1234-567812345678".into()),
-        event_type: Some("Event".into()),
-        version: Some("2.0".into()),
-        title: Some("Self-Consistency Architecture Workshop".into()),
-        description: Some(
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E-SELF-CONSISTENCY-1".into());
+        event_out.uid = Some("urn:uuid:12345678-1234-5678-1234-567812345678".into());
+        event_out.event_type = Some("Event".into());
+        event_out.version = Some("2.0".into());
+        event_out.title = Some("Self-Consistency Architecture Workshop".into());
+        event_out.description = Some(
             "Comprehensive round-trip self-consistency test for Evolution iCalendar mapping."
                 .into(),
-        ),
-        start: Some("2026-10-15T09:00:00".into()),
-        time_zone: Some("Europe/Berlin".into()),
-        duration: Some("PT2H30M".into()),
-        privacy: Some("private".into()),
-        status: Some("confirmed".into()),
-        free_busy_status: Some("busy".into()),
-        priority: Some(1),
-        locations: Some(
+        );
+        event_out.start = Some("2026-10-15T09:00:00".into());
+        event_out.time_zone = Some("Europe/Berlin".into());
+        event_out.duration = Some("PT2H30M".into());
+        event_out.privacy = Some("private".into());
+        event_out.status = Some("confirmed".into());
+        event_out.free_busy_status = Some("busy".into());
+        event_out.priority = Some(1);
+        event_out.locations = Some(
             [(
                 "loc1".to_string(),
                 json!({
@@ -11595,8 +11696,8 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
                 }),
             )]
             .into(),
-        ),
-        virtual_locations: Some(
+        );
+        event_out.virtual_locations = Some(
             [(
                 "v1".to_string(),
                 json!({
@@ -11607,8 +11708,8 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
                 }),
             )]
             .into(),
-        ),
-        links: Some(
+        );
+        event_out.links = Some(
             [
                 (
                     "l1".to_string(),
@@ -11630,24 +11731,25 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
                 ),
             ]
             .into(),
-        ),
-        keywords: Some(
+        );
+        event_out.keywords = Some(
             [
                 ("GNOME".into(), json!(true)),
                 ("Architecture".into(), json!(true)),
                 ("Evolution".into(), json!(true)),
             ]
             .into(),
-        ),
-        recurrence_rule: Some(RecurrenceRule {
-            rule_type: Some("RecurrenceRule".into()),
-            frequency: "weekly".into(),
-            interval: Some(2),
-            by_day: Some(vec![NDay::new("th")]),
-            count: Some(10),
-            ..RecurrenceRule::default()
-        }),
-        recurrence_overrides: Some(
+        );
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.rule_type = Some("RecurrenceRule".into());
+            __built.frequency = "weekly".into();
+            __built.interval = Some(2);
+            __built.by_day = Some(vec![NDay::new("th")]);
+            __built.count = Some(10);
+            __built
+        });
+        event_out.recurrence_overrides = Some(
             [
                 ("2026-11-12T09:00:00".to_string(), json!({"excluded": true})),
                 (
@@ -11659,8 +11761,8 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
                 ),
             ]
             .into(),
-        ),
-        alerts: Some(
+        );
+        event_out.alerts = Some(
             [
                 (
                     "a1".to_string(),
@@ -11686,8 +11788,8 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
                 ),
             ]
             .into(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     };
 
     // 1. Export to iCalendar 2.0
@@ -12342,11 +12444,12 @@ fn alerts_audit_action_types_and_trigger_types_decision_matrix() {
     }
 
     // 3. Outbound decision matrix: maps_alerts coverage and refusal
-    let mut valid_event = CalendarEvent {
-        title: Some("Team Standup".to_owned()),
-        start: Some("2026-01-15T10:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        ..CalendarEvent::default()
+    let mut valid_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Team Standup".to_owned());
+        event_out.start = Some("2026-01-15T10:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out
     };
     valid_event.alerts = Some(
         [(
@@ -12471,11 +12574,12 @@ fn alerts_audit_uid_and_invented_key_allocation_and_collision_avoidance() {
 #[test]
 fn alerts_audit_description_acknowledged_and_unmodeled_properties_fidelity() {
     // 1. VALARM DESCRIPTION population from event title
-    let mut titled_event = CalendarEvent {
-        title: Some("Quarterly All Hands".to_owned()),
-        start: Some("2026-01-15T10:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        ..CalendarEvent::default()
+    let mut titled_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Quarterly All Hands".to_owned());
+        event_out.start = Some("2026-01-15T10:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out
     };
     titled_event.alerts = Some(
         [(
@@ -12557,11 +12661,12 @@ fn alerts_audit_description_acknowledged_and_unmodeled_properties_fidelity() {
 #[test]
 fn alerts_audit_usedefaultalerts_and_recurrence_overrides_matrix() {
     // 1. useDefaultAlerts on Series
-    let mut default_alerts_event = CalendarEvent {
-        title: Some("Project Sync".to_owned()),
-        start: Some("2026-01-15T10:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        ..CalendarEvent::default()
+    let mut default_alerts_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Project Sync".to_owned());
+        event_out.start = Some("2026-01-15T10:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out
     };
     default_alerts_event.alerts = Some(
         [(
@@ -12591,13 +12696,14 @@ fn alerts_audit_usedefaultalerts_and_recurrence_overrides_matrix() {
     );
 
     // 2. Recurrence Overrides with alerts matrix
-    let mut rec_event = CalendarEvent {
-        title: Some("Weekly Design Review".to_owned()),
-        start: Some("2026-01-15T10:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        alerts: Some(
+    let mut rec_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Weekly Design Review".to_owned());
+        event_out.start = Some("2026-01-15T10:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.alerts = Some(
             [(
                 "a1".to_owned(),
                 json!({
@@ -12607,8 +12713,8 @@ fn alerts_audit_usedefaultalerts_and_recurrence_overrides_matrix() {
                 }),
             )]
             .into(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     };
 
     // Override 1: inherits series alerts (doesn't mention alerts)
@@ -12919,16 +13025,16 @@ fn recurrence_overrides_audit_cancelled_occurrences_exdate_matrix() {
     );
 
     // 4. EXDATE in UTC series
-    let utc_event = CalendarEvent {
-        id: Some("EX_UTC".into()),
-        start: Some("2026-01-15T10:00:00".to_owned()),
-        time_zone: Some("Etc/UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        recurrence_overrides: Some(
-            [("2026-01-22T10:00:00".to_owned(), json!({"excluded": true}))].into(),
-        ),
-        ..CalendarEvent::default()
+    let utc_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("EX_UTC".into());
+        event_out.start = Some("2026-01-15T10:00:00".to_owned());
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.recurrence_overrides =
+            Some([("2026-01-22T10:00:00".to_owned(), json!({"excluded": true}))].into());
+        event_out
     };
     let utc_ics = event_to_ical(&utc_event);
     assert_eq!(line(&utc_ics, "DTSTART"), "DTSTART:20260115T100000Z");
@@ -12940,16 +13046,16 @@ fn recurrence_overrides_audit_cancelled_occurrences_exdate_matrix() {
     );
 
     // 5. EXDATE in All-Day Date-Only Series (VALUE=DATE)
-    let allday_event = CalendarEvent {
-        id: Some("EX_ALLDAY".into()),
-        start: Some("2026-01-15T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        recurrence_overrides: Some(
-            [("2026-01-22T00:00:00".to_owned(), json!({"excluded": true}))].into(),
-        ),
-        ..CalendarEvent::default()
+    let allday_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("EX_ALLDAY".into());
+        event_out.start = Some("2026-01-15T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.recurrence_overrides =
+            Some([("2026-01-22T00:00:00".to_owned(), json!({"excluded": true}))].into());
+        event_out
     };
     let allday_ics = event_to_ical(&allday_event);
     assert_eq!(line(&allday_ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
@@ -13372,13 +13478,14 @@ fn recurrence_overrides_audit_precedence_conflicts_and_edge_cases() {
 
 #[test]
 fn recurrence_overrides_audit_predicates_decision_matrix() {
-    let series = CalendarEvent {
-        title: Some("Weekly Review".to_owned()),
-        start: Some("2026-01-15T10:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Weekly Review".to_owned());
+        event_out.start = Some("2026-01-15T10:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out
     };
     let id = "2026-01-22T10:00:00";
 
@@ -14081,14 +14188,15 @@ END:VCALENDAR\r\n";
 
 #[test]
 fn maps_alerts_refusal_boundary_matrix_for_unsupported_shapes() {
-    let base_event = CalendarEvent {
-        id: Some("alarm-boundary-test".into()),
-        event_type: Some("Event".into()),
-        title: Some("Alarm Boundary Test".into()),
-        start: Some("2026-11-10T10:00:00".into()),
-        time_zone: Some("Europe/London".into()),
-        duration: Some("PT1H".into()),
-        ..Default::default()
+    let base_event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("alarm-boundary-test".into());
+        event_out.event_type = Some("Event".into());
+        event_out.title = Some("Alarm Boundary Test".into());
+        event_out.start = Some("2026-11-10T10:00:00".into());
+        event_out.time_zone = Some("Europe/London".into());
+        event_out.duration = Some("PT1H".into());
+        event_out
     };
 
     // 1. Valid offset display alert -> accepted
@@ -14245,19 +14353,21 @@ fn mapping_docs_completeness_audit_master_property_table_fidelity() {
     // CLASS, LOCATION, GEO, CONFERENCE, ATTACH/LINKS, CATEGORIES, ORGANIZER,
     // ATTENDEE, VALARM, VTIMEZONE.
 
-    let rich_event = CalendarEvent {
-        id: Some("jmap-evt-001".into()),
-        uid: Some("rfc-uuid-evt-001".to_owned()),
-        title: Some("Master Architecture Summit".to_owned()),
-        description: Some("Comprehensive review of the iCalendar mapping contract.".to_owned()),
-        start: Some("2026-09-15T09:30:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT2H30M".to_owned()),
-        status: Some("confirmed".to_owned()),
-        free_busy_status: Some("busy".to_owned()),
-        priority: Some(1),
-        privacy: Some("public".to_owned()),
-        locations: Some(BTreeMap::from([(
+    let rich_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("jmap-evt-001".into());
+        event_out.uid = Some("rfc-uuid-evt-001".to_owned());
+        event_out.title = Some("Master Architecture Summit".to_owned());
+        event_out.description =
+            Some("Comprehensive review of the iCalendar mapping contract.".to_owned());
+        event_out.start = Some("2026-09-15T09:30:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT2H30M".to_owned());
+        event_out.status = Some("confirmed".to_owned());
+        event_out.free_busy_status = Some("busy".to_owned());
+        event_out.priority = Some(1);
+        event_out.privacy = Some("public".to_owned());
+        event_out.locations = Some(BTreeMap::from([(
             "loc1".to_owned(),
             json!({
                 "@type": "Location",
@@ -14265,8 +14375,8 @@ fn mapping_docs_completeness_audit_master_property_table_fidelity() {
                 "description": "Ground floor west wing",
                 "coordinates": "geo:52.520008,13.404954",
             }),
-        )])),
-        virtual_locations: Some(BTreeMap::from([(
+        )]));
+        event_out.virtual_locations = Some(BTreeMap::from([(
             "v1".to_owned(),
             json!({
                 "@type": "VirtualLocation",
@@ -14279,8 +14389,8 @@ fn mapping_docs_completeness_audit_master_property_table_fidelity() {
                     "chat": true
                 }
             }),
-        )])),
-        links: Some(BTreeMap::from([(
+        )]));
+        event_out.links = Some(BTreeMap::from([(
             "l1".to_owned(),
             json!({
                 "@type": "Link",
@@ -14290,13 +14400,13 @@ fn mapping_docs_completeness_audit_master_property_table_fidelity() {
                 "size": 1048576,
                 "display": "badge"
             }),
-        )])),
-        keywords: Some(BTreeMap::from([
+        )]));
+        event_out.keywords = Some(BTreeMap::from([
             ("architecture".to_owned(), json!(true)),
             ("jmap".to_owned(), json!(true)),
             ("summit".to_owned(), json!(true)),
-        ])),
-        participants: Some(BTreeMap::from([
+        ]));
+        event_out.participants = Some(BTreeMap::from([
             (
                 "p_org".to_owned(),
                 json!({
@@ -14319,8 +14429,8 @@ fn mapping_docs_completeness_audit_master_property_table_fidelity() {
                     "expectReply": true
                 }),
             ),
-        ])),
-        alerts: Some(BTreeMap::from([(
+        ]));
+        event_out.alerts = Some(BTreeMap::from([(
             "a1".to_owned(),
             json!({
                 "@type": "Alert",
@@ -14330,8 +14440,8 @@ fn mapping_docs_completeness_audit_master_property_table_fidelity() {
                     "offset": "-PT15M"
                 }
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
 
     // 1. Serialization (Pass 1)
@@ -14636,24 +14746,21 @@ fn mapping_docs_completeness_audit_freebusy_decision_matrix() {
 
     // 2. busy_periods_to_vfreebusy formatting and search window bounding
     let periods = [
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-15T10:00:00Z"),
-            utc_end: UtcDate::new("2026-09-15T11:30:00Z"),
-            busy_status: "busy".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-15T14:00:00Z"),
-            utc_end: UtcDate::new("2026-09-15T15:00:00Z"),
-            busy_status: "tentative".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-15T16:00:00Z"),
-            utc_end: UtcDate::new("2026-09-15T17:00:00Z"),
-            busy_status: "unavailable".to_owned(),
-            event: None,
-        },
+        BusyPeriod::new(
+            UtcDate::new("2026-09-15T10:00:00Z"),
+            UtcDate::new("2026-09-15T11:30:00Z"),
+            "busy".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-15T14:00:00Z"),
+            UtcDate::new("2026-09-15T15:00:00Z"),
+            "tentative".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-15T16:00:00Z"),
+            UtcDate::new("2026-09-15T17:00:00Z"),
+            "unavailable".to_owned(),
+        ),
     ];
 
     let vfb = busy_periods_to_vfreebusy(
@@ -14889,10 +14996,11 @@ fn recurrence_until_parser_refusal_and_unstateable_canary_matrix() {
 
     // 2. Unstateable local date-times on export (e.g. month 13, day 30 of Feb)
     for invalid_until in ["2026-13-31T09:00:00", "whenever", "2026-02-30T09:00:00"] {
-        let bad_rule = RecurrenceRule {
-            frequency: "weekly".to_owned(),
-            until: Some(invalid_until.to_owned()),
-            ..RecurrenceRule::default()
+        let bad_rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_owned();
+            __built.until = Some(invalid_until.to_owned());
+            __built
         };
         assert!(
             !maps_recurrence_rule(&bad_rule),
@@ -14904,11 +15012,12 @@ fn recurrence_until_parser_refusal_and_unstateable_canary_matrix() {
             "unstateable_until reports non-convertible until: {invalid_until}"
         );
 
-        let event = CalendarEvent {
-            id: Some("E-BAD-UNTIL".into()),
-            start: Some("2026-01-15T09:00:00".to_owned()),
-            recurrence_rule: Some(bad_rule),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.id = Some("E-BAD-UNTIL".into());
+            event_out.start = Some("2026-01-15T09:00:00".to_owned());
+            event_out.recurrence_rule = Some(bad_rule);
+            event_out
         };
         let ics = event_to_ical(&event);
         assert!(
@@ -14918,10 +15027,11 @@ fn recurrence_until_parser_refusal_and_unstateable_canary_matrix() {
     }
 
     // 3. Valid UNTIL converts and passes maps_recurrence_rule
-    let valid_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        until: Some("2026-12-31T09:00:00".to_owned()),
-        ..RecurrenceRule::default()
+    let valid_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.until = Some("2026-12-31T09:00:00".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&valid_rule));
     assert_eq!(unstateable_until(&valid_rule), None);
@@ -14947,9 +15057,10 @@ fn windows_time_zone_names_unsendable_by_design_refusal_and_cldr_resolution_matr
             "Windows TZ '{win_name}' is not recognized as IANA name"
         );
 
-        let event_bare = CalendarEvent {
-            time_zone: Some(win_name.to_owned()),
-            ..CalendarEvent::default()
+        let event_bare = {
+            let mut event_out = CalendarEvent::default();
+            event_out.time_zone = Some(win_name.to_owned());
+            event_out
         };
         assert!(
             !defines_time_zone(&event_bare, win_name),
@@ -14987,32 +15098,25 @@ fn recurrence_complex_rrule_bysetpos_and_byday_ordinals_matrix() {
     assert!(ics1.contains("RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\r\n"));
 
     // 2. BYSETPOS combined with BYDAY ordinals and multiple set positions (first and last)
-    let complex_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![
-            NDay {
-                nth_of_period: Some(1),
-                ..NDay::new("mo")
-            },
-            NDay {
-                nth_of_period: Some(3),
-                ..NDay::new("mo")
-            },
-            NDay {
-                nth_of_period: Some(-1),
-                ..NDay::new("fr")
-            },
-        ]),
-        by_set_position: Some(vec![1, -1]),
-        ..RecurrenceRule::new("monthly")
+    let complex_rule = {
+        let mut __built = RecurrenceRule::new("monthly");
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![
+            NDay::new("mo").with_nth_of_period(1),
+            NDay::new("mo").with_nth_of_period(3),
+            NDay::new("fr").with_nth_of_period(-1),
+        ]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&complex_rule));
-    let event2 = CalendarEvent {
-        id: Some("SETPOS2".into()),
-        start: Some("2026-01-05T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        recurrence_rule: Some(complex_rule.clone()),
-        ..CalendarEvent::default()
+    let event2 = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("SETPOS2".into());
+        event_out.start = Some("2026-01-05T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.recurrence_rule = Some(complex_rule.clone());
+        event_out
     };
     let ics2 = event_to_ical(&event2);
     assert!(ics2.contains("RRULE:FREQ=MONTHLY;BYDAY=1MO,3MO,-1FR;BYSETPOS=1,-1\r\n"));
@@ -15020,19 +15124,21 @@ fn recurrence_complex_rrule_bysetpos_and_byday_ordinals_matrix() {
     assert_eq!(parsed2.recurrence_rule.as_ref(), Some(&complex_rule));
 
     // 3. BYSETPOS combined with BYMONTHDAY
-    let monthday_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_month_day: Some(vec![1, 15, 31]),
-        by_set_position: Some(vec![-1]),
-        ..RecurrenceRule::new("monthly")
+    let monthday_rule = {
+        let mut __built = RecurrenceRule::new("monthly");
+        __built.frequency = "monthly".to_owned();
+        __built.by_month_day = Some(vec![1, 15, 31]);
+        __built.by_set_position = Some(vec![-1]);
+        __built
     };
     assert!(maps_recurrence_rule(&monthday_rule));
-    let event3 = CalendarEvent {
-        id: Some("SETPOS3".into()),
-        start: Some("2026-01-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        recurrence_rule: Some(monthday_rule.clone()),
-        ..CalendarEvent::default()
+    let event3 = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("SETPOS3".into());
+        event_out.start = Some("2026-01-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.recurrence_rule = Some(monthday_rule.clone());
+        event_out
     };
     let ics3 = event_to_ical(&event3);
     assert!(ics3.contains("RRULE:FREQ=MONTHLY;BYMONTHDAY=1,15,31;BYSETPOS=-1\r\n"));
@@ -15040,48 +15146,53 @@ fn recurrence_complex_rrule_bysetpos_and_byday_ordinals_matrix() {
     assert_eq!(parsed3.recurrence_rule.as_ref(), Some(&monthday_rule));
 
     // 4. BYSETPOS combined with BYHOUR and BYMINUTE
-    let time_rule = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![9, 13, 17]),
-        by_set_position: Some(vec![1, -1]),
-        ..RecurrenceRule::default()
+    let time_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![9, 13, 17]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&time_rule));
-    let event4 = CalendarEvent {
-        id: Some("SETPOS4".into()),
-        start: Some("2026-01-01T09:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        recurrence_rule: Some(time_rule.clone()),
-        ..CalendarEvent::default()
+    let event4 = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("SETPOS4".into());
+        event_out.start = Some("2026-01-01T09:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.recurrence_rule = Some(time_rule.clone());
+        event_out
     };
     let ics4 = event_to_ical(&event4);
     assert!(ics4.contains("RRULE:FREQ=DAILY;BYHOUR=9,13,17;BYSETPOS=1,-1\r\n"));
 
     // 5. Boundary limits and refusal
     for valid_pos in [1, -1, 366, -366] {
-        let rule = RecurrenceRule {
-            frequency: "yearly".to_owned(),
-            by_month: Some(vec!["1".to_owned()]),
-            by_set_position: Some(vec![valid_pos]),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "yearly".to_owned();
+            __built.by_month = Some(vec!["1".to_owned()]);
+            __built.by_set_position = Some(vec![valid_pos]);
+            __built
         };
         assert!(maps_recurrence_rule(&rule), "pos {valid_pos} is valid");
     }
     for invalid_pos in [0, 367, -367] {
-        let rule = RecurrenceRule {
-            frequency: "yearly".to_owned(),
-            by_month: Some(vec!["1".to_owned()]),
-            by_set_position: Some(vec![invalid_pos]),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "yearly".to_owned();
+            __built.by_month = Some(vec!["1".to_owned()]);
+            __built.by_set_position = Some(vec![invalid_pos]);
+            __built
         };
         assert!(!maps_recurrence_rule(&rule), "pos {invalid_pos} is refused");
     }
 
     // 6. Orphan BYSETPOS refusal (without expanding parts)
-    let orphan_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_set_position: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let orphan_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_set_position = Some(vec![1]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&orphan_rule),
@@ -15122,24 +15233,20 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
     assert!(ics1.contains("RRULE:FREQ=MONTHLY;BYDAY=1MO,-1FR,3WE\r\n"));
 
     // 2. Mixed ordinals and bare weekdays
-    let mixed_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![
-            NDay {
-                nth_of_period: Some(2),
-                ..NDay::new("tu")
-            },
-            NDay::new("th"),
-        ]),
-        ..RecurrenceRule::new("monthly")
+    let mixed_rule = {
+        let mut __built = RecurrenceRule::new("monthly");
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("tu").with_nth_of_period(2), NDay::new("th")]);
+        __built
     };
     assert!(maps_recurrence_rule(&mixed_rule));
-    let event2 = CalendarEvent {
-        id: Some("MIXED1".into()),
-        start: Some("2026-01-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        recurrence_rule: Some(mixed_rule.clone()),
-        ..CalendarEvent::default()
+    let event2 = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("MIXED1".into());
+        event_out.start = Some("2026-01-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.recurrence_rule = Some(mixed_rule.clone());
+        event_out
     };
     let ics2 = event_to_ical(&event2);
     assert!(ics2.contains("RRULE:FREQ=MONTHLY;BYDAY=2TU,TH\r\n"));
@@ -15148,24 +15255,20 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
 
     // 3. Frequency gating for ordinals: valid on monthly and yearly, refused on weekly and daily
     for valid_freq in ["monthly", "yearly"] {
-        let rule = RecurrenceRule {
-            frequency: valid_freq.to_owned(),
-            by_day: Some(vec![NDay {
-                nth_of_period: Some(1),
-                ..NDay::new("mo")
-            }]),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = valid_freq.to_owned();
+            __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(1)]);
+            __built
         };
         assert!(maps_recurrence_rule(&rule), "{valid_freq} allows ordinals");
     }
     for invalid_freq in ["weekly", "daily", "hourly"] {
-        let rule = RecurrenceRule {
-            frequency: invalid_freq.to_owned(),
-            by_day: Some(vec![NDay {
-                nth_of_period: Some(1),
-                ..NDay::new("mo")
-            }]),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = invalid_freq.to_owned();
+            __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(1)]);
+            __built
         };
         assert!(
             !maps_recurrence_rule(&rule),
@@ -15174,66 +15277,73 @@ fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
     }
 
     // 4. WKST non-default emission (SU) and default omission (MO)
-    let wkst_su_rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        interval: Some(2),
-        by_day: Some(vec![NDay::new("tu"), NDay::new("su")]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::default()
+    let wkst_su_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.interval = Some(2);
+        __built.by_day = Some(vec![NDay::new("tu"), NDay::new("su")]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&wkst_su_rule));
-    let event_su = CalendarEvent {
-        id: Some("REC-WKST-1".into()),
-        start: Some("2026-01-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        recurrence_rule: Some(wkst_su_rule),
-        ..CalendarEvent::default()
+    let event_su = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("REC-WKST-1".into());
+        event_out.start = Some("2026-01-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.recurrence_rule = Some(wkst_su_rule);
+        event_out
     };
     let ics_su = event_to_ical(&event_su);
     assert!(ics_su.contains("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,SU;WKST=SU\r\n"));
 
-    let wkst_mo_rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        interval: Some(2),
-        by_day: Some(vec![NDay::new("tu"), NDay::new("su")]),
-        first_day_of_week: Some("mo".to_owned()),
-        ..RecurrenceRule::default()
+    let wkst_mo_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.interval = Some(2);
+        __built.by_day = Some(vec![NDay::new("tu"), NDay::new("su")]);
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&wkst_mo_rule));
-    let event_mo = CalendarEvent {
-        id: Some("REC-WKST-2".into()),
-        start: Some("2026-01-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        recurrence_rule: Some(wkst_mo_rule),
-        ..CalendarEvent::default()
+    let event_mo = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("REC-WKST-2".into());
+        event_out.start = Some("2026-01-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.recurrence_rule = Some(wkst_mo_rule);
+        event_out
     };
     let ics_mo = event_to_ical(&event_mo);
     assert!(!line(&ics_mo, "RRULE:").contains("WKST"));
 
     // 5. WKST interaction with BYWEEKNO
-    let weekno_rule = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_week_no: Some(vec![1, 52]),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::default()
+    let weekno_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_week_no = Some(vec![1, 52]);
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&weekno_rule));
-    let event_weekno = CalendarEvent {
-        id: Some("REC-WKST-3".into()),
-        start: Some("2026-01-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        recurrence_rule: Some(weekno_rule),
-        ..CalendarEvent::default()
+    let event_weekno = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("REC-WKST-3".into());
+        event_out.start = Some("2026-01-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.recurrence_rule = Some(weekno_rule);
+        event_out
     };
     let ics_weekno = event_to_ical(&event_weekno);
     assert!(ics_weekno.contains("RRULE:FREQ=YEARLY;BYWEEKNO=1,52;WKST=SU\r\n"));
 
     // 6. firstDayOfWeek validation: uppercase and invalid strings are refused
     for bad_wkst in ["MO", "SU", "monday", "sunday", ""] {
-        let rule = RecurrenceRule {
-            frequency: "weekly".to_owned(),
-            first_day_of_week: Some(bad_wkst.to_owned()),
-            ..RecurrenceRule::default()
+        let rule = {
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_owned();
+            __built.first_day_of_week = Some(bad_wkst.to_owned());
+            __built
         };
         assert!(
             !maps_recurrence_rule(&rule),
@@ -15364,29 +15474,28 @@ fn recurrence_rdate_exdate_and_override_interactions_matrix() {
     assert!(emitted_rmod.contains("DTSTART:20260115T113000Z\r\n"));
 
     // 3. All-day series (VALUE=DATE) with all-day overrides
-    let mut allday_event = CalendarEvent {
-        id: Some("ALLDAY-REC".into()),
-        title: Some("All-Day Series".to_owned()),
-        start: Some("2026-01-01T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "monthly".to_owned(),
-            by_day: Some(vec![NDay {
-                nth_of_period: Some(1),
-                ..NDay::new("mo")
-            }]),
-            ..RecurrenceRule::default()
-        }),
-        recurrence_overrides: Some(BTreeMap::from([
+    let mut allday_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("ALLDAY-REC".into());
+        event_out.title = Some("All-Day Series".to_owned());
+        event_out.start = Some("2026-01-01T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "monthly".to_owned();
+            __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(1)]);
+            __built
+        });
+        event_out.recurrence_overrides = Some(BTreeMap::from([
             ("2026-02-02T00:00:00".to_owned(), json!({"excluded": true})),
             ("2026-02-09T00:00:00".to_owned(), json!({})),
             (
                 "2026-03-02T00:00:00".to_owned(),
                 json!({"title": "Rescheduled Holiday"}),
             ),
-        ])),
-        ..CalendarEvent::default()
+        ]));
+        event_out
     };
     let allday_ics = event_to_ical(&allday_event);
     assert!(allday_ics.contains("DTSTART;VALUE=DATE:20260101\r\n"));
@@ -16129,10 +16238,11 @@ fn custom_solidus_vtimezone_multiple_observances_roundtrip_and_recurrence() {
     });
 
     let mut event = defining(custom_tzid, json!({custom_tzid: custom_multi_zone}));
-    event.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        until: Some("2026-06-15T08:00:00".to_owned()),
-        ..Default::default()
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.until = Some("2026-06-15T08:00:00".to_owned());
+        __built
     });
 
     // 1. Serialization to iCalendar
@@ -19638,11 +19748,12 @@ END:VCALENDAR\r\n";
     );
 
     // BYMONTHDAY on weekly frequency is refused by by_month_day_part and maps_recurrence_rule
-    let weekly_monthday_rule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_string()),
-        frequency: "weekly".to_string(),
-        by_month_day: Some(vec![15]),
-        ..Default::default()
+    let weekly_monthday_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_string());
+        __built.frequency = "weekly".to_string();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&weekly_monthday_rule),
@@ -19650,11 +19761,12 @@ END:VCALENDAR\r\n";
     );
 
     // BYYEARDAY on daily, weekly, or monthly frequency is refused by by_year_day_part and maps_recurrence_rule
-    let daily_yearday_rule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_string()),
-        frequency: "daily".to_string(),
-        by_year_day: Some(vec![100]),
-        ..Default::default()
+    let daily_yearday_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_string());
+        __built.frequency = "daily".to_string();
+        __built.by_year_day = Some(vec![100]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&daily_yearday_rule),
@@ -19769,10 +19881,11 @@ END:VCALENDAR\r\n";
     assert!(!until_out.contains("COUNT="));
 
     // Unbounded recurrence: neither count nor until is present
-    let unbounded_rule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_string()),
-        frequency: "monthly".to_string(),
-        ..Default::default()
+    let unbounded_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_string());
+        __built.frequency = "monthly".to_string();
+        __built
     };
     assert!(maps_recurrence_rule(&unbounded_rule));
     let mut unbounded_ev = count_ev.clone();
@@ -20285,12 +20398,13 @@ fn differential_oracle_recurrence_override_excluded_purity_and_property_conflict
     // Stalwart v1.0.0 parses EXDATE into {"excluded": true}.
     // In jmap-ical: override_maps_by enforces single-field purity for excluded patches;
     // recurrence_dates emits EXDATE on master VEVENT and never detached components for exclusions.
-    let series = CalendarEvent {
-        title: Some("Bi-weekly Review".to_owned()),
-        start: Some("2026-09-01T14:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Bi-weekly Review".to_owned());
+        event_out.start = Some("2026-09-01T14:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out
     };
     let id = "2026-09-08T14:00:00";
 
@@ -20354,12 +20468,13 @@ fn differential_oracle_recurrence_override_property_allowlist_and_subobject_isol
     //  "priority", "privacy", "keywords", "alerts"].
     // Properties outside this list (such as locations, virtualLocations, participants, links)
     // are refused by maps_override_field and inherited from the series.
-    let series = CalendarEvent {
-        title: Some("Project Sync".to_owned()),
-        start: Some("2026-09-01T11:00:00".to_owned()),
-        duration: Some("PT45M".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Project Sync".to_owned());
+        event_out.start = Some("2026-09-01T11:00:00".to_owned());
+        event_out.duration = Some("PT45M".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out
     };
     let id = "2026-09-08T11:00:00";
 
@@ -20479,13 +20594,14 @@ fn differential_oracle_recurrence_override_timezone_scoping_and_custom_zone_defi
     // In jmap-ical: isolated patch checking (maps_recurrence_override) admits standard IANA
     // zone names and refuses custom timezones because the patch cannot carry definitions;
     // full serialization (sends_recurrence_override) admits custom zones defined by the series.
-    let series_iana = CalendarEvent {
-        title: Some("Global Standup".to_owned()),
-        start: Some("2026-09-01T15:00:00".to_owned()),
-        time_zone: Some("Europe/London".to_owned()),
-        duration: Some("PT30M".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        ..CalendarEvent::default()
+    let series_iana = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Global Standup".to_owned());
+        event_out.start = Some("2026-09-01T15:00:00".to_owned());
+        event_out.time_zone = Some("Europe/London".to_owned());
+        event_out.duration = Some("PT30M".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out
     };
     let id = "2026-09-08T15:00:00";
 
@@ -20631,13 +20747,14 @@ fn differential_oracle_recurrence_override_empty_string_refusal_for_title_and_de
     //    non-idempotent round-trips where an empty string turns into null or series inheritance.
     // 2. Non-empty text strings and null deletions are accepted.
     // 3. event_to_ical suppresses empty strings on master series and detached components.
-    let series = CalendarEvent {
-        title: Some("Bi-weekly Review".to_owned()),
-        description: Some("Review goals and progress".to_owned()),
-        start: Some("2026-09-01T14:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.title = Some("Bi-weekly Review".to_owned());
+        event_out.description = Some("Review goals and progress".to_owned());
+        event_out.start = Some("2026-09-01T14:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out
     };
     let id = "2026-09-08T14:00:00";
 
@@ -22024,9 +22141,10 @@ fn differential_oracle_location_single_entry_restriction_and_empty_name_suppress
         "loc2".to_string(),
         json!({"@type": "Location", "name": "Overflow Room"}),
     );
-    let ev = CalendarEvent {
-        locations: Some(locations),
-        ..CalendarEvent::default()
+    let ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.locations = Some(locations);
+        event_out
     };
     assert!(!maps_locations(ev.locations.as_ref().unwrap()));
     let ics = event_to_ical(&ev);
@@ -22116,9 +22234,10 @@ fn differential_oracle_virtual_location_conference_multi_line_and_feature_vocabu
             "features": {"phone": true},
         }),
     );
-    let ev = CalendarEvent {
-        virtual_locations: Some(vlocs),
-        ..CalendarEvent::default()
+    let ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.virtual_locations = Some(vlocs);
+        event_out
     };
     assert!(maps_virtual_locations(
         ev.virtual_locations.as_ref().unwrap()
@@ -22197,9 +22316,10 @@ fn differential_oracle_links_file_uri_and_binary_data_suppression_for_privacy() 
             "display": "badge",
         }),
     );
-    let ev_link = CalendarEvent {
-        links: Some(links_map),
-        ..CalendarEvent::default()
+    let ev_link = {
+        let mut event_out = CalendarEvent::default();
+        event_out.links = Some(links_map);
+        event_out
     };
     let ics_link = event_to_ical(&ev_link);
     assert_eq!(
@@ -22283,12 +22403,7 @@ fn differential_oracle_freebusy_whole_component_refusal_on_invalid_period_or_win
     );
 
     // Invalid busy period refuses component rather than dropping period
-    let bad_period = BusyPeriod {
-        utc_start: invalid_hour,
-        utc_end: valid_end.clone(),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    };
+    let bad_period = BusyPeriod::new(invalid_hour, valid_end.clone(), "confirmed".to_string());
     assert_eq!(
         busy_periods_to_vfreebusy("alice@example.com", &valid_start, &valid_end, &[bad_period]),
         None
@@ -22330,24 +22445,21 @@ fn differential_oracle_freebusy_status_mapping_and_fail_safe_busy_fallback() {
     let window_start = UtcDate::new("2026-09-04T08:00:00Z");
     let window_end = UtcDate::new("2026-09-04T18:00:00Z");
     let periods = vec![
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-04T09:00:00Z"),
-            utc_end: UtcDate::new("2026-09-04T10:00:00Z"),
-            busy_status: "tentative".to_string(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-04T11:00:00Z"),
-            utc_end: UtcDate::new("2026-09-04T12:00:00Z"),
-            busy_status: "unavailable".to_string(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-04T13:00:00Z"),
-            utc_end: UtcDate::new("2026-09-04T14:00:00Z"),
-            busy_status: "future-extension".to_string(),
-            event: None,
-        },
+        BusyPeriod::new(
+            UtcDate::new("2026-09-04T09:00:00Z"),
+            UtcDate::new("2026-09-04T10:00:00Z"),
+            "tentative".to_string(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-04T11:00:00Z"),
+            UtcDate::new("2026-09-04T12:00:00Z"),
+            "unavailable".to_string(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-04T13:00:00Z"),
+            UtcDate::new("2026-09-04T14:00:00Z"),
+            "future-extension".to_string(),
+        ),
     ];
     let ics = busy_periods_to_vfreebusy("alice@example.com", &window_start, &window_end, &periods)
         .expect("render periods");
@@ -22366,12 +22478,11 @@ fn differential_oracle_freebusy_fractional_seconds_truncation_and_digit_validati
     //    refusing the whole component.
     let window_start = UtcDate::new("2026-09-04T08:00:00.123Z");
     let window_end = UtcDate::new("2026-09-04T18:00:00.999Z");
-    let periods = vec![BusyPeriod {
-        utc_start: UtcDate::new("2026-09-04T09:30:00.555Z"),
-        utc_end: UtcDate::new("2026-09-04T10:30:00.001Z"),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    }];
+    let periods = vec![BusyPeriod::new(
+        UtcDate::new("2026-09-04T09:30:00.555Z"),
+        UtcDate::new("2026-09-04T10:30:00.001Z"),
+        "confirmed".to_string(),
+    )];
     let ics = busy_periods_to_vfreebusy("alice@example.com", &window_start, &window_end, &periods)
         .expect("render with fractional seconds");
     assert!(ics.contains("DTSTART:20260904T080000Z"));
@@ -22380,12 +22491,11 @@ fn differential_oracle_freebusy_fractional_seconds_truncation_and_digit_validati
 
     // Invalid non-digit fractional seconds refuse component
     let bad_fraction = UtcDate::new("2026-09-04T09:30:00.55aZ");
-    let bad_period = BusyPeriod {
-        utc_start: bad_fraction,
-        utc_end: UtcDate::new("2026-09-04T10:30:00Z"),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    };
+    let bad_period = BusyPeriod::new(
+        bad_fraction,
+        UtcDate::new("2026-09-04T10:30:00Z"),
+        "confirmed".to_string(),
+    );
     assert_eq!(
         busy_periods_to_vfreebusy(
             "alice@example.com",
@@ -22542,12 +22652,13 @@ fn differential_oracle_content_line_folding_and_crlf_boundary_sanitization() {
     assert_eq!(parsed_mixed.title.as_deref(), Some("Mixed Line Endings"));
 
     // Outbound raw property injection protection: duration with CRLF is dropped
-    let injected_ev = CalendarEvent {
-        id: Some("evt-inj".into()),
-        start: Some("2026-09-04T10:00:00".into()),
-        duration: Some("PT1H\r\nLOCATION:Injected".into()),
-        time_zone: Some("Europe/Berlin\r\nSUMMARY:Injected".into()),
-        ..CalendarEvent::default()
+    let injected_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("evt-inj".into());
+        event_out.start = Some("2026-09-04T10:00:00".into());
+        event_out.duration = Some("PT1H\r\nLOCATION:Injected".into());
+        event_out.time_zone = Some("Europe/Berlin\r\nSUMMARY:Injected".into());
+        event_out
     };
     let ics_out = event_to_ical(&injected_ev);
     assert!(
@@ -22908,17 +23019,19 @@ fn differential_oracle_custom_solidus_timezone_definition_ingestion_and_sendabil
     assert!(out_custom.contains("TZID:/example.org/custom_tz"));
 
     // 3. Dangling custom solidus zone without definition
-    let ev_dangling = CalendarEvent {
-        time_zone: Some("/example.org/dangling".to_owned()),
-        ..CalendarEvent::default()
+    let ev_dangling = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some("/example.org/dangling".to_owned());
+        event_out
     };
     assert!(!defines_time_zone(&ev_dangling, "/example.org/dangling"));
     assert!(!maps_time_zone(&ev_dangling));
 
     // 4. Non-solidus unmapped custom zone
-    let ev_unmapped = CalendarEvent {
-        time_zone: Some("Unmapped Non Solidus".to_owned()),
-        ..CalendarEvent::default()
+    let ev_unmapped = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some("Unmapped Non Solidus".to_owned());
+        event_out
     };
     assert!(!defines_time_zone(&ev_unmapped, "Unmapped Non Solidus"));
     assert!(!maps_time_zone(&ev_unmapped));
@@ -22943,9 +23056,10 @@ fn differential_oracle_custom_timezone_pruning_and_override_scope() {
         }]
     });
 
-    let mut event = CalendarEvent {
-        time_zone: Some(custom_tz.to_owned()),
-        time_zones: Some(BTreeMap::from([
+    let mut event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(custom_tz.to_owned());
+        event_out.time_zones = Some(BTreeMap::from([
             (custom_tz.to_owned(), custom_def.clone()),
             (
                 "/example.org/unused_tz".to_owned(),
@@ -22960,8 +23074,8 @@ fn differential_oracle_custom_timezone_pruning_and_override_scope() {
                     }]
                 }),
             ),
-        ])),
-        ..CalendarEvent::default()
+        ]));
+        event_out
     };
 
     // 1. Prune removes unreferenced zone while retaining master zone
@@ -22993,20 +23107,21 @@ fn differential_oracle_custom_timezone_pruning_and_override_scope() {
     );
 
     // 3. Normalized matching without leading solidus in definition map
-    let mut event_no_slash = CalendarEvent {
-        time_zone: None,
-        recurrence_overrides: Some(BTreeMap::from([(
+    let mut event_no_slash = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = None;
+        event_out.recurrence_overrides = Some(BTreeMap::from([(
             "2026-01-16T13:00:00".to_owned(),
             json!({
                 "start": "2026-01-16T15:00:00",
                 "timeZone": custom_tz
             }),
-        )])),
-        time_zones: Some(BTreeMap::from([(
+        )]));
+        event_out.time_zones = Some(BTreeMap::from([(
             "example.org/custom_tz".to_owned(),
             custom_def,
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     prune_time_zones(&mut event_no_slash);
     assert!(
@@ -23037,11 +23152,12 @@ fn differential_oracle_utc_offset_colon_stripping_and_negative_zero_rejection() 
     // 3. Formats seconds only when non-zero.
 
     let custom_tz = "/example.org/offset_tz";
-    let event = CalendarEvent {
-        time_zone: Some(custom_tz.to_owned()),
-        start: Some("2026-09-04T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(custom_tz.to_owned());
+        event_out.start = Some("2026-09-04T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             custom_tz.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23053,8 +23169,8 @@ fn differential_oracle_utc_offset_colon_stripping_and_negative_zero_rejection() 
                     "offsetTo": "+01:00"
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
 
     let ics = event_to_ical(&event);
@@ -23069,11 +23185,12 @@ fn differential_oracle_utc_offset_colon_stripping_and_negative_zero_rejection() 
 
     // Sub-minute seconds formatting
     let custom_tz_sec = "/example.org/subminute_tz";
-    let event_sec = CalendarEvent {
-        time_zone: Some(custom_tz_sec.to_owned()),
-        start: Some("2026-09-04T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let event_sec = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(custom_tz_sec.to_owned());
+        event_out.start = Some("2026-09-04T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             custom_tz_sec.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23085,8 +23202,8 @@ fn differential_oracle_utc_offset_colon_stripping_and_negative_zero_rejection() 
                     "offsetTo": "+00:00:00"
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     let ics_sec = event_to_ical(&event_sec);
     assert!(
@@ -23100,9 +23217,10 @@ fn differential_oracle_utc_offset_colon_stripping_and_negative_zero_rejection() 
 
     // Negative zero rejection
     let custom_tz_neg_zero = "/example.org/neg_zero_tz";
-    let event_neg_zero = CalendarEvent {
-        time_zone: Some(custom_tz_neg_zero.to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let event_neg_zero = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(custom_tz_neg_zero.to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             custom_tz_neg_zero.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23114,8 +23232,8 @@ fn differential_oracle_utc_offset_colon_stripping_and_negative_zero_rejection() 
                     "offsetTo": "+01:00"
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     assert!(
         !defines_time_zone(&event_neg_zero, custom_tz_neg_zero),
@@ -23153,11 +23271,12 @@ fn differential_oracle_timezone_rule_names_map_and_tzname_property_mapping() {
 
     // 2. Outbound emission filters for true boolean values
     let custom_tz = "/example.org/outbound_names";
-    let event = CalendarEvent {
-        time_zone: Some(custom_tz.to_owned()),
-        start: Some("2026-09-04T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(custom_tz.to_owned());
+        event_out.start = Some("2026-09-04T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             custom_tz.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23175,8 +23294,8 @@ fn differential_oracle_timezone_rule_names_map_and_tzname_property_mapping() {
                     }
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     let out_ics = event_to_ical(&event);
     assert!(
@@ -23255,11 +23374,12 @@ END:VCALENDAR\r\n";
 
     // 2. Outbound drop of extra administrative properties
     let custom_tz = "/example.org/custom_admin_out";
-    let event = CalendarEvent {
-        time_zone: Some(custom_tz.to_owned()),
-        start: Some("2026-09-04T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(custom_tz.to_owned());
+        event_out.start = Some("2026-09-04T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             custom_tz.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23276,8 +23396,8 @@ END:VCALENDAR\r\n";
                     "recurrenceOverrides": {}
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
 
     let out_ics = event_to_ical(&event);
@@ -23309,9 +23429,10 @@ fn differential_oracle_vtimezone_whole_component_and_at_least_one_observance_req
 
     let custom_tz = "/example.org/empty_observances";
     // 1. Zero observances
-    let ev_empty = CalendarEvent {
-        time_zone: Some(custom_tz.to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let ev_empty = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(custom_tz.to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             custom_tz.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23319,8 +23440,8 @@ fn differential_oracle_vtimezone_whole_component_and_at_least_one_observance_req
                 "standard": [],
                 "daylight": []
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     assert!(
         !defines_time_zone(&ev_empty, custom_tz),
@@ -23338,9 +23459,10 @@ fn differential_oracle_vtimezone_whole_component_and_at_least_one_observance_req
 
     // 2. Invalid observance rule aborts whole definition
     let invalid_tz = "/example.org/invalid_observance";
-    let ev_invalid = CalendarEvent {
-        time_zone: Some(invalid_tz.to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let ev_invalid = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(invalid_tz.to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             invalid_tz.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23358,8 +23480,8 @@ fn differential_oracle_vtimezone_whole_component_and_at_least_one_observance_req
                     }
                 ]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     assert!(
         !defines_time_zone(&ev_invalid, invalid_tz),
@@ -23374,9 +23496,10 @@ fn differential_oracle_vtimezone_whole_component_and_at_least_one_observance_req
 
     // 3. Valid observance succeeds
     let valid_tz = "/example.org/valid_observance";
-    let ev_valid = CalendarEvent {
-        time_zone: Some(valid_tz.to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let ev_valid = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(valid_tz.to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             valid_tz.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23388,8 +23511,8 @@ fn differential_oracle_vtimezone_whole_component_and_at_least_one_observance_req
                     "offsetTo": "+0100"
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     assert!(defines_time_zone(&ev_valid, valid_tz));
     assert!(maps_time_zone(&ev_valid));
@@ -23409,9 +23532,10 @@ fn differential_oracle_timezone_observance_recurrence_rule_plural_and_singular_d
     // 3. Inbound read_observance emits recurrenceRules array.
 
     let tz_plural = "/example.org/tz_plural";
-    let ev_plural = CalendarEvent {
-        time_zone: Some(tz_plural.to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let ev_plural = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(tz_plural.to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             tz_plural.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23428,8 +23552,8 @@ fn differential_oracle_timezone_observance_recurrence_rule_plural_and_singular_d
                     }]
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     let ics_plural = event_to_ical(&ev_plural);
     assert!(
@@ -23438,9 +23562,10 @@ fn differential_oracle_timezone_observance_recurrence_rule_plural_and_singular_d
     );
 
     let tz_singular_arr = "/example.org/tz_singular_arr";
-    let ev_singular_arr = CalendarEvent {
-        time_zone: Some(tz_singular_arr.to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let ev_singular_arr = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(tz_singular_arr.to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             tz_singular_arr.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23457,8 +23582,8 @@ fn differential_oracle_timezone_observance_recurrence_rule_plural_and_singular_d
                     }]
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     let ics_singular_arr = event_to_ical(&ev_singular_arr);
     assert!(
@@ -23467,9 +23592,10 @@ fn differential_oracle_timezone_observance_recurrence_rule_plural_and_singular_d
     );
 
     let tz_singular_obj = "/example.org/tz_singular_obj";
-    let ev_singular_obj = CalendarEvent {
-        time_zone: Some(tz_singular_obj.to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let ev_singular_obj = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(tz_singular_obj.to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             tz_singular_obj.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23486,8 +23612,8 @@ fn differential_oracle_timezone_observance_recurrence_rule_plural_and_singular_d
                     }
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     let ics_singular_obj = event_to_ical(&ev_singular_obj);
     assert!(
@@ -23497,9 +23623,10 @@ fn differential_oracle_timezone_observance_recurrence_rule_plural_and_singular_d
 
     // Unmappable recurrence rule fails defines_time_zone
     let tz_bad_rule = "/example.org/tz_bad_rule";
-    let ev_bad_rule = CalendarEvent {
-        time_zone: Some(tz_bad_rule.to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let ev_bad_rule = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(tz_bad_rule.to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             tz_bad_rule.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23515,8 +23642,8 @@ fn differential_oracle_timezone_observance_recurrence_rule_plural_and_singular_d
                     }
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     assert!(
         !defines_time_zone(&ev_bad_rule, tz_bad_rule),
@@ -23605,11 +23732,12 @@ END:VCALENDAR\r\n";
 
     // 2. Outbound: local UNTIL 02:00:00 with offsetFrom +0200 converted back to UTC 00:00:00Z
     let custom_tz = "/example.org/until_out_tz";
-    let ev_out = CalendarEvent {
-        time_zone: Some(custom_tz.to_owned()),
-        start: Some("2026-09-04T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let ev_out = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some(custom_tz.to_owned());
+        event_out.start = Some("2026-09-04T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             custom_tz.to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -23627,8 +23755,8 @@ END:VCALENDAR\r\n";
                     }]
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
 
     let out_ics = event_to_ical(&ev_out);
@@ -23651,15 +23779,16 @@ fn differential_oracle_date_property_emission_and_multi_value_formatting() {
     // 6. Multi-valued property formatting: multiple EXDATE/RDATE values emitted as a single comma-separated line.
 
     // 1. All-day event with multiple excluded dates
-    let all_day_ev = CalendarEvent {
-        show_without_time: Some(true),
-        start: Some("2026-09-05T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        recurrence_overrides: Some(BTreeMap::from([
+    let all_day_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.show_without_time = Some(true);
+        event_out.start = Some("2026-09-05T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.recurrence_overrides = Some(BTreeMap::from([
             ("2026-09-06T00:00:00".to_owned(), json!({"excluded": true})),
             ("2026-09-07T00:00:00".to_owned(), json!({"excluded": true})),
-        ])),
-        ..CalendarEvent::default()
+        ]));
+        event_out
     };
 
     let all_day_ics = event_to_ical(&all_day_ev);
@@ -23673,11 +23802,12 @@ fn differential_oracle_date_property_emission_and_multi_value_formatting() {
     );
 
     // 2. Timed UTC event
-    let utc_ev = CalendarEvent {
-        time_zone: Some("Etc/UTC".to_owned()),
-        start: Some("2026-09-05T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let utc_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.start = Some("2026-09-05T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let utc_ics = event_to_ical(&utc_ev);
     assert!(
@@ -23686,15 +23816,16 @@ fn differential_oracle_date_property_emission_and_multi_value_formatting() {
     );
 
     // 3. Timed non-UTC event with multiple excluded dates
-    let zoned_ev = CalendarEvent {
-        time_zone: Some("Europe/Berlin".to_owned()),
-        start: Some("2026-09-05T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_overrides: Some(BTreeMap::from([
+    let zoned_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.start = Some("2026-09-05T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_overrides = Some(BTreeMap::from([
             ("2026-09-06T10:00:00".to_owned(), json!({"excluded": true})),
             ("2026-09-07T10:00:00".to_owned(), json!({"excluded": true})),
-        ])),
-        ..CalendarEvent::default()
+        ]));
+        event_out
     };
     let zoned_ics = event_to_ical(&zoned_ev);
     assert!(
@@ -23707,10 +23838,11 @@ fn differential_oracle_date_property_emission_and_multi_value_formatting() {
     );
 
     // 4. Floating timed event
-    let floating_ev = CalendarEvent {
-        start: Some("2026-09-05T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let floating_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.start = Some("2026-09-05T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let floating_ics = event_to_ical(&floating_ev);
     assert!(
@@ -24034,12 +24166,13 @@ fn differential_oracle_utc_datetime_formatting_and_idempotent_timestamps() {
     // 3. When updated is absent (None), DTSTAMP is omitted rather than inventing local clock time.
 
     // 1. Valid UTC timestamps
-    let ev_valid = CalendarEvent {
-        created: Some("2026-09-05T10:00:00Z".to_owned()),
-        updated: Some("2026-09-05T12:30:00Z".to_owned()),
-        start: Some("2026-09-05T14:00:00Z".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let ev_valid = {
+        let mut event_out = CalendarEvent::default();
+        event_out.created = Some("2026-09-05T10:00:00Z".to_owned());
+        event_out.updated = Some("2026-09-05T12:30:00Z".to_owned());
+        event_out.start = Some("2026-09-05T14:00:00Z".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let ics_valid = event_to_ical(&ev_valid);
     assert!(
@@ -24056,12 +24189,13 @@ fn differential_oracle_utc_datetime_formatting_and_idempotent_timestamps() {
     );
 
     // 2. Missing updated timestamp: DTSTAMP omitted to prevent non-deterministic sync churn
-    let ev_no_updated = CalendarEvent {
-        created: Some("2026-09-05T10:00:00Z".to_owned()),
-        updated: None,
-        start: Some("2026-09-05T14:00:00Z".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let ev_no_updated = {
+        let mut event_out = CalendarEvent::default();
+        event_out.created = Some("2026-09-05T10:00:00Z".to_owned());
+        event_out.updated = None;
+        event_out.start = Some("2026-09-05T14:00:00Z".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let ics_no_updated = event_to_ical(&ev_no_updated);
     assert!(
@@ -24074,11 +24208,12 @@ fn differential_oracle_utc_datetime_formatting_and_idempotent_timestamps() {
     );
 
     // 3. Timestamps without Z suffix rejected and omitted
-    let ev_no_z = CalendarEvent {
-        created: Some("2026-09-05T10:00:00".to_owned()),
-        updated: Some("2026-09-05T12:30:00".to_owned()),
-        start: Some("2026-09-05T14:00:00Z".to_owned()),
-        ..CalendarEvent::default()
+    let ev_no_z = {
+        let mut event_out = CalendarEvent::default();
+        event_out.created = Some("2026-09-05T10:00:00".to_owned());
+        event_out.updated = Some("2026-09-05T12:30:00".to_owned());
+        event_out.start = Some("2026-09-05T14:00:00Z".to_owned());
+        event_out
     };
     let ics_no_z = event_to_ical(&ev_no_z);
     assert!(
@@ -24091,11 +24226,12 @@ fn differential_oracle_utc_datetime_formatting_and_idempotent_timestamps() {
     );
 
     // 4. Sub-second fractional timestamps rejected and omitted
-    let ev_frac = CalendarEvent {
-        created: Some("2026-09-05T10:00:00.123Z".to_owned()),
-        updated: Some("2026-09-05T12:30:00.456Z".to_owned()),
-        start: Some("2026-09-05T14:00:00Z".to_owned()),
-        ..CalendarEvent::default()
+    let ev_frac = {
+        let mut event_out = CalendarEvent::default();
+        event_out.created = Some("2026-09-05T10:00:00.123Z".to_owned());
+        event_out.updated = Some("2026-09-05T12:30:00.456Z".to_owned());
+        event_out.start = Some("2026-09-05T14:00:00Z".to_owned());
+        event_out
     };
     let ics_frac = event_to_ical(&ev_frac);
     assert!(
@@ -24123,12 +24259,13 @@ fn differential_oracle_all_day_multi_property_invariant_gating() {
     // Violating any invariant falls back to timed date-time representation.
 
     // 1. Baseline conforming all-day event emits VALUE=DATE
-    let valid_all_day = CalendarEvent {
-        show_without_time: Some(true),
-        time_zone: None,
-        start: Some("2026-09-05T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        ..CalendarEvent::default()
+    let valid_all_day = {
+        let mut event_out = CalendarEvent::default();
+        event_out.show_without_time = Some(true);
+        event_out.time_zone = None;
+        event_out.start = Some("2026-09-05T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out
     };
     let ics_valid = event_to_ical(&valid_all_day);
     assert!(
@@ -24137,12 +24274,13 @@ fn differential_oracle_all_day_multi_property_invariant_gating() {
     );
 
     // 2. Invariant 2 violation: timezone present forces timed representation
-    let tz_all_day = CalendarEvent {
-        show_without_time: Some(true),
-        time_zone: Some("Etc/UTC".to_owned()),
-        start: Some("2026-09-05T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        ..CalendarEvent::default()
+    let tz_all_day = {
+        let mut event_out = CalendarEvent::default();
+        event_out.show_without_time = Some(true);
+        event_out.time_zone = Some("Etc/UTC".to_owned());
+        event_out.start = Some("2026-09-05T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out
     };
     let ics_tz = event_to_ical(&tz_all_day);
     assert!(
@@ -24151,12 +24289,13 @@ fn differential_oracle_all_day_multi_property_invariant_gating() {
     );
 
     // 3. Invariant 3 violation: non-midnight start forces timed representation
-    let non_midnight = CalendarEvent {
-        show_without_time: Some(true),
-        time_zone: None,
-        start: Some("2026-09-05T09:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        ..CalendarEvent::default()
+    let non_midnight = {
+        let mut event_out = CalendarEvent::default();
+        event_out.show_without_time = Some(true);
+        event_out.time_zone = None;
+        event_out.start = Some("2026-09-05T09:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out
     };
     let ics_non_midnight = event_to_ical(&non_midnight);
     assert!(
@@ -24165,12 +24304,13 @@ fn differential_oracle_all_day_multi_property_invariant_gating() {
     );
 
     // 4. Invariant 4 violation: sub-day duration forces timed representation
-    let sub_day_dur = CalendarEvent {
-        show_without_time: Some(true),
-        time_zone: None,
-        start: Some("2026-09-05T00:00:00".to_owned()),
-        duration: Some("PT8H".to_owned()),
-        ..CalendarEvent::default()
+    let sub_day_dur = {
+        let mut event_out = CalendarEvent::default();
+        event_out.show_without_time = Some(true);
+        event_out.time_zone = None;
+        event_out.start = Some("2026-09-05T00:00:00".to_owned());
+        event_out.duration = Some("PT8H".to_owned());
+        event_out
     };
     let ics_sub_day = event_to_ical(&sub_day_dur);
     assert!(
@@ -24179,17 +24319,19 @@ fn differential_oracle_all_day_multi_property_invariant_gating() {
     );
 
     // 5. Invariant 5 violation: recurrence rule naming time of day forces timed representation
-    let rrule_time = CalendarEvent {
-        show_without_time: Some(true),
-        time_zone: None,
-        start: Some("2026-09-05T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_owned(),
-            by_hour: Some(vec![9]),
-            ..RecurrenceRule::default()
-        }),
-        ..CalendarEvent::default()
+    let rrule_time = {
+        let mut event_out = CalendarEvent::default();
+        event_out.show_without_time = Some(true);
+        event_out.time_zone = None;
+        event_out.start = Some("2026-09-05T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_owned();
+            __built.by_hour = Some(vec![9]);
+            __built
+        });
+        event_out
     };
     let ics_rrule_time = event_to_ical(&rrule_time);
     assert!(
@@ -24198,16 +24340,17 @@ fn differential_oracle_all_day_multi_property_invariant_gating() {
     );
 
     // 6. Invariant 6 violation: override instance with non-midnight start forces timed representation
-    let override_time = CalendarEvent {
-        show_without_time: Some(true),
-        time_zone: None,
-        start: Some("2026-09-05T00:00:00".to_owned()),
-        duration: Some("P1D".to_owned()),
-        recurrence_overrides: Some(BTreeMap::from([(
+    let override_time = {
+        let mut event_out = CalendarEvent::default();
+        event_out.show_without_time = Some(true);
+        event_out.time_zone = None;
+        event_out.start = Some("2026-09-05T00:00:00".to_owned());
+        event_out.duration = Some("P1D".to_owned());
+        event_out.recurrence_overrides = Some(BTreeMap::from([(
             "2026-09-06T00:00:00".to_owned(),
             json!({ "start": "2026-09-06T10:00:00" }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     let ics_override_time = event_to_ical(&override_time);
     assert!(
@@ -24944,13 +25087,14 @@ fn differential_oracle_fold_overlong_lines_utf8_and_escape_preservation() {
                      Café München ☕, alongside escaped characters like comma\\, semicolon\\; \
                      and backslashes\\\\ to verify line folding integrity.";
 
-    let event = CalendarEvent {
-        uid: Some("fold-test-120".to_owned()),
-        title: Some("Overlong Line Test".to_owned()),
-        description: Some(long_text.to_owned()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("fold-test-120".to_owned());
+        event_out.title = Some("Overlong Line Test".to_owned());
+        event_out.description = Some(long_text.to_owned());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
 
     let ics = event_to_ical(&event);
@@ -25006,12 +25150,13 @@ fn differential_oracle_fmttype_parameter_restricted_name_validation() {
         "href": "https://example.com/agenda.pdf",
         "contentType": "application/pdf"
     });
-    let event_valid = CalendarEvent {
-        uid: Some("link-valid-fmttype".to_owned()),
-        links: Some(BTreeMap::from([("l1".to_owned(), link_valid)])),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let event_valid = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("link-valid-fmttype".to_owned());
+        event_out.links = Some(BTreeMap::from([("l1".to_owned(), link_valid)]));
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let ics_valid = event_to_ical(&event_valid);
     assert!(
@@ -25027,12 +25172,13 @@ fn differential_oracle_fmttype_parameter_restricted_name_validation() {
         "href": "https://example.com/calendar.ics",
         "contentType": "text/calendar; charset=utf-8"
     });
-    let event_param = CalendarEvent {
-        uid: Some("link-param-fmttype".to_owned()),
-        links: Some(BTreeMap::from([("l2".to_owned(), link_param)])),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let event_param = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("link-param-fmttype".to_owned());
+        event_out.links = Some(BTreeMap::from([("l2".to_owned(), link_param)]));
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let ics_param = event_to_ical(&event_param);
     assert!(
@@ -25109,18 +25255,19 @@ fn differential_oracle_participant_roles_precedence_hierarchy_and_owner_omission
         "roles": {"owner": true}
     });
 
-    let event = CalendarEvent {
-        uid: Some("participant-roles-122".to_owned()),
-        participants: Some(BTreeMap::from([
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("participant-roles-122".to_owned());
+        event_out.participants = Some(BTreeMap::from([
             ("p1".to_owned(), p_chair),
             ("p2".to_owned(), p_info),
             ("p3".to_owned(), p_opt),
             ("p4".to_owned(), p_req),
             ("p5".to_owned(), p_owner),
-        ])),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+        ]));
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
 
     let ics = event_to_ical(&event);
@@ -25497,21 +25644,22 @@ fn differential_oracle_instance_shows_without_time_all_day_override_invariants()
     //    or custom timezone), instance_shows_without_time returns false, elevating the entire
     //    event to timed date-time representation (DATE-TIME without VALUE=DATE).
 
-    let event = CalendarEvent {
-        id: Some("allday-series-128".into()),
-        start: Some("2026-09-01T00:00:00".to_owned()),
-        show_without_time: Some(true),
-        duration: Some("P1D".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("daily")),
-        recurrence_overrides: Some(
+    let event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("allday-series-128".into());
+        event_out.start = Some("2026-09-01T00:00:00".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.duration = Some("P1D".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("daily"));
+        event_out.recurrence_overrides = Some(
             serde_json::from_value(json!({
                 "2026-09-02T00:00:00": {
                     "title": "All-Day Override"
                 }
             }))
             .unwrap(),
-        ),
-        ..Default::default()
+        );
+        event_out
     };
 
     let ics = event_to_ical(&event);
@@ -25590,12 +25738,13 @@ fn differential_oracle_maps_override_field_scoping_and_empty_property_refusal() 
     //    alerts: {}) are refused because they serialize as absent lines, returning null on read.
     // 4. When series uses default alerts, setting alerts on an override is refused.
 
-    let series = CalendarEvent {
-        id: Some("series-scoping-129".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("daily")),
-        time_zones: Some(BTreeMap::from([(
+    let series = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("series-scoping-129".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("daily"));
+        event_out.time_zones = Some(BTreeMap::from([(
             "/custom/zone-129".to_owned(),
             json!({
                 "@type": "TimeZone",
@@ -25607,8 +25756,8 @@ fn differential_oracle_maps_override_field_scoping_and_empty_property_refusal() 
                     "offsetTo": "+01:00"
                 }]
             }),
-        )])),
-        ..Default::default()
+        )]));
+        event_out
     };
 
     let id = "2026-09-02T10:00:00";
@@ -25955,16 +26104,17 @@ fn differential_oracle_drawn_time_zones_all_day_suppression_and_dual_key_solidus
     });
 
     // 1. All-day event suppresses VTIMEZONE emission even when custom time_zones is present
-    let allday_event = CalendarEvent {
-        id: Some("allday-tz-133".into()),
-        start: Some("2026-09-01T00:00:00".to_owned()),
-        show_without_time: Some(true),
-        duration: Some("P1D".to_owned()),
-        time_zones: Some(BTreeMap::from([(
+    let allday_event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("allday-tz-133".into());
+        event_out.start = Some("2026-09-01T00:00:00".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.duration = Some("P1D".to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(
             "/custom/corp-tz-133".to_owned(),
             custom_def.clone(),
-        )])),
-        ..Default::default()
+        )]));
+        event_out
     };
     let ics_allday = event_to_ical(&allday_event);
     assert!(ics_allday.contains("DTSTART;VALUE=DATE:20260901"));
@@ -25974,12 +26124,13 @@ fn differential_oracle_drawn_time_zones_all_day_suppression_and_dual_key_solidus
     );
 
     // 2. Standard IANA zone emits TZID on DTSTART but omits VTIMEZONE block
-    let iana_event = CalendarEvent {
-        id: Some("iana-tz-133".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..Default::default()
+    let iana_event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("iana-tz-133".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let ics_iana = event_to_ical(&iana_event);
     assert!(ics_iana.contains("DTSTART;TZID=Europe/Berlin:20260901T100000"));
@@ -25989,25 +26140,26 @@ fn differential_oracle_drawn_time_zones_all_day_suppression_and_dual_key_solidus
     );
 
     // 3. Custom solidus timezone with dual-key storage (key without leading slash) resolves via definition_of
-    let unslashed_key_event = CalendarEvent {
-        id: Some("unslashed-key-133".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("/custom/corp-tz-133".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("daily")),
-        recurrence_overrides: Some(
+    let unslashed_key_event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("unslashed-key-133".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("/custom/corp-tz-133".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("daily"));
+        event_out.recurrence_overrides = Some(
             serde_json::from_value(json!({
                 "2026-09-02T10:00:00": {
                     "timeZone": "/custom/corp-tz-133"
                 }
             }))
             .unwrap(),
-        ),
-        time_zones: Some(BTreeMap::from([(
+        );
+        event_out.time_zones = Some(BTreeMap::from([(
             "custom/corp-tz-133".to_owned(),
             custom_def,
-        )])),
-        ..Default::default()
+        )]));
+        event_out
     };
     let ics_custom = event_to_ical(&unslashed_key_event);
     assert!(ics_custom.contains("DTSTART;TZID=/custom/corp-tz-133:20260901T100000"));
@@ -26035,13 +26187,14 @@ fn differential_oracle_vevent_of_recurrence_id_series_zone_clock_alignment() {
     //    even if the detached override specifies a zoned DTSTART.
 
     // 1. Zoned series with override moved to different timezone
-    let series_event = CalendarEvent {
-        id: Some("series-clock-134".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("America/New_York".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("daily")),
-        recurrence_overrides: Some(
+    let series_event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("series-clock-134".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("America/New_York".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("daily"));
+        event_out.recurrence_overrides = Some(
             serde_json::from_value(json!({
                 "2026-09-02T10:00:00": {
                     "start": "2026-09-02T16:00:00",
@@ -26049,8 +26202,8 @@ fn differential_oracle_vevent_of_recurrence_id_series_zone_clock_alignment() {
                 }
             }))
             .unwrap(),
-        ),
-        ..Default::default()
+        );
+        event_out
     };
 
     let ics_zoned = event_to_ical(&series_event);
@@ -26064,13 +26217,14 @@ fn differential_oracle_vevent_of_recurrence_id_series_zone_clock_alignment() {
     );
 
     // 2. Floating series (no timezone) with override moved into a timezone
-    let floating_series = CalendarEvent {
-        id: Some("floating-series-134".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: None,
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("daily")),
-        recurrence_overrides: Some(
+    let floating_series = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("floating-series-134".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = None;
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("daily"));
+        event_out.recurrence_overrides = Some(
             serde_json::from_value(json!({
                 "2026-09-02T10:00:00": {
                     "start": "2026-09-02T10:00:00",
@@ -26078,8 +26232,8 @@ fn differential_oracle_vevent_of_recurrence_id_series_zone_clock_alignment() {
                 }
             }))
             .unwrap(),
-        ),
-        ..Default::default()
+        );
+        event_out
     };
 
     let ics_floating = event_to_ical(&floating_series);
@@ -26193,12 +26347,13 @@ fn differential_oracle_drawn_link_and_read_links_image_vs_attach_parameter_disjo
     // mandatory VALUE=URI on IMAGE vs default omission on ATTACH,
     // parameter disjointness (DISPLAY on IMAGE, SIZE on ATTACH), and unsigned integer size validation.
 
-    let ev = CalendarEvent {
-        id: Some("link-disjointness-136".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        links: Some(BTreeMap::from([
+    let ev = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("link-disjointness-136".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.links = Some(BTreeMap::from([
             (
                 "k1".to_owned(),
                 json!({
@@ -26228,8 +26383,8 @@ fn differential_oracle_drawn_link_and_read_links_image_vs_attach_parameter_disjo
                     "size": -50
                 }),
             ),
-        ])),
-        ..Default::default()
+        ]));
+        event_out
     };
 
     let ics = event_to_ical(&ev);
@@ -26370,12 +26525,13 @@ fn differential_oracle_spelled_participation_statuses_closed_vocabulary_and_set_
     // PARTICIPATION_STATUSES closed 5-state vocabulary mapping,
     // spelled Set vs String resolution, case insensitivity, and non-event status rejection.
 
-    let ev = CalendarEvent {
-        id: Some("partstat-139".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        participants: Some(BTreeMap::from([
+    let ev = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("partstat-139".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.participants = Some(BTreeMap::from([
             (
                 "p1".to_owned(),
                 json!({
@@ -26436,8 +26592,8 @@ fn differential_oracle_spelled_participation_statuses_closed_vocabulary_and_set_
                     "participationStatus": "completed"
                 }),
             ),
-        ])),
-        ..Default::default()
+        ]));
+        event_out
     };
 
     let ics = event_to_ical(&ev);
@@ -26479,19 +26635,20 @@ fn differential_oracle_drawn_place_single_location_filter_and_multi_location_sup
     // and inbound LOCATION extraction with X-JMAP-KEY preservation.
 
     // 1. Single valid location: serializes to LOCATION with X-JMAP-KEY
-    let single_loc_event = CalendarEvent {
-        id: Some("loc-single-140".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        locations: Some(BTreeMap::from([(
+    let single_loc_event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("loc-single-140".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.locations = Some(BTreeMap::from([(
             "loc1".to_owned(),
             json!({
                 "@type": "Location",
                 "name": "Conference Room Alpha"
             }),
-        )])),
-        ..Default::default()
+        )]));
+        event_out
     };
     assert!(maps_locations(single_loc_event.locations.as_ref().unwrap()));
 
@@ -26504,12 +26661,13 @@ fn differential_oracle_drawn_place_single_location_filter_and_multi_location_sup
 
     // 2. Multi-location: drawn_place draws first named location in map order,
     // but maps_locations returns false to prevent save overwriting server map.
-    let multi_loc_event = CalendarEvent {
-        id: Some("loc-multi-140".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        locations: Some(BTreeMap::from([
+    let multi_loc_event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("loc-multi-140".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.locations = Some(BTreeMap::from([
             (
                 "loc1".to_owned(),
                 json!({
@@ -26524,8 +26682,8 @@ fn differential_oracle_drawn_place_single_location_filter_and_multi_location_sup
                     "name": "Room B Overflow"
                 }),
             ),
-        ])),
-        ..Default::default()
+        ]));
+        event_out
     };
     assert!(
         !maps_locations(multi_loc_event.locations.as_ref().unwrap()),
@@ -26544,19 +26702,20 @@ fn differential_oracle_drawn_place_single_location_filter_and_multi_location_sup
     );
 
     // 3. Location with empty string name is skipped by place_name filter
-    let empty_loc_event = CalendarEvent {
-        id: Some("loc-empty-140".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        locations: Some(BTreeMap::from([(
+    let empty_loc_event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("loc-empty-140".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.locations = Some(BTreeMap::from([(
             "loc_empty".to_owned(),
             json!({
                 "@type": "Location",
                 "name": ""
             }),
-        )])),
-        ..Default::default()
+        )]));
+        event_out
     };
     let empty_ics = event_to_ical(&empty_loc_event);
     assert!(
@@ -26582,12 +26741,13 @@ fn differential_oracle_drawn_conferences_mandatory_value_uri_and_feature_extract
     // mandatory VALUE=URI parameter, multi-feature parameter extraction in canonical order,
     // and X-JMAP-KEY round-trip identity preservation.
 
-    let ev = CalendarEvent {
-        id: Some("conf-141".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        virtual_locations: Some(BTreeMap::from([
+    let ev = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("conf-141".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.virtual_locations = Some(BTreeMap::from([
             (
                 "v1".to_owned(),
                 json!({
@@ -26622,8 +26782,8 @@ fn differential_oracle_drawn_conferences_mandatory_value_uri_and_feature_extract
                     "name": "Bad Endpoint"
                 }),
             ),
-        ])),
-        ..Default::default()
+        ]));
+        event_out
     };
 
     let ics = event_to_ical(&ev);
@@ -26698,13 +26858,14 @@ fn differential_oracle_drawn_alert_display_summary_injection_and_default_alerts_
     // ACTION:DISPLAY requirement, event title summary injection into DESCRIPTION,
     // useDefaultAlerts suppression, and unsupported trigger rejection.
 
-    let ev = CalendarEvent {
-        id: Some("alert-142".into()),
-        title: Some("Quarterly Review".to_owned()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        alerts: Some(BTreeMap::from([
+    let ev = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("alert-142".into());
+        event_out.title = Some("Quarterly Review".to_owned());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.alerts = Some(BTreeMap::from([
             (
                 "alert1".to_owned(),
                 json!({
@@ -26751,8 +26912,8 @@ fn differential_oracle_drawn_alert_display_summary_injection_and_default_alerts_
                     }
                 }),
             ),
-        ])),
-        ..Default::default()
+        ]));
+        event_out
     };
 
     let ics = event_to_ical(&ev);
@@ -26823,16 +26984,17 @@ fn differential_oracle_status_transparency_privacy_and_priority_closed_vocabular
     // and invalid/out-of-range token rejection.
 
     // 1. Outbound emission of canonical tokens
-    let ev = CalendarEvent {
-        id: Some("vocab-143".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        status: Some("confirmed".to_owned()),
-        free_busy_status: Some("busy".to_owned()),
-        privacy: Some("secret".to_owned()),
-        priority: Some(3),
-        ..Default::default()
+    let ev = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("vocab-143".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.status = Some("confirmed".to_owned());
+        event_out.free_busy_status = Some("busy".to_owned());
+        event_out.privacy = Some("secret".to_owned());
+        event_out.priority = Some(3);
+        event_out
     };
 
     let ics = event_to_ical(&ev);
@@ -26849,16 +27011,17 @@ fn differential_oracle_status_transparency_privacy_and_priority_closed_vocabular
     assert!(unfolded.contains("PRIORITY:3"));
 
     // 2. Outbound with free and private
-    let ev2 = CalendarEvent {
-        id: Some("vocab-free-143".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        status: Some("cancelled".to_owned()),
-        free_busy_status: Some("free".to_owned()),
-        privacy: Some("private".to_owned()),
-        priority: Some(9),
-        ..Default::default()
+    let ev2 = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("vocab-free-143".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.status = Some("cancelled".to_owned());
+        event_out.free_busy_status = Some("free".to_owned());
+        event_out.privacy = Some("private".to_owned());
+        event_out.priority = Some(9);
+        event_out
     };
     let ics2 = event_to_ical(&ev2);
     let unfolded2 = ics2.replace("\r\n ", "").replace("\r\n\t", "");
@@ -26871,16 +27034,17 @@ fn differential_oracle_status_transparency_privacy_and_priority_closed_vocabular
     assert!(unfolded2.contains("PRIORITY:9"));
 
     // 3. Outbound unmodeled tokens are omitted
-    let ev_invalid = CalendarEvent {
-        id: Some("vocab-invalid-143".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("UTC".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        status: Some("unknown_status".to_owned()),
-        free_busy_status: Some("tentative".to_owned()),
-        privacy: Some("confidential".to_owned()),
-        priority: Some(15),
-        ..Default::default()
+    let ev_invalid = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("vocab-invalid-143".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.status = Some("unknown_status".to_owned());
+        event_out.free_busy_status = Some("tentative".to_owned());
+        event_out.privacy = Some("confidential".to_owned());
+        event_out.priority = Some(15);
+        event_out
     };
     let ics_invalid = event_to_ical(&ev_invalid);
     assert!(!ics_invalid.contains("STATUS"));
@@ -26960,11 +27124,12 @@ fn differential_oracle_prune_time_zones_override_auditing_and_dual_key_matching(
         }]
     });
 
-    let mut ev = CalendarEvent {
-        id: Some("prune-144".into()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        recurrence_overrides: Some(
+    let mut ev = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("prune-144".into());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.recurrence_overrides = Some(
             [
                 (
                     "2026-09-08T10:00:00".to_owned(),
@@ -26980,16 +27145,16 @@ fn differential_oracle_prune_time_zones_override_auditing_and_dual_key_matching(
                 ),
             ]
             .into(),
-        ),
-        time_zones: Some(
+        );
+        event_out.time_zones = Some(
             [
                 (custom_tz1.to_owned(), dummy_zone_def.clone()),
                 (unused_tz.to_owned(), dummy_zone_def.clone()),
                 ("example.com/prefix-zone".to_owned(), dummy_zone_def.clone()),
             ]
             .into(),
-        ),
-        ..Default::default()
+        );
+        event_out
     };
 
     assert_eq!(ev.time_zones.as_ref().map(BTreeMap::len), Some(3));
@@ -27164,24 +27329,27 @@ fn differential_oracle_unstateable_until_endpoint_isolation_and_error_decoupling
     // Compared with Stalwart's own CalendarEvent/parse:
     // unstateable_until diagnostic isolation: extracts unstateable UNTIL timestamps without
     // conflating them with other recurrence rule structural errors.
-    let valid_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("2026-10-15T10:00:00".to_string()),
-        ..Default::default()
+    let valid_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("2026-10-15T10:00:00".to_string());
+        __built
     };
     assert_eq!(unstateable_until(&valid_rule), None);
 
-    let no_until_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: None,
-        ..Default::default()
+    let no_until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = None;
+        __built
     };
     assert_eq!(unstateable_until(&no_until_rule), None);
 
-    let invalid_until_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("not-a-valid-datetime".to_string()),
-        ..Default::default()
+    let invalid_until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("not-a-valid-datetime".to_string());
+        __built
     };
     assert_eq!(
         unstateable_until(&invalid_until_rule),
@@ -27190,11 +27358,12 @@ fn differential_oracle_unstateable_until_endpoint_isolation_and_error_decoupling
 
     // If a rule is refused for structural reasons (e.g. invalid byMonth component)
     // but until is valid, unstateable_until returns None, preserving error isolation.
-    let bad_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("2026-10-15T10:00:00".to_string()),
-        by_month: Some(vec!["13".to_string()]),
-        ..Default::default()
+    let bad_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("2026-10-15T10:00:00".to_string());
+        __built.by_month = Some(vec!["13".to_string()]);
+        __built
     };
     assert!(!maps_recurrence_rule(&bad_rule));
     assert_eq!(unstateable_until(&bad_rule), None);
@@ -27206,11 +27375,12 @@ fn differential_oracle_rrule_entry_synthetic_envelope_parsing_and_syntax_verific
     // rrule_entry and Parser::entry synthetic component envelope AST parsing: validates serialized
     // recurrence rules through synthetic component envelope AST parsing before emission.
     let mut ev = fixture_event();
-    ev.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_string(),
-        interval: Some(2),
-        count: Some(5),
-        ..Default::default()
+    ev.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.interval = Some(2);
+        __built.count = Some(5);
+        __built
     });
 
     let ics = event_to_ical(&ev);
@@ -27391,13 +27561,14 @@ fn differential_oracle_shows_without_time_all_day_gating_and_override_consistenc
     // Midnight Alignment, Whole-Day Duration Verification, and Override Consistency.
 
     // 1. Valid all-day event: show_without_time=true, no timezone, start at midnight, duration P1D
-    let ev = CalendarEvent {
-        uid: Some("all-day-valid-152".to_owned()),
-        title: Some("All Day Meeting".to_owned()),
-        start: Some("2026-06-01T00:00:00".to_owned()),
-        show_without_time: Some(true),
-        duration: Some("P1D".to_owned()),
-        ..CalendarEvent::default()
+    let ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("all-day-valid-152".to_owned());
+        event_out.title = Some("All Day Meeting".to_owned());
+        event_out.start = Some("2026-06-01T00:00:00".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.duration = Some("P1D".to_owned());
+        event_out
     };
 
     let ics = event_to_ical(&ev);
@@ -27443,10 +27614,11 @@ fn differential_oracle_shows_without_time_all_day_gating_and_override_consistenc
 
     // 5. Recurrence rule with time-of-day part (BYHOUR) falls back to timed representation
     let mut ev_rrule_hour = ev.clone();
-    ev_rrule_hour.recurrence_rule = Some(RecurrenceRule {
-        frequency: "DAILY".to_owned(),
-        by_hour: Some(vec![10]),
-        ..RecurrenceRule::default()
+    ev_rrule_hour.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "DAILY".to_owned();
+        __built.by_hour = Some(vec![10]);
+        __built
     });
     let ics_rh = event_to_ical(&ev_rrule_hour);
     assert!(
@@ -27830,12 +28002,13 @@ fn differential_oracle_drawn_participants_single_organizer_and_dual_role_attenda
     // drawn_participants, holds_role, and calendar_address: Single Primary ORGANIZER Emission (RFC 5545 section 3.6.1),
     // Dual Role Attendance Gating (owns && role.is_some()), IMIP URI Scheme Validation, and Parameter Synthesis.
 
-    let mut event = CalendarEvent {
-        uid: Some("part-event-156".to_owned()),
-        title: Some("Board Meeting".to_owned()),
-        start: Some("2026-08-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let mut event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("part-event-156".to_owned());
+        event_out.title = Some("Board Meeting".to_owned());
+        event_out.start = Some("2026-08-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
 
     let mut participants = std::collections::BTreeMap::new();
@@ -28142,14 +28315,15 @@ fn differential_oracle_component_ast_serialization_crlf_and_empty_param_suppress
     // Component AST Serialization: Canonical CRLF Envelope Delimitation, Empty Parameter Suppression,
     // Standard vs Non-Standard Parameter/Property Token Preservation, and Recursive Subcomponent Hierarchy.
 
-    let mut event = CalendarEvent {
-        uid: Some("ast-ser-159".to_owned()),
-        title: Some("Serialization Architecture Review".to_owned()),
-        description: Some("Reviewing CRLF and AST hierarchy".to_owned()),
-        start: Some("2026-09-01T09:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        priority: Some(2),
-        ..CalendarEvent::default()
+    let mut event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("ast-ser-159".to_owned());
+        event_out.title = Some("Serialization Architecture Review".to_owned());
+        event_out.description = Some("Reviewing CRLF and AST hierarchy".to_owned());
+        event_out.start = Some("2026-09-01T09:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.priority = Some(2);
+        event_out
     };
 
     let mut alerts = std::collections::BTreeMap::new();
@@ -28235,26 +28409,29 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     // Ordinal Zero Refusal, Signed Prefix Parsing (+3TU), and Extension Rejection.
 
     // 1. Ordinal permitted on monthly rule
-    let monthly_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "mo".to_owned(),
-            nth_of_period: Some(2),
-            ..NDay::default()
-        }]),
-        ..RecurrenceRule::default()
+    let monthly_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "mo".to_owned();
+            nday.nth_of_period = Some(2);
+            nday
+        }]);
+        __built
     };
     assert!(
         maps_recurrence_rule(&monthly_rule),
         "ordinal on monthly frequency is permitted"
     );
-    let ev_monthly = CalendarEvent {
-        uid: Some("byday-monthly-160".to_owned()),
-        title: Some("Monthly Second Monday".to_owned()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(monthly_rule),
-        ..CalendarEvent::default()
+    let ev_monthly = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("byday-monthly-160".to_owned());
+        event_out.title = Some("Monthly Second Monday".to_owned());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(monthly_rule);
+        event_out
     };
     let ics_monthly = event_to_ical(&ev_monthly);
     assert!(
@@ -28263,26 +28440,29 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     );
 
     // 2. Ordinal permitted on yearly rule
-    let yearly_rule = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "fr".to_owned(),
-            nth_of_period: Some(-1),
-            ..NDay::default()
-        }]),
-        ..RecurrenceRule::default()
+    let yearly_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_day = Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "fr".to_owned();
+            nday.nth_of_period = Some(-1);
+            nday
+        }]);
+        __built
     };
     assert!(
         maps_recurrence_rule(&yearly_rule),
         "ordinal on yearly frequency is permitted"
     );
-    let ev_yearly = CalendarEvent {
-        uid: Some("byday-yearly-160".to_owned()),
-        title: Some("Yearly Last Friday".to_owned()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(yearly_rule),
-        ..CalendarEvent::default()
+    let ev_yearly = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("byday-yearly-160".to_owned());
+        event_out.title = Some("Yearly Last Friday".to_owned());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(yearly_rule);
+        event_out
     };
     let ics_yearly = event_to_ical(&ev_yearly);
     assert!(
@@ -28291,26 +28471,29 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     );
 
     // 3. Ordinal strictly refused on weekly rule per RFC 5545 section 3.3.10
-    let weekly_rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "mo".to_owned(),
-            nth_of_period: Some(1),
-            ..NDay::default()
-        }]),
-        ..RecurrenceRule::default()
+    let weekly_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.by_day = Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "mo".to_owned();
+            nday.nth_of_period = Some(1);
+            nday
+        }]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&weekly_rule),
         "ordinal on weekly frequency is refused per RFC 5545 section 3.3.10"
     );
-    let ev_weekly = CalendarEvent {
-        uid: Some("byday-weekly-160".to_owned()),
-        title: Some("Invalid Weekly Ordinal".to_owned()),
-        start: Some("2026-09-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(weekly_rule),
-        ..CalendarEvent::default()
+    let ev_weekly = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("byday-weekly-160".to_owned());
+        event_out.title = Some("Invalid Weekly Ordinal".to_owned());
+        event_out.start = Some("2026-09-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(weekly_rule);
+        event_out
     };
     let ics_weekly = event_to_ical(&ev_weekly);
     assert!(
@@ -28319,14 +28502,16 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     );
 
     // 4. Ordinal zero is refused
-    let zero_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "tu".to_owned(),
-            nth_of_period: Some(0),
-            ..NDay::default()
-        }]),
-        ..RecurrenceRule::default()
+    let zero_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "tu".to_owned();
+            nday.nth_of_period = Some(0);
+            nday
+        }]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_rule), "ordinal zero is refused");
 
@@ -28356,15 +28541,17 @@ fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
     // 6. Day extra properties cause refusal
     let mut extra_map = std::collections::BTreeMap::new();
     extra_map.insert("vendor".to_owned(), serde_json::Value::Bool(true));
-    let extra_rule = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            day: "we".to_owned(),
-            nth_of_period: Some(1),
-            extra: extra_map,
-            ..NDay::default()
-        }]),
-        ..RecurrenceRule::default()
+    let extra_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![{
+            let mut nday = NDay::default();
+            nday.day = "we".to_owned();
+            nday.nth_of_period = Some(1);
+            nday.extra = extra_map;
+            nday
+        }]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&extra_rule),
@@ -28570,30 +28757,26 @@ fn differential_oracle_freebusy_envelope_and_window_demarcation() {
     let window_end = UtcDate::new("2026-09-01T18:00:00Z");
 
     let periods = vec![
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T09:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T10:00:00Z"),
-            busy_status: "tentative".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T11:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T12:00:00Z"),
-            busy_status: "unavailable".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T14:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T15:00:00Z"),
-            busy_status: "confirmed".to_owned(),
-            event: None,
-        },
-        BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T16:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T17:00:00Z"),
-            busy_status: "unknown-future-type".to_owned(),
-            event: None,
-        },
+        BusyPeriod::new(
+            UtcDate::new("2026-09-01T09:00:00Z"),
+            UtcDate::new("2026-09-01T10:00:00Z"),
+            "tentative".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-01T11:00:00Z"),
+            UtcDate::new("2026-09-01T12:00:00Z"),
+            "unavailable".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-01T14:00:00Z"),
+            UtcDate::new("2026-09-01T15:00:00Z"),
+            "confirmed".to_owned(),
+        ),
+        BusyPeriod::new(
+            UtcDate::new("2026-09-01T16:00:00Z"),
+            UtcDate::new("2026-09-01T17:00:00Z"),
+            "unknown-future-type".to_owned(),
+        ),
     ];
 
     // 1. Bare VFREEBUSY component envelope
@@ -28655,12 +28838,11 @@ fn differential_oracle_freebusy_envelope_and_window_demarcation() {
         "refuses component whole on unreadable window start"
     );
 
-    let bad_period = BusyPeriod {
-        utc_start: UtcDate::new("not-a-utc-date"),
-        utc_end: UtcDate::new("2026-09-01T10:00:00Z"),
-        busy_status: "confirmed".to_owned(),
-        event: None,
-    };
+    let bad_period = BusyPeriod::new(
+        UtcDate::new("not-a-utc-date"),
+        UtcDate::new("2026-09-01T10:00:00Z"),
+        "confirmed".to_owned(),
+    );
     assert!(
         busy_periods_to_vfreebusy(
             "user@example.com",
@@ -29530,10 +29712,11 @@ fn differential_oracle_drawn_links_image_attach_media_type_and_size() {
     // and RFC 7986 Section 5.10 IMAGE), Mandatory VALUE=URI for IMAGE, Default URI Omission for ATTACH,
     // Media Type RFC 6838 Restricted Name Validation, and Stable X-JMAP-KEY Preservation.
 
-    let mut event = CalendarEvent {
-        uid: Some("links-173".to_string()),
-        start: Some("2026-09-01T10:00:00".to_string()),
-        ..CalendarEvent::default()
+    let mut event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("links-173".to_string());
+        event_out.start = Some("2026-09-01T10:00:00".to_string());
+        event_out
     };
 
     let mut links = BTreeMap::new();
@@ -29608,20 +29791,22 @@ fn differential_oracle_recurrence_set_position_and_wkst_default_handling() {
     // Default Monday Suppression (WKST=MO Omission for Libical/EDS Cache Stability), and Strict Lowercase Weekday Parsing.
 
     // 1. BYSETPOS with set selector (BYDAY) -> emitted cleanly
-    let rule_with_set = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_day: Some(vec![NDay::new("mo"), NDay::new("fr")]),
-        by_set_position: Some(vec![1, -1]),
-        first_day_of_week: Some("su".to_string()),
-        ..RecurrenceRule::default()
+    let rule_with_set = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo"), NDay::new("fr")]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built.first_day_of_week = Some("su".to_string());
+        __built
     };
     assert!(maps_recurrence_rule(&rule_with_set));
 
-    let event_with_set = CalendarEvent {
-        uid: Some("rrule-174-a".to_string()),
-        start: Some("2026-09-01T10:00:00".to_string()),
-        recurrence_rule: Some(rule_with_set),
-        ..CalendarEvent::default()
+    let event_with_set = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("rrule-174-a".to_string());
+        event_out.start = Some("2026-09-01T10:00:00".to_string());
+        event_out.recurrence_rule = Some(rule_with_set);
+        event_out
     };
     let ics_set = event_to_ical(&event_with_set);
     let rrule_line = content_line(&ics_set, "RRULE:");
@@ -29629,52 +29814,58 @@ fn differential_oracle_recurrence_set_position_and_wkst_default_handling() {
     assert!(rrule_line.contains("WKST=SU"));
 
     // 2. BYSETPOS WITHOUT set selector (no BYDAY, BYMONTHDAY, etc.) -> omitted per RFC 5545 Section 3.3.10
-    let rule_without_set = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_set_position: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let rule_without_set = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_set_position = Some(vec![1]);
+        __built
     };
-    let event_no_set = CalendarEvent {
-        uid: Some("rrule-174-b".to_string()),
-        start: Some("2026-09-01T10:00:00".to_string()),
-        recurrence_rule: Some(rule_without_set),
-        ..CalendarEvent::default()
+    let event_no_set = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("rrule-174-b".to_string());
+        event_out.start = Some("2026-09-01T10:00:00".to_string());
+        event_out.recurrence_rule = Some(rule_without_set);
+        event_out
     };
     let ics_no_set = event_to_ical(&event_no_set);
     let rrule_line_b = content_line(&ics_no_set, "RRULE:");
     assert!(!rrule_line_b.contains("BYSETPOS="));
 
     // 3. BYSETPOS = 0 is invalid and rejected
-    let rule_zero_pos = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_day: Some(vec![NDay::new("mo")]),
-        by_set_position: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let rule_zero_pos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built.by_set_position = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&rule_zero_pos));
 
     // 4. Default Monday week start (WKST=MO) is suppressed on outbound emission
-    let rule_monday_wkst = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("mo".to_string()),
-        ..RecurrenceRule::default()
+    let rule_monday_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("mo".to_string());
+        __built
     };
     assert!(maps_recurrence_rule(&rule_monday_wkst));
-    let event_monday = CalendarEvent {
-        uid: Some("rrule-174-c".to_string()),
-        start: Some("2026-09-01T10:00:00".to_string()),
-        recurrence_rule: Some(rule_monday_wkst),
-        ..CalendarEvent::default()
+    let event_monday = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("rrule-174-c".to_string());
+        event_out.start = Some("2026-09-01T10:00:00".to_string());
+        event_out.recurrence_rule = Some(rule_monday_wkst);
+        event_out
     };
     let ics_monday = event_to_ical(&event_monday);
     let rrule_line_c = content_line(&ics_monday, "RRULE:");
     assert!(!rrule_line_c.contains("WKST="));
 
     // 5. Non-lowercase or invalid weekday token is rejected
-    let rule_invalid_wkst = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("MO".to_string()),
-        ..RecurrenceRule::default()
+    let rule_invalid_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("MO".to_string());
+        __built
     };
     assert!(!maps_recurrence_rule(&rule_invalid_wkst));
 }
@@ -29688,18 +29879,20 @@ fn differential_oracle_modified_instances_override_expansion_and_dated_types() {
     // Suppression (EXDATE Chronological Emission), Granular Patch Application (Title, Description, Duration, Status,
     // FreeBusyStatus, Privacy, Priority Nullification, Keywords/Alerts Replacement), and Unified Date/DateTime Serialization.
 
-    let mut series = CalendarEvent {
-        uid: Some("series-175".to_string()),
-        title: Some("Team Sync".to_string()),
-        start: Some("2026-09-01T09:00:00".to_string()),
-        time_zone: Some("Etc/UTC".to_string()),
-        duration: Some("PT30M".to_string()),
-        priority: Some(3),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".to_string(),
-            ..RecurrenceRule::default()
-        }),
-        ..CalendarEvent::default()
+    let mut series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("series-175".to_string());
+        event_out.title = Some("Team Sync".to_string());
+        event_out.start = Some("2026-09-01T09:00:00".to_string());
+        event_out.time_zone = Some("Etc/UTC".to_string());
+        event_out.duration = Some("PT30M".to_string());
+        event_out.priority = Some(3);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_string();
+            __built
+        });
+        event_out
     };
 
     let mut overrides = BTreeMap::new();
@@ -29735,17 +29928,19 @@ fn differential_oracle_modified_instances_override_expansion_and_dated_types() {
     assert!(!ics.contains("RECURRENCE-ID:20260915T090000Z"));
 
     // Verify all-day dated formatting for show_without_time
-    let mut all_day_series = CalendarEvent {
-        uid: Some("all-day-175".to_string()),
-        title: Some("Company Holiday".to_string()),
-        start: Some("2026-10-01T00:00:00".to_string()),
-        duration: Some("P1D".to_string()),
-        show_without_time: Some(true),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "yearly".to_string(),
-            ..RecurrenceRule::default()
-        }),
-        ..CalendarEvent::default()
+    let mut all_day_series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("all-day-175".to_string());
+        event_out.title = Some("Company Holiday".to_string());
+        event_out.start = Some("2026-10-01T00:00:00".to_string());
+        event_out.duration = Some("P1D".to_string());
+        event_out.show_without_time = Some(true);
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "yearly".to_string();
+            __built
+        });
+        event_out
     };
     let mut all_day_overrides = BTreeMap::new();
     all_day_overrides.insert(
@@ -30407,20 +30602,22 @@ fn differential_oracle_all_day_invariants_and_time_of_day_prohibition() {
     assert!(!jmap_ical::event::is_utc("GMT"));
 
     // 4. names_a_time_of_day helper: checks if rule specifies BYHOUR, BYMINUTE, or BYSECOND
-    let rule_subday = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_hour: Some(vec![9, 17]),
-        ..RecurrenceRule::default()
+    let rule_subday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_hour = Some(vec![9, 17]);
+        __built
     };
     assert!(
         jmap_ical::event::names_a_time_of_day(&rule_subday),
         "rule naming BYHOUR carries time of day"
     );
 
-    let rule_day_only = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_day: Some(vec![NDay::new("mo"), NDay::new("we")]),
-        ..RecurrenceRule::default()
+    let rule_day_only = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo"), NDay::new("we")]);
+        __built
     };
     assert!(
         !jmap_ical::event::names_a_time_of_day(&rule_day_only),
@@ -30471,9 +30668,10 @@ fn differential_oracle_custom_timezone_resolution_and_fallback() {
     assert!(jmap_ical::event::definition_of(&definitions, "/nonexistent").is_none());
 
     // 2. defines_time_zone: requires solidus prefix and redrawable VTIMEZONE definition
-    let valid_event = CalendarEvent {
-        time_zones: Some(definitions.clone()),
-        ..CalendarEvent::default()
+    let valid_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zones = Some(definitions.clone());
+        event_out
     };
     assert!(jmap_ical::event::defines_time_zone(
         &valid_event,
@@ -30492,9 +30690,10 @@ fn differential_oracle_custom_timezone_resolution_and_fallback() {
     // Empty observances definition cannot be drawn whole
     let mut bad_defs = BTreeMap::new();
     bad_defs.insert("/empty-zone".to_string(), json!({}));
-    let bad_event = CalendarEvent {
-        time_zones: Some(bad_defs),
-        ..CalendarEvent::default()
+    let bad_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zones = Some(bad_defs);
+        event_out
     };
     assert!(!jmap_ical::event::defines_time_zone(
         &bad_event,
@@ -30503,34 +30702,39 @@ fn differential_oracle_custom_timezone_resolution_and_fallback() {
 
     // 3. maps_time_zone: floating (None/empty) is sendable, IANA is sendable,
     // defined custom zone is sendable; undefined or non-standard zones return false.
-    let floating_event = CalendarEvent {
-        time_zone: None,
-        ..CalendarEvent::default()
+    let floating_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = None;
+        event_out
     };
     assert!(jmap_ical::event::maps_time_zone(&floating_event));
 
-    let iana_event = CalendarEvent {
-        time_zone: Some("Europe/Berlin".to_string()),
-        ..CalendarEvent::default()
+    let iana_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some("Europe/Berlin".to_string());
+        event_out
     };
     assert!(jmap_ical::event::maps_time_zone(&iana_event));
 
-    let custom_event = CalendarEvent {
-        time_zone: Some("/custom-zone-no-slash".to_string()),
-        time_zones: Some(definitions),
-        ..CalendarEvent::default()
+    let custom_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some("/custom-zone-no-slash".to_string());
+        event_out.time_zones = Some(definitions);
+        event_out
     };
     assert!(jmap_ical::event::maps_time_zone(&custom_event));
 
-    let undefined_event = CalendarEvent {
-        time_zone: Some("/undefined-zone".to_string()),
-        ..CalendarEvent::default()
+    let undefined_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some("/undefined-zone".to_string());
+        event_out
     };
     assert!(!jmap_ical::event::maps_time_zone(&undefined_event));
 
-    let windows_event = CalendarEvent {
-        time_zone: Some("W. Europe Standard Time".to_string()),
-        ..CalendarEvent::default()
+    let windows_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some("W. Europe Standard Time".to_string());
+        event_out
     };
     assert!(!jmap_ical::event::maps_time_zone(&windows_event));
 }
@@ -30544,20 +30748,22 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
     // and BYSETPOS Exclusion.
 
     // 1. by_second_part: admits 0..=60 including leap second 60 per RFC 5545 Section 3.3.12
-    let rule_leap = RecurrenceRule {
-        frequency: "minutely".to_string(),
-        by_second: Some(vec![0, 30, 60]),
-        ..RecurrenceRule::default()
+    let rule_leap = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "minutely".to_string();
+        __built.by_second = Some(vec![0, 30, 60]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&rule_leap),
         Some("BYSECOND=0,30,60".to_string())
     );
 
-    let rule_second_overflow = RecurrenceRule {
-        frequency: "minutely".to_string(),
-        by_second: Some(vec![61]),
-        ..RecurrenceRule::default()
+    let rule_second_overflow = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "minutely".to_string();
+        __built.by_second = Some(vec![61]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&rule_second_overflow),
@@ -30565,10 +30771,11 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
         "second 61 is out of range"
     );
 
-    let rule_second_empty = RecurrenceRule {
-        frequency: "minutely".to_string(),
-        by_second: Some(vec![]),
-        ..RecurrenceRule::default()
+    let rule_second_empty = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "minutely".to_string();
+        __built.by_second = Some(vec![]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&rule_second_empty),
@@ -30577,20 +30784,22 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
     );
 
     // 2. by_minute_part: admits 0..=59
-    let rule_minute = RecurrenceRule {
-        frequency: "hourly".to_string(),
-        by_minute: Some(vec![15, 45]),
-        ..RecurrenceRule::default()
+    let rule_minute = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "hourly".to_string();
+        __built.by_minute = Some(vec![15, 45]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_minute_part(&rule_minute),
         Some("BYMINUTE=15,45".to_string())
     );
 
-    let rule_minute_overflow = RecurrenceRule {
-        frequency: "hourly".to_string(),
-        by_minute: Some(vec![60]),
-        ..RecurrenceRule::default()
+    let rule_minute_overflow = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "hourly".to_string();
+        __built.by_minute = Some(vec![60]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_minute_part(&rule_minute_overflow),
@@ -30599,20 +30808,22 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
     );
 
     // 3. by_hour_part: admits 0..=23
-    let rule_hour = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_hour: Some(vec![9, 17]),
-        ..RecurrenceRule::default()
+    let rule_hour = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_hour = Some(vec![9, 17]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_hour_part(&rule_hour),
         Some("BYHOUR=9,17".to_string())
     );
 
-    let rule_hour_overflow = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_hour: Some(vec![24]),
-        ..RecurrenceRule::default()
+    let rule_hour_overflow = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_hour = Some(vec![24]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_hour_part(&rule_hour_overflow),
@@ -30622,15 +30833,16 @@ fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
 
     // 4. named_by_parts: libical canonical ordering puts time-of-day finest-first
     // (BYSECOND, BYMINUTE, BYHOUR), followed by calendar date parts. Excludes BYSETPOS.
-    let full_rule = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        by_second: Some(vec![0]),
-        by_minute: Some(vec![30]),
-        by_hour: Some(vec![10]),
-        by_day: Some(vec![NDay::new("mo")]),
-        by_month: Some(vec!["10".to_string()]),
-        by_set_position: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let full_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.by_second = Some(vec![0]);
+        __built.by_minute = Some(vec![30]);
+        __built.by_hour = Some(vec![10]);
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built.by_month = Some(vec!["10".to_string()]);
+        __built.by_set_position = Some(vec![1]);
+        __built
     };
     let parts = jmap_ical::event::named_by_parts(&full_rule);
     assert_eq!(
@@ -30654,29 +30866,33 @@ fn differential_oracle_recurrence_writability_type_and_year_scope() {
     // RFC 8984 Implied Optional @type Validation, and Yearly Frequency Span Verification.
 
     // 1. writable: frequency cannot be empty, until must be valid date-time
-    let empty_freq = RecurrenceRule {
-        frequency: "".to_string(),
-        ..RecurrenceRule::default()
+    let empty_freq = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "".to_string();
+        __built
     };
     assert!(!jmap_ical::event::writable(&empty_freq));
 
-    let valid_freq_no_until = RecurrenceRule {
-        frequency: "daily".to_string(),
-        ..RecurrenceRule::default()
+    let valid_freq_no_until = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built
     };
     assert!(jmap_ical::event::writable(&valid_freq_no_until));
 
-    let valid_until = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-12-31T23:59:59".to_string()),
-        ..RecurrenceRule::default()
+    let valid_until = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-12-31T23:59:59".to_string());
+        __built
     };
     assert!(jmap_ical::event::writable(&valid_until));
 
-    let invalid_until = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("invalid-date".to_string()),
-        ..RecurrenceRule::default()
+    let invalid_until = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("invalid-date".to_string());
+        __built
     };
     assert!(!jmap_ical::event::writable(&invalid_until));
 
@@ -30737,9 +30953,10 @@ fn differential_oracle_category_tags_formatting_and_ast_scalar_extraction() {
     keywords.insert("Alpha".to_string(), json!(true));
     keywords.insert("   ".to_string(), json!(true));
     keywords.insert("Beta".to_string(), json!(false));
-    let event = CalendarEvent {
-        keywords: Some(keywords),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.keywords = Some(keywords);
+        event_out
     };
     let tags = jmap_ical::event::drawn_tags(&event);
     assert_eq!(
@@ -30943,9 +31160,10 @@ fn differential_oracle_physical_and_virtual_location_gating() {
     let mut order_locs = BTreeMap::new();
     order_locs.insert("b".to_string(), json!({"name": "Second Room"}));
     order_locs.insert("a".to_string(), json!({"name": "First Room"}));
-    let ev_order = CalendarEvent {
-        locations: Some(order_locs),
-        ..CalendarEvent::default()
+    let ev_order = {
+        let mut event_out = CalendarEvent::default();
+        event_out.locations = Some(order_locs);
+        event_out
     };
     let (key, name) = jmap_ical::event::drawn_place(&ev_order).unwrap();
     assert_eq!(key, "a");
@@ -30954,9 +31172,10 @@ fn differential_oracle_physical_and_virtual_location_gating() {
     let mut empty_named_locs = BTreeMap::new();
     empty_named_locs.insert("a".to_string(), json!({"name": ""}));
     empty_named_locs.insert("b".to_string(), json!({"name": "Valid Room"}));
-    let ev_empty_name = CalendarEvent {
-        locations: Some(empty_named_locs),
-        ..CalendarEvent::default()
+    let ev_empty_name = {
+        let mut event_out = CalendarEvent::default();
+        event_out.locations = Some(empty_named_locs);
+        event_out
     };
     let (key2, name2) = jmap_ical::event::drawn_place(&ev_empty_name).unwrap();
     assert_eq!(key2, "b");
@@ -30979,9 +31198,10 @@ fn differential_oracle_alert_masking_and_trigger_serialization() {
     // Absolute Trigger Rejection, and Summary-Derived DESCRIPTION Generation.
 
     // 1. uses_default_alerts: masks alarms when defaults are active
-    let ev_def = CalendarEvent {
-        use_default_alerts: Some(true),
-        ..CalendarEvent::default()
+    let ev_def = {
+        let mut event_out = CalendarEvent::default();
+        event_out.use_default_alerts = Some(true);
+        event_out
     };
     assert!(jmap_ical::event::uses_default_alerts(&ev_def));
     assert!(
@@ -30991,9 +31211,10 @@ fn differential_oracle_alert_masking_and_trigger_serialization() {
 
     let mut extra = BTreeMap::new();
     extra.insert("useDefaultAlerts".to_string(), Value::Bool(true));
-    let ev_extra_def = CalendarEvent {
-        extra,
-        ..CalendarEvent::default()
+    let ev_extra_def = {
+        let mut event_out = CalendarEvent::default();
+        event_out.extra = extra;
+        event_out
     };
     assert!(jmap_ical::event::uses_default_alerts(&ev_extra_def));
     assert!(!jmap_ical::event::maps_alerts(&ev_extra_def));
@@ -31049,12 +31270,13 @@ fn differential_oracle_alert_masking_and_trigger_serialization() {
             }
         }),
     );
-    let ev_alarm = CalendarEvent {
-        uid: Some("alarm-event-uid".to_string()),
-        start: Some("2026-09-05T14:00:00".to_string()),
-        title: Some("Project Demo".to_string()),
-        alerts: Some(alerts),
-        ..CalendarEvent::default()
+    let ev_alarm = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("alarm-event-uid".to_string());
+        event_out.start = Some("2026-09-05T14:00:00".to_string());
+        event_out.title = Some("Project Demo".to_string());
+        event_out.alerts = Some(alerts);
+        event_out
     };
     assert!(jmap_ical::event::maps_alerts(&ev_alarm));
     let ics = jmap_ical::event::event_to_ical(&ev_alarm);
@@ -31074,9 +31296,10 @@ fn differential_oracle_alert_masking_and_trigger_serialization() {
             "trigger": { "offset": "-PT10M" }
         }),
     );
-    let ev_unmodeled = CalendarEvent {
-        alerts: Some(unmodeled_alerts),
-        ..CalendarEvent::default()
+    let ev_unmodeled = {
+        let mut event_out = CalendarEvent::default();
+        event_out.alerts = Some(unmodeled_alerts);
+        event_out
     };
     assert!(!jmap_ical::event::maps_alerts(&ev_unmodeled));
 }
@@ -31107,9 +31330,10 @@ fn differential_oracle_participant_roster_and_organizer_serialization() {
             "roles": { "owner": true }
         }),
     );
-    let ev_owners = CalendarEvent {
-        participants: Some(multi_owners),
-        ..CalendarEvent::default()
+    let ev_owners = {
+        let mut event_out = CalendarEvent::default();
+        event_out.participants = Some(multi_owners);
+        event_out
     };
     let entries = jmap_ical::event::drawn_participants(&ev_owners);
     let org_entries: Vec<_> = entries
@@ -31146,9 +31370,10 @@ fn differential_oracle_participant_roster_and_organizer_serialization() {
             "roles": { "owner": true, "attendee": true }
         }),
     );
-    let ev_attending = CalendarEvent {
-        participants: Some(attending_owner),
-        ..CalendarEvent::default()
+    let ev_attending = {
+        let mut event_out = CalendarEvent::default();
+        event_out.participants = Some(attending_owner);
+        event_out
     };
     let att_entries = jmap_ical::event::drawn_participants(&ev_attending);
     assert_eq!(att_entries.len(), 2);
@@ -31205,9 +31430,10 @@ fn differential_oracle_participant_roster_and_organizer_serialization() {
             "expectReply": true
         }),
     );
-    let ev_rsvp = CalendarEvent {
-        participants: Some(rsvp_participants),
-        ..CalendarEvent::default()
+    let ev_rsvp = {
+        let mut event_out = CalendarEvent::default();
+        event_out.participants = Some(rsvp_participants);
+        event_out
     };
     let rsvp_entries = jmap_ical::event::drawn_participants(&ev_rsvp);
     assert_eq!(rsvp_entries.len(), 1);
@@ -31224,24 +31450,26 @@ fn differential_oracle_vevent_core_identity_timestamps_and_empty_text_suppressio
     // RECURRENCE-ID Anchor Binding, and Dual Timestamp Emission (CREATED, DTSTAMP, LAST-MODIFIED).
 
     // 1. Server-assigned id takes precedence for UID; client uid is preserved in X-JMAP-UID
-    let event = CalendarEvent {
-        id: Some("srv-event-999".into()),
-        uid: Some("client-uid-111".to_string()),
-        title: Some("Core Identity Event".to_string()),
-        created: Some("2026-09-01T08:00:00Z".to_string()),
-        updated: Some("2026-09-02T12:00:00Z".to_string()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("srv-event-999".into());
+        event_out.uid = Some("client-uid-111".to_string());
+        event_out.title = Some("Core Identity Event".to_string());
+        event_out.created = Some("2026-09-01T08:00:00Z".to_string());
+        event_out.updated = Some("2026-09-02T12:00:00Z".to_string());
+        event_out
     };
     let ics = jmap_ical::event::event_to_ical(&event);
     assert!(ics.contains("UID:srv-event-999\r\n"));
     assert!(ics.contains("X-JMAP-UID:client-uid-111\r\n"));
 
     // 2. When id is None, uid stands in for UID
-    let event_no_id = CalendarEvent {
-        id: None,
-        uid: Some("client-uid-222".to_string()),
-        title: Some("Fallback UID Event".to_string()),
-        ..CalendarEvent::default()
+    let event_no_id = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = None;
+        event_out.uid = Some("client-uid-222".to_string());
+        event_out.title = Some("Fallback UID Event".to_string());
+        event_out
     };
     let ics_no_id = jmap_ical::event::event_to_ical(&event_no_id);
     assert!(ics_no_id.contains("UID:client-uid-222\r\n"));
@@ -31253,22 +31481,24 @@ fn differential_oracle_vevent_core_identity_timestamps_and_empty_text_suppressio
     assert!(ics.contains("LAST-MODIFIED:20260902T120000Z\r\n"));
 
     // 4. When updated is absent, neither DTSTAMP nor LAST-MODIFIED is emitted (avoids inventing "now")
-    let event_no_updated = CalendarEvent {
-        id: Some("event-no-updated".into()),
-        title: Some("No Updated Event".to_string()),
-        updated: None,
-        ..CalendarEvent::default()
+    let event_no_updated = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("event-no-updated".into());
+        event_out.title = Some("No Updated Event".to_string());
+        event_out.updated = None;
+        event_out
     };
     let ics_no_updated = jmap_ical::event::event_to_ical(&event_no_updated);
     assert!(!ics_no_updated.contains("DTSTAMP:"));
     assert!(!ics_no_updated.contains("LAST-MODIFIED:"));
 
     // 5. Empty title and description are suppressed from emitting bare property lines
-    let event_empty_text = CalendarEvent {
-        id: Some("event-empty-text".into()),
-        title: Some("".to_string()),
-        description: Some("".to_string()),
-        ..CalendarEvent::default()
+    let event_empty_text = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("event-empty-text".into());
+        event_out.title = Some("".to_string());
+        event_out.description = Some("".to_string());
+        event_out
     };
     let ics_empty = jmap_ical::event::event_to_ical(&event_empty_text);
     assert!(!ics_empty.contains("SUMMARY:"));
@@ -31349,10 +31579,11 @@ fn differential_oracle_scalar_property_bi_directional_vocabulary_gating() {
     assert_eq!(ev_prio_bad.priority, None);
 
     // 5. Outbound serialization always emits CLASS:PUBLIC explicitly
-    let ev_pub = CalendarEvent {
-        id: Some("pub-1".into()),
-        privacy: Some("public".to_string()),
-        ..CalendarEvent::default()
+    let ev_pub = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("pub-1".into());
+        event_out.privacy = Some("public".to_string());
+        event_out
     };
     let ics_pub = jmap_ical::event::event_to_ical(&ev_pub);
     assert!(ics_pub.contains("CLASS:PUBLIC\r\n"));
@@ -31380,16 +31611,17 @@ fn differential_oracle_recurrence_override_instance_expansion_and_replacement() 
     master_keywords.insert("Team".to_string(), Value::Bool(true));
     master_keywords.insert("Sprint".to_string(), Value::Bool(true));
 
-    let event = CalendarEvent {
-        id: Some("series-rec-1".into()),
-        title: Some("Series Weekly Meeting".to_string()),
-        description: Some("Series Description".to_string()),
-        start: Some("20260905T100000".to_string()),
-        locations: Some(locations),
-        keywords: Some(master_keywords),
-        priority: Some(1),
-        recurrence_overrides: Some(overrides),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("series-rec-1".into());
+        event_out.title = Some("Series Weekly Meeting".to_string());
+        event_out.description = Some("Series Description".to_string());
+        event_out.start = Some("20260905T100000".to_string());
+        event_out.locations = Some(locations);
+        event_out.keywords = Some(master_keywords);
+        event_out.priority = Some(1);
+        event_out.recurrence_overrides = Some(overrides);
+        event_out
     };
 
     let ics = jmap_ical::event::event_to_ical(&event);
@@ -31408,11 +31640,12 @@ fn differential_oracle_recurrence_override_instance_expansion_and_replacement() 
     // 2. Excluded instance produces EXDATE and no detached VEVENT
     let mut excl_overrides = BTreeMap::new();
     excl_overrides.insert("20260907T100000".to_string(), json!({ "excluded": true }));
-    let excl_event = CalendarEvent {
-        id: Some("series-excl-1".into()),
-        start: Some("20260905T100000".to_string()),
-        recurrence_overrides: Some(excl_overrides),
-        ..CalendarEvent::default()
+    let excl_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("series-excl-1".into());
+        event_out.start = Some("20260905T100000".to_string());
+        event_out.recurrence_overrides = Some(excl_overrides);
+        event_out
     };
     let excl_ics = jmap_ical::event::event_to_ical(&excl_event);
     assert_eq!(
@@ -31432,12 +31665,13 @@ fn differential_oracle_recurrence_override_instance_expansion_and_replacement() 
     );
     let mut master_kw = BTreeMap::new();
     master_kw.insert("Routine".to_string(), Value::Bool(true));
-    let kw_event = CalendarEvent {
-        id: Some("series-kw-1".into()),
-        start: Some("20260905T100000".to_string()),
-        keywords: Some(master_kw),
-        recurrence_overrides: Some(kw_overrides),
-        ..CalendarEvent::default()
+    let kw_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("series-kw-1".into());
+        event_out.start = Some("20260905T100000".to_string());
+        event_out.keywords = Some(master_kw);
+        event_out.recurrence_overrides = Some(kw_overrides);
+        event_out
     };
     let kw_ics = jmap_ical::event::event_to_ical(&kw_event);
     assert!(kw_ics.contains("CATEGORIES:Routine\r\n"));
@@ -31449,11 +31683,12 @@ fn differential_oracle_recurrence_override_instance_expansion_and_replacement() 
         "20260909T100000".to_string(),
         json!({ "start": "20260909T113000" }),
     );
-    let resched_event = CalendarEvent {
-        id: Some("series-resched-1".into()),
-        start: Some("20260905T100000".to_string()),
-        recurrence_overrides: Some(resched_overrides),
-        ..CalendarEvent::default()
+    let resched_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("series-resched-1".into());
+        event_out.start = Some("20260905T100000".to_string());
+        event_out.recurrence_overrides = Some(resched_overrides);
+        event_out
     };
     let resched_ics = jmap_ical::event::event_to_ical(&resched_event);
     assert!(resched_ics.contains("RECURRENCE-ID:20260909T100000\r\n"));
@@ -31468,10 +31703,11 @@ fn differential_oracle_vcalendar_envelope_sequencing_and_custom_tz_deduplication
     // and Custom Solidus Timezone Deduplication.
 
     // 1. Envelope tags and version
-    let event = CalendarEvent {
-        id: Some("env-event-1".into()),
-        title: Some("Envelope Test".to_string()),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("env-event-1".into());
+        event_out.title = Some("Envelope Test".to_string());
+        event_out
     };
     let ics = jmap_ical::event::event_to_ical(&event);
     assert!(ics.starts_with("BEGIN:VCALENDAR\r\n"));
@@ -31500,13 +31736,14 @@ fn differential_oracle_vcalendar_envelope_sequencing_and_custom_tz_deduplication
             "timeZone": "/Custom/Zone"
         }),
     );
-    let tz_event = CalendarEvent {
-        id: Some("tz-dedup-event".into()),
-        start: Some("20260905T100000".to_string()),
-        time_zone: Some("/Custom/Zone".to_string()),
-        time_zones: Some(tz_map),
-        recurrence_overrides: Some(tz_overrides),
-        ..CalendarEvent::default()
+    let tz_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("tz-dedup-event".into());
+        event_out.start = Some("20260905T100000".to_string());
+        event_out.time_zone = Some("/Custom/Zone".to_string());
+        event_out.time_zones = Some(tz_map);
+        event_out.recurrence_overrides = Some(tz_overrides);
+        event_out
     };
     let tz_ics = jmap_ical::event::event_to_ical(&tz_event);
     let vtz_count = tz_ics.matches("BEGIN:VTIMEZONE").count();
@@ -31524,12 +31761,13 @@ fn differential_oracle_vcalendar_envelope_sequencing_and_custom_tz_deduplication
     );
 
     // 4. Unified all-day date type enforcement (as_a_date): show_without_time with whole days emits VALUE=DATE
-    let all_day_event = CalendarEvent {
-        id: Some("allday-unified-1".into()),
-        start: Some("20260905T000000".to_string()),
-        duration: Some("P1D".to_string()),
-        show_without_time: Some(true),
-        ..CalendarEvent::default()
+    let all_day_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("allday-unified-1".into());
+        event_out.start = Some("20260905T000000".to_string());
+        event_out.duration = Some("P1D".to_string());
+        event_out.show_without_time = Some(true);
+        event_out
     };
     let allday_ics = jmap_ical::event::event_to_ical(&all_day_event);
     assert!(allday_ics.contains("DTSTART;VALUE=DATE:20260905\r\n"));
@@ -31574,12 +31812,13 @@ fn differential_oracle_dtstart_date_vs_datetime_and_all_day_gating() {
     assert_eq!(ev_tz.show_without_time, None);
 
     // 5. Outbound all-day gating: show_without_time true with non-midnight start demotes to DATE-TIME
-    let non_midnight_event = CalendarEvent {
-        id: Some("demote-1".into()),
-        start: Some("20260905T090000".to_string()),
-        show_without_time: Some(true),
-        duration: Some("P1D".to_string()),
-        ..CalendarEvent::default()
+    let non_midnight_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("demote-1".into());
+        event_out.start = Some("20260905T090000".to_string());
+        event_out.show_without_time = Some(true);
+        event_out.duration = Some("P1D".to_string());
+        event_out
     };
     let demote_ics = event_to_ical(&non_midnight_event);
     assert!(
@@ -32132,25 +32371,27 @@ fn differential_oracle_maps_recurrence_rule_gating_and_part_ordering() {
     // Default Value Suppression (INTERVAL=1), and Unstateable UNTIL Endpoint Diagnostics.
 
     // 1. Basic conforming rule passes validation
-    let mut rule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_owned()),
-        frequency: "weekly".to_owned(),
-        interval: Some(2),
-        rscale: None,
-        skip: None,
-        first_day_of_week: Some("mo".to_owned()),
-        by_day: Some(vec![NDay::new("tu")]),
-        by_month_day: None,
-        by_month: None,
-        by_year_day: None,
-        by_week_no: None,
-        by_hour: None,
-        by_minute: None,
-        by_second: None,
-        by_set_position: None,
-        count: Some(5),
-        until: None,
-        extra: Default::default(),
+    let mut rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_owned());
+        __built.frequency = "weekly".to_owned();
+        __built.interval = Some(2);
+        __built.rscale = None;
+        __built.skip = None;
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built.by_day = Some(vec![NDay::new("tu")]);
+        __built.by_month_day = None;
+        __built.by_month = None;
+        __built.by_year_day = None;
+        __built.by_week_no = None;
+        __built.by_hour = None;
+        __built.by_minute = None;
+        __built.by_second = None;
+        __built.by_set_position = None;
+        __built.count = Some(5);
+        __built.until = None;
+        __built.extra = Default::default();
+        __built
     };
     assert!(maps_recurrence_rule(&rule));
 
@@ -32177,15 +32418,17 @@ fn differential_oracle_maps_recurrence_rule_gating_and_part_ordering() {
     assert!(!maps_recurrence_rule(&rule));
 
     // 4. Libical part ordering and INTERVAL=1 suppression in event_to_ical
-    let event_interval_1 = CalendarEvent {
-        id: Some("interval-1".into()),
-        start: Some("2026-09-05T10:00:00".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_owned(),
-            interval: Some(1),
-            ..RecurrenceRule::default()
-        }),
-        ..CalendarEvent::default()
+    let event_interval_1 = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("interval-1".into());
+        event_out.start = Some("2026-09-05T10:00:00".to_owned());
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_owned();
+            __built.interval = Some(1);
+            __built
+        });
+        event_out
     };
     let ics_1 = event_to_ical(&event_interval_1);
     assert!(
@@ -32197,15 +32440,17 @@ fn differential_oracle_maps_recurrence_rule_gating_and_part_ordering() {
         "default INTERVAL=1 is suppressed: {ics_1}"
     );
 
-    let event_interval_3 = CalendarEvent {
-        id: Some("interval-3".into()),
-        start: Some("2026-09-05T10:00:00".to_owned()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_owned(),
-            interval: Some(3),
-            ..RecurrenceRule::default()
-        }),
-        ..CalendarEvent::default()
+    let event_interval_3 = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("interval-3".into());
+        event_out.start = Some("2026-09-05T10:00:00".to_owned());
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_owned();
+            __built.interval = Some(3);
+            __built
+        });
+        event_out
     };
     let ics_3 = event_to_ical(&event_interval_3);
     assert!(
@@ -32222,12 +32467,13 @@ fn differential_oracle_recurrence_override_safety_gating_and_field_validation() 
     // Recurrence Override Safety Gating, Isolated vs Coordinated Custom TimeZone Resolution,
     // Excluded Occurrence Purity, and Field Mutation Validation.
 
-    let series = CalendarEvent {
-        id: Some("series-1".into()),
-        start: Some("2026-09-05T10:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        time_zones: Some(BTreeMap::from([(CUSTOM_TZID.to_owned(), custom_zone())])),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("series-1".into());
+        event_out.start = Some("2026-09-05T10:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.time_zones = Some(BTreeMap::from([(CUSTOM_TZID.to_owned(), custom_zone())]));
+        event_out
     };
 
     let id = "2026-09-12T10:00:00";
@@ -32281,24 +32527,20 @@ fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
     // and Weekly BYMONTHDAY Prohibition.
 
     // 1. BYDAY with ordinal is valid under MONTHLY or YEARLY
-    let monthly_with_ordinal = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            nth_of_period: Some(2),
-            ..NDay::new("mo")
-        }]),
-        ..RecurrenceRule::default()
+    let monthly_with_ordinal = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(2)]);
+        __built
     };
     assert!(maps_recurrence_rule(&monthly_with_ordinal));
 
     // 2. BYDAY with ordinal is prohibited under WEEKLY (RFC 5545 Section 3.3.10)
-    let weekly_with_ordinal = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        by_day: Some(vec![NDay {
-            nth_of_period: Some(2),
-            ..NDay::new("mo")
-        }]),
-        ..RecurrenceRule::default()
+    let weekly_with_ordinal = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(2)]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&weekly_with_ordinal),
@@ -32306,29 +32548,29 @@ fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
     );
 
     // 3. Ordinal 0 is rejected (RFC 8984 Section 4.3.3 and RFC 5545 ordwk 1-based)
-    let zero_ordinal = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay {
-            nth_of_period: Some(0),
-            ..NDay::new("mo")
-        }]),
-        ..RecurrenceRule::default()
+    let zero_ordinal = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("mo").with_nth_of_period(0)]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_ordinal));
 
     // 4. BYMONTHDAY is valid under MONTHLY or YEARLY, with positive and negative day bounds
-    let valid_mday = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_month_day: Some(vec![15, -1]),
-        ..RecurrenceRule::default()
+    let valid_mday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_month_day = Some(vec![15, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&valid_mday));
 
     // 5. BYMONTHDAY is prohibited under WEEKLY (RFC 5545 Section 3.3.10)
-    let weekly_with_mday = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::default()
+    let weekly_with_mday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&weekly_with_mday),
@@ -32336,18 +32578,20 @@ fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
     );
 
     // 6. Day 0 in BYMONTHDAY is rejected
-    let zero_mday = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_month_day: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let zero_mday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_month_day = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_mday));
 
     // 7. Out-of-bounds day in BYMONTHDAY is rejected (> 31 or < -31)
-    let oob_mday = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_month_day: Some(vec![32]),
-        ..RecurrenceRule::default()
+    let oob_mday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_month_day = Some(vec![32]);
+        __built
     };
     assert!(!maps_recurrence_rule(&oob_mday));
 }
@@ -32361,18 +32605,20 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     // and Canonical Month String Normalization.
 
     // 1. BYYEARDAY is valid under YEARLY, HOURLY, MINUTELY, SECONDLY
-    let yearly_yday = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_year_day: Some(vec![100, -1]),
-        ..RecurrenceRule::default()
+    let yearly_yday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_year_day = Some(vec![100, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&yearly_yday));
 
     // BYYEARDAY is prohibited under DAILY, WEEKLY, MONTHLY (holds_a_year)
-    let monthly_yday = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_year_day: Some(vec![100]),
-        ..RecurrenceRule::default()
+    let monthly_yday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_year_day = Some(vec![100]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&monthly_yday),
@@ -32380,25 +32626,28 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     );
 
     // BYYEARDAY with 0 is rejected
-    let zero_yday = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_year_day: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let zero_yday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_year_day = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_yday));
 
     // 2. BYWEEKNO is strictly restricted to YEARLY frequency
-    let yearly_week = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_week_no: Some(vec![20, -1]),
-        ..RecurrenceRule::default()
+    let yearly_week = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_week_no = Some(vec![20, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&yearly_week));
 
-    let monthly_week = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_week_no: Some(vec![20]),
-        ..RecurrenceRule::default()
+    let monthly_week = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_week_no = Some(vec![20]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&monthly_week),
@@ -32406,26 +32655,29 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     );
 
     // BYWEEKNO with 0 is rejected
-    let zero_week = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_week_no: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let zero_week = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_week_no = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_week));
 
     // 3. BYMONTH requires exact canonical numbers 1..=12 without leading zeros
-    let valid_month = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_month: Some(vec!["3".to_owned(), "12".to_owned()]),
-        ..RecurrenceRule::default()
+    let valid_month = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_month = Some(vec!["3".to_owned(), "12".to_owned()]);
+        __built
     };
     assert!(maps_recurrence_rule(&valid_month));
 
     // Leading zero in BYMONTH is rejected (causes round-trip diff noise with libical)
-    let leading_zero_month = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_month: Some(vec!["03".to_owned()]),
-        ..RecurrenceRule::default()
+    let leading_zero_month = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_month = Some(vec!["03".to_owned()]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&leading_zero_month),
@@ -32433,10 +32685,11 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     );
 
     // Non-Gregorian leap month without RSCALE is rejected
-    let leap_month = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_month: Some(vec!["5L".to_owned()]),
-        ..RecurrenceRule::default()
+    let leap_month = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_month = Some(vec!["5L".to_owned()]);
+        __built
     };
     assert!(
         !maps_recurrence_rule(&leap_month),
@@ -32444,10 +32697,11 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     );
 
     // Out-of-bounds month (> 12 or 0) is rejected
-    let oob_month = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_month: Some(vec!["13".to_owned()]),
-        ..RecurrenceRule::default()
+    let oob_month = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_month = Some(vec!["13".to_owned()]);
+        __built
     };
     assert!(!maps_recurrence_rule(&oob_month));
 }
@@ -32461,80 +32715,89 @@ fn differential_oracle_by_set_position_and_wkst_part_generation() {
     // Zero Rejection, Monday Default Suppression (WKST=MO), and Lowercase Weekday Spelling Normalization.
 
     // 1. Valid by_set_position with by_day (selects_from_a_set = true)
-    let valid_setpos = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay::new("fr")]),
-        by_set_position: Some(vec![1, -1]),
-        ..RecurrenceRule::default()
+    let valid_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("fr")]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     assert!(maps_recurrence_rule(&valid_setpos));
 
     // 2. by_set_position with 0 is rejected (RFC 5545 Section 3.3.10)
-    let zero_setpos = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay::new("fr")]),
-        by_set_position: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let zero_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("fr")]);
+        __built.by_set_position = Some(vec![0]);
+        __built
     };
     assert!(!maps_recurrence_rule(&zero_setpos));
 
     // 3. by_set_position out of bounds (> 366 or < -366) is rejected
-    let oob_setpos = RecurrenceRule {
-        frequency: "yearly".to_owned(),
-        by_day: Some(vec![NDay::new("fr")]),
-        by_set_position: Some(vec![367]),
-        ..RecurrenceRule::default()
+    let oob_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_owned();
+        __built.by_day = Some(vec![NDay::new("fr")]);
+        __built.by_set_position = Some(vec![367]);
+        __built
     };
     assert!(!maps_recurrence_rule(&oob_setpos));
 
     // 4. by_set_position empty array is rejected
-    let empty_setpos = RecurrenceRule {
-        frequency: "monthly".to_owned(),
-        by_day: Some(vec![NDay::new("fr")]),
-        by_set_position: Some(vec![]),
-        ..RecurrenceRule::default()
+    let empty_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_owned();
+        __built.by_day = Some(vec![NDay::new("fr")]);
+        __built.by_set_position = Some(vec![]);
+        __built
     };
     assert!(!maps_recurrence_rule(&empty_setpos));
 
     // 5. firstDayOfWeek: lowercase weekdays are valid
-    let valid_wkst = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::default()
+    let valid_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&valid_wkst));
 
     // 6. firstDayOfWeek with uppercase or full day name is rejected
-    let upper_wkst = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("SU".to_owned()),
-        ..RecurrenceRule::default()
+    let upper_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("SU".to_owned());
+        __built
     };
     assert!(!maps_recurrence_rule(&upper_wkst));
 
-    let long_wkst = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("sunday".to_owned()),
-        ..RecurrenceRule::default()
+    let long_wkst = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("sunday".to_owned());
+        __built
     };
     assert!(!maps_recurrence_rule(&long_wkst));
 
     // 7. rule serialization suppresses WKST=MO (libical drops it) and emits WKST=SU
     let mut event_su = fixture_event();
-    event_su.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("su".to_owned()),
-        ..RecurrenceRule::default()
+    event_su.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("su".to_owned());
+        __built
     });
     let ics_su = event_to_ical(&event_su);
     let rrule_su = content_line(&ics_su, "RRULE:");
     assert!(rrule_su.contains("WKST=SU"));
 
     let mut event_mo = fixture_event();
-    event_mo.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        first_day_of_week: Some("mo".to_owned()),
-        ..RecurrenceRule::default()
+    event_mo.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     });
     let ics_mo = event_to_ical(&event_mo);
     let rrule_mo = content_line(&ics_mo, "RRULE:");
@@ -32755,12 +33018,13 @@ fn differential_oracle_by_hour_minute_second_sub_day_parts_and_ordering() {
     // Empty Array Rejection, and Libical Finest-Outward Order Assembly.
 
     // 1. Valid sub-day parts formatted correctly
-    let rule_valid = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![9, 17]),
-        by_minute: Some(vec![0, 30]),
-        by_second: Some(vec![0, 60]),
-        ..RecurrenceRule::default()
+    let rule_valid = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_minute = Some(vec![0, 30]);
+        __built.by_second = Some(vec![0, 60]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_hour_part(&rule_valid),
@@ -32783,34 +33047,38 @@ fn differential_oracle_by_hour_minute_second_sub_day_parts_and_ordering() {
     assert_eq!(parts[2], "BYHOUR=9,17");
 
     // 3. Out-of-bounds rejection: hour > 23, minute > 59, second > 60
-    let rule_bad_hour = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![24]),
-        ..RecurrenceRule::default()
+    let rule_bad_hour = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![24]);
+        __built
     };
     assert_eq!(jmap_ical::event::by_hour_part(&rule_bad_hour), None);
 
-    let rule_bad_minute = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_minute: Some(vec![60]),
-        ..RecurrenceRule::default()
+    let rule_bad_minute = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_minute = Some(vec![60]);
+        __built
     };
     assert_eq!(jmap_ical::event::by_minute_part(&rule_bad_minute), None);
 
-    let rule_bad_second = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_second: Some(vec![61]),
-        ..RecurrenceRule::default()
+    let rule_bad_second = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_second = Some(vec![61]);
+        __built
     };
     assert_eq!(jmap_ical::event::by_second_part(&rule_bad_second), None);
 
     // 4. Empty arrays rejected to prevent libical reading BYHOUR= as BYHOUR=0
-    let rule_empty = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![]),
-        by_minute: Some(vec![]),
-        by_second: Some(vec![]),
-        ..RecurrenceRule::default()
+    let rule_empty = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![]);
+        __built.by_minute = Some(vec![]);
+        __built.by_second = Some(vec![]);
+        __built
     };
     assert_eq!(jmap_ical::event::by_hour_part(&rule_empty), None);
     assert_eq!(jmap_ical::event::by_minute_part(&rule_empty), None);
@@ -33722,18 +33990,16 @@ fn differential_oracle_freebusy_status_mapping_and_address_normalization() {
     // 4. busy_periods_to_vfreebusy whole-component refusal integrity
     let start = UtcDate::new("2026-09-01T08:00:00Z");
     let end = UtcDate::new("2026-09-01T18:00:00Z");
-    let valid_period = BusyPeriod {
-        utc_start: UtcDate::new("2026-09-01T09:00:00.123Z"),
-        utc_end: UtcDate::new("2026-09-01T10:00:00.456Z"),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    };
-    let invalid_period = BusyPeriod {
-        utc_start: UtcDate::new("invalid-timestamp"),
-        utc_end: UtcDate::new("2026-09-01T11:00:00Z"),
-        busy_status: "confirmed".to_string(),
-        event: None,
-    };
+    let valid_period = BusyPeriod::new(
+        UtcDate::new("2026-09-01T09:00:00.123Z"),
+        UtcDate::new("2026-09-01T10:00:00.456Z"),
+        "confirmed".to_string(),
+    );
+    let invalid_period = BusyPeriod::new(
+        UtcDate::new("invalid-timestamp"),
+        UtcDate::new("2026-09-01T11:00:00Z"),
+        "confirmed".to_string(),
+    );
 
     let result_valid = jmap_ical::freebusy::busy_periods_to_vfreebusy(
         "alice@example.com",
@@ -34329,13 +34595,14 @@ fn differential_oracle_all_day_date_invariants_and_time_exclusion() {
     assert!(jmap_ical::event::names_a_time_of_day(&rule_daily));
 
     // 3. shows_without_time: valid all-day event vs invalid (timed, zone-bound, or sub-day rule)
-    let valid_allday = CalendarEvent {
-        id: Some("allday-1".into()),
-        start: Some("2026-06-01T00:00:00".to_owned()),
-        show_without_time: Some(true),
-        time_zone: None,
-        duration: Some("P1D".to_owned()),
-        ..CalendarEvent::default()
+    let valid_allday = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("allday-1".into());
+        event_out.start = Some("2026-06-01T00:00:00".to_owned());
+        event_out.show_without_time = Some(true);
+        event_out.time_zone = None;
+        event_out.duration = Some("P1D".to_owned());
+        event_out
     };
     assert!(jmap_ical::event::shows_without_time(
         &valid_allday,
@@ -34366,9 +34633,10 @@ fn differential_oracle_all_day_date_invariants_and_time_exclusion() {
 
     // Recurrence rule with by_hour prevents VALUE=DATE:
     let mut rrule_allday = valid_allday.clone();
-    rrule_allday.recurrence_rule = Some(RecurrenceRule {
-        by_hour: Some(vec![10]),
-        ..RecurrenceRule::new("daily")
+    rrule_allday.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::new("daily");
+        __built.by_hour = Some(vec![10]);
+        __built
     });
     assert!(!jmap_ical::event::shows_without_time(
         &rrule_allday,
@@ -34499,11 +34767,12 @@ fn differential_oracle_alerts_gating_action_vocabulary_and_uid_ingestion() {
     // and Non-Colliding Invented Key Generation (a1, a2).
 
     // 1. uses_default_alerts detection:
-    let mut ev_alert = CalendarEvent {
-        id: Some("ev-alert".into()),
-        title: Some("Staff Meeting".into()),
-        start: Some("2026-03-01T10:00:00".to_owned()),
-        alerts: Some(BTreeMap::from([(
+    let mut ev_alert = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("ev-alert".into());
+        event_out.title = Some("Staff Meeting".into());
+        event_out.start = Some("2026-03-01T10:00:00".to_owned());
+        event_out.alerts = Some(BTreeMap::from([(
             "alert-1".to_string(),
             json!({
                 "@type": "Alert",
@@ -34514,8 +34783,8 @@ fn differential_oracle_alerts_gating_action_vocabulary_and_uid_ingestion() {
                     "relativeTo": "start"
                 }
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
     assert!(!jmap_ical::event::uses_default_alerts(&ev_alert));
     assert!(jmap_ical::event::maps_alerts(&ev_alert));
@@ -34606,13 +34875,14 @@ fn differential_oracle_recurrence_override_safety_and_timezone_coordination() {
     // Isolated Override vs Coordinated TimeZone Definition Emission (maps_override_field vs draws_override_field),
     // Set Replacement Semantics (keywords and alerts), and Exclusion Purity (excluded: true).
 
-    let series = CalendarEvent {
-        id: Some("series-base".into()),
-        start: Some("2026-05-01T09:00:00".to_owned()),
-        title: Some("Weekly Review".into()),
-        time_zone: Some("UTC".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        time_zones: Some(BTreeMap::from([(
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("series-base".into());
+        event_out.start = Some("2026-05-01T09:00:00".to_owned());
+        event_out.title = Some("Weekly Review".into());
+        event_out.time_zone = Some("UTC".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.time_zones = Some(BTreeMap::from([(
             "/custom-zone".to_string(),
             json!({
                 "@type": "TimeZone",
@@ -34622,8 +34892,8 @@ fn differential_oracle_recurrence_override_safety_and_timezone_coordination() {
                     "offsetTo": "+01:00"
                 }]
             }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
 
     // 1. Exclusion purity: excluded: true with no other fields passes
@@ -35018,10 +35288,7 @@ fn differential_oracle_rrule_by_parts_ordering_and_validation() {
         Some("MO")
     );
 
-    let monday_ordinal = NDay {
-        nth_of_period: Some(2),
-        ..NDay::new("mo")
-    };
+    let monday_ordinal = NDay::new("mo").with_nth_of_period(2);
     assert_eq!(
         jmap_ical::event::by_day_token(&monday_ordinal, "monthly").as_deref(),
         Some("2MO")
@@ -35031,10 +35298,7 @@ fn differential_oracle_rrule_by_parts_ordering_and_validation() {
         None
     );
 
-    let monday_zero = NDay {
-        nth_of_period: Some(0),
-        ..NDay::new("mo")
-    };
+    let monday_zero = NDay::new("mo").with_nth_of_period(0);
     assert_eq!(
         jmap_ical::event::by_day_token(&monday_zero, "monthly"),
         None
@@ -35340,18 +35604,20 @@ fn differential_oracle_inbound_time_of_day_subday_parsing_and_u32_max_sentinel()
 fn differential_oracle_outbound_itip_scheduling_ical_and_instance_scope() {
     use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
 
-    let event = CalendarEvent {
-        id: Some("sched-1".into()),
-        uid: Some("sched-uid-1".into()),
-        title: Some("Design Review".into()),
-        start: Some("2026-09-10T10:00:00".into()),
-        time_zone: Some("America/New_York".into()),
-        duration: Some("PT1H".into()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".into(),
-            ..Default::default()
-        }),
-        ..Default::default()
+    let event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("sched-1".into());
+        event_out.uid = Some("sched-uid-1".into());
+        event_out.title = Some("Design Review".into());
+        event_out.start = Some("2026-09-10T10:00:00".into());
+        event_out.time_zone = Some("America/New_York".into());
+        event_out.duration = Some("PT1H".into());
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".into();
+            __built
+        });
+        event_out
     };
 
     // 1. Full series scheduling payload with METHOD:REQUEST
@@ -35478,16 +35744,17 @@ fn differential_oracle_participant_calendar_address_and_imip_uri_validation() {
     );
 
     // 4. drawn_participants omits participants without valid calendar addresses
-    let event = jmap_proto::calendars::CalendarEvent {
-        participants: Some(
+    let event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.participants = Some(
             [
                 ("p1".into(), valid_participant),
                 ("p2".into(), web_participant),
                 ("p3".into(), invalid_uri_participant),
             ]
             .into(),
-        ),
-        ..Default::default()
+        );
+        event_out
     };
     let entries = jmap_ical::event::drawn_participants(&event);
     assert_eq!(entries.len(), 1);
@@ -35869,14 +36136,15 @@ fn differential_oracle_recurrence_dates_and_modified_instance_absorption() {
     use jmap_proto::calendars::CalendarEvent;
     use serde_json::json;
 
-    let mut event = CalendarEvent {
-        id: Some("series-recur-1".into()),
-        uid: Some("series-recur-1".into()),
-        start: Some("2026-09-10T09:00:00".into()),
-        duration: Some("PT1H".into()),
-        title: Some("Daily Series".into()),
-        time_zone: Some("UTC".into()),
-        ..Default::default()
+    let mut event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("series-recur-1".into());
+        event_out.uid = Some("series-recur-1".into());
+        event_out.start = Some("2026-09-10T09:00:00".into());
+        event_out.duration = Some("PT1H".into());
+        event_out.title = Some("Daily Series".into());
+        event_out.time_zone = Some("UTC".into());
+        event_out
     };
 
     let mut overrides = std::collections::BTreeMap::new();
@@ -36315,12 +36583,11 @@ fn differential_oracle_freebusy_availability_fail_closed_and_address_normalizati
     let window_start = UtcDate::new("2026-09-01T08:00:00Z");
     let window_end = UtcDate::new("2026-09-01T18:00:00Z");
 
-    let invalid_period = BusyPeriod {
-        utc_start: UtcDate::new("not-a-valid-date"),
-        utc_end: UtcDate::new("2026-09-01T10:00:00Z"),
-        busy_status: "confirmed".to_owned(),
-        event: None,
-    };
+    let invalid_period = BusyPeriod::new(
+        UtcDate::new("not-a-valid-date"),
+        UtcDate::new("2026-09-01T10:00:00Z"),
+        "confirmed".to_owned(),
+    );
     assert_eq!(
         busy_periods_to_vfreebusy(
             "user@example.com",
@@ -36340,12 +36607,11 @@ fn differential_oracle_freebusy_availability_fail_closed_and_address_normalizati
     );
 
     // 3. Sub-second fraction truncation in UtcDate
-    let subsecond_period = BusyPeriod {
-        utc_start: UtcDate::new("2026-09-01T09:00:00.123Z"),
-        utc_end: UtcDate::new("2026-09-01T10:00:00.999Z"),
-        busy_status: "confirmed".to_owned(),
-        event: None,
-    };
+    let subsecond_period = BusyPeriod::new(
+        UtcDate::new("2026-09-01T09:00:00.123Z"),
+        UtcDate::new("2026-09-01T10:00:00.999Z"),
+        "confirmed".to_owned(),
+    );
     let vfb = busy_periods_to_vfreebusy(
         "user@example.com",
         &window_start,
@@ -37018,40 +37284,43 @@ END:VCALENDAR\r\n";
 #[test]
 fn differential_oracle_outbound_vevent_id_priority_and_dual_zone_scoping() {
     // 1. Server ID vs UID priority: id: Some("server-100"), uid: Some("uid-200")
-    let event_both = CalendarEvent {
-        id: Some("server-100".into()),
-        uid: Some("uid-200".to_owned()),
-        title: Some("Sync Meeting".to_owned()),
-        start: Some("2026-06-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let event_both = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("server-100".into());
+        event_out.uid = Some("uid-200".to_owned());
+        event_out.title = Some("Sync Meeting".to_owned());
+        event_out.start = Some("2026-06-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let ics_both = event_to_ical(&event_both);
     assert_eq!(line(&ics_both, "UID:"), "UID:server-100");
     assert_eq!(line(&ics_both, "X-JMAP-UID:"), "X-JMAP-UID:uid-200");
 
     // Fallback when id is None: UID becomes uid-200
-    let event_uid_only = CalendarEvent {
-        id: None,
-        uid: Some("uid-200".to_owned()),
-        title: Some("New Meeting".to_owned()),
-        start: Some("2026-06-01T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let event_uid_only = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = None;
+        event_out.uid = Some("uid-200".to_owned());
+        event_out.title = Some("New Meeting".to_owned());
+        event_out.start = Some("2026-06-01T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let ics_uid_only = event_to_ical(&event_uid_only);
     assert_eq!(line(&ics_uid_only, "UID:"), "UID:uid-200");
     assert_eq!(line(&ics_uid_only, "X-JMAP-UID:"), "X-JMAP-UID:uid-200");
 
     // 2. Dual-zone occurrence disambiguation: series in Europe/Berlin, override in America/New_York
-    let event_recur = CalendarEvent {
-        id: Some("rec-1".into()),
-        title: Some("Recurring Standup".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        recurrence_rule: Some(RecurrenceRule::new("weekly")),
-        recurrence_overrides: Some(
+    let event_recur = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("rec-1".into());
+        event_out.title = Some("Recurring Standup".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.recurrence_rule = Some(RecurrenceRule::new("weekly"));
+        event_out.recurrence_overrides = Some(
             [(
                 "2026-01-22T13:00:00".to_owned(),
                 json!({
@@ -37060,8 +37329,8 @@ fn differential_oracle_outbound_vevent_id_priority_and_dual_zone_scoping() {
                 }),
             )]
             .into(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     };
     let ics_recur = event_to_ical(&event_recur);
     assert_eq!(vevents(&ics_recur), 2);
@@ -37547,10 +37816,11 @@ fn differential_oracle_shows_without_time_all_day_gating_and_override_elevation(
     event.duration = Some("P1D".to_owned());
 
     // 5. Recurrence rule with sub-day time part disqualification (RFC 5545 Section 3.3.10)
-    let rule_with_time = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![10]),
-        ..Default::default()
+    let rule_with_time = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![10]);
+        __built
     };
     event.recurrence_rule = Some(rule_with_time);
     assert!(
@@ -38179,14 +38449,15 @@ fn differential_oracle_drawn_alerts_default_suppression_and_valarm() {
 #[test]
 fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() {
     // 1. Libical subpart ordering: FREQ -> COUNT -> INTERVAL -> BYSECOND -> BYMINUTE -> BYHOUR
-    let rule = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        count: Some(5),
-        interval: Some(2),
-        by_hour: Some(vec![9, 17]),
-        by_minute: Some(vec![30]),
-        by_second: Some(vec![0]),
-        ..Default::default()
+    let rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.count = Some(5);
+        __built.interval = Some(2);
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_minute = Some(vec![30]);
+        __built.by_second = Some(vec![0]);
+        __built
     };
     let rrule = jmap_ical::event::rule_to_rrule(
         &rule,
@@ -38200,10 +38471,11 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
     );
 
     // 2. Default INTERVAL=1 suppression
-    let rule_unit = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        interval: Some(1),
-        ..Default::default()
+    let rule_unit = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.interval = Some(1);
+        __built
     };
     let rrule_unit = jmap_ical::event::rule_to_rrule(
         &rule_unit,
@@ -38215,9 +38487,10 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
     assert!(!rrule_unit.contains("INTERVAL"));
 
     // 3. Hour bounds: 0..=23
-    let mut hour_rule = RecurrenceRule {
-        by_hour: Some(vec![0, 23]),
-        ..Default::default()
+    let mut hour_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_hour = Some(vec![0, 23]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_hour_part(&hour_rule).as_deref(),
@@ -38227,9 +38500,10 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
     assert_eq!(jmap_ical::event::by_hour_part(&hour_rule), None);
 
     // 4. Minute bounds: 0..=59
-    let mut min_rule = RecurrenceRule {
-        by_minute: Some(vec![0, 59]),
-        ..Default::default()
+    let mut min_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_minute = Some(vec![0, 59]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_minute_part(&min_rule).as_deref(),
@@ -38239,9 +38513,10 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
     assert_eq!(jmap_ical::event::by_minute_part(&min_rule), None);
 
     // 5. Second bounds: 0..=60 (leap second 60 permitted per RFC 5545 and libical)
-    let mut sec_rule = RecurrenceRule {
-        by_second: Some(vec![0, 59, 60]),
-        ..Default::default()
+    let mut sec_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_second = Some(vec![0, 59, 60]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&sec_rule).as_deref(),
@@ -38258,10 +38533,7 @@ fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() 
 #[test]
 fn differential_oracle_by_day_part_frequency_period_scoping_and_month_day() {
     // 1. Weekday ordinals scoped to MONTHLY and YEARLY
-    let nday_ord = NDay {
-        nth_of_period: Some(2),
-        ..NDay::new("mo")
-    };
+    let nday_ord = NDay::new("mo").with_nth_of_period(2);
     assert_eq!(
         jmap_ical::event::by_day_token(&nday_ord, "monthly").as_deref(),
         Some("2MO")
@@ -38285,17 +38557,15 @@ fn differential_oracle_by_day_part_frequency_period_scoping_and_month_day() {
     );
 
     // 3. Ordinal 0 strictly rejected
-    let nday_zero = NDay {
-        nth_of_period: Some(0),
-        ..NDay::new("fr")
-    };
+    let nday_zero = NDay::new("fr").with_nth_of_period(0);
     assert_eq!(jmap_ical::event::by_day_token(&nday_zero, "monthly"), None);
 
     // 4. by_month_day_part forbidden on WEEKLY frequency
-    let mut mday_rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        by_month_day: Some(vec![15]),
-        ..Default::default()
+    let mut mday_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_month_day_part(&mday_rule),
@@ -38325,10 +38595,11 @@ fn differential_oracle_by_day_part_frequency_period_scoping_and_month_day() {
 #[test]
 fn differential_oracle_by_year_day_week_no_and_month_tokens() {
     // 1. by_year_day_part and holds_a_year frequency gating
-    let mut yday_rule = RecurrenceRule {
-        by_year_day: Some(vec![100, -1]),
-        frequency: "yearly".to_owned(),
-        ..Default::default()
+    let mut yday_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_year_day = Some(vec![100, -1]);
+        __built.frequency = "yearly".to_owned();
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_year_day_part(&yday_rule).as_deref(),
@@ -38363,10 +38634,11 @@ fn differential_oracle_by_year_day_week_no_and_month_tokens() {
     assert_eq!(jmap_ical::event::year_day_token(-367), None);
 
     // 3. by_week_no_part strictly yearly
-    let mut wno_rule = RecurrenceRule {
-        by_week_no: Some(vec![20, -1]),
-        frequency: "yearly".to_owned(),
-        ..Default::default()
+    let mut wno_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_week_no = Some(vec![20, -1]);
+        __built.frequency = "yearly".to_owned();
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_week_no_part(&wno_rule).as_deref(),
@@ -38394,9 +38666,10 @@ fn differential_oracle_by_year_day_week_no_and_month_tokens() {
 #[test]
 fn differential_oracle_set_position_wkst_default_and_read_until_offset() {
     // 1. by_set_position_part dependency gating
-    let setpos_rule = RecurrenceRule {
-        by_set_position: Some(vec![1, -1]),
-        ..Default::default()
+    let setpos_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     // When selects_from_a_set is false (no other BYxxx parts)
     assert_eq!(
@@ -38426,9 +38699,10 @@ fn differential_oracle_set_position_wkst_default_and_read_until_offset() {
     assert_eq!(jmap_ical::event::set_position_token(367), None);
 
     // 3. first_day_of_week_part: Monday suppressed
-    let mut wkst_rule = RecurrenceRule {
-        first_day_of_week: Some("mo".to_owned()),
-        ..Default::default()
+    let mut wkst_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     };
     assert_eq!(jmap_ical::event::first_day_of_week_part(&wkst_rule), None);
 
@@ -39058,10 +39332,11 @@ fn differential_oracle_all_day_dtstart_midnight_and_subday_rrule_gating() {
     ));
 
     // Sub-day recurrence part (BYHOUR) prohibits all-day representation
-    let rrule_with_hour = RecurrenceRule {
-        frequency: "daily".to_owned(),
-        by_hour: Some(vec![10]),
-        ..Default::default()
+    let rrule_with_hour = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_owned();
+        __built.by_hour = Some(vec![10]);
+        __built
     };
     assert!(jmap_ical::event::names_a_time_of_day(&rrule_with_hour));
     all_day_ev.recurrence_rule = Some(rrule_with_hour);
@@ -39224,11 +39499,12 @@ fn differential_oracle_inbound_alert_valarm_display_and_offset_triggers() {
 
 #[test]
 fn differential_oracle_maps_recurrence_rule_gating_and_unstateable_until() {
-    let mut rule = RecurrenceRule {
-        frequency: "weekly".to_owned(),
-        interval: Some(2),
-        first_day_of_week: Some("mo".to_owned()),
-        ..RecurrenceRule::default()
+    let mut rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_owned();
+        __built.interval = Some(2);
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built
     };
     assert!(maps_recurrence_rule(&rule));
 
@@ -40515,17 +40791,19 @@ fn differential_oracle_drawn_alerts_default_masking_and_valarm_synthesis() {
 #[test]
 fn differential_oracle_rrule_serialization_libical_subparts_and_ordering() {
     // Canonical libical subpart ordering: FREQ, COUNT, UNTIL, INTERVAL, time parts, day parts, BYSETPOS, WKST
-    let rule = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        count: Some(5),
-        interval: Some(2),
-        by_second: Some(vec![0, 30, 60]), // leap second 60 permitted
-        by_minute: Some(vec![15, 45]),
-        by_hour: Some(vec![9, 17]),
-        by_month: Some(vec!["3".to_string(), "10".to_string()]),
-        by_set_position: Some(vec![1, -1]),
-        first_day_of_week: Some("su".to_string()),
-        ..RecurrenceRule::default()
+    let rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.count = Some(5);
+        __built.interval = Some(2);
+        __built.by_second = Some(vec![0, 30, 60]);
+        __built.// leap second 60 permitted
+        by_minute = Some(vec![15, 45]);
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_month = Some(vec!["3".to_string(), "10".to_string()]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built.first_day_of_week = Some("su".to_string());
+        __built
     };
 
     let rrule_str = jmap_ical::event::rule_to_rrule(
@@ -40540,11 +40818,12 @@ fn differential_oracle_rrule_serialization_libical_subparts_and_ordering() {
     );
 
     // Default INTERVAL=1 suppression and WKST=MO suppression
-    let default_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        interval: Some(1),
-        first_day_of_week: Some("mo".to_string()),
-        ..RecurrenceRule::default()
+    let default_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.interval = Some(1);
+        __built.first_day_of_week = Some("mo".to_string());
+        __built
     };
     let default_rrule = jmap_ical::event::rule_to_rrule(
         &default_rule,
@@ -40558,36 +40837,36 @@ fn differential_oracle_rrule_serialization_libical_subparts_and_ordering() {
 
     // Frequency constraints:
     // BYMONTHDAY forbidden on WEEKLY
-    let invalid_weekly = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::default()
+    let invalid_weekly = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(jmap_ical::event::by_month_day_part(&invalid_weekly).is_none());
 
     // BYWEEKNO allowed ONLY on YEARLY
-    let invalid_monthly_weekno = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_week_no: Some(vec![12]),
-        ..RecurrenceRule::default()
+    let invalid_monthly_weekno = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_week_no = Some(vec![12]);
+        __built
     };
     assert!(jmap_ical::event::by_week_no_part(&invalid_monthly_weekno).is_none());
 
     // BYYEARDAY forbidden on DAILY/WEEKLY/MONTHLY
-    let invalid_daily_yearday = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_year_day: Some(vec![100]),
-        ..RecurrenceRule::default()
+    let invalid_daily_yearday = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_year_day = Some(vec![100]);
+        __built
     };
     assert!(jmap_ical::event::by_year_day_part(&invalid_daily_yearday).is_none());
 
     // BYDAY ordinal (nthOfPeriod) requires MONTHLY or YEARLY
-    let nday_with_nth = jmap_proto::calendars::NDay {
-        day: "mo".to_string(),
-        nth_of_period: Some(2),
-        extra: Default::default(),
-        day_type: None,
-    };
+    let mut nday_with_nth = jmap_proto::calendars::NDay::default();
+    nday_with_nth.day = "mo".to_string();
+    nday_with_nth.nth_of_period = Some(2);
     assert!(jmap_ical::event::by_day_token(&nday_with_nth, "monthly").is_some());
     assert!(jmap_ical::event::by_day_token(&nday_with_nth, "weekly").is_none());
 }
@@ -40640,11 +40919,12 @@ fn differential_oracle_rrule_parsing_token_decomposition_and_sentinels() {
 #[test]
 fn differential_oracle_recurrence_rule_capability_gating_and_extension_shielding() {
     // 1. Valid conforming rule passes maps_recurrence_rule
-    let valid_rule = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        interval: Some(1),
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::default()
+    let valid_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.interval = Some(1);
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(jmap_ical::event::maps_recurrence_rule(&valid_rule));
     assert!(jmap_ical::event::writable(&valid_rule));
@@ -40666,18 +40946,20 @@ fn differential_oracle_recurrence_rule_capability_gating_and_extension_shielding
     assert!(!jmap_ical::event::maps_recurrence_rule(&extra_rule));
 
     // 3. Missing frequency fails writable
-    let empty_freq = RecurrenceRule {
-        frequency: "".to_string(),
-        ..RecurrenceRule::default()
+    let empty_freq = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "".to_string();
+        __built
     };
     assert!(!jmap_ical::event::writable(&empty_freq));
     assert!(!jmap_ical::event::maps_recurrence_rule(&empty_freq));
 
     // 4. Unstateable until is flagged
-    let unstateable = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("not-a-valid-date-time".to_string()),
-        ..RecurrenceRule::default()
+    let unstateable = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("not-a-valid-date-time".to_string());
+        __built
     };
     assert!(!jmap_ical::event::writable(&unstateable));
     assert_eq!(
@@ -40686,10 +40968,11 @@ fn differential_oracle_recurrence_rule_capability_gating_and_extension_shielding
     );
 
     // 5. Dependent BYSETPOS requires companion expanding part
-    let orphan_setpos = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_set_position: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let orphan_setpos = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_set_position = Some(vec![1]);
+        __built
     };
     assert!(!jmap_ical::event::maps_recurrence_rule(&orphan_setpos));
 }
@@ -41447,10 +41730,11 @@ fn differential_oracle_read_until_zoned_projection_and_unstateable_diagnostic() 
     );
 
     // 4. Actionable outbound capability diagnostics via unstateable_until
-    let unstateable_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-06-01T12:00:00Z".to_string()),
-        ..RecurrenceRule::default()
+    let unstateable_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-06-01T12:00:00Z".to_string());
+        __built
     };
     // Trailing Z sentinel is flagged as unstateable endpoint
     assert_eq!(
@@ -41459,10 +41743,11 @@ fn differential_oracle_read_until_zoned_projection_and_unstateable_diagnostic() 
     );
     assert!(!jmap_ical::event::maps_recurrence_rule(&unstateable_rule));
 
-    let clean_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-06-01T14:00:00".to_string()),
-        ..RecurrenceRule::default()
+    let clean_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-06-01T14:00:00".to_string());
+        __built
     };
     assert_eq!(jmap_ical::event::unstateable_until(&clean_rule), None);
     assert!(jmap_ical::event::maps_recurrence_rule(&clean_rule));
@@ -41470,13 +41755,14 @@ fn differential_oracle_read_until_zoned_projection_and_unstateable_diagnostic() 
 
 #[test]
 fn differential_oracle_recurrence_override_capability_gating_and_patch_validation() {
-    let series = CalendarEvent {
-        id: Some("SERIES1".into()),
-        title: Some("Team Sync".into()),
-        start: Some("2026-06-01T10:00:00".into()),
-        time_zone: Some("Europe/Berlin".into()),
-        duration: Some("PT1H".into()),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("SERIES1".into());
+        event_out.title = Some("Team Sync".into());
+        event_out.start = Some("2026-06-01T10:00:00".into());
+        event_out.time_zone = Some("Europe/Berlin".into());
+        event_out.duration = Some("PT1H".into());
+        event_out
     };
 
     // 1. Excluded mutex: single-property excluded: true passes
@@ -41589,10 +41875,11 @@ fn differential_oracle_recurrence_override_capability_gating_and_patch_validatio
     // Custom solidus timezone with series definition fails maps_override_field
     // (cannot send definition beside recurrenceOverrides alone), but passes draws_override_field
     let custom_tzid = "/example.com/Europe-Berlin";
-    let series_with_custom_tz = CalendarEvent {
-        id: Some("SERIES2".into()),
-        time_zone: Some(custom_tzid.into()),
-        time_zones: serde_json::from_value(json!({
+    let series_with_custom_tz = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("SERIES2".into());
+        event_out.time_zone = Some(custom_tzid.into());
+        event_out.time_zones = serde_json::from_value(json!({
             custom_tzid: {
                 "@type": "TimeZone",
                 "tzId": custom_tzid,
@@ -41604,8 +41891,8 @@ fn differential_oracle_recurrence_override_capability_gating_and_patch_validatio
                 }],
             }
         }))
-        .unwrap(),
-        ..CalendarEvent::default()
+        .unwrap();
+        event_out
     };
     assert!(!jmap_ical::event::maps_override_field(
         &series_with_custom_tz,
@@ -41624,9 +41911,10 @@ fn differential_oracle_recurrence_override_capability_gating_and_patch_validatio
     ));
 
     // 6. Alerts gating and useDefaultAlerts masking
-    let series_default_alerts = CalendarEvent {
-        use_default_alerts: Some(true),
-        ..CalendarEvent::default()
+    let series_default_alerts = {
+        let mut event_out = CalendarEvent::default();
+        event_out.use_default_alerts = Some(true);
+        event_out
     };
     assert!(!jmap_ical::event::maps_override_field(
         &series_default_alerts,
@@ -41780,25 +42068,30 @@ END:VCALENDAR\r\n";
     assert!(ev_range.recurrence_overrides.is_none());
 
     // 6. Direct instance_patch calculation: property differences and null removals
-    let master = CalendarEvent {
-        id: Some("M1".into()),
-        title: Some("Weekly Status".into()),
-        description: Some("Project updates".into()),
-        start: Some("2026-06-01T10:00:00".into()),
-        duration: Some("PT1H".into()),
-        priority: Some(5),
-        privacy: Some("public".into()),
-        ..CalendarEvent::default()
+    let master = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("M1".into());
+        event_out.title = Some("Weekly Status".into());
+        event_out.description = Some("Project updates".into());
+        event_out.start = Some("2026-06-01T10:00:00".into());
+        event_out.duration = Some("PT1H".into());
+        event_out.priority = Some(5);
+        event_out.privacy = Some("public".into());
+        event_out
     };
-    let modified = CalendarEvent {
-        id: Some("M1".into()),
-        title: Some("Quarterly Review".into()),
-        description: Some("Project updates".into()), // identical, omitted
-        start: Some("2026-06-08T11:00:00".into()),   // moved time, included in patch
-        duration: Some("PT2H".into()),
-        priority: None, // cleared, emits null
-        privacy: Some("private".into()),
-        ..CalendarEvent::default()
+    let modified = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("M1".into());
+        event_out.title = Some("Quarterly Review".into());
+        event_out.description = Some("Project updates".into());
+        // identical, omitted
+        event_out.start = Some("2026-06-08T11:00:00".into());
+        // moved time, included in patch
+        event_out.duration = Some("PT2H".into());
+        event_out.priority = None;
+        // cleared, emits null
+        event_out.privacy = Some("private".into());
+        event_out
     };
     let synthesized_patch =
         jmap_ical::event::instance_patch(&master, &modified, "2026-06-08T10:00:00");
@@ -41832,41 +42125,46 @@ fn differential_oracle_shows_without_time_all_day_gating_preconditions() {
     assert!(!jmap_ical::event::whole_days("-P1D"));
 
     // 2. names_a_time_of_day detection
-    let rule_with_hour = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_hour: Some(vec![9]),
-        ..RecurrenceRule::default()
+    let rule_with_hour = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_hour = Some(vec![9]);
+        __built
     };
     assert!(jmap_ical::event::names_a_time_of_day(&rule_with_hour));
 
-    let rule_with_minute = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_minute: Some(vec![30]),
-        ..RecurrenceRule::default()
+    let rule_with_minute = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_minute = Some(vec![30]);
+        __built
     };
     assert!(jmap_ical::event::names_a_time_of_day(&rule_with_minute));
 
-    let rule_with_second = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_second: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let rule_with_second = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_second = Some(vec![0]);
+        __built
     };
     assert!(jmap_ical::event::names_a_time_of_day(&rule_with_second));
 
-    let pure_calendar_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_day: Some(vec![NDay::new("mo")]),
-        ..RecurrenceRule::default()
+    let pure_calendar_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built
     };
     assert!(!jmap_ical::event::names_a_time_of_day(&pure_calendar_rule));
 
     // 3. shows_without_time gating matrix
-    let valid_all_day = CalendarEvent {
-        show_without_time: Some(true),
-        start: Some("2026-06-01T00:00:00".into()),
-        duration: Some("P1D".into()),
-        time_zone: None,
-        ..CalendarEvent::default()
+    let valid_all_day = {
+        let mut event_out = CalendarEvent::default();
+        event_out.show_without_time = Some(true);
+        event_out.start = Some("2026-06-01T00:00:00".into());
+        event_out.duration = Some("P1D".into());
+        event_out.time_zone = None;
+        event_out
     };
     assert!(jmap_ical::event::shows_without_time(
         &valid_all_day,
@@ -41874,9 +42172,10 @@ fn differential_oracle_shows_without_time_all_day_gating_preconditions() {
     ));
 
     // Refuses when timeZone is present (RFC 5545 §3.2.19)
-    let zoned_all_day = CalendarEvent {
-        time_zone: Some("Europe/Berlin".into()),
-        ..valid_all_day.clone()
+    let zoned_all_day = {
+        let mut event_out = valid_all_day.clone();
+        event_out.time_zone = Some("Europe/Berlin".into());
+        event_out
     };
     assert!(!jmap_ical::event::shows_without_time(
         &zoned_all_day,
@@ -41890,9 +42189,10 @@ fn differential_oracle_shows_without_time_all_day_gating_preconditions() {
     ));
 
     // Refuses sub-day duration
-    let subday_all_day = CalendarEvent {
-        duration: Some("PT8H".into()),
-        ..valid_all_day.clone()
+    let subday_all_day = {
+        let mut event_out = valid_all_day.clone();
+        event_out.duration = Some("PT8H".into());
+        event_out
     };
     assert!(!jmap_ical::event::shows_without_time(
         &subday_all_day,
@@ -41900,13 +42200,15 @@ fn differential_oracle_shows_without_time_all_day_gating_preconditions() {
     ));
 
     // Refuses recurrence rule naming time of day
-    let timed_rule_event = CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily".to_string(),
-            by_hour: Some(vec![10]),
-            ..RecurrenceRule::default()
-        }),
-        ..valid_all_day.clone()
+    let timed_rule_event = {
+        let mut event_out = valid_all_day.clone();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily".to_string();
+            __built.by_hour = Some(vec![10]);
+            __built
+        });
+        event_out
     };
     assert!(!jmap_ical::event::shows_without_time(
         &timed_rule_event,
@@ -41914,12 +42216,13 @@ fn differential_oracle_shows_without_time_all_day_gating_preconditions() {
     ));
 
     // Refuses when override instance moves to timed hour
-    let timed_override_event = CalendarEvent {
-        recurrence_overrides: Some(BTreeMap::from([(
+    let timed_override_event = {
+        let mut event_out = valid_all_day.clone();
+        event_out.recurrence_overrides = Some(BTreeMap::from([(
             "2026-06-02T00:00:00".to_string(),
             json!({ "start": "2026-06-02T14:00:00" }),
-        )])),
-        ..valid_all_day.clone()
+        )]));
+        event_out
     };
     assert!(!jmap_ical::event::shows_without_time(
         &timed_override_event,
@@ -41929,23 +42232,25 @@ fn differential_oracle_shows_without_time_all_day_gating_preconditions() {
 
 #[test]
 fn differential_oracle_scheduling_ical_itip_methods_and_instance_narrowing() {
-    let series = CalendarEvent {
-        id: Some("SERIES_ITIP_1".into()),
-        uid: Some("jscalendar-uuid-1".into()),
-        title: Some("Architecture Review".into()),
-        start: Some("2026-06-01T14:00:00".into()),
-        duration: Some("PT1H".into()),
-        time_zone: Some("UTC".into()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".to_string(),
-            count: Some(5),
-            ..RecurrenceRule::default()
-        }),
-        recurrence_overrides: Some(BTreeMap::from([(
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("SERIES_ITIP_1".into());
+        event_out.uid = Some("jscalendar-uuid-1".into());
+        event_out.title = Some("Architecture Review".into());
+        event_out.start = Some("2026-06-01T14:00:00".into());
+        event_out.duration = Some("PT1H".into());
+        event_out.time_zone = Some("UTC".into());
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_string();
+            __built.count = Some(5);
+            __built
+        });
+        event_out.recurrence_overrides = Some(BTreeMap::from([(
             "2026-06-08T14:00:00".to_string(),
             json!({ "title": "Architecture Review: Storage Engine" }),
-        )])),
-        ..CalendarEvent::default()
+        )]));
+        event_out
     };
 
     // 1. Full-series scheduling message carries METHOD:REQUEST and all components
@@ -41955,14 +42260,15 @@ fn differential_oracle_scheduling_ical_itip_methods_and_instance_narrowing() {
     assert!(request_ics.contains("Architecture Review: Storage Engine"));
 
     // 2. Single-occurrence scheduling message narrows to exactly one VEVENT with RECURRENCE-ID
-    let instance = CalendarEvent {
-        id: Some("SERIES_ITIP_1".into()),
-        uid: Some("jscalendar-uuid-1".into()),
-        title: Some("Architecture Review: Storage Engine".into()),
-        start: Some("2026-06-08T14:00:00".into()),
-        duration: Some("PT1H".into()),
-        time_zone: Some("UTC".into()),
-        ..CalendarEvent::default()
+    let instance = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("SERIES_ITIP_1".into());
+        event_out.uid = Some("jscalendar-uuid-1".into());
+        event_out.title = Some("Architecture Review: Storage Engine".into());
+        event_out.start = Some("2026-06-08T14:00:00".into());
+        event_out.duration = Some("PT1H".into());
+        event_out.time_zone = Some("UTC".into());
+        event_out
     };
     let cancel_ics =
         jmap_ical::event::scheduling_ical(&instance, "CANCEL", Some("2026-06-08T14:00:00"));
@@ -42252,9 +42558,10 @@ fn differential_oracle_read_links_fetched_locally_and_size_parsing() {
     );
 
     // 4. Outbound serialization renders ATTACH and IMAGE with parameters
-    let event = CalendarEvent {
-        links: Some(links),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.links = Some(links);
+        event_out
     };
     let drawn = jmap_ical::event::drawn_links(&event);
     assert_eq!(drawn.len(), 2);
@@ -42332,10 +42639,11 @@ fn differential_oracle_event_timestamps_created_updated_and_store_ownership() {
 
     // 3. When updated is absent on outbound serialization, DTSTAMP and LAST-MODIFIED
     // are omitted rather than inventing a changing "now" timestamp.
-    let no_update_event = CalendarEvent {
-        id: Some(jmap_proto::Id::from("no-update-ev")),
-        start: Some("2026-09-01T10:00:00".to_string()),
-        ..CalendarEvent::default()
+    let no_update_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some(jmap_proto::Id::from("no-update-ev"));
+        event_out.start = Some("2026-09-01T10:00:00".to_string());
+        event_out
     };
     let out_ics = jmap_ical::event::event_to_ical(&no_update_event);
     assert!(!out_ics.contains("LAST-MODIFIED:"));
@@ -42448,9 +42756,10 @@ fn differential_oracle_participant_scheduling_protection_and_inbound_suppression
             "expectReply": true
         }),
     );
-    let active_event = CalendarEvent {
-        participants: Some(participants),
-        ..CalendarEvent::default()
+    let active_event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.participants = Some(participants);
+        event_out
     };
     let drawn = jmap_ical::event::drawn_participants(&active_event);
     assert_eq!(drawn.len(), 2);
@@ -42579,11 +42888,12 @@ fn differential_oracle_recurrence_rule_type_annotation_and_elision() {
     );
 
     // 4. Outbound event serialization renders identical RFC 5545 RRULE
-    let event = CalendarEvent {
-        id: Some("type-elision-ev".into()),
-        start: Some("2026-09-01T09:00:00".to_string()),
-        recurrence_rule: Some(rule_from_server),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("type-elision-ev".into());
+        event_out.start = Some("2026-09-01T09:00:00".to_string());
+        event_out.recurrence_rule = Some(rule_from_server);
+        event_out
     };
     let ics = event_to_ical(&event);
     assert!(ics.contains("RRULE:FREQ=WEEKLY;COUNT=10;INTERVAL=2;BYDAY=MO,FR\r\n"));
@@ -42596,13 +42906,14 @@ fn differential_oracle_recurrence_rule_time_of_day_parts_and_zero_values() {
     // zero as valid instant value versus u32::MAX sentinel refusal.
 
     // 1. Component ordering: named_by_parts emits bySecond, byMinute, byHour before days
-    let full_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_second: Some(vec![0, 30]),
-        by_minute: Some(vec![0, 15, 45]),
-        by_hour: Some(vec![9, 17]),
-        by_day: Some(vec![NDay::new("mo")]),
-        ..RecurrenceRule::default()
+    let full_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_second = Some(vec![0, 30]);
+        __built.by_minute = Some(vec![0, 15, 45]);
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built
     };
     let parts = jmap_ical::event::named_by_parts(&full_rule);
     assert_eq!(
@@ -42616,12 +42927,13 @@ fn differential_oracle_recurrence_rule_time_of_day_parts_and_zero_values() {
     );
 
     // 2. Zero is a valid time-of-day value (midnight, zeroth minute, zeroth second)
-    let midnight_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_second: Some(vec![0]),
-        by_minute: Some(vec![0]),
-        by_hour: Some(vec![0]),
-        ..RecurrenceRule::default()
+    let midnight_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_second = Some(vec![0]);
+        __built.by_minute = Some(vec![0]);
+        __built.by_hour = Some(vec![0]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&midnight_rule).as_deref(),
@@ -42637,12 +42949,13 @@ fn differential_oracle_recurrence_rule_time_of_day_parts_and_zero_values() {
     );
 
     // 3. Exact range bounds: hour <= 23, minute <= 59, second <= 60 (leap second per RFC 5545)
-    let valid_bounds_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_second: Some(vec![60]),
-        by_minute: Some(vec![59]),
-        by_hour: Some(vec![23]),
-        ..RecurrenceRule::default()
+    let valid_bounds_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_second = Some(vec![60]);
+        __built.by_minute = Some(vec![59]);
+        __built.by_hour = Some(vec![23]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_second_part(&valid_bounds_rule).as_deref(),
@@ -42658,24 +42971,27 @@ fn differential_oracle_recurrence_rule_time_of_day_parts_and_zero_values() {
     );
 
     // Out-of-range values return None
-    let bad_hour_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_hour: Some(vec![24]),
-        ..RecurrenceRule::default()
+    let bad_hour_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_hour = Some(vec![24]);
+        __built
     };
     assert!(jmap_ical::event::by_hour_part(&bad_hour_rule).is_none());
 
-    let bad_minute_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_minute: Some(vec![60]),
-        ..RecurrenceRule::default()
+    let bad_minute_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_minute = Some(vec![60]);
+        __built
     };
     assert!(jmap_ical::event::by_minute_part(&bad_minute_rule).is_none());
 
-    let bad_second_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        by_second: Some(vec![61]),
-        ..RecurrenceRule::default()
+    let bad_second_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.by_second = Some(vec![61]);
+        __built
     };
     assert!(jmap_ical::event::by_second_part(&bad_second_rule).is_none());
 
@@ -42708,10 +43024,11 @@ fn differential_oracle_recurrence_rule_period_bounding_and_setpos_prerequisites(
     assert_eq!(jmap_ical::event::month_token("13"), None); // out of range
     assert_eq!(jmap_ical::event::month_token("0"), None);
 
-    let month_rule = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        by_month: Some(vec!["3".to_string(), "9".to_string()]),
-        ..RecurrenceRule::default()
+    let month_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.by_month = Some(vec!["3".to_string(), "9".to_string()]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_month_part(&month_rule).as_deref(),
@@ -42725,20 +43042,22 @@ fn differential_oracle_recurrence_rule_period_bounding_and_setpos_prerequisites(
     assert!(!jmap_ical::event::holds_a_year("weekly"));
     assert!(!jmap_ical::event::holds_a_year("monthly"));
 
-    let yearday_rule_valid = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        by_year_day: Some(vec![1, 100, -1]),
-        ..RecurrenceRule::default()
+    let yearday_rule_valid = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.by_year_day = Some(vec![1, 100, -1]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_year_day_part(&yearday_rule_valid).as_deref(),
         Some("BYYEARDAY=1,100,-1")
     );
 
-    let yearday_rule_invalid_freq = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_year_day: Some(vec![1, 100]),
-        ..RecurrenceRule::default()
+    let yearday_rule_invalid_freq = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_year_day = Some(vec![1, 100]);
+        __built
     };
     assert!(jmap_ical::event::by_year_day_part(&yearday_rule_invalid_freq).is_none());
 
@@ -42754,20 +43073,22 @@ fn differential_oracle_recurrence_rule_period_bounding_and_setpos_prerequisites(
     assert_eq!(jmap_ical::event::year_day_token(367), None);
 
     // 3. by_week_no_part: restricted to YEARLY only
-    let week_rule_yearly = RecurrenceRule {
-        frequency: "yearly".to_string(),
-        by_week_no: Some(vec![1, 26, -1]),
-        ..RecurrenceRule::default()
+    let week_rule_yearly = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "yearly".to_string();
+        __built.by_week_no = Some(vec![1, 26, -1]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_week_no_part(&week_rule_yearly).as_deref(),
         Some("BYWEEKNO=1,26,-1")
     );
 
-    let week_rule_monthly = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_week_no: Some(vec![1]),
-        ..RecurrenceRule::default()
+    let week_rule_monthly = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_week_no = Some(vec![1]);
+        __built
     };
     assert!(jmap_ical::event::by_week_no_part(&week_rule_monthly).is_none());
 
@@ -42777,11 +43098,12 @@ fn differential_oracle_recurrence_rule_period_bounding_and_setpos_prerequisites(
     assert_eq!(jmap_ical::event::week_no_token(54), None);
 
     // 4. by_set_position_part: requires selects_from_a_set to be true
-    let setpos_rule = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_day: Some(vec![NDay::new("mo"), NDay::new("fr")]),
-        by_set_position: Some(vec![1, -1]),
-        ..RecurrenceRule::default()
+    let setpos_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_day = Some(vec![NDay::new("mo"), NDay::new("fr")]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_set_position_part(&setpos_rule, true).as_deref(),
@@ -42808,10 +43130,11 @@ fn differential_oracle_recurrence_rule_weekday_normalization_and_wkst_default() 
     // precedence over frequency intervals.
 
     // 1. first_day_of_week_part: default "mo" is omitted to preserve libical round-trip stability
-    let rule_wkst_mo = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("mo".to_string()),
-        ..RecurrenceRule::default()
+    let rule_wkst_mo = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("mo".to_string());
+        __built
     };
     assert_eq!(
         jmap_ical::event::first_day_of_week_part(&rule_wkst_mo),
@@ -42819,20 +43142,22 @@ fn differential_oracle_recurrence_rule_weekday_normalization_and_wkst_default() 
     );
 
     // Non-Monday days are explicitly rendered as WKST=<DAY>
-    let rule_wkst_su = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("su".to_string()),
-        ..RecurrenceRule::default()
+    let rule_wkst_su = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("su".to_string());
+        __built
     };
     assert_eq!(
         jmap_ical::event::first_day_of_week_part(&rule_wkst_su).as_deref(),
         Some("WKST=SU")
     );
 
-    let rule_wkst_tu = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        first_day_of_week: Some("tu".to_string()),
-        ..RecurrenceRule::default()
+    let rule_wkst_tu = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.first_day_of_week = Some("tu".to_string());
+        __built
     };
     assert_eq!(
         jmap_ical::event::first_day_of_week_part(&rule_wkst_tu).as_deref(),
@@ -42862,11 +43187,12 @@ fn differential_oracle_recurrence_rule_weekday_normalization_and_wkst_default() 
     assert_eq!(rule_parsed_mo.first_day_of_week.as_deref(), Some("mo"));
 
     // 4. Outbound event serialization omits WKST=MO and preserves non-default WKST
-    let mut event_mo = CalendarEvent {
-        id: Some("wkst-mo-ev".into()),
-        start: Some("2026-09-01T09:00:00".to_string()),
-        recurrence_rule: Some(rule_wkst_mo),
-        ..CalendarEvent::default()
+    let mut event_mo = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("wkst-mo-ev".into());
+        event_out.start = Some("2026-09-01T09:00:00".to_string());
+        event_out.recurrence_rule = Some(rule_wkst_mo);
+        event_out
     };
     let ics_mo = event_to_ical(&event_mo);
     assert!(ics_mo.contains("RRULE:FREQ=WEEKLY\r\n"));
@@ -42894,11 +43220,9 @@ fn differential_oracle_recurrence_rule_ordinal_days_and_month_day_bounding() {
     assert!(!jmap_ical::event::counts_within_a_period("hourly"));
 
     // 2. by_day_token: ordinals are formatted when permitted, and refused on other frequencies
-    let day_with_nth = NDay {
-        day: "mo".to_string(),
-        nth_of_period: Some(2),
-        ..NDay::default()
-    };
+    let mut day_with_nth = NDay::default();
+    day_with_nth.day = "mo".to_string();
+    day_with_nth.nth_of_period = Some(2);
     assert_eq!(
         jmap_ical::event::by_day_token(&day_with_nth, "monthly").as_deref(),
         Some("2MO")
@@ -42912,19 +43236,15 @@ fn differential_oracle_recurrence_rule_ordinal_days_and_month_day_bounding() {
     assert!(jmap_ical::event::by_day_token(&day_with_nth, "daily").is_none());
 
     // Zero ordinal is invalid in both RFC 5545 and RFC 8984
-    let day_zero = NDay {
-        day: "fr".to_string(),
-        nth_of_period: Some(0),
-        ..NDay::default()
-    };
+    let mut day_zero = NDay::default();
+    day_zero.day = "fr".to_string();
+    day_zero.nth_of_period = Some(0);
     assert!(jmap_ical::event::by_day_token(&day_zero, "monthly").is_none());
 
     // Negative ordinals count from end of period
-    let day_neg = NDay {
-        day: "fr".to_string(),
-        nth_of_period: Some(-1),
-        ..NDay::default()
-    };
+    let mut day_neg = NDay::default();
+    day_neg.day = "fr".to_string();
+    day_neg.nth_of_period = Some(-1);
     assert_eq!(
         jmap_ical::event::by_day_token(&day_neg, "monthly").as_deref(),
         Some("-1FR")
@@ -42961,20 +43281,22 @@ fn differential_oracle_recurrence_rule_ordinal_days_and_month_day_bounding() {
     assert_eq!(jmap_ical::event::month_day_token(-32), None);
 
     // 5. by_month_day_part: RFC 5545 Section 3.3.10 prohibits BYMONTHDAY on weekly frequency
-    let month_day_rule = RecurrenceRule {
-        frequency: "monthly".to_string(),
-        by_month_day: Some(vec![1, 15, -1]),
-        ..RecurrenceRule::default()
+    let month_day_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "monthly".to_string();
+        __built.by_month_day = Some(vec![1, 15, -1]);
+        __built
     };
     assert_eq!(
         jmap_ical::event::by_month_day_part(&month_day_rule).as_deref(),
         Some("BYMONTHDAY=1,15,-1")
     );
 
-    let weekly_month_day_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        by_month_day: Some(vec![15]),
-        ..RecurrenceRule::default()
+    let weekly_month_day_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.by_month_day = Some(vec![15]);
+        __built
     };
     assert!(jmap_ical::event::by_month_day_part(&weekly_month_day_rule).is_none());
 
@@ -42992,10 +43314,11 @@ fn differential_oracle_recurrence_rule_endpoints_count_until_and_utc_projection(
     // and in-document zone offset projection.
 
     // 1. rule_to_rrule: all-day event serializes UNTIL in DATE format YYYYMMDD
-    let until_rule = RecurrenceRule {
-        frequency: "daily".to_string(),
-        until: Some("2026-09-30T00:00:00".to_string()),
-        ..RecurrenceRule::default()
+    let until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "daily".to_string();
+        __built.until = Some("2026-09-30T00:00:00".to_string());
+        __built
     };
     let rrule_date = jmap_ical::event::rule_to_rrule(
         &until_rule,
@@ -43021,17 +43344,19 @@ fn differential_oracle_recurrence_rule_endpoints_count_until_and_utc_projection(
     assert_eq!(rrule_offset, "FREQ=DAILY;UNTIL=20260929T220000Z");
 
     // 4. unstateable_until: isolates unconvertible timestamps without confusing other rule errors
-    let valid_until_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-09-30T10:00:00".to_string()),
-        ..RecurrenceRule::default()
+    let valid_until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-09-30T10:00:00".to_string());
+        __built
     };
     assert_eq!(jmap_ical::event::unstateable_until(&valid_until_rule), None);
 
-    let malformed_until_rule = RecurrenceRule {
-        frequency: "weekly".to_string(),
-        until: Some("2026-09-30T10:00:00Z".to_string()),
-        ..RecurrenceRule::default()
+    let malformed_until_rule = {
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.until = Some("2026-09-30T10:00:00Z".to_string());
+        __built
     };
     assert_eq!(
         jmap_ical::event::unstateable_until(&malformed_until_rule),
@@ -43294,10 +43619,11 @@ fn differential_oracle_itip_scheduling_payload_series_and_instance_assembly() {
 
     let mut event = fixture_event();
     event.title = Some("Sprint Review".to_string());
-    event.recurrence_rule = Some(RecurrenceRule {
-        frequency: "weekly".to_string(),
-        count: Some(4),
-        ..RecurrenceRule::default()
+    event.recurrence_rule = Some({
+        let mut __built = RecurrenceRule::default();
+        __built.frequency = "weekly".to_string();
+        __built.count = Some(4);
+        __built
     });
 
     // 1. Series-wide scheduling payload carries METHOD:REQUEST and full recurrence rules
@@ -43347,9 +43673,10 @@ fn differential_oracle_timezone_canonical_resolution_windows_mapping_and_pruning
     );
 
     // 3. TimeZone pruning of unreferenced custom zones
-    let mut ev = CalendarEvent {
-        time_zone: Some("America/New_York".to_string()),
-        time_zones: Some(
+    let mut ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.time_zone = Some("America/New_York".to_string());
+        event_out.time_zones = Some(
             [
                 (
                     "America/New_York".to_string(),
@@ -43361,8 +43688,8 @@ fn differential_oracle_timezone_canonical_resolution_windows_mapping_and_pruning
                 ),
             ]
             .into(),
-        ),
-        ..CalendarEvent::default()
+        );
+        event_out
     };
 
     let referred: Vec<&str> = jmap_ical::event::referred_zones(&ev).collect();
@@ -43544,9 +43871,10 @@ fn differential_oracle_links_attachment_image_parameters_and_default_elision() {
     assert_eq!(image_link["contentType"], "image/png");
 
     // 3. Outbound serialization renders ATTACH and IMAGE with X-JMAP-KEY
-    let ev = CalendarEvent {
-        links: Some(links),
-        ..CalendarEvent::default()
+    let ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.links = Some(links);
+        event_out
     };
     let drawn = jmap_ical::event::drawn_links(&ev);
 
@@ -43689,22 +44017,24 @@ fn differential_oracle_free_busy_status_transp_default_agreement_and_nullificati
     assert_eq!(patch["freeBusyStatus"], serde_json::Value::Null);
 
     // 3. Outbound serialization omits TRANSP when freeBusyStatus is None (default busy)
-    let default_ev = CalendarEvent {
-        id: Some("transp-default".into()),
-        start: Some("2026-10-15T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        ..CalendarEvent::default()
+    let default_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("transp-default".into());
+        event_out.start = Some("2026-10-15T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out
     };
     let default_ics = event_to_ical(&default_ev);
     assert!(!default_ics.contains("TRANSP:"));
 
     // 4. Outbound serialization emits TRANSP:TRANSPARENT for "free"
-    let free_ev = CalendarEvent {
-        id: Some("transp-free".into()),
-        start: Some("2026-10-15T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        free_busy_status: Some("free".to_owned()),
-        ..CalendarEvent::default()
+    let free_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("transp-free".into());
+        event_out.start = Some("2026-10-15T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.free_busy_status = Some("free".to_owned());
+        event_out
     };
     let free_ics = event_to_ical(&free_ev);
     assert!(free_ics.contains("TRANSP:TRANSPARENT\r\n"));
@@ -43736,26 +44066,29 @@ fn differential_oracle_priority_integer_scale_strict_parsing_and_zero_equivalenc
     }
 
     // 3. Outbound serialization renders PRIORITY:0 for priority: Some(0)
-    let zero_ev = CalendarEvent {
-        id: Some("prio-zero".into()),
-        start: Some("2026-10-15T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        priority: Some(0),
-        ..CalendarEvent::default()
+    let zero_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("prio-zero".into());
+        event_out.start = Some("2026-10-15T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.priority = Some(0);
+        event_out
     };
     let zero_ics = event_to_ical(&zero_ev);
     assert!(zero_ics.contains("PRIORITY:0\r\n"));
 
     // 4. Override instance nullification when priority omitted on detached component
-    let series = CalendarEvent {
-        id: Some("prio-series".into()),
-        priority: Some(2),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("prio-series".into());
+        event_out.priority = Some(2);
+        event_out
     };
-    let instance = CalendarEvent {
-        id: Some("prio-series".into()),
-        priority: None,
-        ..CalendarEvent::default()
+    let instance = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("prio-series".into());
+        event_out.priority = None;
+        event_out
     };
     let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
     assert_eq!(patch["priority"], serde_json::Value::Null);
@@ -43788,12 +44121,13 @@ fn differential_oracle_privacy_class_cross_vocabulary_and_evolution_classificati
     assert!(out_secret_ics.contains("CLASS:CONFIDENTIAL\r\n"));
 
     // 2. Explicit CLASS:PUBLIC serialized for public events for Evolution UI stability
-    let public_ev = CalendarEvent {
-        id: Some("class-public".into()),
-        start: Some("2026-10-15T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        privacy: Some("public".to_owned()),
-        ..CalendarEvent::default()
+    let public_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("class-public".into());
+        event_out.start = Some("2026-10-15T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.privacy = Some("public".to_owned());
+        event_out
     };
     let public_ics = event_to_ical(&public_ev);
     assert!(public_ics.contains("CLASS:PUBLIC\r\n"));
@@ -43814,15 +44148,17 @@ fn differential_oracle_privacy_class_cross_vocabulary_and_evolution_classificati
     assert_eq!(nonstandard_ev.privacy, None);
 
     // 4. Override instance nullification when privacy omitted on detached component
-    let series = CalendarEvent {
-        id: Some("privacy-series".into()),
-        privacy: Some("private".to_owned()),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("privacy-series".into());
+        event_out.privacy = Some("private".to_owned());
+        event_out
     };
-    let instance = CalendarEvent {
-        id: Some("privacy-series".into()),
-        privacy: None,
-        ..CalendarEvent::default()
+    let instance = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("privacy-series".into());
+        event_out.privacy = None;
+        event_out
     };
     let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
     assert_eq!(patch["privacy"], serde_json::Value::Null);
@@ -43946,17 +44282,19 @@ fn differential_oracle_text_properties_summary_description_and_escaping() {
     assert!(!out_empty.contains("DESCRIPTION:"));
 
     // 4. Override instance nullification when title or description cleared
-    let series = CalendarEvent {
-        id: Some("text-series".into()),
-        title: Some("Series Title".to_owned()),
-        description: Some("Series Description".to_owned()),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("text-series".into());
+        event_out.title = Some("Series Title".to_owned());
+        event_out.description = Some("Series Description".to_owned());
+        event_out
     };
-    let instance = CalendarEvent {
-        id: Some("text-series".into()),
-        title: None,
-        description: None,
-        ..CalendarEvent::default()
+    let instance = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("text-series".into());
+        event_out.title = None;
+        event_out.description = None;
+        event_out
     };
     let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
     assert_eq!(patch["title"], serde_json::Value::Null);
@@ -44087,25 +44425,28 @@ fn differential_oracle_keywords_categories_whitespace_normalization_and_override
     tags.insert("Sprint".to_string(), serde_json::Value::Bool(true));
     tags.insert("Planning".to_string(), serde_json::Value::Bool(true));
     tags.insert("Bad\rTag".to_string(), serde_json::Value::Bool(true));
-    let tag_ev = CalendarEvent {
-        id: Some("kw-sort-ev".into()),
-        keywords: Some(tags),
-        ..CalendarEvent::default()
+    let tag_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("kw-sort-ev".into());
+        event_out.keywords = Some(tags);
+        event_out
     };
     let out = event_to_ical(&tag_ev);
     assert!(out.contains("CATEGORIES:Planning,Sprint\r\n"));
     assert!(!out.contains("Bad"));
 
     // 4. Override instance patch nullification when keywords cleared
-    let series = CalendarEvent {
-        id: Some("kw-series".into()),
-        keywords: Some([("Team".to_string(), serde_json::Value::Bool(true))].into()),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("kw-series".into());
+        event_out.keywords = Some([("Team".to_string(), serde_json::Value::Bool(true))].into());
+        event_out
     };
-    let instance = CalendarEvent {
-        id: Some("kw-series".into()),
-        keywords: None,
-        ..CalendarEvent::default()
+    let instance = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("kw-series".into());
+        event_out.keywords = None;
+        event_out
     };
     let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
     assert_eq!(patch["keywords"], serde_json::Value::Null);
@@ -44155,19 +44496,21 @@ fn differential_oracle_uid_id_namespace_disambiguation_and_round_trip_stability(
     assert_eq!(ev_xuid.uid.as_deref(), Some("jscalendar-uuid-789"));
 
     // 3. Outbound serialization renders id as UID, and uid as X-JMAP-UID
-    let both_ev = CalendarEvent {
-        id: Some("store-id-99".into()),
-        uid: Some("jscal-uuid-88".to_string()),
-        ..CalendarEvent::default()
+    let both_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("store-id-99".into());
+        event_out.uid = Some("jscal-uuid-88".to_string());
+        event_out
     };
     let out_both = event_to_ical(&both_ev);
     assert!(out_both.contains("UID:store-id-99\r\n"));
     assert!(out_both.contains("X-JMAP-UID:jscal-uuid-88\r\n"));
 
     // 4. Outbound serialization with only uid (uncreated event) stands in for UID
-    let uid_only_ev = CalendarEvent {
-        uid: Some("fresh-local-uuid-11".to_string()),
-        ..CalendarEvent::default()
+    let uid_only_ev = {
+        let mut event_out = CalendarEvent::default();
+        event_out.uid = Some("fresh-local-uuid-11".to_string());
+        event_out
     };
     let out_uid = event_to_ical(&uid_only_ev);
     assert!(out_uid.contains("UID:fresh-local-uuid-11\r\n"));
@@ -44318,15 +44661,18 @@ fn differential_oracle_alerts_valarm_display_action_acknowledged_and_override_re
     assert!(alerts_nameless.contains_key("a1"));
 
     // 4. Override instance patch nullification when alerts cleared
-    let series = CalendarEvent {
-        id: Some("alarm-series".into()),
-        alerts: Some([("a1".to_string(), serde_json::json!({"action": "display"}))].into()),
-        ..CalendarEvent::default()
+    let series = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("alarm-series".into());
+        event_out.alerts =
+            Some([("a1".to_string(), serde_json::json!({"action": "display"}))].into());
+        event_out
     };
-    let instance = CalendarEvent {
-        id: Some("alarm-series".into()),
-        alerts: None,
-        ..CalendarEvent::default()
+    let instance = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("alarm-series".into());
+        event_out.alerts = None;
+        event_out
     };
     let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
     assert_eq!(patch["alerts"], serde_json::Value::Null);
@@ -44360,12 +44706,13 @@ fn differential_oracle_timestamps_created_updated_dtstamp_and_lifecycle_ownershi
 
     // 2. Outbound serialization renders CREATED from created, and renders both LAST-MODIFIED
     // and DTSTAMP from updated when provided by the store.
-    let ev_stamped = CalendarEvent {
-        id: Some("ts-test-2".into()),
-        created: Some("2026-08-01T09:00:00Z".to_string()),
-        updated: Some("2026-08-24T12:00:00Z".to_string()),
-        start: Some("2026-10-15T10:00:00Z".to_string()),
-        ..CalendarEvent::default()
+    let ev_stamped = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("ts-test-2".into());
+        event_out.created = Some("2026-08-01T09:00:00Z".to_string());
+        event_out.updated = Some("2026-08-24T12:00:00Z".to_string());
+        event_out.start = Some("2026-10-15T10:00:00Z".to_string());
+        event_out
     };
     let out = event_to_ical(&ev_stamped);
     assert!(out.contains("CREATED:20260801T090000Z\r\n"));
@@ -44373,24 +44720,26 @@ fn differential_oracle_timestamps_created_updated_dtstamp_and_lifecycle_ownershi
     assert!(out.contains("DTSTAMP:20260824T120000Z\r\n"));
 
     // 3. Timestamps missing Zulu 'Z' suffix are omitted from serialization
-    let ev_no_z = CalendarEvent {
-        id: Some("ts-test-3".into()),
-        created: Some("2026-08-01T09:00:00".to_string()),
-        updated: Some("2026-08-24T12:00:00".to_string()),
-        start: Some("2026-10-15T10:00:00Z".to_string()),
-        ..CalendarEvent::default()
+    let ev_no_z = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("ts-test-3".into());
+        event_out.created = Some("2026-08-01T09:00:00".to_string());
+        event_out.updated = Some("2026-08-24T12:00:00".to_string());
+        event_out.start = Some("2026-10-15T10:00:00Z".to_string());
+        event_out
     };
     let out_no_z = event_to_ical(&ev_no_z);
     assert!(!out_no_z.contains("CREATED:"));
     assert!(!out_no_z.contains("LAST-MODIFIED:"));
 
     // 4. Timestamps with fractional seconds are omitted from serialization
-    let ev_frac = CalendarEvent {
-        id: Some("ts-test-4".into()),
-        created: Some("2026-08-01T09:00:00.123Z".to_string()),
-        updated: Some("2026-08-24T12:00:00.456Z".to_string()),
-        start: Some("2026-10-15T10:00:00Z".to_string()),
-        ..CalendarEvent::default()
+    let ev_frac = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("ts-test-4".into());
+        event_out.created = Some("2026-08-01T09:00:00.123Z".to_string());
+        event_out.updated = Some("2026-08-24T12:00:00.456Z".to_string());
+        event_out.start = Some("2026-10-15T10:00:00Z".to_string());
+        event_out
     };
     let out_frac = event_to_ical(&ev_frac);
     assert!(!out_frac.contains("CREATED:"));
@@ -44445,11 +44794,12 @@ fn differential_oracle_participants_roster_organizer_attendee_and_scheduling_iso
             "participationStatus": "accepted"
         }),
     );
-    let ev_parts = CalendarEvent {
-        id: Some("part-test-2".into()),
-        start: Some("2026-10-15T10:00:00Z".to_string()),
-        participants: Some(parts),
-        ..CalendarEvent::default()
+    let ev_parts = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("part-test-2".into());
+        event_out.start = Some("2026-10-15T10:00:00Z".to_string());
+        event_out.participants = Some(parts);
+        event_out
     };
     let out = event_to_ical(&ev_parts);
     assert!(
@@ -44481,11 +44831,12 @@ fn differential_oracle_participants_roster_organizer_attendee_and_scheduling_iso
             "roles": { "owner": true }
         }),
     );
-    let ev_multi = CalendarEvent {
-        id: Some("part-test-3".into()),
-        start: Some("2026-10-15T10:00:00Z".to_string()),
-        participants: Some(multi_owners),
-        ..CalendarEvent::default()
+    let ev_multi = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("part-test-3".into());
+        event_out.start = Some("2026-10-15T10:00:00Z".to_string());
+        event_out.participants = Some(multi_owners);
+        event_out
     };
     let out_multi = event_to_ical(&ev_multi);
     assert_eq!(out_multi.matches("ORGANIZER").count(), 1);
@@ -44543,17 +44894,19 @@ fn differential_oracle_recurrence_rules_plurality_type_stamping_and_nday_offsets
     assert_eq!(days[1].nth_of_period, Some(-1));
 
     // 3. Outbound serialization renders RRULE with uppercase frequency and parameters
-    let ev_out = CalendarEvent {
-        id: Some("rrule-test-3".into()),
-        start: Some("2026-10-15T10:00:00Z".to_string()),
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "weekly".to_string(),
-            interval: Some(2),
-            count: Some(6),
-            by_day: Some(vec![NDay::new("mo")]),
-            ..RecurrenceRule::default()
-        }),
-        ..CalendarEvent::default()
+    let ev_out = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("rrule-test-3".into());
+        event_out.start = Some("2026-10-15T10:00:00Z".to_string());
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "weekly".to_string();
+            __built.interval = Some(2);
+            __built.count = Some(6);
+            __built.by_day = Some(vec![NDay::new("mo")]);
+            __built
+        });
+        event_out
     };
     let out = event_to_ical(&ev_out);
     let rrule_line = content_line(&out, "RRULE:");
@@ -44620,19 +44973,21 @@ fn differential_oracle_recurrence_overrides_minimal_patch_and_override_nullifica
     assert_eq!(patch.get("description"), None);
 
     // 3. Override instance patch nullification when series defines property and instance clears it
-    let master = CalendarEvent {
-        id: Some("override-test-3".into()),
-        priority: Some(2),
-        privacy: Some("private".to_string()),
-        free_busy_status: Some("busy".to_string()),
-        ..CalendarEvent::default()
+    let master = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("override-test-3".into());
+        event_out.priority = Some(2);
+        event_out.privacy = Some("private".to_string());
+        event_out.free_busy_status = Some("busy".to_string());
+        event_out
     };
-    let cleared_instance = CalendarEvent {
-        id: Some("override-test-3".into()),
-        priority: None,
-        privacy: None,
-        free_busy_status: None,
-        ..CalendarEvent::default()
+    let cleared_instance = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("override-test-3".into());
+        event_out.priority = None;
+        event_out.privacy = None;
+        event_out.free_busy_status = None;
+        event_out
     };
     let delta = jmap_ical::event::instance_patch(&master, &cleared_instance, "2026-10-22T10:00:00");
     assert_eq!(delta["priority"], Value::Null);
@@ -44790,11 +45145,12 @@ fn differential_oracle_links_display_scalar_token_and_defensive_set_deserializat
             "contentType": "image/png"
         }),
     );
-    let ev_scalar = CalendarEvent {
-        id: Some("link-display-test-2".into()),
-        start: Some("2026-10-15T10:00:00Z".to_string()),
-        links: Some(links_scalar),
-        ..CalendarEvent::default()
+    let ev_scalar = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("link-display-test-2".into());
+        event_out.start = Some("2026-10-15T10:00:00Z".to_string());
+        event_out.links = Some(links_scalar);
+        event_out
     };
     let out_scalar = event_to_ical(&ev_scalar);
     assert!(out_scalar.contains("IMAGE;"));
@@ -45643,12 +45999,13 @@ fn differential_oracle_uid_and_id_dual_namespace_and_unassigned_state_isolation(
     assert!(out_evo.contains("X-JMAP-UID:urn:uuid:8f2b1c94-0d3a-4f7e-9c11-2a6d5e8b7f30\r\n"));
 
     // 4. Unassigned new event (only uid populated, prior to initial create)
-    let unassigned = CalendarEvent {
-        uid: Some("urn:uuid:client-new-event-999".to_owned()),
-        start: Some("2026-11-15T09:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        title: Some("New Client Event".to_owned()),
-        ..Default::default()
+    let unassigned = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.uid = Some("urn:uuid:client-new-event-999".to_owned());
+        event_out.start = Some("2026-11-15T09:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.title = Some("New Client Event".to_owned());
+        event_out
     };
     let out_unassigned = event_to_ical(&unassigned);
     assert!(out_unassigned.contains("UID:urn:uuid:client-new-event-999\r\n"));
@@ -45726,12 +46083,13 @@ fn differential_oracle_participant_roster_and_organizer_dual_role_serialization(
             "roles": { "owner": true }
         }),
     );
-    let ev_owner_only = CalendarEvent {
-        participants: Some(parts_owner_only),
-        start: Some("2026-11-10T09:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        title: Some("Organizer Only Meeting".to_owned()),
-        ..Default::default()
+    let ev_owner_only = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.participants = Some(parts_owner_only);
+        event_out.start = Some("2026-11-10T09:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.title = Some("Organizer Only Meeting".to_owned());
+        event_out
     };
     let out_owner_only = event_to_ical(&ev_owner_only);
     assert!(
@@ -45765,12 +46123,13 @@ fn differential_oracle_participant_roster_and_organizer_dual_role_serialization(
             "roles": { "attendee": true }
         }),
     );
-    let ev_dual = CalendarEvent {
-        participants: Some(parts_dual),
-        start: Some("2026-11-10T10:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        title: Some("Dual Role Planning Session".to_owned()),
-        ..Default::default()
+    let ev_dual = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.participants = Some(parts_dual);
+        event_out.start = Some("2026-11-10T10:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.title = Some("Dual Role Planning Session".to_owned());
+        event_out
     };
     let out_dual = event_to_ical(&ev_dual);
     let org_line = content_line(&out_dual, "ORGANIZER;CN=\"Arthur Dent\"");
@@ -45829,12 +46188,13 @@ fn differential_oracle_recurrence_rule_and_nday_schema_typing() {
         .expect("deserializes untyped RecurrenceRule from server");
     assert_eq!(parsed_rule.rule_type, None);
 
-    let ev_recur = CalendarEvent {
-        start: Some("2026-11-10T09:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        title: Some("Biweekly Standup".to_owned()),
-        recurrence_rule: Some(parsed_rule),
-        ..Default::default()
+    let ev_recur = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.start = Some("2026-11-10T09:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.title = Some("Biweekly Standup".to_owned());
+        event_out.recurrence_rule = Some(parsed_rule);
+        event_out
     };
     let out_recur = event_to_ical(&ev_recur);
     assert!(out_recur.contains("RRULE:FREQ=WEEKLY;COUNT=6;INTERVAL=2;BYDAY=MO\r\n"));
@@ -45962,12 +46322,13 @@ fn differential_oracle_email_alarm_rejection_and_action_scope_isolation() {
             }
         }),
     );
-    let ev_email = CalendarEvent {
-        title: Some("Staff Meeting".to_owned()),
-        start: Some("2026-11-10T09:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        alerts: Some(email_alerts),
-        ..Default::default()
+    let ev_email = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.title = Some("Staff Meeting".to_owned());
+        event_out.start = Some("2026-11-10T09:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.alerts = Some(email_alerts);
+        event_out
     };
     assert!(
         !maps_alerts(&ev_email),
@@ -46021,12 +46382,13 @@ fn differential_oracle_audio_alarm_rejection_and_sound_attachment_filtering() {
             }
         }),
     );
-    let ev_audio = CalendarEvent {
-        title: Some("Alarm Sound Test".to_owned()),
-        start: Some("2026-11-10T09:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        alerts: Some(audio_alerts),
-        ..Default::default()
+    let ev_audio = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.title = Some("Alarm Sound Test".to_owned());
+        event_out.start = Some("2026-11-10T09:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.alerts = Some(audio_alerts);
+        event_out
     };
     assert!(
         !maps_alerts(&ev_audio),
@@ -46079,12 +46441,13 @@ fn differential_oracle_absolute_alarm_trigger_filtering_and_rescheduling_stabili
             }
         }),
     );
-    let ev_abs = CalendarEvent {
-        title: Some("Keynote".to_owned()),
-        start: Some("2026-09-25T09:00:00".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        alerts: Some(abs_alerts),
-        ..Default::default()
+    let ev_abs = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.title = Some("Keynote".to_owned());
+        event_out.start = Some("2026-09-25T09:00:00".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.alerts = Some(abs_alerts);
+        event_out
     };
     assert!(
         !maps_alerts(&ev_abs),
@@ -47255,16 +47618,18 @@ fn differential_oracle_recurrence_overrides_timezone_floating_detection_and_null
 
     // 1. When a master event specifies a timezone and an instance omits TZID (floating time),
     // instance_patch explicitly writes "timeZone": null to strip the master timezone.
-    let series = CalendarEvent {
-        time_zone: Some("America/New_York".to_owned()),
-        start: Some("2026-10-01T10:00:00".to_owned()),
-        ..Default::default()
+    let series = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.time_zone = Some("America/New_York".to_owned());
+        event_out.start = Some("2026-10-01T10:00:00".to_owned());
+        event_out
     };
 
-    let instance_floating = CalendarEvent {
-        time_zone: None,
-        start: Some("2026-10-15T10:00:00".to_owned()),
-        ..Default::default()
+    let instance_floating = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.time_zone = None;
+        event_out.start = Some("2026-10-15T10:00:00".to_owned());
+        event_out
     };
 
     let patch =
@@ -47276,10 +47641,11 @@ fn differential_oracle_recurrence_overrides_timezone_floating_detection_and_null
     );
 
     // 2. When an instance specifies the identical timezone, timeZone is elided from the patch delta.
-    let instance_same_tz = CalendarEvent {
-        time_zone: Some("America/New_York".to_owned()),
-        start: Some("2026-10-15T10:00:00".to_owned()),
-        ..Default::default()
+    let instance_same_tz = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.time_zone = Some("America/New_York".to_owned());
+        event_out.start = Some("2026-10-15T10:00:00".to_owned());
+        event_out
     };
 
     let patch_same =
@@ -47290,10 +47656,11 @@ fn differential_oracle_recurrence_overrides_timezone_floating_detection_and_null
     );
 
     // 3. When an instance specifies a different timezone, timeZone is updated in the patch delta.
-    let instance_diff_tz = CalendarEvent {
-        time_zone: Some("Europe/London".to_owned()),
-        start: Some("2026-10-15T10:00:00".to_owned()),
-        ..Default::default()
+    let instance_diff_tz = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.time_zone = Some("Europe/London".to_owned());
+        event_out.start = Some("2026-10-15T10:00:00".to_owned());
+        event_out
     };
 
     let patch_diff =
@@ -48140,13 +48507,14 @@ fn differential_oracle_links_attach_default_relation_omission_and_outbound_handl
             "contentType": "image/png"
         }),
     );
-    let ev_custom = CalendarEvent {
-        id: Some("link-test-event".into()),
-        start: Some("2026-10-01T10:00:00".into()),
-        duration: Some("PT1H".into()),
-        title: Some("Link Test".into()),
-        links: Some(links_custom),
-        ..Default::default()
+    let ev_custom = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("link-test-event".into());
+        event_out.start = Some("2026-10-01T10:00:00".into());
+        event_out.duration = Some("PT1H".into());
+        event_out.title = Some("Link Test".into());
+        event_out.links = Some(links_custom);
+        event_out
     };
     let out = event_to_ical(&ev_custom);
     let unfolded = out.replace("\r\n ", "").replace("\r\n\t", "");
@@ -48268,13 +48636,14 @@ fn differential_oracle_valarm_description_isolation_and_outbound_title_derivatio
             }
         }),
     );
-    let ev_custom = CalendarEvent {
-        id: Some("alert-title-test".into()),
-        start: Some("2026-10-01T09:00:00".into()),
-        duration: Some("PT30M".into()),
-        title: Some("Weekly Status Review".into()),
-        alerts: Some(custom_alerts),
-        ..Default::default()
+    let ev_custom = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("alert-title-test".into());
+        event_out.start = Some("2026-10-01T09:00:00".into());
+        event_out.duration = Some("PT30M".into());
+        event_out.title = Some("Weekly Status Review".into());
+        event_out.alerts = Some(custom_alerts);
+        event_out
     };
     let out = event_to_ical(&ev_custom);
     assert!(
@@ -48315,13 +48684,14 @@ fn differential_oracle_caldav_conference_parameter_ordering_and_value_uri() {
             }
         }),
     );
-    let event = CalendarEvent {
-        id: Some("conf-order-test".into()),
-        start: Some("2026-10-01T10:00:00".into()),
-        duration: Some("PT1H".into()),
-        title: Some("Design Review".into()),
-        virtual_locations: Some(virtual_locations),
-        ..Default::default()
+    let event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("conf-order-test".into());
+        event_out.start = Some("2026-10-01T10:00:00".into());
+        event_out.duration = Some("PT1H".into());
+        event_out.title = Some("Design Review".into());
+        event_out.virtual_locations = Some(virtual_locations);
+        event_out
     };
 
     let out = event_to_ical(&event);
@@ -48381,13 +48751,14 @@ fn differential_oracle_caldav_image_parameter_ordering_and_roundtrip() {
             "display": "badge"
         }),
     );
-    let event = CalendarEvent {
-        id: Some("image-order-test".into()),
-        start: Some("2026-10-01T14:00:00".into()),
-        duration: Some("PT1H".into()),
-        title: Some("Colloquium".into()),
-        links: Some(links),
-        ..Default::default()
+    let event = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("image-order-test".into());
+        event_out.start = Some("2026-10-01T14:00:00".into());
+        event_out.duration = Some("PT1H".into());
+        event_out.title = Some("Colloquium".into());
+        event_out.links = Some(links);
+        event_out
     };
 
     let out = event_to_ical(&event);
@@ -48432,13 +48803,14 @@ fn differential_oracle_caldav_dtstamp_omission_without_updated_timestamp() {
     // RFC 5545 Section 3.6.1 mandatory DTSTAMP vs RFC 4791 Section 5.3.2 CalDAV PUT.
 
     // 1. When updated is None, outbound serialization omits DTSTAMP to prevent clock fabrication
-    let ev_no_updated = CalendarEvent {
-        id: Some("dtstamp-test".into()),
-        start: Some("2026-10-01T09:00:00".into()),
-        duration: Some("PT30M".into()),
-        title: Some("Morning Standup".into()),
-        updated: None,
-        ..Default::default()
+    let ev_no_updated = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("dtstamp-test".into());
+        event_out.start = Some("2026-10-01T09:00:00".into());
+        event_out.duration = Some("PT30M".into());
+        event_out.title = Some("Morning Standup".into());
+        event_out.updated = None;
+        event_out
     };
     let out = event_to_ical(&ev_no_updated);
     assert!(
@@ -48447,13 +48819,14 @@ fn differential_oracle_caldav_dtstamp_omission_without_updated_timestamp() {
     );
 
     // 2. When updated is present, outbound serialization emits DTSTAMP formatted as UTC Zulu
-    let ev_with_updated = CalendarEvent {
-        id: Some("dtstamp-test".into()),
-        start: Some("2026-10-01T09:00:00".into()),
-        duration: Some("PT30M".into()),
-        title: Some("Morning Standup".into()),
-        updated: Some("2026-09-19T10:00:00Z".into()),
-        ..Default::default()
+    let ev_with_updated = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("dtstamp-test".into());
+        event_out.start = Some("2026-10-01T09:00:00".into());
+        event_out.duration = Some("PT30M".into());
+        event_out.title = Some("Morning Standup".into());
+        event_out.updated = Some("2026-09-19T10:00:00Z".into());
+        event_out
     };
     let out_updated = event_to_ical(&ev_with_updated);
     assert!(
@@ -48473,12 +48846,13 @@ fn differential_oracle_caldav_prodid_and_container_roundtrip_stability() {
     // PRODID and top-level container properties, client identity preservation
     // vs server banner substitution: RFC 5545 Section 3.7.3 PRODID vs RFC 4791 CalDAV resource normalization.
 
-    let ev = CalendarEvent {
-        id: Some("prodid-test".into()),
-        start: Some("2026-10-01T11:00:00".into()),
-        duration: Some("PT45M".into()),
-        title: Some("Product Sync".into()),
-        ..Default::default()
+    let ev = {
+        let mut event_out: CalendarEvent = Default::default();
+        event_out.id = Some("prodid-test".into());
+        event_out.start = Some("2026-10-01T11:00:00".into());
+        event_out.duration = Some("PT45M".into());
+        event_out.title = Some("Product Sync".into());
+        event_out
     };
 
     // 1. Outbound serialization emits Evolution JMAP product identifier and version

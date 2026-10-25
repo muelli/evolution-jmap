@@ -344,10 +344,10 @@ mod tests {
     use super::*;
 
     fn book(id: Option<&str>, name: &str) -> AddressBook {
-        AddressBook {
-            id: id.map(Id::new),
-            name: name.to_owned(),
-            ..AddressBook::default()
+        let book = AddressBook::new(name);
+        match id {
+            Some(id) => book.with_id(Id::new(id)),
+            None => book,
         }
     }
 
@@ -430,25 +430,19 @@ mod tests {
         );
 
         let mut locked = book(Some("AB2"), "Read-only share");
-        locked.my_rights = Some(AddressBookRights {
-            may_write: Some(false),
-            ..AddressBookRights::default()
-        });
+        locked.my_rights = Some(AddressBookRights::default().with_may_write(false));
         assert_eq!(
             resources(vec![locked], Subscription::Honoured)[0].writable,
             Some(false)
         );
 
-        let calendar_own_only = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Work".to_owned(),
-            my_rights: Some(CalendarRights {
-                may_write_all: Some(false),
-                may_write_own: Some(true),
-                ..CalendarRights::default()
-            }),
-            ..Calendar::default()
-        };
+        let calendar_own_only = Calendar::new("Work")
+            .with_id(Id::new("Cal1"))
+            .with_my_rights(
+                CalendarRights::default()
+                    .with_may_write_all(false)
+                    .with_may_write_own(true),
+            );
         assert_eq!(
             resources(vec![calendar_own_only], Subscription::Honoured)[0].writable,
             Some(true)
@@ -465,24 +459,15 @@ mod tests {
         );
 
         let mut undeletable = book(Some("AB2"), "Locked share");
-        undeletable.my_rights = Some(AddressBookRights {
-            may_delete: Some(false),
-            ..AddressBookRights::default()
-        });
+        undeletable.my_rights = Some(AddressBookRights::default().with_may_delete(false));
         assert_eq!(
             resources(vec![undeletable], Subscription::Honoured)[0].deletable,
             Some(false)
         );
 
-        let calendar = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Work".to_owned(),
-            my_rights: Some(CalendarRights {
-                may_delete: Some(true),
-                ..CalendarRights::default()
-            }),
-            ..Calendar::default()
-        };
+        let calendar = Calendar::new("Work")
+            .with_id(Id::new("Cal1"))
+            .with_my_rights(CalendarRights::default().with_may_delete(true));
         assert_eq!(
             resources(vec![calendar], Subscription::Honoured)[0].deletable,
             Some(true)
@@ -493,12 +478,9 @@ mod tests {
     fn a_calendars_color_is_carried_and_an_address_books_never_is() {
         // `AddressBook` has no `color` property, so its color is always `None`.
         // A `Calendar` keeps the server's value unchanged.
-        let calendar = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Work".to_owned(),
-            color: Some("#ff8800".to_owned()),
-            ..Calendar::default()
-        };
+        let calendar = Calendar::new("Work")
+            .with_id(Id::new("Cal1"))
+            .with_color("#ff8800");
         assert_eq!(
             resources(vec![calendar], Subscription::Honoured)[0].color,
             Some("#ff8800".to_owned())
@@ -512,11 +494,7 @@ mod tests {
 
     #[test]
     fn a_calendar_the_server_named_no_color_for_carries_none() {
-        let calendar = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Work".to_owned(),
-            ..Calendar::default()
-        };
+        let calendar = Calendar::new("Work").with_id(Id::new("Cal1"));
         assert_eq!(
             resources(vec![calendar], Subscription::Honoured)[0].color,
             None
@@ -542,25 +520,19 @@ mod tests {
 
     #[test]
     fn a_calendars_order_default_and_rights_are_read_from_the_calendar() {
-        let late = Calendar {
-            id: Some(Id::new("Cal1")),
-            name: "Alpha".to_owned(),
-            sort_order: Some(2),
-            ..Calendar::default()
-        };
-        let early = Calendar {
-            id: Some(Id::new("Cal2")),
-            name: "Beta".to_owned(),
-            sort_order: Some(1),
-            is_default: Some(true),
-            my_rights: Some(CalendarRights {
-                may_write_all: Some(false),
-                may_write_own: Some(false),
-                may_delete: Some(false),
-                ..CalendarRights::default()
-            }),
-            ..Calendar::default()
-        };
+        let late = Calendar::new("Alpha")
+            .with_id(Id::new("Cal1"))
+            .with_sort_order(2);
+        let early = Calendar::new("Beta")
+            .with_id(Id::new("Cal2"))
+            .with_sort_order(1)
+            .is_default(true)
+            .with_my_rights(
+                CalendarRights::default()
+                    .with_may_write_all(false)
+                    .with_may_write_own(false)
+                    .with_may_delete(false),
+            );
 
         let resources = resources(vec![late, early], Subscription::Honoured);
 

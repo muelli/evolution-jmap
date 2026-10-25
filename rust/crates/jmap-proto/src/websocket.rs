@@ -32,6 +32,7 @@ pub mod message_type {
 /// A client-to-server request frame over WebSocket (RFC 8887 §2.2.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct WebSocketRequest {
     #[serde(rename = "@type")]
     pub message_type: String,
@@ -88,6 +89,7 @@ impl WebSocketRequest {
 /// A server-to-client response frame over WebSocket (RFC 8887 §2.2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct WebSocketResponse {
     #[serde(rename = "@type")]
     pub message_type: String,
@@ -151,6 +153,7 @@ impl WebSocketResponse {
 
 /// A request-level error frame over WebSocket (RFC 8887 §2.2.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WebSocketRequestError {
     #[serde(rename = "@type")]
     pub message_type: String,
@@ -197,6 +200,7 @@ impl WebSocketRequestError {
 /// A client request to enable WebSocket push notifications (RFC 8887 §2.3.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct WebSocketPushEnable {
     #[serde(rename = "@type")]
     pub message_type: String,
@@ -233,6 +237,7 @@ impl WebSocketPushEnable {
 /// A client request to disable WebSocket push notifications (RFC 8887 §2.3.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct WebSocketPushDisable {
     #[serde(rename = "@type")]
     pub message_type: String,

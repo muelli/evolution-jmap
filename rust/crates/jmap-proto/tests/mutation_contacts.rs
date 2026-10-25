@@ -76,16 +76,10 @@ fn address_book_rights_presets_permissions_logic_and_extra_preservation() {
     assert_eq!(ro_rights.may_delete, None);
     assert!(!ro_rights.is_writable());
 
-    let write_only = AddressBookRights {
-        may_write: Some(true),
-        ..AddressBookRights::default()
-    };
+    let write_only = AddressBookRights::default().with_may_write(true);
     assert!(write_only.is_writable());
 
-    let write_false = AddressBookRights {
-        may_write: Some(false),
-        ..AddressBookRights::default()
-    };
+    let write_false = AddressBookRights::default().with_may_write(false);
     assert!(!write_false.is_writable());
 
     let mut extra = BTreeMap::new();
@@ -354,12 +348,10 @@ fn name_and_name_component_builders_and_phonetic() {
 fn nickname_and_contact_email_builders_and_properties() {
     let mut extra = BTreeMap::new();
     extra.insert("customNick".to_string(), json!("fav"));
-    let nickname = Nickname {
-        name: "Johnny".to_string(),
-        contexts: Some(json!({"private": true})),
-        pref: Some(1),
-        extra,
-    };
+    let mut nickname = Nickname::new("Johnny");
+    nickname.contexts = Some(json!({"private": true}));
+    nickname.pref = Some(1);
+    nickname.extra = extra;
     let val_nick = serde_json::to_value(&nickname).expect("serialize Nickname");
     assert_eq!(val_nick["name"], "Johnny");
     assert_eq!(val_nick["pref"], 1);
@@ -537,12 +529,8 @@ fn author_and_note_builders_and_serialization() {
         Some("QA Engineer".to_string())
     );
 
-    let note_string_author = Note {
-        note: "Legacy note format".to_string(),
-        created: None,
-        author: Some(json!("Legacy Auditor")),
-        extra: BTreeMap::new(),
-    };
+    let mut note_string_author = Note::new("Legacy note format");
+    note_string_author.author = Some(json!("Legacy Auditor"));
     assert_eq!(note_string_author.author_name(), Some("Legacy Auditor"));
     assert_eq!(
         note_string_author.author().and_then(|a| a.name),

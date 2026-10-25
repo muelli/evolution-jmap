@@ -640,19 +640,11 @@ fn client_takes_calls_in_one_request_limits() {
 
 #[test]
 fn client_unwrap_invocation_variants() {
-    let ok_invocation = Invocation {
-        name: "Core/echo".to_string(),
-        arguments: json!({"key": "val"}),
-        call_id: "c0".to_string(),
-    };
+    let ok_invocation = Invocation::from_value("Core/echo", json!({"key": "val"}), "c0");
     let unwrapped = Client::unwrap_invocation(&ok_invocation, "Core/echo").unwrap();
     assert_eq!(unwrapped, json!({"key": "val"}));
 
-    let mismatched_invocation = Invocation {
-        name: "Something/other".to_string(),
-        arguments: json!({}),
-        call_id: "c0".to_string(),
-    };
+    let mismatched_invocation = Invocation::from_value("Something/other", json!({}), "c0");
     let mismatch_res = Client::unwrap_invocation(&mismatched_invocation, "Core/echo");
     match mismatch_res {
         Err(Error::Protocol(msg)) => {
@@ -661,11 +653,11 @@ fn client_unwrap_invocation_variants() {
         other => panic!("expected Error::Protocol, got {other:?}"),
     }
 
-    let error_invocation = Invocation {
-        name: "error".to_string(),
-        arguments: json!({"type": "accountNotFound", "description": "no such account"}),
-        call_id: "c0".to_string(),
-    };
+    let error_invocation = Invocation::from_value(
+        "error",
+        json!({"type": "accountNotFound", "description": "no such account"}),
+        "c0",
+    );
     let err_res = Client::unwrap_invocation(&error_invocation, "Core/echo");
     match err_res {
         Err(Error::Method(method_err)) => {

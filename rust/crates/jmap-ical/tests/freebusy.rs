@@ -12,12 +12,7 @@ use jmap_proto::principals::BusyPeriod;
 use jmap_proto::state::UtcDate;
 
 fn period(start: &str, end: &str, status: &str) -> BusyPeriod {
-    BusyPeriod {
-        utc_start: UtcDate::new(start),
-        utc_end: UtcDate::new(end),
-        busy_status: status.to_owned(),
-        event: None,
-    }
+    BusyPeriod::new(UtcDate::new(start), UtcDate::new(end), status)
 }
 
 fn render(attendee: &str, periods: &[BusyPeriod]) -> Option<String> {

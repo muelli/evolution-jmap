@@ -18,18 +18,16 @@ fn server_with_principals() -> (MockServer, Id, Id, Id) {
         let state = server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&account_id).unwrap();
-        let me = account.seed_current_user_principal(Principal {
-            principal_type: Some("individual".to_owned()),
-            name: "Alice Example".to_owned(),
-            email: Some("alice@example.com".to_owned()),
-            ..Principal::default()
-        });
-        let attendee = account.seed_principal(Principal {
-            principal_type: Some("individual".to_owned()),
-            name: "Bob Example".to_owned(),
-            email: Some("bob@example.com".to_owned()),
-            ..Principal::default()
-        });
+        let me = account.seed_current_user_principal(
+            Principal::new("Alice Example")
+                .with_type("individual")
+                .with_email("alice@example.com"),
+        );
+        let attendee = account.seed_principal(
+            Principal::new("Bob Example")
+                .with_type("individual")
+                .with_email("bob@example.com"),
+        );
         (me, attendee)
     };
     (server, account_id, me, attendee)
@@ -94,9 +92,11 @@ fn get_availability_returns_busy_periods_in_the_window_sorted_by_start() {
     let earlier = CalendarEvent::simple(calendar.clone(), "Earlier", "2026-09-01T09:00:00", "PT1H");
     let outside_window =
         CalendarEvent::simple(calendar.clone(), "Next week", "2026-09-08T09:00:00", "PT1H");
-    let free = CalendarEvent {
-        free_busy_status: Some("free".to_owned()),
-        ..CalendarEvent::simple(calendar, "Optional", "2026-09-01T12:00:00", "PT1H")
+    let free = {
+        let mut event_out =
+            CalendarEvent::simple(calendar, "Optional", "2026-09-01T12:00:00", "PT1H");
+        event_out.free_busy_status = Some("free".to_owned());
+        event_out
     };
     for event in [&later, &earlier, &outside_window, &free] {
         client.event_create(&account_id, event).unwrap();
@@ -158,20 +158,18 @@ fn get_availability_is_not_found_when_the_principal_denies_it() {
     let denied = {
         let state = server.state();
         let mut state = state.lock().unwrap();
-        state
-            .account_mut(&account_id)
-            .unwrap()
-            .seed_principal(Principal {
-                principal_type: Some("individual".to_owned()),
-                name: "Carol NoAvailability".to_owned(),
-                capabilities: [(
-                    "urn:ietf:params:jmap:calendars".to_owned(),
-                    json!({"mayGetAvailability": false}),
-                )]
-                .into_iter()
-                .collect(),
-                ..Principal::default()
-            })
+        state.account_mut(&account_id).unwrap().seed_principal(
+            Principal::new("Carol NoAvailability")
+                .with_type("individual")
+                .with_capabilities(
+                    [(
+                        "urn:ietf:params:jmap:calendars".to_owned(),
+                        json!({"mayGetAvailability": false}),
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+        )
     };
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
@@ -315,18 +313,16 @@ fn current_user_principal_does_not_accept_an_unverified_decoy_candidate() {
         // "take whichever Principal/get answers first" bug would return
         // this one. Its email contains "alice", matching the substring
         // filter, but it is not the account owner.
-        account.seed_principal(Principal {
-            principal_type: Some("individual".to_owned()),
-            name: "Alice Decoy Team".to_owned(),
-            email: Some("alice.decoy@example.com".to_owned()),
-            ..Principal::default()
-        });
-        account.seed_principal(Principal {
-            principal_type: Some("individual".to_owned()),
-            name: "Alice Example".to_owned(),
-            email: Some("alice@example.com".to_owned()),
-            ..Principal::default()
-        })
+        account.seed_principal(
+            Principal::new("Alice Decoy Team")
+                .with_type("individual")
+                .with_email("alice.decoy@example.com"),
+        );
+        account.seed_principal(
+            Principal::new("Alice Example")
+                .with_type("individual")
+                .with_email("alice@example.com"),
+        )
     };
 
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();

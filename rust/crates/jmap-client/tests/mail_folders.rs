@@ -32,11 +32,11 @@ fn with_inbox() -> (MockServer, Client, Id, Id) {
 
 /// A mailbox named `name` under `parent`, as a client would ask for one.
 fn asking_for(name: &str, parent: Option<&Id>) -> Mailbox {
-    Mailbox {
-        name: name.to_owned(),
-        parent_id: parent.cloned(),
-        ..Mailbox::default()
+    let mut mailbox = Mailbox::new(name);
+    if let Some(parent) = parent {
+        mailbox = mailbox.with_parent_id(parent.clone());
     }
+    mailbox
 }
 
 /// The mailbox the account holds under `id`, or nothing.

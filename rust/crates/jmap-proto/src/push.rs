@@ -15,6 +15,7 @@ use crate::state::{State, UtcDate};
 /// A push subscription object (RFC 8620 §7.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PushSubscription {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -90,6 +91,7 @@ impl PushSubscription {
 
 /// Elliptic curve keys for Web Push payload encryption (RFC 8620 §7.2, RFC 8291).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub struct PushSubscriptionKeys {
     pub p256dh: String,
     pub auth: String,
@@ -117,6 +119,7 @@ impl PushSubscriptionKeys {
 /// A verification challenge sent by the server to validate a push subscription URL (RFC 8620 §7.2.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PushVerification {
     #[serde(rename = "@type")]
     pub object_type: String,
@@ -158,6 +161,7 @@ pub type TypeState = BTreeMap<String, State>;
 /// A server-pushed notification that something changed (RFC 8620 §7.1),
 /// delivered over EventSource (§7.3). `@type` MUST be `"StateChange"`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StateChange {
     #[serde(rename = "@type")]
     pub kind: String,
@@ -212,6 +216,7 @@ pub mod push_subscription_set_error {
 /// Voluntary Application Server Identification (VAPID) Web Push capability properties (RFC 9749 §6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct WebPushVapidCapability {
     pub application_server_key: String,
     #[serde(flatten)]

@@ -1005,6 +1005,62 @@ pub unsafe fn setup(collection: *mut ESource, address: &str) -> bool {
     true
 }
 
+/// Copies the real server of an existing standalone account from `source` onto
+/// `collection`, the one case `setup` must not handle by deriving from the
+/// address.
+///
+/// `new_collection` always starts `collection` with no server
+/// ([`from_identity("")`][from_identity]). For a new account that is correct:
+/// nothing else knows a server yet. For an account the editor re-opens, it is
+/// not: Evolution keeps a fresh `collection` for a backend with no collection
+/// source to put in its place (there is none for a standalone JMAP mail
+/// account), so `source`, the scratch copy of the real mail account, is the
+/// only place the real `[Authentication]`/`[Security]` live. Without this,
+/// `check_complete`'s narrow to the address calls `setup`, which treats the
+/// blank `collection` as a new account and offers an address-derived guess
+/// in place of the real server; a commit with no further edit then writes
+/// that guess onto the real mail source.
+///
+/// Returns true if it wrote; the caller then skips `setup`. Idempotent like
+/// `setup`: once `collection`'s identity matches `address` (what this
+/// function just wrote, or what a real collection already had), it writes
+/// nothing further, so a server the user then types by hand is not undone by
+/// the next keystroke's narrow.
+///
+/// # Safety
+///
+/// `collection` and `source` must each be NULL or a valid `ESource`. This
+/// function reads both and writes only `collection`, and keeps nothing after
+/// the call.
+pub unsafe fn seed_existing(collection: *mut ESource, source: *mut ESource, address: &str) -> bool {
+    if collection.is_null() || source.is_null() {
+        return false;
+    }
+
+    // SAFETY: non-NULL and a valid source by the contract of this function.
+    let mut account = unsafe { read(collection) };
+    if account.identity == address {
+        return false;
+    }
+
+    // SAFETY: non-NULL and a valid source by the contract of this function.
+    // `read` gets the connection straight from `[Authentication]`/
+    // `[Security]`, which it reads with no need for a `[Collection]`
+    // extension: exactly the groups a standalone mail source has.
+    let existing = unsafe { read(source) }.connection;
+    if existing.host.is_empty() {
+        // A blank source: the assistant's new, not yet configured, account.
+        // Nothing to copy; `setup` is the right path for it.
+        return false;
+    }
+
+    account.identity = address.to_owned();
+    account.connection = existing;
+    // SAFETY: as above; `apply` borrows the account only for the call.
+    unsafe { apply(collection, &account) };
+    true
+}
+
 /// Evolution asks this before the assistant goes to the next page, and again
 /// after each keystroke: is this account complete?
 ///
@@ -1040,9 +1096,10 @@ unsafe extern "C" fn check_complete(backend: *mut EMailConfigServiceBackend) -> 
         // SAFETY: a live backend of this class, which is what Evolution
         // dispatches through this slot. Both are `(transfer none)`: the
         // backend's own references, which live longer than this call.
-        let (collection, page) = unsafe {
+        let (collection, source, page) = unsafe {
             (
                 e_mail_config_service_backend_get_collection(backend),
+                e_mail_config_service_backend_get_source(backend),
                 e_mail_config_service_backend_get_page(backend),
             )
         };
@@ -1065,9 +1122,14 @@ unsafe extern "C" fn check_complete(backend: *mut EMailConfigServiceBackend) -> 
             let address =
                 unsafe { read_string(e_mail_config_service_page_get_email_address(page)) };
             if let Some(address) = address.filter(|a| !a.trim().is_empty()) {
-                // SAFETY: `collection` is NULL or the backend's live collection
-                // source; `setup` accepts NULL and keeps nothing after the call.
-                unsafe { setup(collection, &address) };
+                // SAFETY: `collection` and `source` are each NULL or one of the
+                // backend's live sources; both functions accept NULL and keep
+                // nothing after the call. `seed_existing` copies the real
+                // server of an existing standalone account before `setup`
+                // would replace it with an address-derived guess; see its doc.
+                if !unsafe { seed_existing(collection, source, &address) } {
+                    unsafe { setup(collection, &address) };
+                }
             }
         }
 

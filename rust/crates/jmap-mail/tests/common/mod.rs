@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
     CamelProvider, CamelService, CamelStore, camel_service_get_user_cache_dir,
-    camel_session_get_type,
+    camel_session_get_type, camel_session_set_online,
 };
 use gio_sys::g_initable_new;
 use glib_sys::{GError, gchar};
@@ -131,6 +131,12 @@ impl Account {
         // SAFETY: `self.store` is an instance of `JmapStore`, constructed
         // above, and it lives as long as this `Account`.
         unsafe { JmapStore::borrow(self.store) }.expect("a store of ours")
+    }
+
+    /// Takes the session online or offline. A new session is online.
+    pub fn set_online(&self, online: bool) {
+        // SAFETY: the live session of this account.
+        unsafe { camel_session_set_online(self.session.cast(), online.into()) };
     }
 
     /// Installs a live connection, the way `connect_sync` would.

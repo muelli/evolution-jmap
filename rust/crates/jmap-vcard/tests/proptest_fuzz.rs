@@ -58,12 +58,7 @@ prop_compose! {
         if let Some(s) = sort_as {
             extra.insert("sortAs".to_string(), json!(s));
         }
-        Name {
-            components,
-            full,
-            extra,
-            ..Name::default()
-        }
+        { let mut name_val = Name::default(); name_val.components = components; name_val.full = full; name_val.extra = extra; name_val }
     }
 }
 
@@ -82,11 +77,7 @@ prop_compose! {
             Just("🌟 Star".to_string()),
         ],
     ) -> Nickname {
-        Nickname {
-            name,
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        }
+        { let mut v = Nickname::default(); v.name = name; v.extra = BTreeMap::new(); v }
     }
 }
 
@@ -113,12 +104,7 @@ prop_compose! {
         if let Some(l) = label {
             extra.insert("label".to_string(), json!(l));
         }
-        ContactEmail {
-            address,
-            contexts,
-            pref,
-            extra,
-        }
+        { let mut v = ContactEmail::default(); v.address = address; v.contexts = contexts; v.pref = pref; v.extra = extra; v }
     }
 }
 
@@ -160,13 +146,7 @@ prop_compose! {
         if let Some(l) = label {
             extra.insert("label".to_string(), json!(l));
         }
-        ContactPhone {
-            number,
-            features,
-            contexts,
-            pref,
-            extra,
-        }
+        { let mut v = ContactPhone::default(); v.number = number; v.features = features; v.contexts = contexts; v.pref = pref; v.extra = extra; v }
     }
 }
 
@@ -200,11 +180,12 @@ prop_compose! {
             "[a-z]{1,6}",
         ]),
     ) -> Title {
-        Title {
-            name,
-            kind,
-            extra: BTreeMap::new(),
-            ..Title::default()
+        {
+            let mut title = Title::default();
+            title.name = name;
+            title.kind = kind;
+            title.extra = BTreeMap::new();
+            title
         }
     }
 }
@@ -253,23 +234,13 @@ prop_compose! {
         if let Some(l) = label {
             extra.insert("label".to_owned(), json!(l));
         }
-        Address {
-            components,
-            contexts,
-            full,
-            extra,
-            ..Address::default()
-        }
+        { let mut address_val = Address::default(); address_val.components = components; address_val.contexts = contexts; address_val.full = full; address_val.extra = extra; address_val }
     }
 }
 
 prop_compose! {
     fn arb_note()(note in "\\PC*") -> Note {
-        Note {
-            note,
-            extra: BTreeMap::new(),
-            ..Note::default()
-        }
+        { let mut v = Note::default(); v.note = note; v.extra = BTreeMap::new(); v }
     }
 }
 
@@ -294,11 +265,10 @@ prop_compose! {
             Just(json!(null)),
         ]),
     ) -> Anniversary {
-        Anniversary {
-            kind,
-            date,
-            extra: BTreeMap::new(),
-        }
+        let mut v = Anniversary::default();
+        v.kind = kind;
+        v.date = date;
+        v
     }
 }
 
@@ -349,11 +319,12 @@ prop_compose! {
             "[a-z]{1,8}",
         ]),
     ) -> Calendar {
-        Calendar {
-            kind,
-            uri,
-            extra: BTreeMap::new(),
-            ..Calendar::default()
+        {
+            let mut calendar = Calendar::default();
+            calendar.kind = kind;
+            calendar.uri = uri;
+            calendar.extra = BTreeMap::new();
+            calendar
         }
     }
 }
@@ -431,13 +402,12 @@ prop_compose! {
             "\\PC*",
         ]),
     ) -> OnlineService {
-        OnlineService {
-            service,
-            user,
-            uri,
-            extra: BTreeMap::new(),
-            ..OnlineService::default()
-        }
+        let mut v = OnlineService::default();
+        v.service = service;
+        v.user = user;
+        v.uri = uri;
+        v.extra = BTreeMap::new();
+        v
     }
 }
 
@@ -465,10 +435,10 @@ prop_compose! {
         if let Some(l) = label {
             extra.insert("label".to_string(), json!(l));
         }
-        Relation {
-            relation,
-            extra,
-        }
+        let mut v = Relation::default();
+        v.relation = relation;
+        v.extra = extra;
+        v
     }
 }
 
@@ -631,28 +601,29 @@ fn arb_contact_card() -> impl Strategy<Value = ContactCard> {
                 (anniversaries, links, calendars, media, keywords, related_to),
                 extra,
             )| {
-                ContactCard {
-                    id: id.map(Into::into),
-                    uid,
-                    card_type: Some("Card".to_string()),
-                    version: Some("1.0".to_string()),
-                    name,
-                    nicknames,
-                    emails,
-                    phones,
-                    organizations,
-                    titles,
-                    addresses,
-                    notes,
-                    anniversaries,
-                    links,
-                    calendars,
-                    media,
-                    online_services,
-                    keywords,
-                    related_to,
-                    extra,
-                    ..ContactCard::default()
+                {
+                    let mut card = ContactCard::default();
+                    card.id = id.map(Into::into);
+                    card.uid = uid;
+                    card.card_type = Some("Card".to_string());
+                    card.version = Some("1.0".to_string());
+                    card.name = name;
+                    card.nicknames = nicknames;
+                    card.emails = emails;
+                    card.phones = phones;
+                    card.organizations = organizations;
+                    card.titles = titles;
+                    card.addresses = addresses;
+                    card.notes = notes;
+                    card.anniversaries = anniversaries;
+                    card.links = links;
+                    card.calendars = calendars;
+                    card.media = media;
+                    card.online_services = online_services;
+                    card.keywords = keywords;
+                    card.related_to = related_to;
+                    card.extra = extra;
+                    card
                 }
             },
         )
@@ -1147,14 +1118,16 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
 // Keep fixed-point stability when `full` is empty and only `given` exists.
 #[test]
 fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
-    let card = ContactCard {
-        name: Some(Name {
-            components: Some(vec![NameComponent::new("given", "A")]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
-        }),
-        ..Default::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![NameComponent::new("given", "A")]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
+        });
+        card
     };
 
     let vcard1 = card_to_vcard(&card);
@@ -1181,9 +1154,10 @@ fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first
             ..Organization::default()
         },
     );
-    let card = ContactCard {
-        organizations: Some(organizations),
-        ..Default::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(organizations);
+        card
     };
 
     let vcard1 = card_to_vcard(&card);
@@ -1218,9 +1192,10 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
             ..Organization::default()
         },
     );
-    let card = ContactCard {
-        organizations: Some(organizations),
-        ..Default::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(organizations);
+        card
     };
 
     let vcard1 = card_to_vcard(&card);
@@ -1237,22 +1212,21 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
 #[test]
 fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
     let mut addresses = BTreeMap::new();
-    addresses.insert(
-        "-AaaAa".to_owned(),
-        Address {
-            components: Some(vec![AddressComponent::new(
-                "postOfficeBox",
-                "ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প",
-            )]),
-            contexts: None,
-            full: None,
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
-    let card = ContactCard {
-        addresses: Some(addresses),
-        ..Default::default()
+    addresses.insert("-AaaAa".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new(
+            "postOfficeBox",
+            "ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প",
+        )]);
+        address_val.contexts = None;
+        address_val.full = None;
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
+    let card = {
+        let mut card = ContactCard::default();
+        card.addresses = Some(addresses);
+        card
     };
 
     for line in card_to_vcard(&card).split("\r\n") {
@@ -1355,16 +1329,13 @@ proptest! {
         let mut notes = BTreeMap::new();
         notes.insert(
             "n1".to_owned(),
-            Note {
-                note: text.clone(),
-                extra: BTreeMap::new(),
-                ..Note::default()
-            },
+            { let mut v = Note::default(); v.note = text.clone(); v.extra = BTreeMap::new(); v },
         );
-        let card = ContactCard {
-            id: Some("C-PROP-ESC".into()),
-            notes: Some(notes),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-PROP-ESC".into());
+            card.notes = Some(notes);
+            card
         };
 
         let vcard1 = card_to_vcard(&card);
@@ -1417,26 +1388,18 @@ proptest! {
         ],
     ) {
         let full = format!("{given} {surname}");
-        let card = ContactCard {
-            id: Some("C-PROP-UNICODE".into()),
-            name: Some(Name {
-                full: Some(full.clone()),
-                components: Some(vec![
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-PROP-UNICODE".into());
+            card.name = Some({ let mut name_val = Name::default(); name_val.full = Some(full.clone()); name_val.components = Some(vec![
                     NameComponent::new("given", &given),
                     NameComponent::new("surname", &surname),
-                ]),
-                extra: BTreeMap::new(),
-                ..Name::default()
-            }),
-            notes: Some([(
+                ]); name_val.extra = BTreeMap::new(); name_val });
+            card.notes = Some([(
                 "n1".to_owned(),
-                Note {
-                    note: note_text.clone(),
-                    extra: BTreeMap::new(),
-                    ..Note::default()
-                },
-            )].into()),
-            ..ContactCard::default()
+                { let mut v = Note::default(); v.note = note_text.clone(); v.extra = BTreeMap::new(); v },
+            )].into());
+            card
         };
 
         let vcard1 = card_to_vcard(&card);
@@ -1487,9 +1450,10 @@ proptest! {
             )
         };
 
-        let card = ContactCard {
-            id: Some("C-PROP-PHOTO".into()),
-            media: Some([(
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-PROP-PHOTO".into());
+            card.media = Some([(
                 "m1".to_owned(),
                 Media {
                     kind: Some("photo".to_owned()),
@@ -1498,8 +1462,8 @@ proptest! {
                     extra: BTreeMap::new(),
                     ..Media::default()
                 },
-            )].into()),
-            ..ContactCard::default()
+            )].into());
+            card
         };
 
         let uri_is_supported_remote = uri.starts_with("http://") || uri.starts_with("https://");
@@ -1553,10 +1517,11 @@ proptest! {
     fn prop_fixpoint_telephony_domain(
         phones in prop::collection::btree_map(arb_key(), arb_phone(), 1..6)
     ) {
-        let card = ContactCard {
-            id: Some("C-TEL".into()),
-            phones: Some(phones),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-TEL".into());
+            card.phones = Some(phones);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("telephony vcard1 parse");
@@ -1572,10 +1537,11 @@ proptest! {
     fn prop_fixpoint_email_domain(
         emails in prop::collection::btree_map(arb_key(), arb_email(), 1..6)
     ) {
-        let card = ContactCard {
-            id: Some("C-EMAIL".into()),
-            emails: Some(emails),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-EMAIL".into());
+            card.emails = Some(emails);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("email vcard1 parse");
@@ -1591,10 +1557,11 @@ proptest! {
     fn prop_fixpoint_address_and_label_domain(
         addresses in prop::collection::btree_map(arb_key(), arb_address(), 1..4)
     ) {
-        let card = ContactCard {
-            id: Some("C-ADR".into()),
-            addresses: Some(addresses),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-ADR".into());
+            card.addresses = Some(addresses);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("address vcard1 parse");
@@ -1610,10 +1577,11 @@ proptest! {
     fn prop_fixpoint_organization_domain(
         organizations in prop::collection::btree_map(arb_key(), arb_organization(), 1..3)
     ) {
-        let card = ContactCard {
-            id: Some("C-ORG".into()),
-            organizations: Some(organizations),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-ORG".into());
+            card.organizations = Some(organizations);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("org vcard1 parse");
@@ -1629,10 +1597,11 @@ proptest! {
     fn prop_fixpoint_relation_domain(
         relations in prop::collection::btree_map(arb_key(), arb_relation(), 1..4)
     ) {
-        let card = ContactCard {
-            id: Some("C-REL".into()),
-            related_to: Some(relations),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-REL".into());
+            card.related_to = Some(relations);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         prop_assert!(!vcard1.contains("AGENT:"));
@@ -1651,10 +1620,11 @@ proptest! {
     fn prop_fixpoint_anniversary_domain(
         anniversaries in prop::collection::btree_map(arb_key(), arb_anniversary(), 1..4)
     ) {
-        let card = ContactCard {
-            id: Some("C-ANNIV".into()),
-            anniversaries: Some(anniversaries),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-ANNIV".into());
+            card.anniversaries = Some(anniversaries);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("anniversary vcard1 parse");
@@ -1674,10 +1644,11 @@ proptest! {
             1..6,
         )
     ) {
-        let card = ContactCard {
-            id: Some("C-CAT".into()),
-            keywords: Some(keywords),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-CAT".into());
+            card.keywords = Some(keywords);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("categories vcard1 parse");
@@ -1693,10 +1664,11 @@ proptest! {
     fn prop_fixpoint_notes_escaping_domain(
         notes in prop::collection::btree_map(arb_key(), arb_note(), 1..3)
     ) {
-        let card = ContactCard {
-            id: Some("C-NOTE".into()),
-            notes: Some(notes),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-NOTE".into());
+            card.notes = Some(notes);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("notes vcard1 parse");
@@ -1712,10 +1684,11 @@ proptest! {
     fn prop_fixpoint_online_services_domain(
         online_services in prop::collection::btree_map(arb_key(), arb_online_service(), 1..4)
     ) {
-        let card = ContactCard {
-            id: Some("C-IM".into()),
-            online_services: Some(online_services),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-IM".into());
+            card.online_services = Some(online_services);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("im vcard1 parse");
@@ -1740,11 +1713,12 @@ proptest! {
         if let Some(cf) = card_file_as {
             extra.insert("fileAs".to_string(), json!(cf));
         }
-        let card = ContactCard {
-            id: Some("C-NAME".into()),
-            name: Some(name),
-            extra,
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-NAME".into());
+            card.name = Some(name);
+            card.extra = extra;
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("name vcard1 parse");
@@ -1783,10 +1757,11 @@ proptest! {
     fn prop_fixpoint_links_domain(
         links in prop::collection::btree_map(arb_key(), arb_link(), 1..4),
     ) {
-        let card = ContactCard {
-            id: Some("C-LINKS".into()),
-            links: Some(links),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-LINKS".into());
+            card.links = Some(links);
+            card
         };
         let vcard1 = card_to_vcard(&card);
         let parsed1 = vcard_to_card(&vcard1).expect("links vcard1 parse");
@@ -1813,11 +1788,12 @@ proptest! {
         let mut extra = BTreeMap::new();
         extra.insert("cryptoKeys".to_string(), json!(crypto_keys));
 
-        let card = ContactCard {
-            id: Some("C-KEY-LOGO".into()),
-            media: Some(media),
-            extra,
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-KEY-LOGO".into());
+            card.media = Some(media);
+            card.extra = extra;
+            card
         };
 
         let vcard1 = card_to_vcard(&card);

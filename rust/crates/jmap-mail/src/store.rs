@@ -49,8 +49,8 @@ use jmap_backend_core::retry::retry_once_after;
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
 use jmap_client::Credentials;
 use jmap_mail_sync::{
-    Filing, FolderInfo, FolderTree, FolderUpdate, KeywordChange, Keywords, MailSync,
-    MessageSummary, MessageUpdate, SyncError,
+    Filing, FolderInfo, FolderListChange, FolderTree, FolderUpdate, KeywordChange, Keywords,
+    MailSync, MessageSummary, MessageUpdate, SyncError,
 };
 use jmap_proto::mail::EmailQueryFilter;
 use jmap_proto::methods::Filter;
@@ -598,26 +598,25 @@ impl JmapStore {
     }
 
     /// The folder-list half of a pushed `Mailbox` change. It refreshes the
-    /// held tree and tells if the change was structural. A structural change
-    /// creates, destroys, renames, moves, subscribes or unsubscribes a
-    /// mailbox; a count change is not structural. The module docs of
-    /// [`crate::push`] tell that only a structural change must call
-    /// `camel_store_folder_info_stale`.
+    /// held tree and tells how the folders changed. A count change is
+    /// [`FolderListChange::Same`]. The module docs of [`crate::push`] tell
+    /// which change gets which Camel signal.
     ///
-    /// It returns `false` if no tree is held: Camel did not ask for a folder
-    /// list yet, so no list can be stale.
-    pub fn folder_list_changed_structurally(&self) -> bool {
+    /// It returns `Same` if no tree is held: Camel did not ask for a folder
+    /// list yet, so no list can be out of date. A failed listing also gives
+    /// `Same`: the next push tries again.
+    pub fn pushed_folder_list_change(&self) -> FolderListChange {
         let Some(before) = self.cached_tree() else {
-            return false;
+            return FolderListChange::Same;
         };
         match self.folders(CAMEL_STORE_FOLDER_INFO_REFRESH) {
-            Ok(after) => !before.same_shape(&after),
+            Ok(after) => before.change_to(&after),
             Err(failure) => {
                 tracing::debug!(
                     ?failure,
-                    "checking whether a pushed folder-list change was structural failed"
+                    "checking how a pushed folder-list change changed the folders failed"
                 );
-                false
+                FolderListChange::Same
             }
         }
     }

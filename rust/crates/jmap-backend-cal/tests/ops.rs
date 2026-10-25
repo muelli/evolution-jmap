@@ -22,7 +22,7 @@ use glib_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 use jmap_backend_cal::ops::{self, Outcome};
-use jmap_cal_sync::{CalSync, Itip, OnConflict, SyncError, Unscheduled, Unsendable};
+use jmap_cal_sync::{CalSync, Itip, OnConflict, SyncError, Unscheduled, Unsendable, edit_base};
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -306,6 +306,7 @@ fn load_component_yields_an_icalcomponent_keyed_by_the_jmap_id() {
         let ok = ops::load_component(
             &fixture.sync(),
             uid.as_ptr(),
+            ptr::null(),
             &mut component,
             &mut extra,
             &mut error,
@@ -320,6 +321,11 @@ fn load_component_yields_an_icalcomponent_keyed_by_the_jmap_id() {
         );
         let text = marshal::ical_from_component(component).expect("rendered");
         assert!(text.contains("SUMMARY:Standup"), "{text}");
+        let revision = fixture.sync().load_component(id.as_str()).unwrap().revision;
+        assert!(
+            text.contains(&format!("X-JMAP-BASE:{revision}")),
+            "the component carries no stamp of its base: {text}"
+        );
         marshal::component_unref(component);
     }
 }
@@ -339,6 +345,7 @@ fn loading_an_unknown_component_reports_object_not_found_and_writes_nothing() {
         let ok = ops::load_component(
             &fixture.sync(),
             uid.as_ptr(),
+            ptr::null(),
             &mut component,
             ptr::null_mut(),
             &mut error,
@@ -362,6 +369,7 @@ fn loading_without_an_identifier_is_an_invalid_argument_not_a_null_dereference()
     unsafe {
         let ok = ops::load_component(
             &fixture.sync(),
+            ptr::null(),
             ptr::null(),
             ptr::null_mut(),
             ptr::null_mut(),
@@ -859,11 +867,24 @@ fn get_changes_skips_unrequested_out_parameters_and_populates_requested_ones() {
 
 /// Loads `uid` through `ops::load_component` and returns the extra it stores.
 fn loaded_extra(sync: &CalSync, uid: &Id) -> String {
+    reloaded_extra(sync, uid, None)
+}
+
+/// [`loaded_extra`] for a refresh over the cached extra `previous`.
+fn reloaded_extra(sync: &CalSync, uid: &Id, previous: Option<&str>) -> String {
     let uid = CString::new(uid.as_str()).unwrap();
+    let previous = previous.map(|text| CString::new(text).unwrap());
     let mut extra: *mut gchar = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
     unsafe {
-        let ok = ops::load_component(sync, uid.as_ptr(), ptr::null_mut(), &mut extra, &mut error);
+        let ok = ops::load_component(
+            sync,
+            uid.as_ptr(),
+            previous.as_ref().map_or(ptr::null(), |text| text.as_ptr()),
+            ptr::null_mut(),
+            &mut extra,
+            &mut error,
+        );
         assert_eq!(ok, GTRUE);
         take_string(&mut extra)
     }
@@ -985,9 +1006,73 @@ fn an_edit_with_its_extra_keeps_a_remote_edit_of_another_property() {
         "the remote edit was reverted: {stored}"
     );
     assert_eq!(
-        new_extra, stored,
-        "the new extra is not the stored iCalendar"
+        edit_base::versions_of(&new_extra),
+        [stored, extra],
+        "the new extra is not the stored iCalendar, then the base"
     );
+}
+
+/// The E1 finding: a refresh replaced the extra while an editor kept the old copy open.
+#[test]
+fn a_stale_copy_keeps_a_remote_edit_after_a_refresh_replaced_the_extra() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let (id, extra) = edited_remotely(&fixture, &sync, json!({"description": "Remote notes"}));
+    let refreshed = reloaded_extra(&sync, &id, Some(&extra));
+
+    let copy = edit_base::stamp(&master(&extra), "VEVENT", &edit_base::revision_of(&extra));
+    let edited = copy.replace("SUMMARY:Standup\r\n", "SUMMARY:Standup local\r\n");
+    let (ok, error, _) = save_edit(
+        &sync,
+        &edited,
+        &refreshed,
+        E_CONFLICT_RESOLUTION_KEEP_LOCAL,
+        Itip::Send,
+    );
+
+    assert_eq!(ok, GTRUE);
+    assert!(error.is_null());
+    let stored = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(stored.contains("SUMMARY:Standup local"), "{stored}");
+    assert!(
+        stored.contains("Remote notes"),
+        "the stale copy reverted the remote edit: {stored}"
+    );
+    assert!(
+        !stored.contains("X-JMAP-BASE"),
+        "the stamp reached the server: {stored}"
+    );
+}
+
+/// A copy older than every version that the extra keeps has no base, so it must not overwrite.
+#[test]
+fn a_stamp_that_the_extra_no_longer_keeps_is_out_of_sync() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let (id, extra) = edited_remotely(&fixture, &sync, json!({"description": "Remote notes"}));
+    let refreshed = loaded_extra(&sync, &id);
+
+    let copy = edit_base::stamp(&master(&extra), "VEVENT", &edit_base::revision_of(&extra));
+    let edited = copy.replace("SUMMARY:Standup\r\n", "SUMMARY:Standup local\r\n");
+    let (ok, mut error, _) = save_edit(
+        &sync,
+        &edited,
+        &refreshed,
+        E_CONFLICT_RESOLUTION_KEEP_LOCAL,
+        Itip::Send,
+    );
+
+    assert_eq!(ok, GFALSE);
+    unsafe {
+        assert_error(
+            &mut error,
+            e_client_error_quark(),
+            E_CLIENT_ERROR_OUT_OF_SYNC as i32,
+        );
+    }
+    let stored = sync.load_component(id.as_str()).unwrap().icalendar;
+    assert!(stored.contains("SUMMARY:Standup\r\n"), "{stored}");
+    assert!(stored.contains("Remote notes"), "{stored}");
 }
 
 /// A received change comes from the organizer and replaces the event, so it has no base.
@@ -1273,12 +1358,11 @@ fn seed_principal(fixture: &Fixture, email: &str) {
     let state = fixture.server.state();
     let mut state = state.lock().unwrap();
     let account = state.account_mut(&fixture.account_id).unwrap();
-    account.seed_principal(jmap_proto::principals::Principal {
-        principal_type: Some("individual".to_owned()),
-        name: email.to_owned(),
-        email: Some(email.to_owned()),
-        ..Default::default()
-    });
+    account.seed_principal(
+        jmap_proto::principals::Principal::new(email)
+            .with_type("individual")
+            .with_email(email),
+    );
 }
 
 /// Reads and frees free/busy string list as EDS does.

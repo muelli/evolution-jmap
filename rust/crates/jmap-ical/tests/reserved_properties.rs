@@ -98,119 +98,102 @@ fn assert_no_reserved_or_obsoleted_properties(val: &Value, path: &str) {
 #[test]
 fn never_emit_reserved_or_obsoleted_names_in_serialized_types_and_ical_output() {
     // 1. RecurrenceRule with all fields populated
-    let rrule = RecurrenceRule {
-        rule_type: Some("RecurrenceRule".to_owned()),
-        frequency: "monthly".to_owned(),
-        interval: Some(2),
-        count: Some(10),
-        until: Some("2026-12-31T23:59:59Z".to_owned()),
-        by_second: Some(vec![0, 30]),
-        by_minute: Some(vec![15, 45]),
-        by_hour: Some(vec![9, 17]),
-        by_day: Some(vec![NDay::new("mo")]),
-        by_month_day: Some(vec![1, -1]),
-        by_year_day: Some(vec![100, -100]),
-        by_week_no: Some(vec![1, 52]),
-        by_month: Some(vec!["3".to_owned(), "9".to_owned()]),
-        by_set_position: Some(vec![1, -1]),
-        first_day_of_week: Some("mo".to_owned()),
-        rscale: Some("gregorian".to_owned()),
-        skip: Some("omit".to_owned()),
-        extra: BTreeMap::new(),
+    let rrule = {
+        let mut __built = RecurrenceRule::default();
+        __built.rule_type = Some("RecurrenceRule".to_owned());
+        __built.frequency = "monthly".to_owned();
+        __built.interval = Some(2);
+        __built.count = Some(10);
+        __built.until = Some("2026-12-31T23:59:59Z".to_owned());
+        __built.by_second = Some(vec![0, 30]);
+        __built.by_minute = Some(vec![15, 45]);
+        __built.by_hour = Some(vec![9, 17]);
+        __built.by_day = Some(vec![NDay::new("mo")]);
+        __built.by_month_day = Some(vec![1, -1]);
+        __built.by_year_day = Some(vec![100, -100]);
+        __built.by_week_no = Some(vec![1, 52]);
+        __built.by_month = Some(vec!["3".to_owned(), "9".to_owned()]);
+        __built.by_set_position = Some(vec![1, -1]);
+        __built.first_day_of_week = Some("mo".to_owned());
+        __built.rscale = Some("gregorian".to_owned());
+        __built.skip = Some("omit".to_owned());
+        __built.extra = BTreeMap::new();
+        __built
     };
     let rrule_val = serde_json::to_value(&rrule).expect("serializes RecurrenceRule");
     assert_no_reserved_or_obsoleted_properties(&rrule_val, "RecurrenceRule");
 
     // 2. Alert with all fields populated
-    let alert = Alert {
-        alert_type: Some("Alert".to_owned()),
-        action: Some("display".to_owned()),
-        trigger: Some(serde_json::json!({
+    let alert = Alert::new(
+        "display",
+        serde_json::json!({
             "@type": "OffsetTrigger",
             "offset": "-PT15M",
             "relativeTo": "start"
-        })),
-        acknowledged: Some(UtcDate::new("2026-10-14T12:00:00Z")),
-        related_to: Some("alert-parent".to_owned()),
-        extra: BTreeMap::new(),
-    };
+        }),
+    )
+    .with_acknowledged(UtcDate::new("2026-10-14T12:00:00Z"))
+    .with_related_to("alert-parent");
     let alert_val = serde_json::to_value(&alert).expect("serializes Alert");
     assert_no_reserved_or_obsoleted_properties(&alert_val, "Alert");
 
     // 3. Link with all fields populated (including obsoleted cid)
-    let link = Link {
-        link_type: Some("Link".to_owned()),
-        href: "https://example.com/agenda.pdf".to_owned(),
-        content_type: Some("application/pdf".to_owned()),
-        size: Some(1024),
-        rel: Some("enclosure".to_owned()),
-        display: Some(BTreeMap::from([("badge".to_owned(), true)])),
-        title: Some("Meeting Agenda".to_owned()),
-        cid: Some("cid:12345@example.com".to_owned()),
-        extra: BTreeMap::new(),
-    };
+    let link: Link = serde_json::from_value(serde_json::json!({
+        "@type": "Link",
+        "href": "https://example.com/agenda.pdf",
+        "contentType": "application/pdf",
+        "size": 1024,
+        "rel": "enclosure",
+        "display": {"badge": true},
+        "title": "Meeting Agenda",
+        "cid": "cid:12345@example.com",
+    }))
+    .expect("deserializes Link with obsoleted cid");
     let link_val = serde_json::to_value(&link).expect("serializes Link");
     assert_no_reserved_or_obsoleted_properties(&link_val, "Link");
 
     // 4. Location with all fields populated (including obsoleted/reserved relativeTo, timeZone, description)
-    let location = Location {
-        location_type: Some("Location".to_owned()),
-        name: Some("Conference Room 1".to_owned()),
-        description: Some("Third floor next to elevators".to_owned()),
-        relative_to: Some("start".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        coordinates: Some("geo:52.5200,13.4050".to_owned()),
-        location_types: Some(BTreeMap::from([("room".to_owned(), true)])),
-        extra: BTreeMap::new(),
-    };
+    let location = Location::new("Conference Room 1")
+        .with_description("Third floor next to elevators")
+        .with_relative_to("start")
+        .with_time_zone("Europe/Berlin")
+        .with_coordinates("geo:52.5200,13.4050")
+        .with_location_types(BTreeMap::from([("room".to_owned(), true)]));
     let loc_val = serde_json::to_value(&location).expect("serializes Location");
     assert_no_reserved_or_obsoleted_properties(&loc_val, "Location");
 
     // 5. VirtualLocation with all fields populated (including reserved description)
-    let vlocation = VirtualLocation {
-        virtual_location_type: Some("VirtualLocation".to_owned()),
-        name: Some("Video Bridge".to_owned()),
-        description: Some("PIN: 4321".to_owned()),
-        uri: "https://meet.example.com/bridge".to_owned(),
-        features: Some(BTreeMap::from([("video".to_owned(), true)])),
-        extra: BTreeMap::new(),
-    };
+    let vlocation = VirtualLocation::new("https://meet.example.com/bridge")
+        .with_name("Video Bridge")
+        .with_description("PIN: 4321")
+        .with_features(BTreeMap::from([("video".to_owned(), true)]));
     let vloc_val = serde_json::to_value(&vlocation).expect("serializes VirtualLocation");
     assert_no_reserved_or_obsoleted_properties(&vloc_val, "VirtualLocation");
 
     // 6. Participant with all fields populated (including reserved/obsoleted sendTo, locationId, scheduleAgent, etc.)
-    let participant = Participant {
-        participant_type: Some("Participant".to_owned()),
-        name: Some("Alice Developer".to_owned()),
-        email: Some("alice@example.com".to_owned()),
-        description: Some("Core maintainer".to_owned()),
-        description_content_type: Some("text/plain".to_owned()),
-        calendar_address: Some("mailto:alice@example.com".to_owned()),
-        send_to: Some(BTreeMap::from([(
-            "imip".to_owned(),
-            "mailto:alice@example.com".to_owned(),
-        )])),
-        kind: Some("individual".to_owned()),
-        roles: Some(BTreeMap::from([("required".to_owned(), true)])),
-        location_id: Some("loc-1".to_owned()),
-        participation_status: Some("accepted".to_owned()),
-        participation_comment: Some("Will join online".to_owned()),
-        attendance: Some("required".to_owned()),
-        expect_reply: Some(true),
-        schedule_agent: Some("server".to_owned()),
-        schedule_sequence: Some(1),
-        schedule_status: Some(vec!["2.0".to_owned()]),
-        schedule_updated: Some(UtcDate::new("2026-10-14T10:00:00Z")),
-        delegated_to: Some(vec!["mailto:bob@example.com".to_owned()]),
-        delegated_from: Some(vec!["mailto:carol@example.com".to_owned()]),
-        member_of: Some(BTreeMap::from([(
+    let participant = Participant::new("Alice Developer", "alice@example.com")
+        .with_description("Core maintainer")
+        .with_description_content_type("text/plain")
+        .with_calendar_address("mailto:alice@example.com")
+        .with_kind("individual")
+        .with_roles(BTreeMap::from([("required".to_owned(), true)]))
+        .with_location_id("loc-1")
+        .with_participation_status("accepted")
+        .with_participation_comment("Will join online")
+        .with_attendance("required")
+        .expect_reply(true)
+        .with_schedule_agent("server")
+        .with_schedule_sequence(1)
+        .with_schedule_status(["2.0".to_owned()])
+        .with_schedule_updated(UtcDate::new("2026-10-14T10:00:00Z"))
+        .with_delegated_to(["mailto:bob@example.com".to_owned()])
+        .with_delegated_from(["mailto:carol@example.com".to_owned()])
+        .with_member_of(BTreeMap::from([(
             "mailto:team@example.com".to_owned(),
             true,
-        )])),
-        progress: Some("completed".to_owned()),
-        progress_updated: Some(UtcDate::new("2026-10-14T11:00:00Z")),
-        extra: BTreeMap::new(),
-    };
+        )]))
+        .with_progress("completed")
+        .with_progress_updated(UtcDate::new("2026-10-14T11:00:00Z"));
     let part_val = serde_json::to_value(&participant).expect("serializes Participant");
     assert_no_reserved_or_obsoleted_properties(&part_val, "Participant");
 
@@ -245,48 +228,50 @@ fn never_emit_reserved_or_obsoleted_names_in_serialized_types_and_ical_output() 
     let mut localizations = BTreeMap::new();
     localizations.insert("de".to_owned(), serde_json::json!({"title": "Standup"}));
 
-    let event = CalendarEvent {
-        id: Some(Id::new("evt-1")),
-        calendar_ids: Some(cal_ids),
-        event_type: Some("Event".to_owned()),
-        version: Some("2.0".to_owned()),
-        uid: Some("uid-12345".to_owned()),
-        created: Some("2026-10-01T12:00:00Z".to_owned()),
-        updated: Some("2026-10-14T12:00:00Z".to_owned()),
-        title: Some("Sprint Planning".to_owned()),
-        description: Some("Sprint planning session".to_owned()),
-        start: Some("2026-10-15T09:00:00".to_owned()),
-        time_zone: Some("Europe/Berlin".to_owned()),
-        duration: Some("PT1H".to_owned()),
-        show_without_time: Some(false),
-        status: Some("confirmed".to_owned()),
-        free_busy_status: Some("busy".to_owned()),
-        priority: Some(1),
-        privacy: Some("public".to_owned()),
-        locations: Some(locations),
-        virtual_locations: Some(virtual_locations),
-        links: Some(links),
-        keywords: Some(keywords),
-        alerts: Some(alerts),
-        participants: Some(participants),
-        organizer_calendar_address: Some("mailto:organizer@example.com".to_owned()),
-        is_draft: Some(false),
-        hide_attendees: Some(false),
-        recurrence_rule: Some(rrule),
-        recurrence_overrides: Some(recurrence_overrides),
-        time_zones: Some(time_zones),
-        use_default_alerts: Some(false),
-        color: Some("#aabbcc".to_owned()),
-        locale: Some("en".to_owned()),
-        localizations: Some(localizations),
-        is_origin: Some(true),
-        end_time_zone: Some("Europe/Berlin".to_owned()),
-        main_location_id: Some(Id::new("loc-1")),
-        schedule_sequence: Some(0),
-        schedule_updated: Some(UtcDate::new("2026-10-14T12:00:00Z")),
-        may_invite_self: Some(true),
-        may_invite_others: Some(true),
-        extra: BTreeMap::new(),
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some(Id::new("evt-1"));
+        event_out.calendar_ids = Some(cal_ids);
+        event_out.event_type = Some("Event".to_owned());
+        event_out.version = Some("2.0".to_owned());
+        event_out.uid = Some("uid-12345".to_owned());
+        event_out.created = Some("2026-10-01T12:00:00Z".to_owned());
+        event_out.updated = Some("2026-10-14T12:00:00Z".to_owned());
+        event_out.title = Some("Sprint Planning".to_owned());
+        event_out.description = Some("Sprint planning session".to_owned());
+        event_out.start = Some("2026-10-15T09:00:00".to_owned());
+        event_out.time_zone = Some("Europe/Berlin".to_owned());
+        event_out.duration = Some("PT1H".to_owned());
+        event_out.show_without_time = Some(false);
+        event_out.status = Some("confirmed".to_owned());
+        event_out.free_busy_status = Some("busy".to_owned());
+        event_out.priority = Some(1);
+        event_out.privacy = Some("public".to_owned());
+        event_out.locations = Some(locations);
+        event_out.virtual_locations = Some(virtual_locations);
+        event_out.links = Some(links);
+        event_out.keywords = Some(keywords);
+        event_out.alerts = Some(alerts);
+        event_out.participants = Some(participants);
+        event_out.organizer_calendar_address = Some("mailto:organizer@example.com".to_owned());
+        event_out.is_draft = Some(false);
+        event_out.hide_attendees = Some(false);
+        event_out.recurrence_rule = Some(rrule);
+        event_out.recurrence_overrides = Some(recurrence_overrides);
+        event_out.time_zones = Some(time_zones);
+        event_out.use_default_alerts = Some(false);
+        event_out.color = Some("#aabbcc".to_owned());
+        event_out.locale = Some("en".to_owned());
+        event_out.localizations = Some(localizations);
+        event_out.is_origin = Some(true);
+        event_out.end_time_zone = Some("Europe/Berlin".to_owned());
+        event_out.main_location_id = Some(Id::new("loc-1"));
+        event_out.schedule_sequence = Some(0);
+        event_out.schedule_updated = Some(UtcDate::new("2026-10-14T12:00:00Z"));
+        event_out.may_invite_self = Some(true);
+        event_out.may_invite_others = Some(true);
+        event_out.extra = BTreeMap::new();
+        event_out
     };
 
     let event_val = serde_json::to_value(&event).expect("serializes CalendarEvent");

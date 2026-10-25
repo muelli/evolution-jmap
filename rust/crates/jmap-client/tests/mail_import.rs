@@ -309,11 +309,9 @@ fn an_import_into_no_mailbox_is_refused() {
     // names none, exactly as it does for an `Email/set`.
     let result = fixture.client.email_import(
         &fixture.account_id,
-        &EmailImport {
-            blob_id: Some(blob_id),
-            mailbox_ids: Some([(fixture.inbox.clone(), false)].into()),
-            ..EmailImport::default()
-        },
+        &EmailImport::default()
+            .with_blob_id(blob_id)
+            .with_mailbox_ids([(fixture.inbox.clone(), false)].into()),
     );
     match result {
         Err(Error::Set(error)) => assert_eq!(error.error_type, set::INVALID_PROPERTIES),

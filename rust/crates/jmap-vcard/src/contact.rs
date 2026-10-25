@@ -1536,12 +1536,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
             "NICKNAME" => {
                 // Parse as RFC 2426 `text-list`, matching calcard and EDS.
                 // Unescaped commas stay in one nickname instead of splitting it.
-                let nickname = Nickname {
-                    name: entry_text_list(entry),
-                    contexts: read_flags(&CONTEXTS, entry),
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra: BTreeMap::new(),
-                };
+                let mut nickname = Nickname::new(entry_text_list(entry));
+                nickname.contexts = read_flags(&CONTEXTS, entry);
+                nickname.pref = entry_has_type(entry, "PREF").then_some(1);
                 if !states_nickname(&nickname) {
                     continue;
                 }
@@ -1575,12 +1572,10 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                         }
                     }
                 }
-                let email = ContactEmail {
-                    address,
-                    contexts,
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra,
-                };
+                let mut email = ContactEmail::new(address);
+                email.contexts = contexts;
+                email.pref = entry_has_type(entry, "PREF").then_some(1);
+                email.extra = extra;
                 emails.insert(entry_key(entry, "e", &emails), email);
             }
             "TEL" => {
@@ -1664,13 +1659,11 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                         }
                     }
                 }
-                let phone = ContactPhone {
-                    number,
-                    contexts,
-                    features,
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra,
-                };
+                let mut phone = ContactPhone::new(number);
+                phone.contexts = contexts;
+                phone.features = features;
+                phone.pref = entry_has_type(entry, "PREF").then_some(1);
+                phone.extra = extra;
                 phones.insert(entry_key(entry, "p", &phones), phone);
             }
             "ADR" => {
@@ -1697,11 +1690,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 titles.insert(entry_key(entry, "t", &titles), title);
             }
             "NOTE" => {
-                let note = Note {
-                    note: entry_text(entry),
-                    extra: BTreeMap::new(),
-                    ..Note::default()
-                };
+                let note = Note::new(entry_text(entry));
                 if !states_note(&note) {
                     continue;
                 }
@@ -1763,16 +1752,14 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 if uri.is_empty() {
                     continue;
                 }
-                let calendar = Calendar {
-                    kind: calendar_kind(&name_upper).map(str::to_owned),
-                    uri,
-                    media_type: entry_param(entry, "MEDIATYPE")
-                        .map(|value| value.trim().to_owned())
-                        .filter(|value| !value.is_empty()),
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra: BTreeMap::new(),
-                    ..Calendar::default()
-                };
+                let mut calendar = Calendar::default();
+                calendar.kind = calendar_kind(&name_upper).map(str::to_owned);
+                calendar.uri = uri;
+                calendar.media_type = entry_param(entry, "MEDIATYPE")
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty());
+                calendar.pref = entry_has_type(entry, "PREF").then_some(1);
+                calendar.extra = BTreeMap::new();
                 calendars.insert(entry_key(entry, "c", &calendars), calendar);
             }
             "CALADRURI" => {
@@ -1780,12 +1767,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 if uri.is_empty() {
                     continue;
                 }
-                let address = SchedulingAddress {
-                    uri,
-                    pref: entry_has_type(entry, "PREF").then_some(1),
-                    extra: BTreeMap::new(),
-                    ..SchedulingAddress::default()
-                };
+                let mut address = SchedulingAddress::new(uri);
+                address.pref = entry_has_type(entry, "PREF").then_some(1);
                 scheduling_addresses.insert(entry_key(entry, "s", &scheduling_addresses), address);
             }
             "PHOTO" => {
@@ -1854,9 +1837,10 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 } else {
                     continue;
                 };
-                let entry_rel = related_to.entry(name).or_insert_with(|| Relation {
-                    relation: Some(BTreeMap::new()),
-                    extra: BTreeMap::new(),
+                let entry_rel = related_to.entry(name).or_insert_with(|| {
+                    let mut v = Relation::new();
+                    v.relation = Some(BTreeMap::new());
+                    v
                 });
                 if let Some(types) = &mut entry_rel.relation {
                     types.insert(relation_type, Value::Bool(true));
@@ -1878,10 +1862,11 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                             other if !other.is_empty() => other.to_owned(),
                             _ => "wedding".to_owned(),
                         };
-                        let anniversary = Anniversary {
-                            kind,
-                            date: Some(day.json()),
-                            extra: BTreeMap::new(),
+                        let anniversary = {
+                            let mut v = Anniversary::default();
+                            v.kind = kind;
+                            v.date = Some(day.json());
+                            v
                         };
                         let key = entry_param(entry, X_JMAP_KEY).filter(|k| !k.is_empty());
                         if let Some(k) = key.as_deref()
@@ -1935,13 +1920,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     if let Some(service) = matched_service
                         && plain_handle(handle)
                     {
-                        let entry_obj = OnlineService {
-                            service: Some(service.to_owned()),
-                            user: Some(handle.to_owned()),
-                            uri: None,
-                            extra: BTreeMap::new(),
-                            ..OnlineService::default()
-                        };
+                        let entry_obj = OnlineService::new()
+                            .with_service(service.to_owned())
+                            .with_user(handle.to_owned());
                         online_services.insert(entry_key(entry, "s", &online_services), entry_obj);
                     }
                 }
@@ -1957,13 +1938,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 if handle.is_empty() {
                     continue;
                 }
-                let entry_obj = OnlineService {
-                    service: Some(service.to_owned()),
-                    user: Some(handle),
-                    uri: None,
-                    extra: BTreeMap::new(),
-                    ..OnlineService::default()
-                };
+                let entry_obj = OnlineService::new()
+                    .with_service(service.to_owned())
+                    .with_user(handle);
                 online_services.insert(entry_key(entry, "s", &online_services), entry_obj);
             }
         }
@@ -1981,9 +1958,10 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         }
         let contexts = read_flags(&CONTEXTS, entry);
         let key = label_entry(entry, contexts.as_ref(), &addresses, &full);
-        let address = addresses.entry(key).or_insert_with(|| Address {
-            contexts,
-            ..Address::default()
+        let address = addresses.entry(key).or_insert_with(|| {
+            let mut address = Address::default();
+            address.contexts = contexts;
+            address
         });
         address.full = Some(full);
         if entry_has_type(entry, "PREF") && !address.extra.contains_key("pref") {
@@ -1993,44 +1971,44 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         }
     }
 
-    Ok(ContactCard {
-        id: text("UID").map(Into::into),
-        // Membership depends on the EDS source being served.
-        // The backend fills it in during create.
-        address_book_ids: None,
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        uid: text(X_JMAP_UID),
-        name,
-        nicknames: (!nicknames.is_empty()).then_some(nicknames),
-        emails: (!emails.is_empty()).then_some(emails),
-        phones: (!phones.is_empty()).then_some(phones),
-        addresses: (!addresses.is_empty()).then_some(addresses),
-        organizations: (!organizations.is_empty()).then_some(organizations),
-        titles: (!titles.is_empty()).then_some(titles),
-        notes: (!notes.is_empty()).then_some(notes),
-        anniversaries: (!anniversaries.is_empty()).then_some(anniversaries),
-        links: (!links.is_empty()).then_some(links),
-        calendars: (!calendars.is_empty()).then_some(calendars),
-        scheduling_addresses: (!scheduling_addresses.is_empty()).then_some(scheduling_addresses),
-        // vCard 3.0 exposes media through `PHOTO` only.
-        // Other media kinds stay absent here and stay in save-path extras.
-        media: (!media.is_empty()).then_some(media),
-        online_services: (!online_services.is_empty()).then_some(online_services),
-        keywords: read_keywords(&card.entries),
-        // Keep only relations represented by mapped vCard lines on read.
-        // Keep other relation kinds in extras.
-        related_to: (!related_to.is_empty()).then_some(related_to),
-        crypto_keys: None,
-        directories: None,
-        personal_info: None,
-        speak_to_as: None,
-        preferred_languages: None,
-        localizations: None,
-        kind: None,
-        extra: BTreeMap::new(),
-        ..ContactCard::default()
-    })
+    let mut contact_card = ContactCard::default();
+    contact_card.id = text("UID").map(Into::into);
+    // Membership depends on the EDS source being served.
+    // The backend fills it in during create.
+    contact_card.address_book_ids = None;
+    contact_card.card_type = Some("Card".to_owned());
+    contact_card.version = Some("1.0".to_owned());
+    contact_card.uid = text(X_JMAP_UID);
+    contact_card.name = name;
+    contact_card.nicknames = (!nicknames.is_empty()).then_some(nicknames);
+    contact_card.emails = (!emails.is_empty()).then_some(emails);
+    contact_card.phones = (!phones.is_empty()).then_some(phones);
+    contact_card.addresses = (!addresses.is_empty()).then_some(addresses);
+    contact_card.organizations = (!organizations.is_empty()).then_some(organizations);
+    contact_card.titles = (!titles.is_empty()).then_some(titles);
+    contact_card.notes = (!notes.is_empty()).then_some(notes);
+    contact_card.anniversaries = (!anniversaries.is_empty()).then_some(anniversaries);
+    contact_card.links = (!links.is_empty()).then_some(links);
+    contact_card.calendars = (!calendars.is_empty()).then_some(calendars);
+    contact_card.scheduling_addresses =
+        (!scheduling_addresses.is_empty()).then_some(scheduling_addresses);
+    // vCard 3.0 exposes media through `PHOTO` only.
+    // Other media kinds stay absent here and stay in save-path extras.
+    contact_card.media = (!media.is_empty()).then_some(media);
+    contact_card.online_services = (!online_services.is_empty()).then_some(online_services);
+    contact_card.keywords = read_keywords(&card.entries);
+    // Keep only relations represented by mapped vCard lines on read.
+    // Keep other relation kinds in extras.
+    contact_card.related_to = (!related_to.is_empty()).then_some(related_to);
+    contact_card.crypto_keys = None;
+    contact_card.directories = None;
+    contact_card.personal_info = None;
+    contact_card.speak_to_as = None;
+    contact_card.preferred_languages = None;
+    contact_card.localizations = None;
+    contact_card.kind = None;
+    contact_card.extra = BTreeMap::new();
+    Ok(contact_card)
 }
 
 /// Decode one `PHOTO` line into one media entry.
@@ -2174,12 +2152,11 @@ fn read_title(entry: &VCardEntry) -> Option<Title> {
         .find(|(_, mapped)| mapped.eq_ignore_ascii_case(entry.name.as_str()))
         .map(|(kind, _)| *kind)
         .filter(|kind| *kind != DEFAULT_TITLE_KIND);
-    Some(Title {
-        name,
-        kind: kind.map(str::to_owned),
-        extra: BTreeMap::new(),
-        ..Title::default()
-    })
+    let mut title = Title::default();
+    title.name = name;
+    title.kind = kind.map(str::to_owned);
+    title.extra = BTreeMap::new();
+    Some(title)
 }
 
 /// The anniversary a calendar-property line states, or `None` when no day parses.
@@ -2199,11 +2176,10 @@ fn read_anniversary(entry: &VCardEntry) -> Option<Anniversary> {
     } else {
         return None;
     };
-    Some(Anniversary {
-        kind: kind.to_owned(),
-        date: Some(read_day(&entry_text(entry))?.json()),
-        extra: BTreeMap::new(),
-    })
+    let mut v = Anniversary::default();
+    v.kind = kind.to_owned();
+    v.date = Some(read_day(&entry_text(entry))?.json());
+    Some(v)
 }
 
 /// The seven `ADR` fields for an address, or `None` when no mapped component
@@ -2355,13 +2331,12 @@ fn read_address(entry: &VCardEntry, group_label: Option<&str>) -> Option<Address
             }
         }
     }
-    Some(Address {
-        components: (!components.is_empty()).then_some(components),
-        contexts,
-        full,
-        extra,
-        ..Address::default()
-    })
+    let mut address = Address::default();
+    address.components = (!components.is_empty()).then_some(components);
+    address.contexts = contexts;
+    address.full = full;
+    address.extra = extra;
+    Some(address)
 }
 
 /// The `ORG` components for an organisation, name first then units, or `None`
@@ -2522,12 +2497,11 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
     if full.is_none() && components.is_empty() && extra.is_empty() {
         return None;
     }
-    Some(Name {
-        components: (!components.is_empty()).then_some(components),
-        full,
-        extra,
-        ..Name::default()
-    })
+    let mut name = Name::default();
+    name.components = (!components.is_empty()).then_some(components);
+    name.full = full;
+    name.extra = extra;
+    Some(name)
 }
 
 /// vCard `TYPE` values for the JSContact boolean map `value`.
@@ -3067,10 +3041,8 @@ mod tests {
             super::Value::String("Example, Alice".to_owned()),
         );
 
-        let name = super::Name {
-            extra,
-            ..super::Name::default()
-        };
+        let mut name = super::Name::default();
+        name.extra = extra;
 
         assert!(super::states_name(&name));
     }

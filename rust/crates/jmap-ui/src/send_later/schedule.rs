@@ -41,6 +41,9 @@ pub enum Preset {
     /// [`WORKDAY_HOUR`] on the next day that is not a Saturday or Sunday.
     /// Today is included if that hour is still ahead.
     NextWorkday,
+    /// [`WORKDAY_HOUR`] on the first Monday after today. Snooze offers it;
+    /// this menu does not.
+    NextMonday,
 }
 
 /// The times of day that the menu suggests, in menu order.
@@ -65,6 +68,7 @@ pub fn slug(preset: Preset) -> String {
         Preset::InOneHour => "hour".to_owned(),
         Preset::TimeOfDay(hour) => format!("at-{hour}"),
         Preset::NextWorkday => "workday".to_owned(),
+        Preset::NextMonday => "monday".to_owned(),
     }
 }
 
@@ -73,6 +77,7 @@ pub fn from_slug(slug: &str) -> Option<Preset> {
     match slug {
         "hour" => Some(Preset::InOneHour),
         "workday" => Some(Preset::NextWorkday),
+        "monday" => Some(Preset::NextMonday),
         other => other
             .strip_prefix("at-")?
             .parse()
@@ -109,12 +114,7 @@ pub fn resolve(preset: Preset) -> Option<Occurrence> {
         if now.is_null() {
             return None;
         }
-        let target = match preset {
-            Preset::InOneHour => unreachable!("handled above"),
-            Preset::TimeOfDay(hour) => next_at_hour(now, hour),
-            Preset::NextWorkday => next_workday(now),
-        };
-        let occurrence = target.and_then(|target| {
+        let occurrence = target_at(now, preset).and_then(|target| {
             let hold = g_date_time_to_unix(target) - g_date_time_to_unix(now);
             let label = day_label(now, target);
             g_date_time_unref(target);
@@ -126,6 +126,24 @@ pub fn resolve(preset: Preset) -> Option<Occurrence> {
         });
         g_date_time_unref(now);
         occurrence
+    }
+}
+
+/// The moment that `preset` names, seen from `now`. Returns `None` for the
+/// relative preset, which has no calendar target.
+///
+/// # Safety
+///
+/// `now` must be a live `GDateTime`. The caller owns the result.
+unsafe fn target_at(now: *mut GDateTime, preset: Preset) -> Option<*mut GDateTime> {
+    // SAFETY: the contract makes `now` live; each helper has the same contract.
+    unsafe {
+        match preset {
+            Preset::InOneHour => None,
+            Preset::TimeOfDay(hour) => next_at_hour(now, hour),
+            Preset::NextWorkday => next_workday(now),
+            Preset::NextMonday => next_monday(now),
+        }
     }
 }
 
@@ -168,6 +186,21 @@ unsafe fn next_workday(now: *mut GDateTime) -> Option<*mut GDateTime> {
             g_date_time_unref(candidate);
         }
         None
+    }
+}
+
+/// [`WORKDAY_HOUR`] on the first Monday after today. On a Monday, this is
+/// the Monday one week later.
+///
+/// # Safety
+///
+/// As [`next_at_hour`].
+unsafe fn next_monday(now: *mut GDateTime) -> Option<*mut GDateTime> {
+    // SAFETY: the contract makes `now` live; `at_hour` checks its own result.
+    unsafe {
+        // ISO weekday: 1 = Monday … 7 = Sunday, thus the gap is 1 to 7 days.
+        let ahead = 8 - g_date_time_get_day_of_week(now);
+        at_hour(now, ahead, WORKDAY_HOUR)
     }
 }
 
@@ -293,13 +326,34 @@ pub fn utc_in(seconds: u64) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use glib_sys::{
         g_date_time_get_hour, g_date_time_get_minute, g_date_time_new_from_unix_local,
         g_date_time_new_now_local,
     };
 
     use super::*;
+
+    /// Where `preset` lands from a fixed local `now`, as (day of month,
+    /// ISO weekday, hour, minute).
+    pub(crate) fn lands_from(now: (i32, i32, i32, i32), preset: Preset) -> (i32, i32, i32, i32) {
+        let (year, month, day, hour) = now;
+        // SAFETY: plain GLib calendar calls; the code releases each object.
+        unsafe {
+            let now = g_date_time_new_local(year, month, day, hour, 0, 0.0);
+            assert!(!now.is_null());
+            let target = target_at(now, preset).expect("a calendar preset");
+            let landed = (
+                g_date_time_get_day_of_month(target),
+                g_date_time_get_day_of_week(target),
+                g_date_time_get_hour(target),
+                g_date_time_get_minute(target),
+            );
+            g_date_time_unref(target);
+            g_date_time_unref(now);
+            landed
+        }
+    }
 
     /// The time `hold` seconds from now, as (weekday, hour, minute).
     fn lands_at(hold: u64) -> (i32, i32, i32) {
@@ -351,6 +405,41 @@ mod tests {
         assert_eq!((hour, minute), (WORKDAY_HOUR, 0));
     }
 
+    /// From a fixed clock: 2026-10-20 is a Tuesday, 2026-10-23 a Friday.
+    #[test]
+    fn the_next_workday_from_a_fixed_clock() {
+        assert_eq!(
+            lands_from((2026, 10, 20, 8), Preset::NextWorkday),
+            (20, 2, 9, 0)
+        );
+        assert_eq!(
+            lands_from((2026, 10, 20, 10), Preset::NextWorkday),
+            (21, 3, 9, 0)
+        );
+        assert_eq!(
+            lands_from((2026, 10, 23, 20), Preset::NextWorkday),
+            (26, 1, 9, 0)
+        );
+    }
+
+    /// The next Monday is after today: one week ahead on a Monday, also
+    /// before 09:00, and one day ahead on a Sunday.
+    #[test]
+    fn the_next_monday_from_a_fixed_clock() {
+        assert_eq!(
+            lands_from((2026, 10, 20, 10), Preset::NextMonday),
+            (26, 1, 9, 0)
+        );
+        assert_eq!(
+            lands_from((2026, 10, 19, 7), Preset::NextMonday),
+            (26, 1, 9, 0)
+        );
+        assert_eq!(
+            lands_from((2026, 10, 25, 23), Preset::NextMonday),
+            (26, 1, 9, 0)
+        );
+    }
+
     /// Each label names its day, thus a stale menu is still clear.
     #[test]
     fn labels_name_the_day() {
@@ -370,6 +459,8 @@ mod tests {
         for preset in offered() {
             assert_eq!(from_slug(&slug(preset)), Some(preset), "for {preset:?}");
         }
+        let monday = Preset::NextMonday;
+        assert_eq!(from_slug(&slug(monday)), Some(monday));
         assert_eq!(from_slug("nonsense"), None);
         assert_eq!(from_slug("at-notanumber"), None);
     }

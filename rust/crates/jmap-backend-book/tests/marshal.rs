@@ -13,7 +13,7 @@ use eds_sys::{
 };
 use glib_sys::{GSList, g_slist_free_full, g_slist_length, g_slist_nth_data};
 use jmap_backend_book::marshal;
-use jmap_book_sync::ContactInfo;
+use jmap_book_sync::{ContactInfo, edit_base};
 
 fn info(uid: &str, revision: &str, vcard: &str) -> ContactInfo {
     ContactInfo {
@@ -54,12 +54,42 @@ fn an_info_list_carries_one_node_per_contact_in_order() {
             (
                 "K1".to_owned(),
                 "r1".to_owned(),
-                "BEGIN:VCARD\r\nEND:VCARD\r\n".to_owned(),
+                // The object carries the stamp of its base; the extra does not.
+                "BEGIN:VCARD\r\nX-JMAP-BASE:r1\r\nEND:VCARD\r\n".to_owned(),
                 // EDS stores the extra as the base of a later edit.
                 Some("BEGIN:VCARD\r\nEND:VCARD\r\n".to_owned())
             )
         );
         assert_eq!(nth_info(list, 1).0, "K2");
+        g_slist_free_full(list, Some(e_book_meta_backend_info_free));
+    }
+}
+
+/// A refresh keeps the cached versions after the new one, for an editor that is still open.
+#[test]
+fn keep_versions_adds_the_cached_extra_to_each_node_that_has_one() {
+    let infos = [
+        info("K1", "r1", "BEGIN:VCARD\r\nFN:new\r\nEND:VCARD\r\n"),
+        info("K2", "r2", "BEGIN:VCARD\r\nUID:K2\r\nEND:VCARD\r\n"),
+    ];
+    let list = marshal::info_list(&infos);
+
+    unsafe {
+        marshal::keep_versions(list, |uid| {
+            (CStr::from_ptr(uid).to_bytes() == b"K1")
+                .then(|| "BEGIN:VCARD\r\nFN:old\r\nEND:VCARD\r\n".to_owned())
+        });
+        assert_eq!(
+            edit_base::versions_of(&nth_info(list, 0).3.unwrap()),
+            [
+                "BEGIN:VCARD\r\nFN:new\r\nEND:VCARD\r\n",
+                "BEGIN:VCARD\r\nFN:old\r\nEND:VCARD\r\n"
+            ]
+        );
+        assert_eq!(
+            nth_info(list, 1).3.as_deref(),
+            Some("BEGIN:VCARD\r\nUID:K2\r\nEND:VCARD\r\n")
+        );
         g_slist_free_full(list, Some(e_book_meta_backend_info_free));
     }
 }

@@ -69,12 +69,10 @@ pub fn address_book_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.address_books.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.address_books.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// Return rights that `book.share_with` grants to `principal`.
@@ -224,12 +222,10 @@ pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Val
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.contact_cards.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.contact_cards.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 fn rewrite_photo_uri_to_file_scheme(card: &mut ContactCard) {
@@ -345,15 +341,15 @@ pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<V
         .filter(|(_, card)| card_matches(card, &filter))
         .count() as u64;
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.contact_cards.state(),
-        can_calculate_changes: false,
-        position: request.position.max(0) as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit,
-    })
+    let mut response = QueryResponse::new(request.account_id, account.contact_cards.state(), ids)
+        .with_position(request.position.max(0) as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    if let Some(limit) = limit {
+        response = response.with_limit(limit);
+    }
+    to_result(&response)
 }
 
 /// `ContactCard/parse` (RFC 9610 §3.4): parse vCard blobs to projected
@@ -448,13 +444,10 @@ impl AccountState {
     /// Seed an address book and return its id without bumping state.
     pub fn seed_address_book(&mut self, name: &str, is_default: bool) -> Id {
         let id = self.address_books.alloc_id();
-        let book = AddressBook {
-            id: Some(id.clone()),
-            name: name.to_owned(),
-            is_default: Some(is_default),
-            is_subscribed: Some(true),
-            ..AddressBook::default()
-        };
+        let book = AddressBook::new(name)
+            .with_id(id.clone())
+            .is_default(is_default)
+            .is_subscribed(true);
         self.address_books.seed_with_id(id.clone(), book);
         id
     }

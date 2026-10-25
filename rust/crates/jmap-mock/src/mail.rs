@@ -105,12 +105,10 @@ pub fn mailbox_get(
         }
     };
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.mailboxes.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.mailboxes.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// Return rights from `mailbox.share_with` for `principal`, if present.
@@ -277,17 +275,27 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
         }
     });
 
-    to_result(&SetResponse {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.mailboxes.state()),
-        created: (!created.is_empty()).then_some(created),
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: (!destroyed.is_empty()).then_some(destroyed),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response =
+        SetResponse::new(request.account_id, account.mailboxes.state()).with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !destroyed.is_empty() {
+        response = response.with_destroyed(destroyed);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 /// Validate RFC 8621 §2 mailbox placement rules for `of` (`None` on create).
@@ -344,13 +352,12 @@ fn placeable(
 
 /// Return a new mailbox with explicit zero counters.
 fn counted_empty(mailbox: &Mailbox) -> Mailbox {
-    Mailbox {
-        total_emails: Some(0),
-        unread_emails: Some(0),
-        total_threads: Some(0),
-        unread_threads: Some(0),
-        ..mailbox.clone()
-    }
+    mailbox
+        .clone()
+        .with_total_emails(0)
+        .with_unread_emails(0)
+        .with_total_threads(0)
+        .with_unread_threads(0)
 }
 
 /// Whether `email` is filed in mailbox `id` (`mailboxIds[id] == true`).
@@ -406,12 +413,10 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.emails.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.emails.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// Assign the `threadId` for this one-email-per-thread mock.
@@ -457,12 +462,10 @@ pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, Me
         list.push(Thread::new(thread_id, email_ids));
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.emails.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.emails.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// Handle `SearchSnippet/get` (RFC 8621 §5.1).
@@ -484,11 +487,11 @@ pub fn search_snippet_get(state: &mut ServerState, arguments: Value) -> Result<V
         });
     }
 
-    to_result(&SearchSnippetGetResponse {
-        account_id: request.account_id,
-        list,
-        not_found: (!not_found.is_empty()).then_some(not_found),
-    })
+    let mut response = SearchSnippetGetResponse::new(request.account_id, list);
+    if !not_found.is_empty() {
+        response = response.with_not_found(not_found);
+    }
+    to_result(&response)
 }
 
 /// Preview byte cap after text and HTML escaping (RFC 8621 §5).
@@ -662,15 +665,15 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     };
     let capped = never_terminates || page_size.is_some_and(|page_size| page_size < asked);
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.emails.state(),
-        can_calculate_changes: false,
-        position: position as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit: (capped && !hides_limit).then(|| page_size.unwrap_or_default()),
-    })
+    let mut response = QueryResponse::new(request.account_id, account.emails.state(), ids)
+        .with_position(position as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    if capped && !hides_limit {
+        response = response.with_limit(page_size.unwrap_or_default());
+    }
+    to_result(&response)
 }
 
 /// Evaluate a `Filter<EmailQueryFilter>` tree per RFC 8620 §5.5.
@@ -849,12 +852,10 @@ pub fn identity_get(state: &mut ServerState, arguments: Value) -> Result<Value, 
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.identities.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.identities.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// `VacationResponse/get` (RFC 8621 §8.1): singleton always exists.
@@ -884,12 +885,10 @@ pub fn vacation_response_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.vacation_response.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.vacation_response.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// `VacationResponse/set` (RFC 8621 §8.1): only `update` mutates state.
@@ -977,17 +976,21 @@ pub fn vacation_response_set(
         }
     });
 
-    to_result(&SetResponse {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.vacation_response.state()),
-        created: None,
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: None,
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response = SetResponse::new(request.account_id, account.vacation_response.state())
+        .with_old_state(old_state);
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 /// Validate `Email.snoozed`: requires the snooze extension and snoozed mailbox.
@@ -1069,17 +1072,15 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
             email.received_at = Some(UtcDate::new(MOCK_NOW));
         }
 
-        created.insert(
-            creation_id,
-            Email {
-                id: Some(id.clone()),
-                blob_id: Some(blob_id),
-                thread_id: email.thread_id.clone(),
-                size: Some(size),
-                received_at: email.received_at.clone(),
-                ..Email::default()
-            },
-        );
+        created.insert(creation_id, {
+            let mut summary = Email::default();
+            summary.id = Some(id.clone());
+            summary.blob_id = Some(blob_id);
+            summary.thread_id = email.thread_id.clone();
+            summary.size = Some(size);
+            summary.received_at = email.received_at.clone();
+            summary
+        });
         to_create_threads.push((thread_id.clone(), Thread::new(thread_id, [id.clone()])));
         to_create.push((id, email));
     }
@@ -1166,17 +1167,27 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         }
     });
 
-    to_result(&SetResponse {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.emails.state()),
-        created: (!created.is_empty()).then_some(created),
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: (!destroyed.is_empty()).then_some(destroyed),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response =
+        SetResponse::new(request.account_id, account.emails.state()).with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !destroyed.is_empty() {
+        response = response.with_destroyed(destroyed);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 /// Whether `email` is in at least one existing mailbox in this account.
@@ -1224,16 +1235,14 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
         match imported(account, &import) {
             Ok(email) => {
                 // Return only the four RFC-selected server fields.
-                created.insert(
-                    creation_id,
-                    Email {
-                        id: email.id.clone(),
-                        blob_id: email.blob_id.clone(),
-                        thread_id: email.thread_id.clone(),
-                        size: email.size,
-                        ..Email::default()
-                    },
-                );
+                created.insert(creation_id, {
+                    let mut summary = Email::default();
+                    summary.id = email.id.clone();
+                    summary.blob_id = email.blob_id.clone();
+                    summary.thread_id = email.thread_id.clone();
+                    summary.size = email.size;
+                    summary
+                });
                 to_create.push((email.id.clone().expect("imported email has an id"), email));
             }
             Err(refusal) => {
@@ -1264,13 +1273,15 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
         }
     });
 
-    to_result(&EmailImportResponse {
-        account_id: request.account_id,
-        old_state: Some(old_state),
-        new_state: account.emails.state(),
-        created: (!created.is_empty()).then_some(created),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-    })
+    let mut response = EmailImportResponse::new(request.account_id, account.emails.state())
+        .with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    to_result(&response)
 }
 
 /// `Email/parse` (RFC 8621 §4.8): parse an uploaded blob without storing it.
@@ -1290,19 +1301,17 @@ pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, M
             not_parsable.push(id.clone());
             continue;
         };
-        let email = Email {
-            blob_id: Some(id.clone()),
-            size: Some(blob.data.len() as u64),
-            message_id: message.message_ids("message-id"),
-            in_reply_to: message.message_ids("in-reply-to"),
-            references: message.message_ids("references"),
-            from: message.addresses("from"),
-            to: message.addresses("to"),
-            cc: message.addresses("cc"),
-            subject: message.subject(),
-            preview: message.preview(),
-            ..Email::default()
-        };
+        let mut email = Email::default();
+        email.blob_id = Some(id.clone());
+        email.size = Some(blob.data.len() as u64);
+        email.message_id = message.message_ids("message-id");
+        email.in_reply_to = message.message_ids("in-reply-to");
+        email.references = message.message_ids("references");
+        email.from = message.addresses("from");
+        email.to = message.addresses("to");
+        email.cc = message.addresses("cc");
+        email.subject = message.subject();
+        email.preview = message.preview();
         parsed.insert(
             id.to_string(),
             project_properties(&email, request.properties.as_deref())?,
@@ -1337,27 +1346,25 @@ fn imported(
             .with_description("the blob is not an RFC 5322 message"));
     };
 
-    let mut email = Email {
-        blob_id: Some(blob_id),
-        mailbox_ids: import.mailbox_ids.clone(),
-        keywords: Some(import.keywords.clone().unwrap_or_default()),
-        size: Some(size),
-        received_at: Some(
-            import
-                .received_at
-                .clone()
-                .unwrap_or_else(|| UtcDate::new(MOCK_NOW)),
-        ),
-        message_id: message.message_ids("message-id"),
-        in_reply_to: message.message_ids("in-reply-to"),
-        references: message.message_ids("references"),
-        from: message.addresses("from"),
-        to: message.addresses("to"),
-        cc: message.addresses("cc"),
-        subject: message.subject(),
-        preview: message.preview(),
-        ..Email::default()
-    };
+    let mut email = Email::default();
+    email.blob_id = Some(blob_id);
+    email.mailbox_ids = import.mailbox_ids.clone();
+    email.keywords = Some(import.keywords.clone().unwrap_or_default());
+    email.size = Some(size);
+    email.received_at = Some(
+        import
+            .received_at
+            .clone()
+            .unwrap_or_else(|| UtcDate::new(MOCK_NOW)),
+    );
+    email.message_id = message.message_ids("message-id");
+    email.in_reply_to = message.message_ids("in-reply-to");
+    email.references = message.message_ids("references");
+    email.from = message.addresses("from");
+    email.to = message.addresses("to");
+    email.cc = message.addresses("cc");
+    email.subject = message.subject();
+    email.preview = message.preview();
     // Reuse the same mailboxIds validation path as Email/set.
     filed_somewhere(account, &email)?;
 
@@ -1509,21 +1516,22 @@ pub fn email_submission_set(
         }
 
         // When absent, derive the SMTP envelope from the message (RFC 8621 §7).
-        let envelope = submission.envelope.clone().unwrap_or_else(|| Envelope {
-            mail_from: EnvelopeAddress::new(
-                email
-                    .from
-                    .as_ref()
-                    .and_then(|from| from.first())
-                    .map(|address| address.email.clone())
-                    .unwrap_or_default(),
-            ),
-            rcpt_to: [&email.to, &email.cc, &email.bcc]
-                .into_iter()
-                .flatten()
-                .flat_map(|addresses| addresses.iter())
-                .map(|address| EnvelopeAddress::new(address.email.clone()))
-                .collect(),
+        let envelope = submission.envelope.clone().unwrap_or_else(|| {
+            Envelope::new(
+                EnvelopeAddress::new(
+                    email
+                        .from
+                        .as_ref()
+                        .and_then(|from| from.first())
+                        .map(|address| address.email.clone())
+                        .unwrap_or_default(),
+                ),
+                [&email.to, &email.cc, &email.bcc]
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|addresses| addresses.iter())
+                    .map(|address| EnvelopeAddress::new(address.email.clone())),
+            )
         });
 
         let id = account.submissions.alloc_id();
@@ -1629,17 +1637,21 @@ pub fn email_submission_set(
         }
     });
 
-    let mut result = to_result(&SetResponse {
-        account_id: request.set.account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.submissions.state()),
-        created: (!created.is_empty()).then_some(created),
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: None,
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: None,
-    })?;
+    let mut response = SetResponse::new(request.set.account_id, account.submissions.state())
+        .with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    let mut result = to_result(&response)?;
 
     // RFC 8620 §5.3: `created` omits properties already sent by the client.
     if terse_submission_create
@@ -1678,12 +1690,10 @@ pub fn email_submission_get(
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.submissions.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.submissions.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// `EmailSubmission/query` (RFC 8621 §7.3): filter by ids, `undoStatus`, or `sendAt` range.
@@ -1747,15 +1757,12 @@ pub fn email_submission_query(
         .filter(|(_, submission)| matches(submission))
         .count() as u64;
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.submissions.state(),
-        can_calculate_changes: false,
-        position: request.position.max(0) as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit: None,
-    })
+    let mut response = QueryResponse::new(request.account_id, account.submissions.state(), ids)
+        .with_position(request.position.max(0) as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    to_result(&response)
 }
 
 /// Everything needed to seed one email into an account.
@@ -1886,13 +1893,9 @@ impl AccountState {
     /// Seed a sending identity without bumping state.
     pub fn seed_identity(&mut self, name: &str, email: &str) -> Id {
         let id = self.identities.alloc_id();
-        let identity = Identity {
-            id: Some(id.clone()),
-            name: name.to_owned(),
-            email: email.to_owned(),
-            may_delete: Some(false),
-            ..Identity::default()
-        };
+        let identity = Identity::new(name, email)
+            .with_id(id.clone())
+            .with_may_delete(false);
         self.identities.seed_with_id(id.clone(), identity);
         id
     }
@@ -1914,15 +1917,16 @@ impl AccountState {
         parent_id: Option<Id>,
     ) -> Id {
         let id = self.mailboxes.alloc_id();
-        let mailbox = Mailbox {
-            id: Some(id.clone()),
-            name: name.to_owned(),
-            parent_id,
-            role: role.map(str::to_owned),
-            sort_order: Some(0),
-            is_subscribed: Some(true),
-            ..Mailbox::default()
-        };
+        let mut mailbox = Mailbox::new(name)
+            .with_id(id.clone())
+            .with_sort_order(0)
+            .is_subscribed(true);
+        if let Some(parent_id) = parent_id {
+            mailbox = mailbox.with_parent_id(parent_id);
+        }
+        if let Some(role) = role {
+            mailbox = mailbox.with_role(role);
+        }
         self.mailboxes.seed_with_id(id.clone(), mailbox);
         id
     }
@@ -1930,15 +1934,16 @@ impl AccountState {
     /// Create a mailbox via transaction so `/changes` reports it.
     pub fn create_mailbox(&mut self, name: &str, role: Option<&str>, parent: Option<&Id>) -> Id {
         let id = self.mailboxes.alloc_id();
-        let mailbox = Mailbox {
-            id: Some(id.clone()),
-            name: name.to_owned(),
-            parent_id: parent.cloned(),
-            role: role.map(str::to_owned),
-            sort_order: Some(0),
-            is_subscribed: Some(true),
-            ..Mailbox::default()
-        };
+        let mut mailbox = Mailbox::new(name)
+            .with_id(id.clone())
+            .with_sort_order(0)
+            .is_subscribed(true);
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(parent.clone());
+        }
+        if let Some(role) = role {
+            mailbox = mailbox.with_role(role);
+        }
         self.mailboxes
             .transaction(|transaction| transaction.create(id.clone(), mailbox));
         id
@@ -1950,10 +1955,8 @@ impl AccountState {
             let Some(mailbox) = transaction.get(id) else {
                 return false;
             };
-            let renamed = Mailbox {
-                name: name.to_owned(),
-                ..mailbox.clone()
-            };
+            let mut renamed = mailbox.clone();
+            renamed.name = name.to_owned();
             transaction.update(id, renamed)
         })
     }
@@ -2007,58 +2010,57 @@ impl AccountState {
         let id = self.emails.alloc_id();
         let body_blob_id = self.add_blob("text/plain", seed.text_body.clone().into_bytes());
 
-        let text_part = EmailBodyPart {
-            part_id: Some("1".to_owned()),
-            blob_id: Some(body_blob_id),
-            size: Some(seed.text_body.len() as u64),
-            content_type: Some("text/plain".to_owned()),
-            charset: Some("utf-8".to_owned()),
-            ..EmailBodyPart::default()
-        };
+        let text_part = EmailBodyPart::new()
+            .with_part_id("1")
+            .with_blob_id(body_blob_id)
+            .with_size(seed.text_body.len() as u64)
+            .with_content_type("text/plain")
+            .with_charset("utf-8");
         let attachments: Vec<EmailBodyPart> = seed
             .attachments
             .iter()
             .enumerate()
-            .map(|(index, (blob_id, name, content_type))| EmailBodyPart {
-                part_id: Some(format!("{}", index + 2)),
-                blob_id: Some(blob_id.clone()),
-                size: self.blobs.get(blob_id).map(|blob| blob.data.len() as u64),
-                name: Some(name.clone()),
-                content_type: Some(content_type.clone()),
-                disposition: Some("attachment".to_owned()),
-                ..EmailBodyPart::default()
+            .map(|(index, (blob_id, name, content_type))| {
+                let mut part = EmailBodyPart::new()
+                    .with_part_id(format!("{}", index + 2))
+                    .with_blob_id(blob_id.clone())
+                    .with_name(name.clone())
+                    .with_content_type(content_type.clone())
+                    .with_disposition("attachment");
+                if let Some(size) = self.blobs.get(blob_id).map(|blob| blob.data.len() as u64) {
+                    part = part.with_size(size);
+                }
+                part
             })
             .collect();
 
         let source = rfc5322(&id, &seed);
         // RFC 8621 §4.1 defines `size` as octets of the raw `blobId` payload.
         let size = source.len() as u64;
-        let email = Email {
-            id: Some(id.clone()),
-            blob_id: Some(self.add_blob("message/rfc822", source.into_bytes())),
-            thread_id: Some(new_thread_id(&id)),
-            mailbox_ids: Some([(seed.mailbox_id, true)].into()),
-            keywords: Some(
-                seed.keywords
-                    .into_iter()
-                    .map(|keyword| (keyword, true))
-                    .collect(),
-            ),
-            size: Some(size),
-            received_at: Some(seed.received_at),
-            from: Some(vec![seed.from]),
-            to: Some(seed.to),
-            cc: (!seed.cc.is_empty()).then_some(seed.cc),
-            bcc: (!seed.bcc.is_empty()).then_some(seed.bcc),
-            subject: Some(seed.subject),
-            has_attachment: Some(!attachments.is_empty()),
-            preview: Some(seed.text_body.chars().take(64).collect()),
-            body_values: Some([("1".to_owned(), EmailBodyValue::new(seed.text_body))].into()),
-            text_body: Some(vec![text_part]),
-            headers: (!seed.headers.is_empty()).then_some(seed.headers),
-            attachments: (!attachments.is_empty()).then_some(attachments),
-            ..Email::default()
-        };
+        let mut email = Email::default();
+        email.id = Some(id.clone());
+        email.blob_id = Some(self.add_blob("message/rfc822", source.into_bytes()));
+        email.thread_id = Some(new_thread_id(&id));
+        email.mailbox_ids = Some([(seed.mailbox_id, true)].into());
+        email.keywords = Some(
+            seed.keywords
+                .into_iter()
+                .map(|keyword| (keyword, true))
+                .collect(),
+        );
+        email.size = Some(size);
+        email.received_at = Some(seed.received_at);
+        email.from = Some(vec![seed.from]);
+        email.to = Some(seed.to);
+        email.cc = (!seed.cc.is_empty()).then_some(seed.cc);
+        email.bcc = (!seed.bcc.is_empty()).then_some(seed.bcc);
+        email.subject = Some(seed.subject);
+        email.has_attachment = Some(!attachments.is_empty());
+        email.preview = Some(seed.text_body.chars().take(64).collect());
+        email.body_values = Some([("1".to_owned(), EmailBodyValue::new(seed.text_body))].into());
+        email.text_body = Some(vec![text_part]);
+        email.headers = (!seed.headers.is_empty()).then_some(seed.headers);
+        email.attachments = (!attachments.is_empty()).then_some(attachments);
         (id, email)
     }
 }

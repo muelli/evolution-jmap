@@ -336,10 +336,7 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
     // Unique per run so a prior run's leftover (e.g. a destroy that failed)
     // cannot be mistaken for this run's own mailbox.
     let name = format!("agent-livewrite-{}", unique_suffix());
-    let mailbox = Mailbox {
-        name: name.clone(),
-        ..Mailbox::default()
-    };
+    let mailbox = Mailbox::new(name.clone());
 
     let created = client
         .mailbox_create(&account_id, &mailbox)
@@ -458,10 +455,7 @@ fn address_book_create_then_destroy_round_trips_through_the_real_api() {
         .expect("the write-test account needs the contacts capability");
 
     let name = format!("agent-livewrite-{}", unique_suffix());
-    let book = AddressBook {
-        name: name.clone(),
-        ..AddressBook::default()
-    };
+    let book = AddressBook::new(name.clone());
 
     let created = client
         .address_book_create(&account_id, &book)
@@ -1244,25 +1238,26 @@ fn send_email_delivers_to_a_second_account_on_the_real_server() {
     };
 
     let subject = format!("agent-livewrite-send-{}", unique_suffix());
-    let draft = Email {
-        mailbox_ids: Some([(drafts_id, true)].into()),
-        keywords: Some([(keyword::DRAFT.to_owned(), true)].into()),
-        from: Some(vec![EmailAddress::new(None, &sender_email)]),
-        to: Some(vec![EmailAddress::new(None, &recipient_email)]),
-        subject: Some(subject.clone()),
-        body_values: Some(
+    let draft = {
+        let mut email = Email::default();
+        email.mailbox_ids = Some([(drafts_id, true)].into());
+        email.keywords = Some([(keyword::DRAFT.to_owned(), true)].into());
+        email.from = Some(vec![EmailAddress::new(None, &sender_email)]);
+        email.to = Some(vec![EmailAddress::new(None, &recipient_email)]);
+        email.subject = Some(subject.clone());
+        email.body_values = Some(
             [(
                 "1".to_owned(),
                 EmailBodyValue::new("Delivered, not just accepted."),
             )]
             .into(),
-        ),
-        text_body: Some(vec![EmailBodyPart {
-            part_id: Some("1".to_owned()),
-            content_type: Some("text/plain".to_owned()),
-            ..EmailBodyPart::default()
-        }]),
-        ..Email::default()
+        );
+        email.text_body = Some(vec![
+            EmailBodyPart::new()
+                .with_part_id("1")
+                .with_content_type("text/plain"),
+        ]);
+        email
     };
 
     let (created_email, submission) = sender
@@ -1736,10 +1731,7 @@ fn push_notifies_a_subscribed_eventsource_of_a_real_mailbox_change() {
     std::thread::sleep(Duration::from_millis(500));
 
     let name = format!("agent-livewrite-push-{}", unique_suffix());
-    let mailbox = Mailbox {
-        name: name.clone(),
-        ..Mailbox::default()
-    };
+    let mailbox = Mailbox::new(name.clone());
     let created = client
         .mailbox_create(&account_id, &mailbox)
         .expect("Mailbox/set create failed against the real server");
@@ -1826,10 +1818,7 @@ fn eventsource_reconnect_and_gap_handling_through_the_real_api() {
 
     // 2. Mutate state during the disconnection gap.
     let gap_name = format!("agent-livewrite-gap-{}", unique_suffix());
-    let gap_mailbox = Mailbox {
-        name: gap_name.clone(),
-        ..Mailbox::default()
-    };
+    let gap_mailbox = Mailbox::new(gap_name.clone());
     let gap_created = client
         .mailbox_create(&account_id, &gap_mailbox)
         .expect("Mailbox/set create failed against the real server during gap");
@@ -1872,10 +1861,7 @@ fn eventsource_reconnect_and_gap_handling_through_the_real_api() {
 
     // 6. Verify subsequent real-time changes are delivered over the reconnected stream.
     let post_name = format!("agent-livewrite-post-{}", unique_suffix());
-    let post_mailbox = Mailbox {
-        name: post_name.clone(),
-        ..Mailbox::default()
-    };
+    let post_mailbox = Mailbox::new(post_name.clone());
     let post_created = client
         .mailbox_create(&account_id, &post_mailbox)
         .expect("Mailbox/set create failed against the real server after reconnect");
@@ -2748,13 +2734,7 @@ fn mailbox_shared_with_a_second_real_account_is_visible_only_after_the_grant() {
 
     let name = format!("agent-livewrite-acl-{}", unique_suffix());
     let mailbox = owner
-        .mailbox_create(
-            &owner_account_id,
-            &Mailbox {
-                name: name.clone(),
-                ..Mailbox::default()
-            },
-        )
+        .mailbox_create(&owner_account_id, &Mailbox::new(name.clone()))
         .expect("Mailbox/set create failed against the real server");
     let mailbox_id = mailbox
         .id
@@ -4752,11 +4732,7 @@ fn protocol_edges_optimistic_locking_and_backreference_failures_through_the_real
 
     // 2. Back-reference failure when referenced call fails.
     let mut get_failed = GetRequest::all(account_id.clone());
-    get_failed.ids_ref = Some(ResultReference {
-        result_of: "c0".to_owned(),
-        name: "ContactCard/query".to_owned(),
-        path: "/ids".to_owned(),
-    });
+    get_failed.ids_ref = Some(ResultReference::new("c0", "ContactCard/query", "/ids"));
     let req_failed = Request::new([CAPABILITY_CORE, CAPABILITY_CONTACTS])
         .call("ContactCard/nonexistentQuery", &json!({}), "c0")
         .unwrap()
@@ -4777,11 +4753,7 @@ fn protocol_edges_optimistic_locking_and_backreference_failures_through_the_real
 
     // 3. Back-reference failure when referenced call succeeds but property path is missing.
     let mut get_bad_path = GetRequest::all(account_id.clone());
-    get_bad_path.ids_ref = Some(ResultReference {
-        result_of: "c0".to_owned(),
-        name: "Core/echo".to_owned(),
-        path: "/nonexistentPath".to_owned(),
-    });
+    get_bad_path.ids_ref = Some(ResultReference::new("c0", "Core/echo", "/nonexistentPath"));
     let req_bad_path = Request::new([CAPABILITY_CORE, CAPABILITY_CONTACTS])
         .call("Core/echo", &json!({"greeting": "hello"}), "c0")
         .unwrap()
@@ -4799,11 +4771,7 @@ fn protocol_edges_optimistic_locking_and_backreference_failures_through_the_real
 
     // 4. Successful back-reference resolution chaining Principal/query -> Principal/get.
     let mut get_success = GetRequest::all(account_id.clone());
-    get_success.ids_ref = Some(ResultReference {
-        result_of: "q0".to_owned(),
-        name: "Principal/query".to_owned(),
-        path: "/ids".to_owned(),
-    });
+    get_success.ids_ref = Some(ResultReference::new("q0", "Principal/query", "/ids"));
     let req_success = Request::new([CAPABILITY_CORE, CAPABILITY_PRINCIPALS])
         .call("Principal/query", &json!({"accountId": account_id}), "q0")
         .unwrap()
@@ -4882,11 +4850,8 @@ fn changes_paging_and_resumption_through_the_real_api() {
         .state;
 
     // Page 1: request maxChanges: 1
-    let changes_req1 = ChangesRequest {
-        account_id: account_id.clone(),
-        since_state: initial_state.clone(),
-        max_changes: Some(1),
-    };
+    let changes_req1 =
+        ChangesRequest::new(account_id.clone(), initial_state.clone()).max_changes(1);
     let page1_val = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CONTACTS],
@@ -4910,11 +4875,8 @@ fn changes_paging_and_resumption_through_the_real_api() {
     assert_ne!(page1.new_state, final_state);
 
     // Page 2: resume from page 1's newState
-    let changes_req2 = ChangesRequest {
-        account_id: account_id.clone(),
-        since_state: page1.new_state.clone(),
-        max_changes: Some(1),
-    };
+    let changes_req2 =
+        ChangesRequest::new(account_id.clone(), page1.new_state.clone()).max_changes(1);
     let page2_val = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CONTACTS],
@@ -5059,10 +5021,7 @@ fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
         .expect("write account has a mail capability");
 
     let raw_name = format!("  agent-livewrite-pad-{}  ", unique_suffix());
-    let mailbox = Mailbox {
-        name: raw_name.clone(),
-        ..Mailbox::default()
-    };
+    let mailbox = Mailbox::new(raw_name.clone());
 
     let created = client
         .mailbox_create(&account_id, &mailbox)

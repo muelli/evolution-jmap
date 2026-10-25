@@ -41,7 +41,7 @@ use serde_json::{Map, Value};
 
 pub use error::{SyncError, Unscheduled, Unsendable};
 pub use freebusy::FreeBusy;
-pub use jmap_object_sync::OnConflict;
+pub use jmap_object_sync::{OnConflict, edit_base};
 
 /// One event in the form that the meta backend uses: an identifier, a change
 /// token and the object.
@@ -573,10 +573,7 @@ impl CalSync {
     /// Only this calendar: this calendar does not edit an event in a different
     /// calendar. Thus the create continues, and the server decides.
     fn holding(&self, uid: &str) -> Result<Option<String>, SyncError> {
-        let filter = CalendarEventQueryFilter {
-            uid: Some(uid.to_owned()),
-            ..CalendarEventQueryFilter::in_calendar(self.calendar_id.clone())
-        };
+        let filter = CalendarEventQueryFilter::in_calendar(self.calendar_id.clone()).uid(uid);
         let ids = self.client.event_query(&self.account_id, filter)?.ids;
         Ok(ids.into_iter().next().map(|id| id.to_string()))
     }
@@ -707,9 +704,10 @@ mod tests {
     use jmap_proto::error::{MethodError, SetError};
 
     fn organised_by(organizer: Option<&str>) -> CalendarEvent {
-        CalendarEvent {
-            organizer_calendar_address: organizer.map(str::to_owned),
-            ..CalendarEvent::default()
+        {
+            let mut event_out = CalendarEvent::default();
+            event_out.organizer_calendar_address = organizer.map(str::to_owned);
+            event_out
         }
     }
 

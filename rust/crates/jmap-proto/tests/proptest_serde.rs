@@ -98,19 +98,19 @@ prop_compose! {
         may_share in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> MailboxRights {
-        MailboxRights {
-            may_read_items,
-            may_add_items,
-            may_remove_items,
-            may_set_seen,
-            may_set_keywords,
-            may_create_child,
-            may_rename,
-            may_delete,
-            may_submit,
-            may_share,
-            extra,
-        }
+        let mut rights = MailboxRights::default();
+        rights.may_read_items = may_read_items;
+        rights.may_add_items = may_add_items;
+        rights.may_remove_items = may_remove_items;
+        rights.may_set_seen = may_set_seen;
+        rights.may_set_keywords = may_set_keywords;
+        rights.may_create_child = may_create_child;
+        rights.may_rename = may_rename;
+        rights.may_delete = may_delete;
+        rights.may_submit = may_submit;
+        rights.may_share = may_share;
+        rights.extra = extra;
+        rights
     }
 }
 
@@ -136,21 +136,21 @@ prop_compose! {
         my_rights in prop::option::of(arb_mailbox_rights()),
         extra in arb_extra(),
     ) -> Mailbox {
-        Mailbox {
-            id,
-            name,
-            parent_id,
-            role,
-            sort_order,
-            total_emails,
-            unread_emails,
-            total_threads,
-            unread_threads,
-            is_subscribed,
-            share_with,
-            my_rights,
-            extra,
-        }
+        let mut mailbox = Mailbox::default();
+        mailbox.id = id;
+        mailbox.name = name;
+        mailbox.parent_id = parent_id;
+        mailbox.role = role;
+        mailbox.sort_order = sort_order;
+        mailbox.total_emails = total_emails;
+        mailbox.unread_emails = unread_emails;
+        mailbox.total_threads = total_threads;
+        mailbox.unread_threads = unread_threads;
+        mailbox.is_subscribed = is_subscribed;
+        mailbox.share_with = share_with;
+        mailbox.my_rights = my_rights;
+        mailbox.extra = extra;
+        mailbox
     }
 }
 
@@ -159,7 +159,10 @@ prop_compose! {
         name in prop::option::of("[A-Za-z ]{1,20}"),
         email in "[a-z0-9]{1,10}@[a-z0-9]{1,10}\\.com",
     ) -> EmailAddress {
-        EmailAddress { name, email }
+        let mut address = EmailAddress::default();
+        address.name = name;
+        address.email = email;
+        address
     }
 }
 
@@ -168,7 +171,7 @@ prop_compose! {
         name in "[A-Za-z-]{1,16}",
         value in "[A-Za-z0-9 ;=_-]{1,32}",
     ) -> EmailHeader {
-        EmailHeader { name, value }
+        EmailHeader::new(name, value)
     }
 }
 
@@ -178,11 +181,10 @@ prop_compose! {
         is_encoding_problem in any::<bool>(),
         is_truncated in any::<bool>(),
     ) -> EmailBodyValue {
-        EmailBodyValue {
-            value,
-            is_encoding_problem,
-            is_truncated,
-        }
+        let mut body_value = EmailBodyValue::new(value);
+        body_value.is_encoding_problem = is_encoding_problem;
+        body_value.is_truncated = is_truncated;
+        body_value
     }
 }
 
@@ -202,23 +204,17 @@ prop_compose! {
         cid in prop::option::of("<cid123@example.com>"),
         extra in arb_extra(),
     ) -> EmailBodyPart {
-        EmailBodyPart {
-            part_id,
-            blob_id,
-            size,
-            name,
-            content_type,
-            charset,
-            disposition,
-            cid,
-            location: None,
-            sub_parts: None,
-            headers: None,
-            smime_status: None,
-            smime_errors: None,
-            smime_verified_at: None,
-            extra,
-        }
+        let mut part = EmailBodyPart::default();
+        part.part_id = part_id;
+        part.blob_id = blob_id;
+        part.size = size;
+        part.name = name;
+        part.content_type = content_type;
+        part.charset = charset;
+        part.disposition = disposition;
+        part.cid = cid;
+        part.extra = extra;
+        part
     }
 }
 
@@ -229,12 +225,11 @@ prop_compose! {
         set_keywords in prop::option::of(prop::collection::btree_map("[a-z]{1,8}", any::<bool>(), 0..2)),
         extra in arb_extra(),
     ) -> SnoozeDetails {
-        SnoozeDetails {
-            until,
-            move_to_mailbox_id,
-            set_keywords,
-            extra,
-        }
+        let mut details = SnoozeDetails::new(until);
+        details.move_to_mailbox_id = move_to_mailbox_id;
+        details.set_keywords = set_keywords;
+        details.extra = extra;
+        details
     }
 }
 
@@ -314,39 +309,41 @@ prop_compose! {
         (message_id, from, to, subject) in arb_email_envelope(),
         (has_attachment, preview, body_structure, body_values, headers) in arb_email_content(),
     ) -> Email {
-        Email {
-            id,
-            blob_id,
-            thread_id,
-            mailbox_ids,
-            keywords,
-            snoozed,
-            size,
-            received_at,
-            message_id,
-            in_reply_to: None,
-            references: None,
-            sender: None,
-            from,
-            to,
-            cc: None,
-            bcc: None,
-            reply_to: None,
-            subject,
-            sent_at: None,
-            has_attachment,
-            preview,
-            body_structure,
-            body_values,
-            text_body: None,
-            html_body: None,
-            headers,
-            attachments: None,
-            smime_status: None,
-            smime_errors: None,
-            smime_verified_at: None,
-            extra,
-        }
+        {
+    let mut email = Email::default();
+    email.id = id;
+    email.blob_id = blob_id;
+    email.thread_id = thread_id;
+    email.mailbox_ids = mailbox_ids;
+    email.keywords = keywords;
+    email.snoozed = snoozed;
+    email.size = size;
+    email.received_at = received_at;
+    email.message_id = message_id;
+    email.in_reply_to = None;
+    email.references = None;
+    email.sender = None;
+    email.from = from;
+    email.to = to;
+    email.cc = None;
+    email.bcc = None;
+    email.reply_to = None;
+    email.subject = subject;
+    email.sent_at = None;
+    email.has_attachment = has_attachment;
+    email.preview = preview;
+    email.body_structure = body_structure;
+    email.body_values = body_values;
+    email.text_body = None;
+    email.html_body = None;
+    email.headers = headers;
+    email.attachments = None;
+    email.smime_status = None;
+    email.smime_errors = None;
+    email.smime_verified_at = None;
+    email.extra = extra;
+    email
+}
     }
 }
 
@@ -364,19 +361,19 @@ prop_compose! {
         may_send in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> Identity {
-        Identity {
-            id,
-            name,
-            email,
-            reply_to,
-            bcc,
-            text_signature,
-            html_signature,
-            draft_mailbox_id,
-            may_delete,
-            may_send,
-            extra,
-        }
+        let mut identity = Identity::default();
+        identity.id = id;
+        identity.name = name;
+        identity.email = email;
+        identity.reply_to = reply_to;
+        identity.bcc = bcc;
+        identity.text_signature = text_signature;
+        identity.html_signature = html_signature;
+        identity.draft_mailbox_id = draft_mailbox_id;
+        identity.may_delete = may_delete;
+        identity.may_send = may_send;
+        identity.extra = extra;
+        identity
     }
 }
 
@@ -388,13 +385,13 @@ prop_compose! {
         may_delete in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> AddressBookRights {
-        AddressBookRights {
-            may_read,
-            may_write,
-            may_share,
-            may_delete,
-            extra,
-        }
+        let mut rights = AddressBookRights::default();
+        rights.may_read = may_read;
+        rights.may_write = may_write;
+        rights.may_share = may_share;
+        rights.may_delete = may_delete;
+        rights.extra = extra;
+        rights
     }
 }
 
@@ -410,18 +407,18 @@ prop_compose! {
         share_with in prop::option::of(prop::collection::btree_map(arb_id(), arb_address_book_rights(), 0..2)),
         extra in arb_extra(),
     ) -> AddressBook {
-        AddressBook {
-            id,
-            name,
-            description,
-            sort_order,
-            is_default,
-            is_subscribed,
-            my_rights,
-            share_with,
-            may_delete: None,
-            extra,
-        }
+        let mut book = AddressBook::default();
+        book.id = id;
+        book.name = name;
+        book.description = description;
+        book.sort_order = sort_order;
+        book.is_default = is_default;
+        book.is_subscribed = is_subscribed;
+        book.my_rights = my_rights;
+        book.share_with = share_with;
+        book.may_delete = None;
+        book.extra = extra;
+        book
     }
 }
 
@@ -447,14 +444,13 @@ prop_compose! {
         default_separator in prop::option::of(" "),
         extra in arb_extra(),
     ) -> Name {
-        Name {
-            components,
-            full,
-            is_ordered,
-            sort_as: None,
-            default_separator,
-            extra,
-        }
+        let mut result = Name::default();
+        result.components = components;
+        result.full = full;
+        result.is_ordered = is_ordered;
+        result.default_separator = default_separator;
+        result.extra = extra;
+        result
     }
 }
 
@@ -464,12 +460,10 @@ prop_compose! {
         pref in any::<Option<u32>>(),
         extra in arb_extra(),
     ) -> ContactEmail {
-        ContactEmail {
-            address,
-            contexts: None,
-            pref,
-            extra,
-        }
+        let mut v = ContactEmail::new(address);
+        v.pref = pref;
+        v.extra = extra;
+        v
     }
 }
 
@@ -479,13 +473,10 @@ prop_compose! {
         pref in any::<Option<u32>>(),
         extra in arb_extra(),
     ) -> ContactPhone {
-        ContactPhone {
-            number,
-            contexts: None,
-            features: None,
-            pref,
-            extra,
-        }
+        let mut v = ContactPhone::new(number);
+        v.pref = pref;
+        v.extra = extra;
+        v
     }
 }
 
@@ -509,12 +500,10 @@ prop_compose! {
         name in "[A-Za-z ]{1,24}",
         extra in arb_extra(),
     ) -> Title {
-        Title {
-            name,
-            kind: None,
-            organization_id: None,
-            extra,
-        }
+        let mut title = Title::default();
+        title.name = name;
+        title.extra = extra;
+        title
     }
 }
 
@@ -525,18 +514,12 @@ prop_compose! {
         default_separator in prop::option::of(", "),
         extra in arb_extra(),
     ) -> Address {
-        Address {
-            components: None,
-            contexts: None,
-            full,
-            is_ordered: None,
-            country_code,
-            coordinates: None,
-            time_zone: None,
-            pref: None,
-            default_separator,
-            extra,
-        }
+        let mut result = Address::default();
+        result.full = full;
+        result.country_code = country_code;
+        result.default_separator = default_separator;
+        result.extra = extra;
+        result
     }
 }
 
@@ -556,7 +539,11 @@ prop_compose! {
         date in prop::option::of(arb_partial_date().prop_map(|pd| serde_json::to_value(pd).unwrap())),
         extra in arb_extra(),
     ) -> Anniversary {
-        Anniversary { kind, date, extra }
+        let mut v = Anniversary::default();
+        v.kind = kind;
+        v.date = date;
+        v.extra = extra;
+        v
     }
 }
 
@@ -569,12 +556,11 @@ prop_compose! {
         ),
         extra in arb_extra(),
     ) -> Note {
-        Note {
-            note,
-            created,
-            author,
-            extra,
-        }
+        let mut result = Note::new(note);
+        result.created = created;
+        result.author = author;
+        result.extra = extra;
+        result
     }
 }
 
@@ -643,42 +629,24 @@ prop_compose! {
         (emails, phones, addresses) in arb_card_comm(),
         (notes, anniversaries) in arb_card_entries(),
     ) -> ContactCard {
-        ContactCard {
-            id,
-            address_book_ids,
-            card_type: Some("Card".to_string()),
-            kind: Some("individual".to_string()),
-            version: Some("1.0".to_string()),
-            language: None,
-            members: None,
-            prod_id: None,
-            uid,
-            created,
-            updated: None,
-            name,
-            nicknames: None,
-            emails,
-            phones,
-            organizations,
-            titles,
-            addresses,
-            notes,
-            anniversaries,
-            links: None,
-            calendars: None,
-            scheduling_addresses: None,
-            media: None,
-            online_services: None,
-            keywords: None,
-            related_to: None,
-            crypto_keys: None,
-            directories: None,
-            personal_info: None,
-            speak_to_as: None,
-            preferred_languages: None,
-            localizations: None,
-            extra,
-        }
+        let mut card = ContactCard::default();
+        card.id = id;
+        card.address_book_ids = address_book_ids;
+        card.card_type = Some("Card".to_string());
+        card.kind = Some("individual".to_string());
+        card.version = Some("1.0".to_string());
+        card.uid = uid;
+        card.created = created;
+        card.name = name;
+        card.emails = emails;
+        card.phones = phones;
+        card.organizations = organizations;
+        card.titles = titles;
+        card.addresses = addresses;
+        card.notes = notes;
+        card.anniversaries = anniversaries;
+        card.extra = extra;
+        card
     }
 }
 
@@ -694,17 +662,17 @@ prop_compose! {
         may_delete in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> CalendarRights {
-        CalendarRights {
-            may_read_free_busy,
-            may_read_items,
-            may_write_all,
-            may_write_own,
-            may_update_private,
-            may_rsvp,
-            may_share,
-            may_delete,
-            extra,
-        }
+        let mut rights = CalendarRights::default();
+        rights.may_read_free_busy = may_read_free_busy;
+        rights.may_read_items = may_read_items;
+        rights.may_write_all = may_write_all;
+        rights.may_write_own = may_write_own;
+        rights.may_update_private = may_update_private;
+        rights.may_rsvp = may_rsvp;
+        rights.may_share = may_share;
+        rights.may_delete = may_delete;
+        rights.extra = extra;
+        rights
     }
 }
 
@@ -725,22 +693,22 @@ prop_compose! {
         may_delete in any::<Option<bool>>(),
         extra in arb_extra(),
     ) -> Calendar {
-        Calendar {
-            id,
-            name,
-            description,
-            color,
-            sort_order,
-            is_default,
-            is_subscribed,
-            is_visible,
-            include_in_availability,
-            time_zone,
-            my_rights,
-            share_with,
-            may_delete,
-            extra,
-        }
+        let mut calendar = Calendar::default();
+        calendar.id = id;
+        calendar.name = name;
+        calendar.description = description;
+        calendar.color = color;
+        calendar.sort_order = sort_order;
+        calendar.is_default = is_default;
+        calendar.is_subscribed = is_subscribed;
+        calendar.is_visible = is_visible;
+        calendar.include_in_availability = include_in_availability;
+        calendar.time_zone = time_zone;
+        calendar.my_rights = my_rights;
+        calendar.share_with = share_with;
+        calendar.may_delete = may_delete;
+        calendar.extra = extra;
+        calendar
     }
 }
 
@@ -758,12 +726,12 @@ prop_compose! {
         nth_of_period in any::<Option<i32>>(),
         extra in arb_extra(),
     ) -> NDay {
-        NDay {
-            day_type: Some("NDay".to_string()),
-            day,
-            nth_of_period,
-            extra,
-        }
+        let mut nday = NDay::default();
+        nday.day_type = Some("NDay".to_string());
+        nday.day = day;
+        nday.nth_of_period = nth_of_period;
+        nday.extra = extra;
+        nday
     }
 }
 
@@ -782,26 +750,7 @@ prop_compose! {
         first_day_of_week in prop::option::of(Just("mo".to_string())),
         extra in arb_extra(),
     ) -> RecurrenceRule {
-        RecurrenceRule {
-            rule_type: Some("RecurrenceRule".to_string()),
-            frequency,
-            interval,
-            count,
-            until,
-            by_day,
-            by_month: None,
-            by_month_day: None,
-            by_year_day: None,
-            by_week_no: None,
-            by_hour: None,
-            by_minute: None,
-            by_second: None,
-            by_set_position: None,
-            first_day_of_week,
-            rscale: None,
-            skip: None,
-            extra,
-        }
+        { let mut __built = RecurrenceRule::default(); __built.rule_type = Some("RecurrenceRule".to_string()); __built.frequency = frequency; __built.interval = interval; __built.count = count; __built.until = until; __built.by_day = by_day; __built.by_month = None; __built.by_month_day = None; __built.by_year_day = None; __built.by_week_no = None; __built.by_hour = None; __built.by_minute = None; __built.by_second = None; __built.by_set_position = None; __built.first_day_of_week = first_day_of_week; __built.rscale = None; __built.skip = None; __built.extra = extra; __built }
     }
 }
 
@@ -871,49 +820,49 @@ prop_compose! {
         (start, time_zone, duration, show_without_time, recurrence_rule) in arb_event_schedule(),
         (title, description, status, free_busy_status, priority) in arb_event_details(),
     ) -> CalendarEvent {
-        CalendarEvent {
-            id,
-            calendar_ids,
-            event_type: Some("Event".to_string()),
-            version: Some("2.0".to_string()),
-            uid,
-            created: None,
-            updated: None,
-            title,
-            description,
-            start,
-            time_zone,
-            duration,
-            show_without_time,
-            status,
-            free_busy_status,
-            priority,
-            privacy: None,
-            locations: None,
-            virtual_locations: None,
-            links: None,
-            keywords: None,
-            alerts: None,
-            participants: None,
-            organizer_calendar_address: None,
-            is_draft: None,
-            hide_attendees: None,
-            recurrence_rule,
-            recurrence_overrides: None,
-            time_zones: None,
-            use_default_alerts: None,
-            color: None,
-            locale: None,
-            localizations: None,
-            is_origin,
-            end_time_zone: None,
-            main_location_id,
-            schedule_sequence: None,
-            schedule_updated: None,
-            may_invite_self: None,
-            may_invite_others: None,
-            extra,
-        }
+        let mut event = CalendarEvent::default();
+        event.id = id;
+        event.calendar_ids = calendar_ids;
+        event.event_type = Some("Event".to_string());
+        event.version = Some("2.0".to_string());
+        event.uid = uid;
+        event.created = None;
+        event.updated = None;
+        event.title = title;
+        event.description = description;
+        event.start = start;
+        event.time_zone = time_zone;
+        event.duration = duration;
+        event.show_without_time = show_without_time;
+        event.status = status;
+        event.free_busy_status = free_busy_status;
+        event.priority = priority;
+        event.privacy = None;
+        event.locations = None;
+        event.virtual_locations = None;
+        event.links = None;
+        event.keywords = None;
+        event.alerts = None;
+        event.participants = None;
+        event.organizer_calendar_address = None;
+        event.is_draft = None;
+        event.hide_attendees = None;
+        event.recurrence_rule = recurrence_rule;
+        event.recurrence_overrides = None;
+        event.time_zones = None;
+        event.use_default_alerts = None;
+        event.color = None;
+        event.locale = None;
+        event.localizations = None;
+        event.is_origin = is_origin;
+        event.end_time_zone = None;
+        event.main_location_id = main_location_id;
+        event.schedule_sequence = None;
+        event.schedule_updated = None;
+        event.may_invite_self = None;
+        event.may_invite_others = None;
+        event.extra = extra;
+        event
     }
 }
 
@@ -924,12 +873,11 @@ prop_compose! {
         ids_ref in prop::option::of(arb_result_reference()),
         properties in prop::option::of(prop::collection::vec("[a-z]{1,10}", 0..3)),
     ) -> GetRequest {
-        GetRequest {
-            account_id,
-            ids,
-            ids_ref,
-            properties,
-        }
+        let mut request = GetRequest::all(account_id);
+        request.ids = ids;
+        request.ids_ref = ids_ref;
+        request.properties = properties;
+        request
     }
 }
 
@@ -944,11 +892,10 @@ where
         prop::collection::vec(make_item(), 0..3),
         prop::collection::vec(arb_id(), 0..2),
     )
-        .prop_map(|(account_id, state, list, not_found)| GetResponse {
-            account_id,
-            state,
-            list,
-            not_found,
+        .prop_map(|(account_id, state, list, not_found)| {
+            let mut response = GetResponse::new(account_id, state, list);
+            response.not_found = not_found;
+            response
         })
 }
 
@@ -972,15 +919,14 @@ where
         )),
         prop::option::of(prop::collection::vec(arb_id(), 0..2)),
     )
-        .prop_map(
-            |(account_id, if_in_state, create, update, destroy)| SetRequest {
-                account_id,
-                if_in_state,
-                create,
-                update,
-                destroy,
-            },
-        )
+        .prop_map(|(account_id, if_in_state, create, update, destroy)| {
+            let mut request = SetRequest::new(account_id);
+            request.if_in_state = if_in_state;
+            request.create = create;
+            request.update = update;
+            request.destroy = destroy;
+            request
+        })
 }
 
 prop_compose! {
@@ -1045,17 +991,17 @@ where
                 not_updated,
                 not_destroyed,
             )| {
-                SetResponse {
-                    account_id,
-                    old_state,
-                    new_state,
-                    created,
-                    updated,
-                    destroyed,
-                    not_created,
-                    not_updated,
-                    not_destroyed,
-                }
+                let mut response =
+                    SetResponse::new(account_id, new_state.clone().unwrap_or_default());
+                response.old_state = old_state;
+                response.new_state = new_state;
+                response.created = created;
+                response.updated = updated;
+                response.destroyed = destroyed;
+                response.not_created = not_created;
+                response.not_updated = not_updated;
+                response.not_destroyed = not_destroyed;
+                response
             },
         )
 }
@@ -1072,17 +1018,17 @@ prop_compose! {
         fetch_all_body_values in any::<bool>(),
         max_body_value_bytes in any::<Option<u64>>(),
     ) -> EmailGetRequest {
-        EmailGetRequest {
-            account_id,
-            ids,
-            ids_ref,
-            properties,
-            body_properties,
-            fetch_text_body_values,
-            fetch_html_body_values,
-            fetch_all_body_values,
-            max_body_value_bytes,
-        }
+        let mut request = EmailGetRequest::default();
+        request.account_id = account_id;
+        request.ids = ids;
+        request.ids_ref = ids_ref;
+        request.properties = properties;
+        request.body_properties = body_properties;
+        request.fetch_text_body_values = fetch_text_body_values;
+        request.fetch_html_body_values = fetch_html_body_values;
+        request.fetch_all_body_values = fetch_all_body_values;
+        request.max_body_value_bytes = max_body_value_bytes;
+        request
     }
 }
 
@@ -1093,10 +1039,11 @@ fn arb_address_book_set_request() -> impl Strategy<Value = AddressBookSetRequest
         prop::option::of(arb_id()),
     )
         .prop_map(
-            |(set, on_destroy_remove_contents, on_success_set_is_default)| AddressBookSetRequest {
-                set,
-                on_destroy_remove_contents,
-                on_success_set_is_default,
+            |(set, on_destroy_remove_contents, on_success_set_is_default)| {
+                let mut request = AddressBookSetRequest::new(set);
+                request.on_destroy_remove_contents = on_destroy_remove_contents;
+                request.on_success_set_is_default = on_success_set_is_default;
+                request
             },
         )
 }
@@ -1129,24 +1076,24 @@ fn arb_calendar_set_request() -> impl Strategy<Value = CalendarSetRequest> {
                 on_destroy_remove_contents,
                 on_success_set_is_default,
             )| {
-                CalendarSetRequest {
-                    account_id,
-                    if_in_state,
-                    create,
-                    update,
-                    destroy,
-                    on_destroy_remove_contents,
-                    on_success_set_is_default,
-                }
+                let mut request = CalendarSetRequest::new(account_id);
+                request.if_in_state = if_in_state;
+                request.create = create;
+                request.update = update;
+                request.destroy = destroy;
+                request.on_destroy_remove_contents = on_destroy_remove_contents;
+                request.on_success_set_is_default = on_success_set_is_default;
+                request
             },
         )
 }
 
 fn arb_calendar_event_set_request() -> impl Strategy<Value = CalendarEventSetRequest> {
     (arb_set_request(arb_calendar_event), any::<Option<bool>>()).prop_map(
-        |(set, send_scheduling_messages)| CalendarEventSetRequest {
-            set,
-            send_scheduling_messages,
+        |(set, send_scheduling_messages)| {
+            let mut request = CalendarEventSetRequest::new(set);
+            request.send_scheduling_messages = send_scheduling_messages;
+            request
         },
     )
 }

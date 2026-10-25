@@ -49,10 +49,7 @@ use jmap_test_support::{LiveAccount, env_count, unique_suffix};
 /// Returns whether a new `CalendarEvent/query` on the server shows `uid`. A 429
 /// gives `false`.
 fn uid_exists(client: &Client, account_id: &Id, uid: &str) -> bool {
-    let filter = CalendarEventQueryFilter {
-        uid: Some(uid.to_owned()),
-        ..CalendarEventQueryFilter::default()
-    };
+    let filter = CalendarEventQueryFilter::default().uid(uid);
     match client.event_query(account_id, filter) {
         Ok(response) => !response.ids.is_empty(),
         Err(ClientError::Http { status: 429, .. }) => false,

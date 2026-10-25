@@ -762,17 +762,13 @@ fn share_notifications_and_query_return_matching_records() {
         let state = server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&account_id).unwrap();
-        let me = account.seed_current_user_principal(Principal {
-            name: "Alice".to_owned(),
-            email: Some("alice@example.com".to_owned()),
-            ..Principal::default()
-        });
-        account.seed_principal(Principal {
-            id: Some(attendee.clone()),
-            name: "Bob".to_owned(),
-            email: Some("bob@example.com".to_owned()),
-            ..Principal::default()
-        });
+        let me = account
+            .seed_current_user_principal(Principal::new("Alice").with_email("alice@example.com"));
+        account.seed_principal(
+            Principal::new("Bob")
+                .with_id(attendee.clone())
+                .with_email("bob@example.com"),
+        );
         me
     };
 
@@ -1236,10 +1232,7 @@ fn set_failure_protocol_error_when_set_response_has_neither_success_nor_error() 
     });
 
     let account_id = Id::new("acc1");
-    let book = AddressBook {
-        name: "Test Book".to_owned(),
-        ..AddressBook::default()
-    };
+    let book = AddressBook::new("Test Book");
     let err = client
         .address_book_create(&account_id, &book)
         .expect_err("must fail when server returns empty created map");

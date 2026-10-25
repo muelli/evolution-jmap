@@ -15,6 +15,7 @@ use crate::id::Id;
 /// Blob capability properties (RFC 9404 §1.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobCapability {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_size_blob_set: Option<u64>,
@@ -92,6 +93,7 @@ impl crate::session::Account {
 /// A source of octets for an uploaded blob (RFC 9404 §2.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DataSource {
     #[serde(
         rename = "data:asText",
@@ -168,6 +170,7 @@ impl DataSource {
 /// An object to upload in `Blob/upload` (RFC 9404 §2.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UploadBlob {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data: Vec<DataSource>,
@@ -218,6 +221,7 @@ impl UploadBlob {
 /// Result of an uploaded blob in `Blob/upload` (RFC 9404 §2.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UploadBlobResult {
     pub id: Id,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
@@ -251,6 +255,7 @@ impl UploadBlobResult {
 /// `Blob/upload` arguments (RFC 9404 §2.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobUploadRequest {
     #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
@@ -274,6 +279,7 @@ impl BlobUploadRequest {
 /// `Blob/upload` response (RFC 9404 §2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobUploadResponse {
     #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
@@ -320,6 +326,7 @@ impl BlobUploadResponse {
 /// Metadata and data for a blob (RFC 9404 §2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobInfo {
     pub id: Id,
     #[serde(
@@ -435,6 +442,7 @@ impl BlobInfo {
 /// `Blob/get` arguments (RFC 9404 §2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobGetRequest {
     #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
@@ -494,6 +502,7 @@ impl BlobGetRequest {
 /// `Blob/get` response (RFC 9404 §2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobGetResponse {
     #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
@@ -521,6 +530,7 @@ impl BlobGetResponse {
 /// `Blob/lookup` arguments (RFC 9404 §2.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobLookupRequest {
     #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,
@@ -545,6 +555,7 @@ impl BlobLookupRequest {
 /// A matched blob lookup item (RFC 9404 §2.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobLookupMatch {
     pub id: Id,
     #[serde(default)]
@@ -586,6 +597,7 @@ impl BlobLookupMatch {
 /// `Blob/lookup` response (RFC 9404 §2.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BlobLookupResponse {
     #[serde(default, skip_serializing_if = "Id::is_empty")]
     pub account_id: Id,

@@ -73,12 +73,9 @@ fn seed_principal(fixture: &Fixture, name: &str, email: &str, may_get_availabili
     let state = fixture.server.state();
     let mut state = state.lock().unwrap();
     let account = state.account_mut(&fixture.account_id).unwrap();
-    let mut principal = Principal {
-        principal_type: Some("individual".to_owned()),
-        name: name.to_owned(),
-        email: Some(email.to_owned()),
-        ..Principal::default()
-    };
+    let mut principal = Principal::new(name)
+        .with_type("individual")
+        .with_email(email);
     if !may_get_availability {
         principal.capabilities.insert(
             "urn:ietf:params:jmap:calendars".to_owned(),

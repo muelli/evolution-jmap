@@ -209,50 +209,56 @@ fn entry_sets<T: Clone + std::fmt::Debug>(
 }
 
 fn arb_nickname() -> impl Strategy<Value = Nickname> {
-    "[a-zA-Z ]{1,12}".prop_map(|name| Nickname {
-        name,
-        ..Nickname::default()
+    "[a-zA-Z ]{1,12}".prop_map(|name| {
+        let mut v = Nickname::default();
+        v.name = name;
+        v
     })
 }
 
 fn arb_nickname_pair() -> impl Strategy<Value = (Nickname, Nickname)> {
     (arb_nickname(), "[a-zA-Z ]{1,12}").prop_map(|(old, name)| {
-        let new = Nickname {
-            name,
-            ..old.clone()
+        let new = {
+            let mut v = old.clone();
+            v.name = name;
+            v
         };
         (old, new)
     })
 }
 
 fn card_with_nicknames(map: BTreeMap<String, Nickname>) -> ContactCard {
-    ContactCard {
-        nicknames: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.nicknames = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
 fn arb_note() -> impl Strategy<Value = Note> {
-    "[a-zA-Z0-9 .,]{1,20}".prop_map(|note| Note {
-        note,
-        ..Note::default()
+    "[a-zA-Z0-9 .,]{1,20}".prop_map(|note| {
+        let mut v = Note::default();
+        v.note = note;
+        v
     })
 }
 
 fn arb_note_pair() -> impl Strategy<Value = (Note, Note)> {
     (arb_note(), "[a-zA-Z0-9 .,]{1,20}").prop_map(|(old, note)| {
-        let new = Note {
-            note,
-            ..old.clone()
+        let new = {
+            let mut v = old.clone();
+            v.note = note;
+            v
         };
         (old, new)
     })
 }
 
 fn card_with_notes(map: BTreeMap<String, Note>) -> ContactCard {
-    ContactCard {
-        notes: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.notes = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -264,28 +270,31 @@ fn arb_title_kind() -> impl Strategy<Value = Option<String>> {
 }
 
 fn arb_title() -> impl Strategy<Value = Title> {
-    ("[a-zA-Z ]{1,12}", arb_title_kind()).prop_map(|(name, kind)| Title {
-        name,
-        kind,
-        ..Title::default()
+    ("[a-zA-Z ]{1,12}", arb_title_kind()).prop_map(|(name, kind)| {
+        let mut title = Title::default();
+        title.name = name;
+        title.kind = kind;
+        title
     })
 }
 
 fn arb_title_pair() -> impl Strategy<Value = (Title, Title)> {
     (arb_title(), "[a-zA-Z ]{1,12}", arb_title_kind()).prop_map(|(old, name, kind)| {
-        let new = Title {
-            name,
-            kind,
-            ..old.clone()
+        let new = {
+            let mut title = old.clone();
+            title.name = name;
+            title.kind = kind;
+            title
         };
         (old, new)
     })
 }
 
 fn card_with_titles(map: BTreeMap<String, Title>) -> ContactCard {
-    ContactCard {
-        titles: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.titles = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -321,9 +330,10 @@ fn arb_link_pair() -> impl Strategy<Value = (Link, Link)> {
 }
 
 fn card_with_links(map: BTreeMap<String, Link>) -> ContactCard {
-    ContactCard {
-        links: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.links = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -335,28 +345,31 @@ fn arb_calendar_kind() -> impl Strategy<Value = Option<String>> {
 }
 
 fn arb_calendar() -> impl Strategy<Value = Calendar> {
-    (arb_uri(), arb_calendar_kind()).prop_map(|(uri, kind)| Calendar {
-        uri,
-        kind,
-        ..Calendar::default()
+    (arb_uri(), arb_calendar_kind()).prop_map(|(uri, kind)| {
+        let mut calendar = Calendar::default();
+        calendar.uri = uri;
+        calendar.kind = kind;
+        calendar
     })
 }
 
 fn arb_calendar_pair() -> impl Strategy<Value = (Calendar, Calendar)> {
     (arb_calendar(), arb_uri(), arb_calendar_kind()).prop_map(|(old, uri, kind)| {
-        let new = Calendar {
-            uri,
-            kind,
-            ..old.clone()
+        let new = {
+            let mut calendar = old.clone();
+            calendar.uri = uri;
+            calendar.kind = kind;
+            calendar
         };
         (old, new)
     })
 }
 
 fn card_with_calendars(map: BTreeMap<String, Calendar>) -> ContactCard {
-    ContactCard {
-        calendars: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.calendars = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -369,9 +382,10 @@ fn card_with_keywords(tags: BTreeSet<String>) -> ContactCard {
         .into_iter()
         .map(|tag| (tag, Value::Bool(true)))
         .collect();
-    ContactCard {
-        keywords: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.keywords = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -405,9 +419,10 @@ fn arb_organization_name_pair() -> impl Strategy<Value = (Organization, Organiza
 }
 
 fn card_with_organizations(map: BTreeMap<String, Organization>) -> ContactCard {
-    ContactCard {
-        organizations: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.organizations = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -416,11 +431,7 @@ fn arb_sort_as() -> impl Strategy<Value = Option<String>> {
 }
 
 fn bare_unit(name: String) -> OrgUnit {
-    OrgUnit {
-        name,
-        sort_as: None,
-        extra: BTreeMap::new(),
-    }
+    OrgUnit::new(&name)
 }
 
 /// A `(current, edited)` pair of units lists. `kept` units have the same name
@@ -439,11 +450,8 @@ fn arb_units_pair() -> impl Strategy<Value = (Vec<OrgUnit>, Vec<OrgUnit>)> {
             let mut current = Vec::new();
             let mut edited = Vec::new();
             for (index, sort_as) in kept_sort_as.into_iter().enumerate() {
-                let unit = OrgUnit {
-                    name: format!("k{index}"),
-                    sort_as,
-                    extra: BTreeMap::new(),
-                };
+                let mut unit = OrgUnit::new(&format!("k{index}"));
+                unit.sort_as = sort_as;
                 current.push(unit.clone());
                 edited.push(unit);
             }
@@ -472,10 +480,10 @@ fn arb_organization_units_stable() -> impl Strategy<Value = Organization> {
         let units = sort_as_list
             .into_iter()
             .enumerate()
-            .map(|(index, sort_as)| OrgUnit {
-                name: format!("u{index}"),
-                sort_as,
-                extra: BTreeMap::new(),
+            .map(|(index, sort_as)| {
+                let mut unit = OrgUnit::new(&format!("u{index}"));
+                unit.sort_as = sort_as;
+                unit
             })
             .collect();
         organization_with_units(units)
@@ -509,9 +517,10 @@ const ADDRESS_COMPONENT_KINDS: [&str; 7] = [
 ];
 
 fn arb_address_with_components() -> impl Strategy<Value = Address> {
-    arb_address_value().prop_map(|value| Address {
-        components: Some(vec![AddressComponent::new("locality", value)]),
-        ..Address::default()
+    arb_address_value().prop_map(|value| {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", value)]);
+        address_val
     })
 }
 
@@ -596,18 +605,20 @@ fn arb_address_components_pair() -> impl Strategy<Value = (Address, Address)> {
             }
             current.extend(current_tail);
             edited.extend(edited_tail);
-            let to_address = |components: Vec<AddressComponent>| Address {
-                components: (!components.is_empty()).then_some(components),
-                ..Address::default()
+            let to_address = |components: Vec<AddressComponent>| {
+                let mut address_val = Address::default();
+                address_val.components = (!components.is_empty()).then_some(components);
+                address_val
             };
             (to_address(current), to_address(edited))
         })
 }
 
 fn card_with_addresses(map: BTreeMap<String, Address>) -> ContactCard {
-    ContactCard {
-        addresses: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.addresses = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -700,18 +711,20 @@ fn arb_name_components_pair() -> impl Strategy<Value = (Name, Name)> {
             }
             current.extend(current_tail);
             edited.extend(edited_tail);
-            let to_name = |components: Vec<NameComponent>| Name {
-                components: (!components.is_empty()).then_some(components),
-                ..Name::default()
+            let to_name = |components: Vec<NameComponent>| {
+                let mut name_val = Name::default();
+                name_val.components = (!components.is_empty()).then_some(components);
+                name_val
             };
             (to_name(current), to_name(edited))
         })
 }
 
 fn card_with_name(name: Name) -> ContactCard {
-    ContactCard {
-        name: Some(name),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.name = Some(name);
+        card
     }
 }
 
@@ -748,9 +761,10 @@ fn arb_anniversary_slot() -> impl Strategy<Value = AnniversarySlot> {
 }
 
 fn card_with_anniversaries(map: BTreeMap<String, Anniversary>) -> ContactCard {
-    ContactCard {
-        anniversaries: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.anniversaries = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -769,10 +783,11 @@ fn arb_anniversary_cards() -> impl Strategy<Value = (ContactCard, ContactCard, C
         for (kind, slot) in [("birth", birth), ("wedding", wedding)] {
             let current_key = format!("c-{kind}");
             let edited_key = format!("e-{kind}");
-            let entry = |date: Value| Anniversary {
-                kind: kind.to_owned(),
-                date: Some(date),
-                extra: BTreeMap::new(),
+            let entry = |date: Value| {
+                let mut v = Anniversary::default();
+                v.kind = kind.to_owned();
+                v.date = Some(date);
+                v
             };
             match slot {
                 AnniversarySlot::Absent => {}
@@ -831,9 +846,10 @@ fn arb_media_slot() -> impl Strategy<Value = MediaSlot> {
 }
 
 fn card_with_media(map: BTreeMap<String, Media>) -> ContactCard {
-    ContactCard {
-        media: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.media = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -907,12 +923,7 @@ const SERVICE_B: &str = "Yahoo";
 /// The shape in which every real `vcard_to_card` parse builds an online-service
 /// entry: a plain `user`, never a `uri`.
 fn user_stated(service: &str, handle: String) -> OnlineService {
-    OnlineService {
-        service: Some(service.to_owned()),
-        user: Some(handle),
-        uri: None,
-        ..OnlineService::default()
-    }
+    OnlineService::new().with_service(service).with_user(handle)
 }
 
 fn arb_online_service() -> impl Strategy<Value = OnlineService> {
@@ -929,9 +940,10 @@ fn arb_online_service_service_pair() -> impl Strategy<Value = (OnlineService, On
 }
 
 fn card_with_online_services(map: BTreeMap<String, OnlineService>) -> ContactCard {
-    ContactCard {
-        online_services: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.online_services = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -947,12 +959,9 @@ enum CurrentShape {
 fn shaped(shape: CurrentShape, handle: String) -> OnlineService {
     match shape {
         CurrentShape::UserStated => user_stated(SERVICE_A, handle),
-        CurrentShape::UriDrawn => OnlineService {
-            service: Some(SERVICE_A.to_owned()),
-            user: None,
-            uri: Some(format!("skype:{handle}")),
-            ..OnlineService::default()
-        },
+        CurrentShape::UriDrawn => OnlineService::new()
+            .with_service(SERVICE_A)
+            .with_uri(format!("skype:{handle}")),
     }
 }
 
@@ -1007,16 +1016,16 @@ fn round_trips_to(
 const RELATION_KIND: &str = "spouse";
 
 fn bare_relation() -> Relation {
-    Relation {
-        relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
-        extra: BTreeMap::new(),
-    }
+    let mut v = Relation::default();
+    v.relation = Some([(RELATION_KIND.to_owned(), json!(true))].into());
+    v
 }
 
 fn card_with_related_to(map: BTreeMap<String, Relation>) -> ContactCard {
-    ContactCard {
-        related_to: (!map.is_empty()).then_some(map),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.related_to = (!map.is_empty()).then_some(map);
+        card
     }
 }
 
@@ -1086,43 +1095,37 @@ fn arb_related_to_cards() -> impl Strategy<Value = (ContactCard, ContactCard, Co
                     }
                     RelatedSlot::RemovedKeepsUnmappedKind => {
                         let key = format!("kept-kind-{i}");
-                        current.insert(
-                            key.clone(),
-                            Relation {
-                                relation: Some(
-                                    [
-                                        (RELATION_KIND.to_owned(), json!(true)),
-                                        ("kin".to_owned(), json!(true)),
-                                    ]
-                                    .into(),
-                                ),
-                                extra: BTreeMap::new(),
-                            },
-                        );
-                        expected.insert(
-                            key,
-                            Relation {
-                                relation: Some([("kin".to_owned(), json!(true))].into()),
-                                extra: BTreeMap::new(),
-                            },
-                        );
+                        current.insert(key.clone(), {
+                            let mut v = Relation::default();
+                            v.relation = Some(
+                                [
+                                    (RELATION_KIND.to_owned(), json!(true)),
+                                    ("kin".to_owned(), json!(true)),
+                                ]
+                                .into(),
+                            );
+                            v
+                        });
+                        expected.insert(key, {
+                            let mut v = Relation::default();
+                            v.relation = Some([("kin".to_owned(), json!(true))].into());
+                            v
+                        });
                     }
                     RelatedSlot::RemovedKeepsExtra(note) => {
                         let key = format!("kept-extra-{i}");
-                        current.insert(
-                            key.clone(),
-                            Relation {
-                                relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
-                                extra: [("note".to_owned(), json!(note))].into(),
-                            },
-                        );
-                        expected.insert(
-                            key,
-                            Relation {
-                                relation: Some(BTreeMap::new()),
-                                extra: [("note".to_owned(), json!(note))].into(),
-                            },
-                        );
+                        current.insert(key.clone(), {
+                            let mut v = Relation::default();
+                            v.relation = Some([(RELATION_KIND.to_owned(), json!(true))].into());
+                            v.extra = [("note".to_owned(), json!(note))].into();
+                            v
+                        });
+                        expected.insert(key, {
+                            let mut v = Relation::default();
+                            v.relation = Some(BTreeMap::new());
+                            v.extra = [("note".to_owned(), json!(note))].into();
+                            v
+                        });
                     }
                     RelatedSlot::AddedNew => {
                         let key = format!("brand-new-{i}");
@@ -1132,45 +1135,39 @@ fn arb_related_to_cards() -> impl Strategy<Value = (ContactCard, ContactCard, Co
                     }
                     RelatedSlot::AddedExistingWithRelation => {
                         let key = format!("existing-rel-{i}");
-                        current.insert(
-                            key.clone(),
-                            Relation {
-                                relation: Some([("kin".to_owned(), json!(true))].into()),
-                                extra: BTreeMap::new(),
-                            },
-                        );
+                        current.insert(key.clone(), {
+                            let mut v = Relation::default();
+                            v.relation = Some([("kin".to_owned(), json!(true))].into());
+                            v
+                        });
                         edited.insert(key.clone(), bare_relation());
-                        expected.insert(
-                            key,
-                            Relation {
-                                relation: Some(
-                                    [
-                                        ("kin".to_owned(), json!(true)),
-                                        (RELATION_KIND.to_owned(), json!(true)),
-                                    ]
-                                    .into(),
-                                ),
-                                extra: BTreeMap::new(),
-                            },
-                        );
+                        expected.insert(key, {
+                            let mut v = Relation::default();
+                            v.relation = Some(
+                                [
+                                    ("kin".to_owned(), json!(true)),
+                                    (RELATION_KIND.to_owned(), json!(true)),
+                                ]
+                                .into(),
+                            );
+                            v
+                        });
                     }
                     RelatedSlot::AddedExistingNoRelation(note) => {
                         let key = format!("existing-norel-{i}");
-                        current.insert(
-                            key.clone(),
-                            Relation {
-                                relation: None,
-                                extra: [("note".to_owned(), json!(note))].into(),
-                            },
-                        );
+                        current.insert(key.clone(), {
+                            let mut v = Relation::default();
+                            v.relation = None;
+                            v.extra = [("note".to_owned(), json!(note))].into();
+                            v
+                        });
                         edited.insert(key.clone(), bare_relation());
-                        expected.insert(
-                            key,
-                            Relation {
-                                relation: Some([(RELATION_KIND.to_owned(), json!(true))].into()),
-                                extra: [("note".to_owned(), json!(note))].into(),
-                            },
-                        );
+                        expected.insert(key, {
+                            let mut v = Relation::default();
+                            v.relation = Some([(RELATION_KIND.to_owned(), json!(true))].into());
+                            v.extra = [("note".to_owned(), json!(note))].into();
+                            v
+                        });
                     }
                 }
             }

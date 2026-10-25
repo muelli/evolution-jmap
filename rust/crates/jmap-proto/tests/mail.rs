@@ -288,12 +288,9 @@ fn delivery_status_and_submission_query_filter_roundtrip_cover_rfc8621() {
         "cannotDestroyDefault"
     );
 
-    let status = DeliveryStatus {
-        smtp_reply: "250 2.1.5 Ok".to_owned(),
-        delivered: delivered::YES.to_owned(),
-        displayed: displayed::YES.to_owned(),
-        extra: BTreeMap::new(),
-    };
+    let status = DeliveryStatus::new("250 2.1.5 Ok")
+        .with_delivered(delivered::YES)
+        .with_displayed(displayed::YES);
     let json = serde_json::to_value(&status).unwrap();
     assert_eq!(json["smtpReply"], "250 2.1.5 Ok");
     assert_eq!(json["delivered"], "yes");
@@ -302,16 +299,12 @@ fn delivery_status_and_submission_query_filter_roundtrip_cover_rfc8621() {
     let round_tripped: DeliveryStatus = serde_json::from_value(json).unwrap();
     assert_eq!(round_tripped, status);
 
-    let sub = EmailSubmission {
-        id: Some("S1".into()),
-        identity_id: "I1".into(),
-        email_id: "M1".into(),
-        delivery_status: Some(BTreeMap::from([(
+    let sub = EmailSubmission::new("I1", "M1")
+        .with_id("S1")
+        .with_delivery_status(BTreeMap::from([(
             "bob@example.com".to_owned(),
             status.clone(),
-        )])),
-        ..EmailSubmission::default()
-    };
+        )]));
     let sub_json = serde_json::to_value(&sub).unwrap();
     assert_eq!(
         sub_json["deliveryStatus"]["bob@example.com"]["delivered"],
@@ -408,10 +401,7 @@ fn email_parse_and_headers_roundtrip_cover_rfc8621() {
     assert_eq!(resp.not_parsable.as_ref().unwrap().len(), 1);
     assert_eq!(resp.not_found.as_ref().unwrap().len(), 1);
 
-    let header = EmailHeader {
-        name: "X-Spam-Score".to_owned(),
-        value: "0.0".to_owned(),
-    };
+    let header = EmailHeader::new("X-Spam-Score", "0.0");
     let h_val = serde_json::to_value(&header).unwrap();
     assert_eq!(h_val["name"], "X-Spam-Score");
     assert_eq!(h_val["value"], "0.0");
@@ -420,13 +410,11 @@ fn email_parse_and_headers_roundtrip_cover_rfc8621() {
         header
     );
 
-    let addr_group = EmailAddressGroup {
-        name: Some("Engineering".to_owned()),
-        addresses: vec![
-            EmailAddress::new(Some("Alice"), "alice@example.com"),
-            EmailAddress::new(Some("Bob"), "bob@example.com"),
-        ],
-    };
+    let addr_group = EmailAddressGroup::new([
+        EmailAddress::new(Some("Alice"), "alice@example.com"),
+        EmailAddress::new(Some("Bob"), "bob@example.com"),
+    ])
+    .with_name("Engineering");
     let ag_val = serde_json::to_value(&addr_group).unwrap();
     assert_eq!(ag_val["name"], "Engineering");
     assert_eq!(ag_val["addresses"].as_array().unwrap().len(), 2);
@@ -442,15 +430,13 @@ fn mail_capabilities_roundtrip_covers_rfc8621() {
     use jmap_proto::mail::{MailCapability, SubmissionCapability};
     use std::collections::BTreeMap;
 
-    let mail_cap = MailCapability {
-        max_size_attachments_per_email: 50_000_000,
-        max_size_email_in_bytes: 75_000_000,
-        max_size_body_value_bytes: 2_000_000,
-        max_number_of_attachments_per_email: 100,
-        max_number_of_recipients_per_email: 50,
-        may_create_top_level_mailbox: true,
-        extra: BTreeMap::new(),
-    };
+    let mail_cap = MailCapability::new()
+        .with_max_size_attachments_per_email(50_000_000)
+        .with_max_size_email_in_bytes(75_000_000)
+        .with_max_size_body_value_bytes(2_000_000)
+        .with_max_number_of_attachments_per_email(100)
+        .with_max_number_of_recipients_per_email(50)
+        .may_create_top_level_mailbox(true);
     let mc_val = serde_json::to_value(&mail_cap).unwrap();
     assert_eq!(mc_val["maxSizeAttachmentsPerEmail"], 50_000_000);
     assert_eq!(mc_val["maxSizeEmailInBytes"], 75_000_000);
@@ -462,14 +448,12 @@ fn mail_capabilities_roundtrip_covers_rfc8621() {
     let round_mc: MailCapability = serde_json::from_value(mc_val).unwrap();
     assert_eq!(round_mc, mail_cap);
 
-    let sub_cap = SubmissionCapability {
-        max_delayed_send: 86400,
-        submission_extensions: BTreeMap::from([(
+    let sub_cap = SubmissionCapability::new()
+        .with_max_delayed_send(86400)
+        .with_submission_extensions(BTreeMap::from([(
             "FUTURERELEASE".to_owned(),
             vec!["MAXDISCARD".to_owned()],
-        )]),
-        extra: BTreeMap::new(),
-    };
+        )]));
     let sc_val = serde_json::to_value(&sub_cap).unwrap();
     assert_eq!(sc_val["maxDelayedSend"], 86400);
     assert_eq!(
@@ -487,28 +471,22 @@ fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
     use jmap_proto::mail::{
         Email, EmailHeader, EmailQueryFilter, Identity, Mailbox, MailboxRights,
     };
-    use std::collections::BTreeMap;
 
-    let rights = MailboxRights {
-        may_read_items: Some(true),
-        may_add_items: Some(true),
-        may_remove_items: Some(false),
-        may_set_seen: Some(true),
-        may_set_keywords: Some(true),
-        may_create_child: Some(false),
-        may_rename: Some(false),
-        may_delete: Some(false),
-        may_submit: Some(false),
-        may_share: Some(false),
-        extra: BTreeMap::new(),
-    };
+    let rights = MailboxRights::new()
+        .with_may_read_items(true)
+        .with_may_add_items(true)
+        .with_may_remove_items(false)
+        .with_may_set_seen(true)
+        .with_may_set_keywords(true)
+        .with_may_create_child(false)
+        .with_may_rename(false)
+        .with_may_delete(false)
+        .with_may_submit(false)
+        .with_may_share(false);
 
-    let mailbox = Mailbox {
-        id: Some("mb1".into()),
-        name: "Shared Support Inbox".to_owned(),
-        my_rights: Some(rights.clone()),
-        ..Mailbox::default()
-    };
+    let mailbox = Mailbox::new("Shared Support Inbox")
+        .with_id("mb1")
+        .with_my_rights(rights.clone());
 
     let mb_val = serde_json::to_value(&mailbox).unwrap();
     assert_eq!(mb_val["myRights"]["maySetKeywords"], true);
@@ -516,13 +494,9 @@ fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
     let round_mb: Mailbox = serde_json::from_value(mb_val).unwrap();
     assert_eq!(round_mb, mailbox);
 
-    let identity = Identity {
-        id: Some("id1".into()),
-        name: "Support".to_owned(),
-        email: "support@example.com".to_owned(),
-        draft_mailbox_id: Some("mb_drafts".into()),
-        ..Identity::default()
-    };
+    let identity = Identity::new("Support", "support@example.com")
+        .with_id("id1")
+        .with_draft_mailbox_id("mb_drafts");
 
     let id_val = serde_json::to_value(&identity).unwrap();
     assert_eq!(id_val["draftMailboxId"], "mb_drafts");
@@ -530,11 +504,12 @@ fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
     let round_id: Identity = serde_json::from_value(id_val).unwrap();
     assert_eq!(round_id, identity);
 
-    let email = Email {
-        id: Some("em1".into()),
-        subject: Some("Report".to_owned()),
-        headers: Some(vec![EmailHeader::new("X-Custom", "value1")]),
-        ..Email::default()
+    let email = {
+        let mut email = Email::default();
+        email.id = Some("em1".into());
+        email.subject = Some("Report".to_owned());
+        email.headers = Some(vec![EmailHeader::new("X-Custom", "value1")]);
+        email
     };
 
     let em_val = serde_json::to_value(&email).unwrap();
@@ -581,14 +556,10 @@ fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
 fn mail_spec_properties_roundtrip() {
     use jmap_proto::mail::{EmailBodyPart, EmailHeader, EmailQueryFilter, Identity};
 
-    let identity = Identity {
-        id: Some("id_spec".into()),
-        name: "Security Team".to_owned(),
-        email: "sec@example.com".to_owned(),
-        may_send: Some(true),
-        may_delete: Some(false),
-        ..Identity::default()
-    };
+    let identity = Identity::new("Security Team", "sec@example.com")
+        .with_id("id_spec")
+        .may_send(true)
+        .with_may_delete(false);
     let id_json = serde_json::to_value(&identity).unwrap();
     assert_eq!(id_json["maySend"], true);
     assert_eq!(id_json["mayDelete"], false);
@@ -597,15 +568,10 @@ fn mail_spec_properties_roundtrip() {
         identity
     );
 
-    let part = EmailBodyPart {
-        part_id: Some("part1".to_owned()),
-        content_type: Some("message/rfc822".to_owned()),
-        headers: Some(vec![EmailHeader::new(
-            "Content-Description",
-            "Embedded Message",
-        )]),
-        ..EmailBodyPart::default()
-    };
+    let part = EmailBodyPart::new()
+        .with_part_id("part1")
+        .with_content_type("message/rfc822")
+        .with_headers([EmailHeader::new("Content-Description", "Embedded Message")]);
     let p_json = serde_json::to_value(&part).unwrap();
     assert_eq!(p_json["headers"][0]["name"], "Content-Description");
     assert_eq!(p_json["headers"][0]["value"], "Embedded Message");
@@ -710,10 +676,10 @@ fn mailbox_identity_and_submission_builders_roundtrip() {
     let sub = EmailSubmission::new("ident_1", "email_1")
         .with_thread_id("th_1")
         .with_envelope(
-            Envelope {
-                mail_from: EnvelopeAddress::new("eng@example.com"),
-                rcpt_to: vec![EnvelopeAddress::new("customer@example.com")],
-            }
+            Envelope::new(
+                EnvelopeAddress::new("eng@example.com"),
+                [EnvelopeAddress::new("customer@example.com")],
+            )
             .with_schedule(&Schedule::HoldUntil(UtcDate::new("2026-09-01T12:00:00Z"))),
         )
         .with_undo_status("pending");
@@ -752,10 +718,10 @@ fn schedule_becomes_a_futurerelease_envelope_parameter() {
     use jmap_proto::mail::{Envelope, EnvelopeAddress, Schedule};
     use serde_json::json;
 
-    let envelope = Envelope {
-        mail_from: EnvelopeAddress::new("a@example.com").with_parameters(json!({"RET": "HDRS"})),
-        rcpt_to: vec![EnvelopeAddress::new("b@example.com")],
-    }
+    let envelope = Envelope::new(
+        EnvelopeAddress::new("a@example.com").with_parameters(json!({"RET": "HDRS"})),
+        [EnvelopeAddress::new("b@example.com")],
+    )
     .with_schedule(&Schedule::HoldFor(600));
 
     assert_eq!(
@@ -834,14 +800,12 @@ fn mdn_send_request_response_and_disposition_roundtrip_covers_rfc9007() {
         true
     );
 
-    let resp = MDNSendResponse {
-        account_id: "acc1".into(),
-        sent: Some(BTreeMap::from([("k1".to_string(), mdn)])),
-        not_sent: Some(BTreeMap::from([(
+    let resp = MDNSendResponse::new("acc1")
+        .with_sent(BTreeMap::from([("k1".to_string(), mdn)]))
+        .with_not_sent(BTreeMap::from([(
             "k2".to_string(),
             SetError::new(mdn_set_error::MDN_ALREADY_SENT),
-        )])),
-    };
+        )]));
 
     let resp_val = serde_json::to_value(&resp).unwrap();
     assert_eq!(resp_val["accountId"], "acc1");

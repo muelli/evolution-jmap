@@ -15,6 +15,7 @@ use crate::state::UtcDate;
 /// (draft-ietf-jmap-filenode §2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct FileNode {
     pub id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,6 +115,7 @@ impl FileNode {
 /// Access rights for a `FileNode` (draft-ietf-jmap-filenode §2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct FileNodeRights {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_read: Option<bool>,
@@ -176,6 +178,7 @@ impl FileNodeRights {
 /// JMAP FileNode account capability properties (draft-ietf-jmap-filenode §1.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct FileNodeCapability {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_file_node_depth: Option<u64>,
@@ -219,6 +222,7 @@ impl FileNodeCapability {
 /// Filter condition for `FileNode/query` (draft-ietf-jmap-filenode §3.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct FileNodeQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<Id>,

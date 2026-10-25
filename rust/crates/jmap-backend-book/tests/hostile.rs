@@ -22,17 +22,19 @@ fn hostile_card() -> ContactCard {
     let mut emails = BTreeMap::new();
     emails.insert(
         "e1\r\nFN:Mallory <attacker@example.invalid>\r\nX-TAIL".to_owned(),
-        ContactEmail {
-            address: "vera@example.com".to_owned(),
-            ..ContactEmail::default()
+        {
+            let mut v = ContactEmail::default();
+            v.address = "vera@example.com".to_owned();
+            v
         },
     );
-    ContactCard {
-        id: Some("C1".into()),
+    {
+        let mut card = ContactCard::default();
+        card.id = Some("C1".into());
         // Omit `name` so the card renders no legitimate `FN` property.
         // An injected `FN` would become the display name in Evolution.
-        emails: Some(emails),
-        ..ContactCard::default()
+        card.emails = Some(emails);
+        card
     }
 }
 
@@ -68,15 +70,17 @@ fn a_map_key_cannot_terminate_the_card_early() {
     let mut emails = BTreeMap::new();
     emails.insert(
         "e1\r\nEND:VCARD\r\nBEGIN:VCARD\r\nFN:Mallory\r\nEND:VCARD\r\nX".to_owned(),
-        ContactEmail {
-            address: "vera@example.com".to_owned(),
-            ..ContactEmail::default()
+        {
+            let mut v = ContactEmail::default();
+            v.address = "vera@example.com".to_owned();
+            v
         },
     );
-    let card = ContactCard {
-        id: Some("C1".into()),
-        emails: Some(emails),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C1".into());
+        card.emails = Some(emails);
+        card
     };
 
     // Parameter text must not start a new vCard line.

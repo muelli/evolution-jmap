@@ -13,18 +13,11 @@ use jmap_proto::mail::{Mailbox, MailboxRights, role};
 
 /// A mailbox with an id, a name and nothing else set.
 fn mailbox(id: &str, name: &str) -> Mailbox {
-    Mailbox {
-        id: Some(Id::new(id)),
-        name: name.to_owned(),
-        ..Mailbox::default()
-    }
+    Mailbox::new(name).with_id(Id::new(id))
 }
 
 fn child(id: &str, name: &str, parent: &str) -> Mailbox {
-    Mailbox {
-        parent_id: Some(Id::new(parent)),
-        ..mailbox(id, name)
-    }
+    mailbox(id, name).with_parent_id(Id::new(parent))
 }
 
 fn with_role(mut mailbox: Mailbox, role: &str) -> Mailbox {
@@ -38,10 +31,7 @@ fn with_sort_order(mut mailbox: Mailbox, sort_order: u32) -> Mailbox {
 }
 
 fn with_may_add_items(mut mailbox: Mailbox, allowed: bool) -> Mailbox {
-    mailbox.my_rights = Some(MailboxRights {
-        may_add_items: Some(allowed),
-        ..MailboxRights::default()
-    });
+    mailbox.my_rights = Some(MailboxRights::new().with_may_add_items(allowed));
     mailbox
 }
 
@@ -343,17 +333,12 @@ fn a_mailbox_hanging_off_a_cycle_stays_under_its_parent() {
 #[test]
 fn counts_come_from_the_mailbox_and_saturate() {
     let tree = tree(&[
-        Mailbox {
-            total_emails: Some(12),
-            unread_emails: Some(3),
-            ..mailbox("M1", "Inbox")
-        },
-        Mailbox {
-            // Just more than 32 bits. A wrapping cast gives five messages,
-            // which is wrong but looks correct.
-            total_emails: Some(u64::from(u32::MAX) + 5),
-            ..mailbox("M2", "Absurd")
-        },
+        mailbox("M1", "Inbox")
+            .with_total_emails(12)
+            .with_unread_emails(3),
+        // Just more than 32 bits. A wrapping cast gives five messages,
+        // which is wrong but looks correct.
+        mailbox("M2", "Absurd").with_total_emails(u64::from(u32::MAX) + 5),
         mailbox("M3", "Quiet"),
     ]);
     let counts: Vec<(u32, u32)> = tree
@@ -371,10 +356,7 @@ fn an_absent_subscription_flag_means_subscribed() {
     // If a server has no subscriptions, the client must not hide all folders.
     let tree = tree(&[
         mailbox("M1", "Inbox"),
-        Mailbox {
-            is_subscribed: Some(false),
-            ..mailbox("M2", "Noisy list")
-        },
+        mailbox("M2", "Noisy list").is_subscribed(false),
     ]);
     let subscribed: Vec<bool> = tree.iter().map(|folder| folder.subscribed).collect();
 
@@ -411,11 +393,7 @@ fn a_tree_with_one_mailbox_is_not_empty() {
 
 #[test]
 fn a_mailbox_without_an_id_is_a_protocol_error() {
-    let nameless = Mailbox {
-        id: None,
-        name: "Inbox".to_owned(),
-        ..Mailbox::default()
-    };
+    let nameless = Mailbox::new("Inbox");
 
     let error = FolderTree::from_mailboxes(&[nameless]).expect_err("an id is not optional");
 
@@ -848,12 +826,10 @@ fn a_moved_folder_brings_its_subtree_to_the_new_path() {
 /// mailbox. The counts, the role, the subscription and the id do not change.
 #[test]
 fn a_renamed_folder_keeps_what_the_rename_did_not_change() {
-    let mut tree = tree(&[Mailbox {
-        total_emails: Some(12),
-        unread_emails: Some(3),
-        is_subscribed: Some(false),
-        ..with_role(mailbox("M1", "Inbox"), role::INBOX)
-    }]);
+    let mut tree = tree(&[with_role(mailbox("M1", "Inbox"), role::INBOX)
+        .with_total_emails(12)
+        .with_unread_emails(3)
+        .is_subscribed(false)]);
 
     assert!(tree.rename(&Id::new("M1"), "Post", "Post"));
 

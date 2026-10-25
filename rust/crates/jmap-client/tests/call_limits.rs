@@ -24,19 +24,20 @@ use serde_json::json;
 
 /// A minimal draft addressed from `alice` to `bob`.
 fn draft(drafts_mailbox: &Id) -> Email {
-    Email {
-        mailbox_ids: Some([(drafts_mailbox.clone(), true)].into()),
-        keywords: Some([(keyword::DRAFT.to_owned(), true)].into()),
-        from: Some(vec![EmailAddress::new(Some("Alice"), "alice@example.com")]),
-        to: Some(vec![EmailAddress::new(Some("Bob"), "bob@example.com")]),
-        subject: Some("Ping".to_owned()),
-        body_values: Some([("1".to_owned(), EmailBodyValue::new("Hello Bob"))].into()),
-        text_body: Some(vec![EmailBodyPart {
-            part_id: Some("1".to_owned()),
-            content_type: Some("text/plain".to_owned()),
-            ..EmailBodyPart::default()
-        }]),
-        ..Email::default()
+    {
+        let mut email = Email::default();
+        email.mailbox_ids = Some([(drafts_mailbox.clone(), true)].into());
+        email.keywords = Some([(keyword::DRAFT.to_owned(), true)].into());
+        email.from = Some(vec![EmailAddress::new(Some("Alice"), "alice@example.com")]);
+        email.to = Some(vec![EmailAddress::new(Some("Bob"), "bob@example.com")]);
+        email.subject = Some("Ping".to_owned());
+        email.body_values = Some([("1".to_owned(), EmailBodyValue::new("Hello Bob"))].into());
+        email.text_body = Some(vec![
+            EmailBodyPart::new()
+                .with_part_id("1")
+                .with_content_type("text/plain"),
+        ]);
+        email
     }
 }
 

@@ -16,12 +16,13 @@ use jmap_proto::state::UtcDate;
 use serde_json::json;
 
 fn new_event(calendar_id: &Id, title: &str) -> CalendarEvent {
-    CalendarEvent {
-        calendar_ids: Some([(calendar_id.clone(), true)].into()),
-        version: Some("2.0".to_owned()),
-        start: Some("2026-06-01T10:00:00".to_owned()),
-        title: Some(title.to_owned()),
-        ..CalendarEvent::default()
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.calendar_ids = Some([(calendar_id.clone(), true)].into());
+        event_out.version = Some("2.0".to_owned());
+        event_out.start = Some("2026-06-01T10:00:00".to_owned());
+        event_out.title = Some(title.to_owned());
+        event_out
     }
 }
 

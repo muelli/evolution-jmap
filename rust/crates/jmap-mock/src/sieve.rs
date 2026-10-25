@@ -44,12 +44,10 @@ pub fn sieve_script_get(state: &mut ServerState, arguments: Value) -> Result<Val
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.sieve_scripts.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.sieve_scripts.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// `SieveScript/set` (RFC 9661 §2.4).
@@ -62,6 +60,7 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
         set,
         on_success_activate_script,
         on_success_deactivate_script,
+        ..
     } = request;
     let account_id = set.account_id.clone();
     let account = account_mut(state, &account_id)?;
@@ -225,17 +224,27 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
         activate(account, None);
     }
 
-    to_result(&SetResponse {
-        account_id,
-        old_state: Some(old_state),
-        new_state: Some(account.sieve_scripts.state()),
-        created: (!created.is_empty()).then_some(created),
-        updated: (!updated.is_empty()).then_some(updated),
-        destroyed: (!destroyed.is_empty()).then_some(destroyed),
-        not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: (!not_updated.is_empty()).then_some(not_updated),
-        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
-    })
+    let mut response =
+        SetResponse::new(account_id, account.sieve_scripts.state()).with_old_state(old_state);
+    if !created.is_empty() {
+        response = response.with_created(created);
+    }
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !destroyed.is_empty() {
+        response = response.with_destroyed(destroyed);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 /// `SieveScript/query` (RFC 9661 §2.5).
@@ -260,15 +269,12 @@ pub fn sieve_script_query(state: &mut ServerState, arguments: Value) -> Result<V
         .filter(|(_, script)| sieve_script_matches(script, &filter))
         .count() as u64;
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.sieve_scripts.state(),
-        can_calculate_changes: false,
-        position: request.position.max(0) as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit: None,
-    })
+    let mut response = QueryResponse::new(request.account_id, account.sieve_scripts.state(), ids)
+        .with_position(request.position.max(0) as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    to_result(&response)
 }
 
 fn sieve_script_matches(script: &SieveScript, filter: &SieveScriptQueryFilter) -> bool {

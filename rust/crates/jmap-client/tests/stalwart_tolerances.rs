@@ -643,12 +643,9 @@ fn finding_14_contact_card_create_tolerates_online_service_without_uri() {
     let mut online_services = std::collections::BTreeMap::new();
     online_services.insert(
         "s1".to_string(),
-        OnlineService {
-            service: Some("Jabber".to_string()),
-            user: Some("alice@example.org".to_string()),
-            uri: None,
-            ..Default::default()
-        },
+        OnlineService::new()
+            .with_service("Jabber")
+            .with_user("alice@example.org"),
     );
     card.online_services = Some(online_services);
 

@@ -185,11 +185,7 @@ fn calendar_create_success() {
     });
 
     let account_id = Id::new("acc1");
-    let cal = Calendar {
-        name: "Project Calendar".to_owned(),
-        color: Some("#0000ff".to_owned()),
-        ..Calendar::default()
-    };
+    let cal = Calendar::new("Project Calendar").with_color("#0000ff");
     let created = client.calendar_create(&account_id, &cal).unwrap();
     assert_eq!(created.id.as_ref(), Some(&Id::new("CAL-created-1")));
     assert_eq!(created.name, "Project Calendar");
@@ -318,10 +314,7 @@ fn calendar_create_fails_with_protocol_error_when_neither_created_nor_not_create
     });
 
     let account_id = Id::new("acc1");
-    let cal = Calendar {
-        name: "Test".to_owned(),
-        ..Calendar::default()
-    };
+    let cal = Calendar::new("Test");
 
     match client.calendar_create(&account_id, &cal) {
         Err(Error::Protocol(msg)) => {

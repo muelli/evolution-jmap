@@ -13,6 +13,7 @@
 # Evolution 3.52 of Ubuntu 24.04 (ci/gui-scenario/Containerfile). It installs
 # the components of the host build tree ($GUI_SCENARIO_BUILD, default
 # build/) into the container. Build that tree first, on Ubuntu 24.04.
+# $GUI_SCENARIO_MOCKD selects a different jmap-mockd binary.
 # With --host, the script runs on this machine. Use --host only in a
 # throwaway machine or container: it needs the components installed as root.
 #
@@ -47,7 +48,7 @@ for scenario in "$@"; do
 done
 
 if [ "$host" -eq 0 ]; then
-	mock="$BUILD/cargo-target/release/jmap-mockd"
+	mock="${GUI_SCENARIO_MOCKD:-$BUILD/cargo-target/release/jmap-mockd}"
 	if [ ! -x "$mock" ]; then
 		echo "gui-scenario: no jmap-mockd at $mock. Build the tree first." >&2
 		exit 2
@@ -67,12 +68,13 @@ if [ "$host" -eq 0 ]; then
 	podman run --rm --userns=keep-id -u 0 \
 		-v "$ROOT:$ROOT:Z" \
 		-v "$stage:/stage:Z" \
+		-v "$mock:/usr/local/bin/jmap-mockd:ro" \
 		-v "$ARTIFACTS:$ARTIFACTS:Z" \
 		-w "$ROOT" \
 		-e HOST_UID="$(id -u)" \
 		-e HOST_GID="$(id -g)" \
 		-e GUI_SCENARIO_ARTIFACTS="$ARTIFACTS" \
-		-e JMAP_MOCKD="$mock" \
+		-e JMAP_MOCKD=/usr/local/bin/jmap-mockd \
 		"$IMAGE" \
 		bash -c '
 			trap '\''chown -R "$HOST_UID:$HOST_GID" "$GUI_SCENARIO_ARTIFACTS"'\'' EXIT
@@ -149,7 +151,13 @@ run_scenario() {
 		GUI_SCENARIO_JMAP_URL="http://127.0.0.1:$MOCK_PORT"
 	)
 
-	"$MOCK_BIN" --port "$MOCK_PORT" >"$out/mock.log" 2>&1 &
+	# The scenario names the Evolution component to start and the arguments of
+	# the mock.
+	local config component
+	mapfile -t config < <("${session_env[@]}" python3 "$SCENARIOS/$name.py" config)
+	component="${config[0]:-mail}"
+
+	"$MOCK_BIN" --port "$MOCK_PORT" "${config[@]:1}" >"$out/mock.log" 2>&1 &
 	PIDS+=($!)
 	Xvfb "$DISPLAY_NUM" -screen 0 1280x1024x24 >"$run_dir/xvfb.log" 2>&1 &
 	PIDS+=($!)
@@ -161,10 +169,17 @@ run_scenario() {
 		>"$out/transcript.txt" 2>&1 || verdict=$?
 
 	if [ "$verdict" -eq 0 ]; then
-		"${session_env[@]}" dbus-daemon --session --fork \
-			--print-address=3 --print-pid=4 \
-			3>"$run_dir/dbus-address" 4>"$run_dir/dbus-pid" 2>"$out/dbus.log"
-		PIDS+=("$(cat "$run_dir/dbus-pid")")
+		# Without --fork, the services that D-Bus starts (the registry and the
+		# factories) keep the standard error of the daemon, so their log goes
+		# to dbus.log.
+		"${session_env[@]}" dbus-daemon --session --nofork --print-address=3 \
+			3>"$run_dir/dbus-address" >"$out/dbus.log" 2>&1 &
+		PIDS+=($!)
+		local tries
+		for tries in $(seq 100); do
+			[ -s "$run_dir/dbus-address" ] && break
+			sleep 0.1
+		done
 		session_env+=(DBUS_SESSION_BUS_ADDRESS="$(cat "$run_dir/dbus-address")")
 
 		# at-spi2-registryd synthesizes input on the display, so the
@@ -184,7 +199,7 @@ run_scenario() {
 			-y "$recording" >"$run_dir/ffmpeg.log" 2>&1 &
 		local rec_pid=$!
 
-		"${session_env[@]}" evolution -c mail --force-online >"$out/evolution.log" 2>&1 &
+		"${session_env[@]}" evolution -c "$component" --force-online >"$out/evolution.log" 2>&1 &
 		PIDS+=($!)
 
 		"${session_env[@]}" python3 "$SCENARIOS/$name.py" run \

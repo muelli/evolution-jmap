@@ -106,12 +106,7 @@ fn main() {
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS],
             "Principal/get",
-            &GetRequest {
-                account_id: alice_account.clone(),
-                ids: Some(vec![bob_principal_id.clone()]),
-                ids_ref: None,
-                properties: None,
-            },
+            &GetRequest::ids(alice_account.clone(), vec![bob_principal_id.clone()]),
         )
         .expect("Principal/get");
     print_raw("Principal/get(bob) raw response", &principal_get);
@@ -120,10 +115,7 @@ fn main() {
     let book = alice
         .address_book_create(
             &alice_account,
-            &AddressBook {
-                name: "agent-sharing-probe book".into(),
-                ..Default::default()
-            },
+            &AddressBook::new("agent-sharing-probe book"),
         )
         .expect("AddressBook/set create");
     let book_id = book.id.clone().expect("server-set address book id");
@@ -135,13 +127,11 @@ fn main() {
     let mut share_with = BTreeMap::new();
     share_with.insert(
         bob_principal_id.clone(),
-        AddressBookRights {
-            may_read: Some(true),
-            may_write: Some(false),
-            may_share: Some(false),
-            may_delete: Some(false),
-            extra: BTreeMap::new(),
-        },
+        AddressBookRights::default()
+            .with_may_read(true)
+            .with_may_write(false)
+            .with_may_share(false)
+            .with_may_delete(false),
     );
     let patch = json!({ "shareWith": share_with });
     let share_response = alice
@@ -271,17 +261,15 @@ fn main() {
         let mut calendar_share_with = BTreeMap::new();
         calendar_share_with.insert(
             bob_principal_id.clone(),
-            CalendarRights {
-                may_read_free_busy: Some(true),
-                may_read_items: Some(true),
-                may_write_all: Some(false),
-                may_write_own: Some(false),
-                may_update_private: Some(false),
-                may_rsvp: Some(false),
-                may_share: Some(false),
-                may_delete: Some(false),
-                extra: BTreeMap::new(),
-            },
+            CalendarRights::default()
+                .with_may_read_free_busy(true)
+                .with_may_read_items(true)
+                .with_may_write_all(false)
+                .with_may_write_own(false)
+                .with_may_update_private(false)
+                .with_may_rsvp(false)
+                .with_may_share(false)
+                .with_may_delete(false),
         );
         let calendar_patch = json!({ "shareWith": calendar_share_with });
         let calendar_share_response = alice.single_call(

@@ -70,16 +70,17 @@ fn modified_instance_inherits_use_default_alerts_suppressing_alarms() {
         }),
     );
 
-    let event = CalendarEvent {
-        id: Some("ev1".into()),
-        uid: Some("uid1".into()),
-        title: Some("Series".into()),
-        start: Some("2026-06-01T10:00:00".into()),
-        duration: Some("PT1H".into()),
-        use_default_alerts: Some(true),
-        alerts: Some(alerts),
-        recurrence_overrides: Some(overrides),
-        ..CalendarEvent::default()
+    let event = {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("ev1".into());
+        event_out.uid = Some("uid1".into());
+        event_out.title = Some("Series".into());
+        event_out.start = Some("2026-06-01T10:00:00".into());
+        event_out.duration = Some("PT1H".into());
+        event_out.use_default_alerts = Some(true);
+        event_out.alerts = Some(alerts);
+        event_out.recurrence_overrides = Some(overrides);
+        event_out
     };
 
     let ics = jmap_ical::event::event_to_ical(&event);

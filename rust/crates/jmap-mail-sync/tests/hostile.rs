@@ -17,11 +17,12 @@ use jmap_proto::mail::{Email, Mailbox};
 /// `count` mailboxes, each the child of the one before it.
 fn chain(count: usize) -> Vec<Mailbox> {
     (0..count)
-        .map(|index| Mailbox {
-            id: Some(format!("M{index}").into()),
-            name: format!("f{index}"),
-            parent_id: (index > 0).then(|| format!("M{}", index - 1).into()),
-            ..Mailbox::default()
+        .map(|index| {
+            let mut mailbox = Mailbox::new(format!("f{index}")).with_id(format!("M{index}"));
+            if index > 0 {
+                mailbox = mailbox.with_parent_id(format!("M{}", index - 1));
+            }
+            mailbox
         })
         .collect()
 }

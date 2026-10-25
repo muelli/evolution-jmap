@@ -57,8 +57,8 @@ use glib_sys::{GFALSE, GTRUE, gpointer};
 use gobject_sys::{GObject, g_object_get, g_object_unref};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::{g_object_set, g_signal_connect_data};
-#[cfg(not(evolution_eui_manager))]
 use jmap_backend_core::BACKEND_NAME;
+#[cfg(not(evolution_eui_manager))]
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::{read_string, take_string};
@@ -121,8 +121,8 @@ type ActivateFn = unsafe extern "C" fn(*mut GtkAction, gpointer);
 #[cfg(evolution_eui_manager)]
 type ActivateFn = unsafe extern "C" fn(*mut EUIAction, *mut GVariant, gpointer);
 
-/// The three presets. They use the same [`Preset`] values as `send_later`,
-/// so that the two menus give the same times.
+/// The three presets. They use the [`Preset`] values of `send_later`, so that
+/// the two menus calculate times in the same way.
 const PRESETS: &[(&CStr, &CStr, ActivateFn)] = &[
     (c"jmap-snooze-hour", N_(c"For One _Hour"), activate_hour),
     (
@@ -136,6 +136,9 @@ const PRESETS: &[(&CStr, &CStr, ActivateFn)] = &[
         activate_monday,
     ),
 ];
+
+/// The preset of the "Next Monday Morning" item.
+const NEXT_MONDAY: Preset = Preset::NextMonday;
 
 /// The group name of this extension under `EUIManager`.
 /// It is not an Evolution group name. Upstream, `mailing-list-actions.c` and
@@ -595,7 +598,7 @@ unsafe extern "C" fn activate_tomorrow(
 unsafe extern "C" fn activate_monday(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::monday", (), || unsafe {
         // SAFETY: the same as `activate_hour`.
-        activate(owner.cast(), Preset::NextWorkday);
+        activate(owner.cast(), NEXT_MONDAY);
     });
 }
 #[cfg(evolution_eui_manager)]
@@ -606,7 +609,7 @@ unsafe extern "C" fn activate_monday(
 ) {
     guard("snooze::monday", (), || unsafe {
         // SAFETY: the same as `activate_hour`.
-        activate(owner.cast(), Preset::NextWorkday);
+        activate(owner.cast(), NEXT_MONDAY);
     });
 }
 
@@ -779,9 +782,18 @@ mod tests {
 
     use super::snooze_all;
     use crate::link::AccountLink;
+    use crate::send_later::schedule::tests::lands_from;
     use crate::session_cache::AccountFeatures;
 
     const UNTIL: &str = "2026-01-02T08:00:00Z";
+
+    /// "Next Monday Morning" is a Monday at 09:00, also from a Tuesday.
+    /// 2026-10-20 is a Tuesday, 2026-10-26 the next Monday.
+    #[test]
+    fn next_monday_lands_on_a_monday() {
+        let from_tuesday = lands_from((2026, 10, 20, 10), super::NEXT_MONDAY);
+        assert_eq!(from_tuesday, (26, 1, 9, 0));
+    }
 
     /// A link to `server` and the ids of `count` messages in its inbox.
     fn seeded(server: &MockServer, count: usize) -> (AccountLink, Vec<String>) {

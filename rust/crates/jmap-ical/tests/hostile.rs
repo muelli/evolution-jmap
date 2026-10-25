@@ -12,11 +12,12 @@ use jmap_ical::{event_to_ical, scheduling_ical};
 use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
 
 fn event() -> CalendarEvent {
-    CalendarEvent {
-        id: Some("E1".into()),
-        title: Some("Standup".to_owned()),
-        start: Some("2026-01-15T13:00:00".to_owned()),
-        ..CalendarEvent::default()
+    {
+        let mut event_out = CalendarEvent::default();
+        event_out.id = Some("E1".into());
+        event_out.title = Some("Standup".to_owned());
+        event_out.start = Some("2026-01-15T13:00:00".to_owned());
+        event_out
     }
 }
 
@@ -36,9 +37,10 @@ fn line_names(ics: &str) -> Vec<String> {
 /// Values with line breaks in `duration` must not be written to iCalendar output.
 #[test]
 fn a_crlf_in_the_duration_cannot_add_a_property() {
-    let ics = event_to_ical(&CalendarEvent {
-        duration: Some("PT1H\r\nSUMMARY:Cancelled — see attachment".to_owned()),
-        ..event()
+    let ics = event_to_ical(&{
+        let mut event_out = event();
+        event_out.duration = Some("PT1H\r\nSUMMARY:Cancelled — see attachment".to_owned());
+        event_out
     });
 
     assert!(
@@ -56,12 +58,14 @@ fn a_crlf_in_the_duration_cannot_add_a_property() {
 /// Recurrence rule frequency values must not inject content lines.
 #[test]
 fn a_crlf_in_a_recurrence_frequency_cannot_add_a_property() {
-    let ics = event_to_ical(&CalendarEvent {
-        recurrence_rule: Some(RecurrenceRule {
-            frequency: "daily\r\nLOCATION:Elsewhere".to_owned(),
-            ..RecurrenceRule::default()
-        }),
-        ..event()
+    let ics = event_to_ical(&{
+        let mut event_out = event();
+        event_out.recurrence_rule = Some({
+            let mut __built = RecurrenceRule::default();
+            __built.frequency = "daily\r\nLOCATION:Elsewhere".to_owned();
+            __built
+        });
+        event_out
     });
 
     assert!(
@@ -74,9 +78,10 @@ fn a_crlf_in_a_recurrence_frequency_cannot_add_a_property() {
 /// Time zone parameters must strip line breaks to prevent property injection.
 #[test]
 fn a_crlf_in_the_time_zone_cannot_add_a_property() {
-    let ics = event_to_ical(&CalendarEvent {
-        time_zone: Some("Europe/Berlin\r\nDESCRIPTION:Injected".to_owned()),
-        ..event()
+    let ics = event_to_ical(&{
+        let mut event_out = event();
+        event_out.time_zone = Some("Europe/Berlin\r\nDESCRIPTION:Injected".to_owned());
+        event_out
     });
 
     assert!(
@@ -90,13 +95,15 @@ fn a_crlf_in_the_time_zone_cannot_add_a_property() {
 #[test]
 fn a_bare_lf_or_cr_is_stripped_as_well() {
     for injected in ["\nSUMMARY:x", "\rSUMMARY:x", "\n\rSUMMARY:x"] {
-        let ics = event_to_ical(&CalendarEvent {
-            duration: Some(format!("PT1H{injected}")),
-            recurrence_rule: Some(RecurrenceRule {
-                frequency: format!("daily{injected}"),
-                ..RecurrenceRule::default()
-            }),
-            ..event()
+        let ics = event_to_ical(&{
+            let mut event_out = event();
+            event_out.duration = Some(format!("PT1H{injected}"));
+            event_out.recurrence_rule = Some({
+                let mut __built = RecurrenceRule::default();
+                __built.frequency = format!("daily{injected}");
+                __built
+            });
+            event_out
         });
         assert_eq!(
             ics.matches("\r\nSUMMARY").count(),
@@ -114,9 +121,10 @@ fn a_bare_lf_or_cr_is_stripped_as_well() {
 /// TEXT properties escape newlines as `\n` rather than stripping them.
 #[test]
 fn a_newline_in_a_text_value_is_still_escaped_rather_than_dropped() {
-    let ics = event_to_ical(&CalendarEvent {
-        description: Some("first\r\nsecond".to_owned()),
-        ..event()
+    let ics = event_to_ical(&{
+        let mut event_out = event();
+        event_out.description = Some("first\r\nsecond".to_owned());
+        event_out
     });
 
     assert_eq!(ics.matches("\r\nDESCRIPTION").count(), 1);
@@ -536,9 +544,10 @@ fn a_file_href_from_the_server_is_not_drawn_as_an_attach_line() {
         }
         links.insert(key.to_owned(), link);
     }
-    let ics = event_to_ical(&CalendarEvent {
-        links: Some(links),
-        ..event()
+    let ics = event_to_ical(&{
+        let mut event_out = event();
+        event_out.links = Some(links);
+        event_out
     });
     assert!(
         !ics.to_ascii_lowercase().contains("file:"),

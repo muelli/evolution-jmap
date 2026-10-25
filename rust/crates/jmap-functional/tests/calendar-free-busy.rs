@@ -53,11 +53,7 @@ fn a_real_backend_answers_free_busy_for_a_seeded_principal() {
             .account_mut(&account_id)
             .expect("the mock's default account");
         let calendar_id = account.seed_calendar("Personal", true);
-        account.seed_principal(Principal {
-            name: "Bob".to_owned(),
-            email: Some(USER_EMAIL.to_owned()),
-            ..Principal::default()
-        });
+        account.seed_principal(Principal::new("Bob").with_email(USER_EMAIL));
         // 09:00-10:00 UTC, in the [08:00, 12:00) window of the client. This
         // is the only busy period that `Principal/getAvailability` must
         // report for this attendee.

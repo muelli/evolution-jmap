@@ -47,13 +47,14 @@ impl Fixture {
     }
 
     fn create(&self, organizer_calendar_address: Option<&str>) -> Id {
-        let event = CalendarEvent {
-            calendar_ids: Some([(self.calendar_id.clone(), true)].into()),
-            version: Some("2.0".to_owned()),
-            start: Some("2026-06-01T10:00:00".to_owned()),
-            title: Some("Meeting".to_owned()),
-            organizer_calendar_address: organizer_calendar_address.map(str::to_owned),
-            ..CalendarEvent::default()
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.calendar_ids = Some([(self.calendar_id.clone(), true)].into());
+            event_out.version = Some("2.0".to_owned());
+            event_out.start = Some("2026-06-01T10:00:00".to_owned());
+            event_out.title = Some("Meeting".to_owned());
+            event_out.organizer_calendar_address = organizer_calendar_address.map(str::to_owned);
+            event_out
         };
         let request = CalendarEventSetRequest::new(
             SetRequest::new(self.account_id.clone()).create("new", event),

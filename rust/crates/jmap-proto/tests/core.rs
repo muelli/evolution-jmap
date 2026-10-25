@@ -849,8 +849,7 @@ fn standard_filter_operators_and_error_codes_cover_rfc8620() {
 #[test]
 fn push_and_state_change_roundtrip_covers_rfc8620() {
     use jmap_proto::push::{
-        PushSubscription, PushSubscriptionKeys, PushVerification, StateChange,
-        push_subscription_set_error,
+        PushSubscription, PushVerification, StateChange, push_subscription_set_error,
     };
     use std::collections::BTreeMap;
 
@@ -860,19 +859,11 @@ fn push_and_state_change_roundtrip_covers_rfc8620() {
         "expiresTooFar"
     );
 
-    let sub = PushSubscription {
-        id: Some(Id::new("sub_1")),
-        device_client_id: "device_abc".to_owned(),
-        url: Some("https://push.example.com/endpoint".to_owned()),
-        keys: Some(PushSubscriptionKeys {
-            p256dh: "key_p256dh".to_owned(),
-            auth: "key_auth".to_owned(),
-        }),
-        expires: Some(UtcDate::new("2026-10-01T00:00:00Z")),
-        types: Some(vec!["Email".to_owned(), "CalendarEvent".to_owned()]),
-        verification_code: None,
-        extra: BTreeMap::new(),
-    };
+    let sub = PushSubscription::new("device_abc", "https://push.example.com/endpoint")
+        .with_id(Id::new("sub_1"))
+        .with_keys("key_p256dh", "key_auth")
+        .with_expires(UtcDate::new("2026-10-01T00:00:00Z"))
+        .with_types(["Email", "CalendarEvent"]);
 
     let sub_val = serde_json::to_value(&sub).unwrap();
     assert_eq!(sub_val["id"], "sub_1");
@@ -888,12 +879,7 @@ fn push_and_state_change_roundtrip_covers_rfc8620() {
     let round_tripped: PushSubscription = serde_json::from_value(sub_val).unwrap();
     assert_eq!(round_tripped, sub);
 
-    let verification = PushVerification {
-        object_type: "PushVerification".to_owned(),
-        push_subscription_id: Id::new("sub_1"),
-        verification_code: "code_12345".to_owned(),
-        extra: BTreeMap::new(),
-    };
+    let verification = PushVerification::new(Id::new("sub_1"), "code_12345");
     let ver_val = serde_json::to_value(&verification).unwrap();
     assert_eq!(ver_val["@type"], "PushVerification");
     assert_eq!(ver_val["pushSubscriptionId"], "sub_1");
@@ -902,17 +888,9 @@ fn push_and_state_change_roundtrip_covers_rfc8620() {
     let ver_round_tripped: PushVerification = serde_json::from_value(ver_val).unwrap();
     assert_eq!(ver_round_tripped, verification);
 
-    let state_change = StateChange {
-        kind: "StateChange".to_owned(),
-        changed: BTreeMap::from([(
-            Id::new("A1"),
-            BTreeMap::from([
-                ("Email".to_owned(), State::new("s_email_1")),
-                ("Mailbox".to_owned(), State::new("s_box_1")),
-            ]),
-        )]),
-        extra: BTreeMap::new(),
-    };
+    let state_change = StateChange::new(BTreeMap::new())
+        .with_account_change("A1", "Email", State::new("s_email_1"))
+        .with_account_change("A1", "Mailbox", State::new("s_box_1"));
     let sc_val = serde_json::to_value(&state_change).unwrap();
     assert_eq!(sc_val["@type"], "StateChange");
     assert_eq!(sc_val["changed"]["A1"]["Email"], "s_email_1");
@@ -937,15 +915,12 @@ fn blob_copy_and_core_capabilities_roundtrip_covers_rfc8620() {
     let round_req: BlobCopyRequest = serde_json::from_value(req_val).unwrap();
     assert_eq!(round_req, req);
 
-    let resp = BlobCopyResponse {
-        from_account_id: Id::new("acc_source"),
-        account_id: Id::new("acc_target"),
-        copied: Some(BTreeMap::from([(Id::new("blob_1"), Id::new("blob_1_new"))])),
-        not_copied: Some(BTreeMap::from([(
+    let resp = BlobCopyResponse::new("acc_source", "acc_target")
+        .with_copied(BTreeMap::from([(Id::new("blob_1"), Id::new("blob_1_new"))]))
+        .with_not_copied(BTreeMap::from([(
             Id::new("blob_2"),
             jmap_proto::error::SetError::new("notFound"),
-        )])),
-    };
+        )]));
     let resp_val = serde_json::to_value(&resp).unwrap();
     assert_eq!(resp_val["copied"]["blob_1"], "blob_1_new");
     assert_eq!(resp_val["notCopied"]["blob_2"]["type"], "notFound");
@@ -953,17 +928,15 @@ fn blob_copy_and_core_capabilities_roundtrip_covers_rfc8620() {
     let round_resp: BlobCopyResponse = serde_json::from_value(resp_val).unwrap();
     assert_eq!(round_resp, resp);
 
-    let cap = CoreCapability {
-        max_size_upload: 10_000_000,
-        max_concurrent_upload: 4,
-        max_size_request: 5_000_000,
-        max_concurrent_requests: 8,
-        max_calls_in_request: 16,
-        max_objects_in_get: 256,
-        max_objects_in_set: 128,
-        collation_algorithms: vec!["i;ascii-casemap".to_owned(), "i;octet".to_owned()],
-        extra: BTreeMap::new(),
-    };
+    let cap = CoreCapability::new()
+        .with_max_size_upload(10_000_000)
+        .with_max_concurrent_upload(4)
+        .with_max_size_request(5_000_000)
+        .with_max_concurrent_requests(8)
+        .with_max_calls_in_request(16)
+        .with_max_objects_in_get(256)
+        .with_max_objects_in_set(128)
+        .with_collation_algorithms(["i;ascii-casemap", "i;octet"]);
     let cap_val = serde_json::to_value(&cap).unwrap();
     assert_eq!(cap_val["maxSizeUpload"], 10_000_000);
     assert_eq!(cap_val["maxConcurrentUpload"], 4);

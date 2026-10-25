@@ -13,27 +13,29 @@ use jmap_proto::mail::{Email, EmailAddress, keyword};
 
 /// The minimum `Email/get` answer: RFC 8620 §5.1 guarantees only the id.
 fn bare_email() -> Email {
-    Email {
-        id: Some(Id::new("M1")),
-        ..Email::default()
+    {
+        let mut email = Email::default();
+        email.id = Some(Id::new("M1"));
+        email
     }
 }
 
 #[test]
 fn what_camel_keeps_about_a_message_comes_off_the_email() {
-    let email = Email {
-        id: Some(Id::new("M42")),
-        blob_id: Some(Id::new("B42")),
-        thread_id: Some(Id::new("T42")),
-        size: Some(4096),
-        received_at: Some("2026-01-15T09:31:00Z".into()),
-        sent_at: Some("2026-01-15T10:30:00+01:00".to_owned()),
-        subject: Some("Lunch?".to_owned()),
-        from: Some(vec![EmailAddress::new(Some("Bob"), "bob@example.com")]),
-        to: Some(vec![EmailAddress::new(Some("Alice"), "alice@example.com")]),
-        cc: Some(vec![EmailAddress::new(None, "carol@example.com")]),
-        preview: Some("Are you free at one?".to_owned()),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M42"));
+        email.blob_id = Some(Id::new("B42"));
+        email.thread_id = Some(Id::new("T42"));
+        email.size = Some(4096);
+        email.received_at = Some("2026-01-15T09:31:00Z".into());
+        email.sent_at = Some("2026-01-15T10:30:00+01:00".to_owned());
+        email.subject = Some("Lunch?".to_owned());
+        email.from = Some(vec![EmailAddress::new(Some("Bob"), "bob@example.com")]);
+        email.to = Some(vec![EmailAddress::new(Some("Alice"), "alice@example.com")]);
+        email.cc = Some(vec![EmailAddress::new(None, "carol@example.com")]);
+        email.preview = Some("Are you free at one?".to_owned());
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -76,10 +78,11 @@ fn a_message_the_server_says_nothing_about_is_still_a_row() {
 
 #[test]
 fn an_email_without_an_id_is_a_protocol_error() {
-    let email = Email {
-        id: None,
-        subject: Some("Who am I".to_owned()),
-        ..Email::default()
+    let email = {
+        let mut email = Email::default();
+        email.id = None;
+        email.subject = Some("Who am I".to_owned());
+        email
     };
 
     let error = MessageSummary::from_email(&email).expect_err("no id, no uid");
@@ -92,8 +95,9 @@ fn an_email_without_an_id_is_a_protocol_error() {
 
 #[test]
 fn the_keywords_camel_has_a_flag_for_become_flags() {
-    let email = Email {
-        keywords: Some(
+    let email = {
+        let mut email = bare_email();
+        email.keywords = Some(
             [
                 (keyword::SEEN.to_owned(), true),
                 (keyword::ANSWERED.to_owned(), true),
@@ -104,8 +108,8 @@ fn the_keywords_camel_has_a_flag_for_become_flags() {
                 (keyword::NOT_JUNK.to_owned(), true),
             ]
             .into(),
-        ),
-        ..bare_email()
+        );
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -132,16 +136,17 @@ fn the_keywords_camel_has_a_flag_for_become_flags() {
 
 #[test]
 fn a_keyword_camel_has_no_flag_for_becomes_a_tag() {
-    let email = Email {
-        keywords: Some(
+    let email = {
+        let mut email = bare_email();
+        email.keywords = Some(
             [
                 (keyword::SEEN.to_owned(), true),
                 ("$phishing".to_owned(), true),
                 ("todo".to_owned(), true),
             ]
             .into(),
-        ),
-        ..bare_email()
+        );
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -157,15 +162,16 @@ fn a_keyword_camel_has_no_flag_for_becomes_a_tag() {
 
 #[test]
 fn a_keyword_set_to_false_is_not_set_at_all() {
-    let email = Email {
-        keywords: Some(
+    let email = {
+        let mut email = bare_email();
+        email.keywords = Some(
             [
                 (keyword::SEEN.to_owned(), false),
                 ("todo".to_owned(), false),
             ]
             .into(),
-        ),
-        ..bare_email()
+        );
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -176,9 +182,10 @@ fn a_keyword_set_to_false_is_not_set_at_all() {
 
 #[test]
 fn a_keyword_is_matched_whatever_case_it_arrives_in() {
-    let email = Email {
-        keywords: Some([("$Seen".to_owned(), true)].into()),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.keywords = Some([("$Seen".to_owned(), true)].into());
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -189,9 +196,10 @@ fn a_keyword_is_matched_whatever_case_it_arrives_in() {
 
 #[test]
 fn an_attachment_is_a_flag_camel_reads_but_no_keyword_carries() {
-    let email = Email {
-        has_attachment: Some(true),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.has_attachment = Some(true);
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -202,11 +210,12 @@ fn an_attachment_is_a_flag_camel_reads_but_no_keyword_carries() {
 
 #[test]
 fn the_threading_headers_come_over_as_the_server_wrote_them() {
-    let email = Email {
-        message_id: Some(vec!["c@example.com".to_owned()]),
-        in_reply_to: Some(vec!["b@example.com".to_owned()]),
-        references: Some(vec!["a@example.com".to_owned(), "b@example.com".to_owned()]),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.message_id = Some(vec!["c@example.com".to_owned()]);
+        email.in_reply_to = Some(vec!["b@example.com".to_owned()]);
+        email.references = Some(vec!["a@example.com".to_owned(), "b@example.com".to_owned()]);
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -221,10 +230,11 @@ fn the_threading_headers_come_over_as_the_server_wrote_them() {
 
 #[test]
 fn a_reply_whose_parent_is_only_in_in_reply_to_still_has_a_parent() {
-    let email = Email {
-        in_reply_to: Some(vec!["b@example.com".to_owned()]),
-        references: Some(vec!["a@example.com".to_owned()]),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.in_reply_to = Some(vec!["b@example.com".to_owned()]);
+        email.references = Some(vec!["a@example.com".to_owned()]);
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -238,12 +248,13 @@ fn a_reply_whose_parent_is_only_in_in_reply_to_still_has_a_parent() {
 
 #[test]
 fn a_message_id_header_with_several_ids_keeps_the_first() {
-    let email = Email {
-        message_id: Some(vec![
+    let email = {
+        let mut email = bare_email();
+        email.message_id = Some(vec![
             "first@example.com".to_owned(),
             "second@invalid".to_owned(),
-        ]),
-        ..bare_email()
+        ]);
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -253,9 +264,10 @@ fn a_message_id_header_with_several_ids_keeps_the_first() {
 
 #[test]
 fn an_empty_message_id_header_is_no_message_id() {
-    let email = Email {
-        message_id: Some(Vec::new()),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.message_id = Some(Vec::new());
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -265,9 +277,10 @@ fn an_empty_message_id_header_is_no_message_id() {
 
 #[test]
 fn a_size_beyond_camels_counter_saturates_rather_than_wraps() {
-    let email = Email {
-        size: Some(u64::from(u32::MAX) + 1),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.size = Some(u64::from(u32::MAX) + 1);
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -281,9 +294,10 @@ fn a_size_beyond_camels_counter_saturates_rather_than_wraps() {
 
 #[test]
 fn a_date_before_the_epoch_is_a_negative_time() {
-    let email = Email {
-        received_at: Some("1969-07-20T20:17:40Z".into()),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.received_at = Some("1969-07-20T20:17:40Z".into());
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -293,9 +307,10 @@ fn a_date_before_the_epoch_is_a_negative_time() {
 
 #[test]
 fn a_fractional_second_is_dropped_rather_than_rejected() {
-    let email = Email {
-        received_at: Some("2026-01-15T09:30:00.512Z".into()),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.received_at = Some("2026-01-15T09:30:00.512Z".into());
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary");
@@ -314,10 +329,11 @@ fn a_date_the_client_cannot_read_leaves_the_message_dateless() {
         "2026-01-15T25:30:00Z",
         "2026-01-15T09:30:00+0X:00",
     ] {
-        let email = Email {
-            received_at: Some(unreadable.into()),
-            subject: Some("Unreadable date".to_owned()),
-            ..bare_email()
+        let email = {
+            let mut email = bare_email();
+            email.received_at = Some(unreadable.into());
+            email.subject = Some("Unreadable date".to_owned());
+            email
         };
 
         let summary = MessageSummary::from_email(&email)
@@ -334,13 +350,14 @@ fn a_date_the_client_cannot_read_leaves_the_message_dateless() {
 #[test]
 fn multiple_references_and_in_reply_to_deduplicate_and_preserve_ancestry_order() {
     // 1. An In-Reply-To equal to the last References entry is not added again.
-    let email_matched = Email {
-        references: Some(vec![
+    let email_matched = {
+        let mut email = bare_email();
+        email.references = Some(vec![
             "root@example.com".to_owned(),
             "parent@example.com".to_owned(),
-        ]),
-        in_reply_to: Some(vec!["parent@example.com".to_owned()]),
-        ..bare_email()
+        ]);
+        email.in_reply_to = Some(vec!["parent@example.com".to_owned()]);
+        email
     };
     let summary_matched =
         MessageSummary::from_email(&email_matched).expect("a summary with matched in-reply-to");
@@ -353,10 +370,11 @@ fn multiple_references_and_in_reply_to_deduplicate_and_preserve_ancestry_order()
     );
 
     // 2. A different In-Reply-To goes at the end, to complete the ancestry.
-    let email_diff = Email {
-        references: Some(vec!["root@example.com".to_owned()]),
-        in_reply_to: Some(vec!["parent@example.com".to_owned()]),
-        ..bare_email()
+    let email_diff = {
+        let mut email = bare_email();
+        email.references = Some(vec!["root@example.com".to_owned()]);
+        email.in_reply_to = Some(vec!["parent@example.com".to_owned()]);
+        email
     };
     let summary_diff =
         MessageSummary::from_email(&email_diff).expect("a summary with distinct in-reply-to");
@@ -371,8 +389,9 @@ fn multiple_references_and_in_reply_to_deduplicate_and_preserve_ancestry_order()
 
 #[test]
 fn summary_maps_combined_flags_and_custom_tags_faithfully() {
-    let email = Email {
-        keywords: Some(
+    let email = {
+        let mut email = bare_email();
+        email.keywords = Some(
             [
                 (keyword::SEEN.to_owned(), true),
                 (keyword::FLAGGED.to_owned(), true),
@@ -383,9 +402,9 @@ fn summary_maps_combined_flags_and_custom_tags_faithfully() {
                 ("cleared_tag".to_owned(), false),
             ]
             .into(),
-        ),
-        has_attachment: Some(true),
-        ..bare_email()
+        );
+        email.has_attachment = Some(true);
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("a summary with mixed flags");
@@ -402,22 +421,23 @@ fn summary_maps_combined_flags_and_custom_tags_faithfully() {
 
 #[test]
 fn summary_with_attachments_and_forwarded_flag_retains_all_attributes() {
-    let email = Email {
-        id: Some(Id::new("M-ATTACH-99")),
-        blob_id: Some(Id::new("B-ATTACH-99")),
-        thread_id: Some(Id::new("T-ATTACH-99")),
-        size: Some(1048576),
-        subject: Some("Quarterly Results Presentation".to_owned()),
-        has_attachment: Some(true),
-        keywords: Some(
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-ATTACH-99"));
+        email.blob_id = Some(Id::new("B-ATTACH-99"));
+        email.thread_id = Some(Id::new("T-ATTACH-99"));
+        email.size = Some(1048576);
+        email.subject = Some("Quarterly Results Presentation".to_owned());
+        email.has_attachment = Some(true);
+        email.keywords = Some(
             [
                 (keyword::FORWARDED.to_owned(), true),
                 (keyword::SEEN.to_owned(), true),
                 ("finance".to_owned(), true),
             ]
             .into(),
-        ),
-        ..bare_email()
+        );
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("summary with attachment");
@@ -436,27 +456,28 @@ fn summary_with_attachments_and_forwarded_flag_retains_all_attributes() {
 
 #[test]
 fn summary_extracts_structured_addresses_and_message_id_cleanly() {
-    let email = Email {
-        id: Some(Id::new("M-ADDR-01")),
-        blob_id: Some(Id::new("B-ADDR-01")),
-        subject: Some("Syncing addresses and IDs".to_owned()),
-        message_id: Some(vec!["<alpha-beta-123@example.com>".to_owned()]),
-        from: Some(vec![EmailAddress::new(
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-ADDR-01"));
+        email.blob_id = Some(Id::new("B-ADDR-01"));
+        email.subject = Some("Syncing addresses and IDs".to_owned());
+        email.message_id = Some(vec!["<alpha-beta-123@example.com>".to_owned()]);
+        email.from = Some(vec![EmailAddress::new(
             Some("Alice Sender"),
             "alice@example.com",
-        )]),
-        to: Some(vec![
+        )]);
+        email.to = Some(vec![
             EmailAddress::new(Some("Bob Recipient"), "bob@example.com"),
             EmailAddress::new(None, "carol@example.com"),
-        ]),
-        cc: Some(vec![EmailAddress::new(
+        ]);
+        email.cc = Some(vec![EmailAddress::new(
             Some("Dev Team"),
             "devs@example.com",
-        )]),
-        preview: Some("Brief summary snippet".to_owned()),
-        sent_at: Some("2026-01-15T10:30:00+01:00".into()),
-        received_at: Some("2026-01-15T09:30:00Z".into()),
-        ..bare_email()
+        )]);
+        email.preview = Some("Brief summary snippet".to_owned());
+        email.sent_at = Some("2026-01-15T10:30:00+01:00".into());
+        email.received_at = Some("2026-01-15T09:30:00Z".into());
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("summary from email with addresses");
@@ -485,16 +506,17 @@ fn summary_extracts_structured_addresses_and_message_id_cleanly() {
 
 #[test]
 fn summary_handles_unicode_preview_and_subject_with_accents_and_emojis() {
-    let email = Email {
-        id: Some(Id::new("M-UNICODE-88")),
-        blob_id: Some(Id::new("B-UNICODE-88")),
-        subject: Some("JMAP Überprüfung 🚀 — 会議の招待".to_owned()),
-        preview: Some("Wichtige Aktualisierung für das Projekt: Bitte prüfen 👍".to_owned()),
-        from: Some(vec![EmailAddress::new(
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-UNICODE-88"));
+        email.blob_id = Some(Id::new("B-UNICODE-88"));
+        email.subject = Some("JMAP Überprüfung 🚀 — 会議の招待".to_owned());
+        email.preview = Some("Wichtige Aktualisierung für das Projekt: Bitte prüfen 👍".to_owned());
+        email.from = Some(vec![EmailAddress::new(
             Some("Müller & 佐藤"),
             "team@example.com",
-        )]),
-        ..bare_email()
+        )]);
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("summary with unicode fields");
@@ -511,10 +533,11 @@ fn summary_handles_unicode_preview_and_subject_with_accents_and_emojis() {
 
 #[test]
 fn summary_maps_various_user_tags_and_retains_case_sensitivities() {
-    let email = Email {
-        id: Some(Id::new("M-TAGS-77")),
-        blob_id: Some(Id::new("B-TAGS-77")),
-        keywords: Some(
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-TAGS-77"));
+        email.blob_id = Some(Id::new("B-TAGS-77"));
+        email.keywords = Some(
             [
                 (keyword::SEEN.to_owned(), true),
                 (keyword::FLAGGED.to_owned(), false),
@@ -524,8 +547,8 @@ fn summary_maps_various_user_tags_and_retains_case_sensitivities() {
                 ("Finance2026".to_owned(), true),
             ]
             .into(),
-        ),
-        ..bare_email()
+        );
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("summary with multiple tags");
@@ -540,16 +563,17 @@ fn summary_maps_various_user_tags_and_retains_case_sensitivities() {
 
 #[test]
 fn summary_handles_html_entity_sequences_in_subject_and_preview() {
-    let email = Email {
-        id: Some(Id::new("M-ENTITY-55")),
-        blob_id: Some(Id::new("B-ENTITY-55")),
-        subject: Some("Invoice &amp; Statement #1234 &lt;Q1&gt;".to_owned()),
-        preview: Some("Total amount due: &quot;$1,250.00&quot; &amp; fees".to_owned()),
-        from: Some(vec![EmailAddress::new(
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-ENTITY-55"));
+        email.blob_id = Some(Id::new("B-ENTITY-55"));
+        email.subject = Some("Invoice &amp; Statement #1234 &lt;Q1&gt;".to_owned());
+        email.preview = Some("Total amount due: &quot;$1,250.00&quot; &amp; fees".to_owned());
+        email.from = Some(vec![EmailAddress::new(
             Some("Billing &amp; Finance"),
             "billing@example.com",
-        )]),
-        ..bare_email()
+        )]);
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("summary with html entities");
@@ -569,37 +593,38 @@ fn summary_handles_html_entity_sequences_in_subject_and_preview() {
 
 #[test]
 fn summary_preserves_multiple_recipient_groups_and_custom_references() {
-    let email = Email {
-        id: Some(Id::new("M-RECIP-33")),
-        blob_id: Some(Id::new("B-RECIP-33")),
-        subject: Some("Group distribution update".to_owned()),
-        from: Some(vec![
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-RECIP-33"));
+        email.blob_id = Some(Id::new("B-RECIP-33"));
+        email.subject = Some("Group distribution update".to_owned());
+        email.from = Some(vec![
             EmailAddress::new(Some("Primary Sender"), "sender1@example.com"),
             EmailAddress::new(Some("Co-Sender"), "sender2@example.com"),
-        ]),
-        to: Some(vec![
+        ]);
+        email.to = Some(vec![
             EmailAddress::new(Some("Alice Lead"), "alice@example.com"),
             EmailAddress::new(Some("Bob Reviewer"), "bob@example.com"),
-        ]),
-        cc: Some(vec![
+        ]);
+        email.cc = Some(vec![
             EmailAddress::new(Some("Carol Auditor"), "carol@example.com"),
             EmailAddress::new(None, "audit-archive@example.com"),
-        ]),
-        references: Some(vec![
+        ]);
+        email.references = Some(vec![
             "<root-msg-001@example.com>".to_owned(),
             "<inter-msg-002@example.com>".to_owned(),
             "<prev-msg-003@example.com>".to_owned(),
-        ]),
-        in_reply_to: Some(vec!["<prev-msg-003@example.com>".to_owned()]),
-        keywords: Some(
+        ]);
+        email.in_reply_to = Some(vec!["<prev-msg-003@example.com>".to_owned()]);
+        email.keywords = Some(
             [
                 (keyword::SEEN.to_owned(), true),
                 (keyword::FLAGGED.to_owned(), true),
                 ("audit-complete".to_owned(), true),
             ]
             .into(),
-        ),
-        ..bare_email()
+        );
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("summary with multiple recipients");
@@ -618,19 +643,20 @@ fn summary_preserves_multiple_recipient_groups_and_custom_references() {
 
 #[test]
 fn summary_handles_modified_utf7_tag_and_subject_strings() {
-    let email = Email {
-        id: Some(Id::new("M-UTF7-11")),
-        blob_id: Some(Id::new("B-UTF7-11")),
-        subject: Some("Ordner Entw&APw-rfe und Gel&APY-schte Elemente".to_owned()),
-        preview: Some("Best&AOQ-tigung f&APw-r Benutzer".to_owned()),
-        keywords: Some(
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-UTF7-11"));
+        email.blob_id = Some(Id::new("B-UTF7-11"));
+        email.subject = Some("Ordner Entw&APw-rfe und Gel&APY-schte Elemente".to_owned());
+        email.preview = Some("Best&AOQ-tigung f&APw-r Benutzer".to_owned());
+        email.keywords = Some(
             [
                 (keyword::SEEN.to_owned(), true),
                 ("Posteingang/Privat & gesch&AOQ-ftlich".to_owned(), true),
             ]
             .into(),
-        ),
-        ..bare_email()
+        );
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("summary with modified utf-7 patterns");
@@ -650,10 +676,11 @@ fn summary_handles_modified_utf7_tag_and_subject_strings() {
 
 #[test]
 fn summary_handles_mixed_case_standard_keywords_alongside_custom_tags() {
-    let email = Email {
-        id: Some(Id::new("M-MIX-KW-22")),
-        blob_id: Some(Id::new("B-MIX-KW-22")),
-        keywords: Some(
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-MIX-KW-22"));
+        email.blob_id = Some(Id::new("B-MIX-KW-22"));
+        email.keywords = Some(
             [
                 ("$SEEN".to_owned(), true),
                 ("$Flagged".to_owned(), true),
@@ -666,8 +693,8 @@ fn summary_handles_mixed_case_standard_keywords_alongside_custom_tags() {
                 ("category/inbox-2026".to_owned(), true),
             ]
             .into(),
-        ),
-        ..bare_email()
+        );
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("summary with mixed-case keywords");
@@ -685,11 +712,12 @@ fn summary_handles_mixed_case_standard_keywords_alongside_custom_tags() {
 
 #[test]
 fn summary_normalizes_and_preserves_subject_with_nested_reply_prefixes() {
-    let email = Email {
-        id: Some(Id::new("M-SUBJ-PREFIX-01")),
-        blob_id: Some(Id::new("B-SUBJ-PREFIX-01")),
-        subject: Some("Re: Re[2]: Fwd: [Engineering] Q3 Roadmap Planning".to_owned()),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-SUBJ-PREFIX-01"));
+        email.blob_id = Some(Id::new("B-SUBJ-PREFIX-01"));
+        email.subject = Some("Re: Re[2]: Fwd: [Engineering] Q3 Roadmap Planning".to_owned());
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("summary with nested prefixes");
@@ -701,19 +729,21 @@ fn summary_normalizes_and_preserves_subject_with_nested_reply_prefixes() {
 
 #[test]
 fn summary_date_ordering_and_comparison_properties() {
-    let email_earlier = Email {
-        id: Some(Id::new("M-DATE-01")),
-        blob_id: Some(Id::new("B-DATE-01")),
-        received_at: Some("2026-08-15T00:00:00Z".into()),
-        sent_at: Some("2026-08-14T23:59:50Z".into()),
-        ..bare_email()
+    let email_earlier = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-DATE-01"));
+        email.blob_id = Some(Id::new("B-DATE-01"));
+        email.received_at = Some("2026-08-15T00:00:00Z".into());
+        email.sent_at = Some("2026-08-14T23:59:50Z".into());
+        email
     };
-    let email_later = Email {
-        id: Some(Id::new("M-DATE-02")),
-        blob_id: Some(Id::new("B-DATE-02")),
-        received_at: Some("2026-08-15T01:00:00Z".into()),
-        sent_at: Some("2026-08-15T00:59:50Z".into()),
-        ..bare_email()
+    let email_later = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-DATE-02"));
+        email.blob_id = Some(Id::new("B-DATE-02"));
+        email.received_at = Some("2026-08-15T01:00:00Z".into());
+        email.sent_at = Some("2026-08-15T00:59:50Z".into());
+        email
     };
 
     let s1 = MessageSummary::from_email(&email_earlier).expect("earlier summary");
@@ -734,10 +764,11 @@ fn summary_date_ordering_and_comparison_properties() {
 #[test]
 fn junk_and_not_junk_keywords_are_independently_tracked() {
     // Only $junk.
-    let junk_email = Email {
-        id: Some(Id::new("M-JUNK-01")),
-        keywords: Some([(keyword::JUNK.to_owned(), true)].into_iter().collect()),
-        ..bare_email()
+    let junk_email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-JUNK-01"));
+        email.keywords = Some([(keyword::JUNK.to_owned(), true)].into_iter().collect());
+        email
     };
     let junk_summary = MessageSummary::from_email(&junk_email).expect("junk summary");
     assert!(
@@ -750,10 +781,11 @@ fn junk_and_not_junk_keywords_are_independently_tracked() {
     );
 
     // Only $notjunk.
-    let not_junk_email = Email {
-        id: Some(Id::new("M-JUNK-02")),
-        keywords: Some([(keyword::NOT_JUNK.to_owned(), true)].into_iter().collect()),
-        ..bare_email()
+    let not_junk_email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-JUNK-02"));
+        email.keywords = Some([(keyword::NOT_JUNK.to_owned(), true)].into_iter().collect());
+        email
     };
     let not_junk_summary = MessageSummary::from_email(&not_junk_email).expect("not-junk summary");
     assert!(
@@ -766,17 +798,18 @@ fn junk_and_not_junk_keywords_are_independently_tracked() {
     );
 
     // Both: the user ($notjunk) overrides the server decision ($junk).
-    let both_email = Email {
-        id: Some(Id::new("M-JUNK-03")),
-        keywords: Some(
+    let both_email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-JUNK-03"));
+        email.keywords = Some(
             [
                 (keyword::JUNK.to_owned(), true),
                 (keyword::NOT_JUNK.to_owned(), true),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..bare_email()
+        );
+        email
     };
     let both_summary = MessageSummary::from_email(&both_email).expect("both-flags summary");
     assert!(both_summary.flags.junk, "both: junk flag must be set");
@@ -793,13 +826,13 @@ fn junk_and_not_junk_keywords_are_independently_tracked() {
 /// empty when the server sends them.
 #[test]
 fn subject_and_preview_provide_indexable_text() {
-    let email = Email {
-        id: Some(Id::new("M-IDX-01")),
-        subject: Some("Quarterly review: JMAP sync performance 🚀".to_owned()),
-        preview: Some(
-            "Please review the attached metrics before the meeting on Friday.".to_owned(),
-        ),
-        ..bare_email()
+    let email = {
+        let mut email = bare_email();
+        email.id = Some(Id::new("M-IDX-01"));
+        email.subject = Some("Quarterly review: JMAP sync performance 🚀".to_owned());
+        email.preview =
+            Some("Please review the attached metrics before the meeting on Friday.".to_owned());
+        email
     };
 
     let summary = MessageSummary::from_email(&email).expect("indexable summary");

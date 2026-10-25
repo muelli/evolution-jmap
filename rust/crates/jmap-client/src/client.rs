@@ -797,12 +797,10 @@ impl Client {
 
             match &mut combined {
                 None => {
-                    combined = Some(GetResponse {
-                        account_id,
-                        state: state.unwrap_or_default(),
-                        list,
-                        not_found,
-                    });
+                    combined = Some(
+                        GetResponse::new(account_id, state.unwrap_or_default(), list)
+                            .with_not_found(not_found),
+                    );
                 }
                 Some(combined) => {
                     combined.list.extend(list);

@@ -195,6 +195,55 @@ fn the_senders_clock_and_the_servers_are_not_the_same_column() {
     }
 }
 
+/// A message with no `Date` header has no `sentAt`. Camel then shows the
+/// received date in the Date column, not "?". The oracle is Camel's own row for
+/// the same headers: a `Received` header and no `Date` header.
+#[test]
+fn a_message_with_no_sent_date_shows_the_received_date() {
+    let mut message = row("Em0010");
+    message.received_at = Some(1_700_000_000);
+    let info = info_of(&message);
+    let camel = camel_info_from(&[(
+        "Received",
+        "from mx.example.org; Tue, 14 Nov 2023 22:13:20 +0000",
+    )]);
+
+    // SAFETY: `info` and `camel` are live message infos this test owns.
+    unsafe {
+        assert_eq!(camel_message_info_get_date_received(camel), 1_700_000_000);
+        assert_eq!(camel_message_info_get_date_sent(camel), 1_700_000_000);
+        assert_eq!(camel_message_info_get_date_sent(info), 1_700_000_000);
+        assert_eq!(camel_message_info_get_date_received(info), 1_700_000_000);
+        g_object_unref(camel.cast());
+        g_object_unref(info.cast());
+    }
+}
+
+/// A message with neither date shows the time the row is made, as Camel does.
+#[test]
+fn a_message_with_no_date_at_all_shows_the_time_of_the_row() {
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock after 1970")
+            .as_secs() as i64
+    };
+    let before = now();
+    let info = info_of(&row("Em0011"));
+    let after = now();
+    let camel = camel_info_from(&[("Subject", "no dates")]);
+
+    // SAFETY: `info` and `camel` are live message infos this test owns.
+    unsafe {
+        let camel_sent = camel_message_info_get_date_sent(camel);
+        assert!((before..=after + 1).contains(&camel_sent), "{camel_sent}");
+        let sent = camel_message_info_get_date_sent(info);
+        assert!((before..=after).contains(&sent), "{sent}");
+        g_object_unref(camel.cast());
+        g_object_unref(info.cast());
+    }
+}
+
 /// Every keyword Camel has a bit for, in the one word it keeps them in.
 #[test]
 fn the_keywords_camel_has_a_bit_for_become_the_flags_word() {

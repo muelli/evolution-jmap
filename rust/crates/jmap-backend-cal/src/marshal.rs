@@ -9,18 +9,19 @@ use std::ptr;
 use std::sync::{Mutex, PoisonError};
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_CALENDAR, ECalComponent, ESource, ESourceSelectable, ETimezoneCache,
-    I_CAL_ANY_PROPERTY, I_CAL_RECURRENCEID_PROPERTY, I_CAL_TZID_PARAMETER, I_CAL_TZID_PROPERTY,
-    I_CAL_VCALENDAR_COMPONENT, I_CAL_VEVENT_COMPONENT, ICalComponent, ICalComponentKind,
-    ICalTimezone, e_cal_component_get_icalcomponent, e_cal_meta_backend_info_new,
-    e_source_get_extension, e_source_selectable_get_color, e_timezone_cache_get_timezone,
-    i_cal_component_as_ical_string, i_cal_component_clone, i_cal_component_get_first_component,
-    i_cal_component_get_first_property, i_cal_component_get_next_component,
-    i_cal_component_get_next_property, i_cal_component_get_timezone, i_cal_component_get_uid,
-    i_cal_component_isa, i_cal_component_new_from_string, i_cal_component_new_vcalendar,
-    i_cal_component_take_component, i_cal_parameter_get_tzid, i_cal_property_get_first_parameter,
-    i_cal_property_set_tzid, i_cal_timezone_get_builtin_timezone,
-    i_cal_timezone_get_builtin_timezone_from_tzid, i_cal_timezone_get_component, time_t,
+    E_SOURCE_EXTENSION_CALENDAR, ECalComponent, ECalMetaBackendInfo, ESource, ESourceSelectable,
+    ETimezoneCache, I_CAL_ANY_PROPERTY, I_CAL_RECURRENCEID_PROPERTY, I_CAL_TZID_PARAMETER,
+    I_CAL_TZID_PROPERTY, I_CAL_VCALENDAR_COMPONENT, I_CAL_VEVENT_COMPONENT, ICalComponent,
+    ICalComponentKind, ICalTimezone, e_cal_component_get_icalcomponent,
+    e_cal_meta_backend_info_new, e_source_get_extension, e_source_selectable_get_color,
+    e_timezone_cache_get_timezone, i_cal_component_as_ical_string, i_cal_component_clone,
+    i_cal_component_get_first_component, i_cal_component_get_first_property,
+    i_cal_component_get_next_component, i_cal_component_get_next_property,
+    i_cal_component_get_timezone, i_cal_component_get_uid, i_cal_component_isa,
+    i_cal_component_new_from_string, i_cal_component_new_vcalendar, i_cal_component_take_component,
+    i_cal_parameter_get_tzid, i_cal_property_get_first_parameter, i_cal_property_set_tzid,
+    i_cal_timezone_get_builtin_timezone, i_cal_timezone_get_builtin_timezone_from_tzid,
+    i_cal_timezone_get_component, time_t,
 };
 use glib_sys::{
     GSList, g_date_time_format, g_date_time_new_from_unix_utc, g_date_time_unref, g_free,
@@ -29,7 +30,7 @@ use glib_sys::{
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::owned::Owned;
-use jmap_cal_sync::{ComponentInfo, FreeBusy};
+use jmap_cal_sync::{ComponentInfo, FreeBusy, edit_base};
 
 /// The event a save is about, extracted from instances passed by EDS.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,13 +43,14 @@ pub struct SavedComponent {
 
 /// Wraps `infos` as an allocated `GSList` of `ECalMetaBackendInfo`. The extra of
 /// each node is its iCalendar: EDS stores it with the component as the base of an edit.
+/// The object carries the stamp of that base (see [`edit_base`]).
 pub fn info_list(infos: &[ComponentInfo]) -> *mut GSList {
     let mut list = ptr::null_mut();
     // Prepending is O(1); iterate in reverse order to preserve input sequence.
     for info in infos.iter().rev() {
         let uid = cstring_lossy(&info.uid);
         let revision = cstring_lossy(&info.revision);
-        let object = cstring_lossy(&icalendar_with_time_zones(&info.icalendar));
+        let object = cstring_lossy(&icalendar_with_time_zones(&stamped(info)));
         let extra = cstring_lossy(&info.icalendar);
         // SAFETY: The four pointers are valid NUL-terminated strings copied by EDS.
         let node = unsafe {
@@ -63,6 +65,36 @@ pub fn info_list(infos: &[ComponentInfo]) -> *mut GSList {
         list = unsafe { g_slist_prepend(list, node.cast()) };
     }
     list
+}
+
+/// The iCalendar of `info` with the stamp of its revision in each `VEVENT`.
+pub fn stamped(info: &ComponentInfo) -> String {
+    edit_base::stamp(&info.icalendar, "VEVENT", &info.revision)
+}
+
+/// Adds the server versions that the cache keeps to the extra of each node of `list`.
+///
+/// `cached` gives the cached extra for a UID. Without it, an editor that is open
+/// across this refresh has no base for its save.
+///
+/// # Safety
+///
+/// `list` must be null or a valid `GSList` of `ECalMetaBackendInfo` that [`info_list`] made.
+pub unsafe fn keep_versions(list: *mut GSList, cached: impl Fn(*const gchar) -> Option<String>) {
+    let mut link = list;
+    while !link.is_null() {
+        // SAFETY: the caller guarantees a valid list of infos with GLib-allocated strings.
+        unsafe {
+            if let Some(info) = (*link).data.cast::<ECalMetaBackendInfo>().as_mut()
+                && let Some(current) = read_string(info.extra)
+                && let Some(previous) = cached(info.uid)
+            {
+                g_free(info.extra.cast());
+                info.extra = dup_string(&edit_base::extra(&current, Some(&previous)));
+            }
+            link = (*link).next;
+        }
+    }
 }
 
 /// Wraps removed `uids` as a `GSList` of `ECalMetaBackendInfo` with only `uid` set.

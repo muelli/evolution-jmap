@@ -102,6 +102,49 @@ pub struct FolderInfo {
     pub children: Vec<FolderInfo>,
 }
 
+/// How a new listing differs from the held one, in the terms of the folder
+/// signals of Camel. [`FolderTree::change_to`] makes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolderListChange {
+    /// The same folders at the same paths. Counts can differ.
+    Same,
+    /// Only new folders, destroyed folders and subscription changes. Each
+    /// folder has its own signal, and the other rows stay as they are.
+    Delta(FolderDelta),
+    /// A folder has a new path, name or role, or the sibling order changed.
+    /// Camel must get the full list again.
+    Reshaped,
+}
+
+/// The folders of a [`FolderListChange::Delta`]. Each folder has no children.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FolderDelta {
+    /// Destroyed folders, as the old listing has them. Children come before
+    /// their parents.
+    pub destroyed: Vec<FolderInfo>,
+    /// New folders. Parents come before their children.
+    pub created: Vec<FolderInfo>,
+    /// Folders with only a new subscription. Each has the new value.
+    pub resubscribed: Vec<FolderInfo>,
+}
+
+impl FolderInfo {
+    /// A copy of the folder without its children.
+    fn leaf(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            path: self.path.clone(),
+            display_name: self.display_name.clone(),
+            role: self.role,
+            total: self.total,
+            unread: self.unread,
+            subscribed: self.subscribed,
+            may_add_items: self.may_add_items,
+            children: Vec::new(),
+        }
+    }
+}
+
 /// All mailboxes of an account, as a forest.
 ///
 /// JMAP has no root mailbox, so the top-level mailboxes are siblings.
@@ -211,6 +254,49 @@ impl FolderTree {
     /// uses this to decide whether the folder list of Camel is out of date.
     pub fn same_shape(&self, other: &Self) -> bool {
         same_shape(&self.roots, &other.roots)
+    }
+
+    /// The change from `self` to `after`, in the terms of the folder signals.
+    ///
+    /// A folder is the same folder if it has the same mailbox id. A rename or
+    /// a move also changes the paths of the descendants, so it gives
+    /// [`FolderListChange::Reshaped`].
+    pub fn change_to(&self, after: &Self) -> FolderListChange {
+        if self.same_shape(after) {
+            return FolderListChange::Same;
+        }
+        let before: BTreeMap<&Id, &FolderInfo> =
+            self.iter().map(|folder| (&folder.id, folder)).collect();
+        let mut delta = FolderDelta::default();
+        for folder in after.iter() {
+            match before.get(&folder.id) {
+                None => delta.created.push(folder.leaf()),
+                Some(old)
+                    if old.path != folder.path
+                        || old.display_name != folder.display_name
+                        || old.role != folder.role =>
+                {
+                    return FolderListChange::Reshaped;
+                }
+                Some(old) if old.subscribed != folder.subscribed => {
+                    delta.resubscribed.push(folder.leaf());
+                }
+                Some(_) => {}
+            }
+        }
+        let kept: BTreeSet<&Id> = after.iter().map(|folder| &folder.id).collect();
+        delta.destroyed = self
+            .iter()
+            .filter(|folder| !kept.contains(&folder.id))
+            .map(FolderInfo::leaf)
+            .collect();
+        // The pre-order reversed puts each child before its parent.
+        delta.destroyed.reverse();
+        // No folder changed, so only the sibling order did.
+        if delta == FolderDelta::default() {
+            return FolderListChange::Reshaped;
+        }
+        FolderListChange::Delta(delta)
     }
 
     /// The folder at a Camel path, if the account has one.
@@ -624,15 +710,15 @@ mod tests {
     use super::*;
 
     fn mailbox(id: &str, name: &str, parent: Option<&str>, total: u64, unread: u64) -> Mailbox {
-        Mailbox {
-            id: Some(Id::from(id)),
-            name: name.to_owned(),
-            parent_id: parent.map(Id::from),
-            total_emails: Some(total),
-            unread_emails: Some(unread),
-            is_subscribed: Some(true),
-            ..Mailbox::default()
+        let mut mailbox = Mailbox::new(name)
+            .with_id(Id::from(id))
+            .with_total_emails(total)
+            .with_unread_emails(unread)
+            .is_subscribed(true);
+        if let Some(parent) = parent {
+            mailbox = mailbox.with_parent_id(Id::from(parent));
         }
+        mailbox
     }
 
     /// A delivery changes the counts of mailboxes, and that is not a shape
@@ -709,5 +795,120 @@ mod tests {
         let after = FolderTree::from_mailboxes(&[unsubscribed]).unwrap();
 
         assert!(!before.same_shape(&after));
+    }
+
+    fn ids(folders: &[FolderInfo]) -> Vec<&str> {
+        folders.iter().map(|folder| folder.id.as_str()).collect()
+    }
+
+    fn delta(before: &[Mailbox], after: &[Mailbox]) -> FolderDelta {
+        let before = FolderTree::from_mailboxes(before).unwrap();
+        let after = FolderTree::from_mailboxes(after).unwrap();
+        match before.change_to(&after) {
+            FolderListChange::Delta(delta) => delta,
+            other => panic!("expected a delta, got {other:?}"),
+        }
+    }
+
+    /// New counts only are no change for the folder list.
+    #[test]
+    fn change_to_ignores_total_and_unread() {
+        let before = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
+        let after = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 4, 2)]).unwrap();
+
+        assert_eq!(before.change_to(&after), FolderListChange::Same);
+    }
+
+    /// A new parent with a new child: the parent comes first, and neither
+    /// carries children.
+    #[test]
+    fn change_to_names_new_folders_parents_first() {
+        let delta = delta(
+            &[mailbox("1", "Inbox", None, 0, 0)],
+            &[
+                mailbox("1", "Inbox", None, 0, 0),
+                mailbox("2", "Work", None, 0, 0),
+                mailbox("3", "Receipts", Some("2"), 0, 0),
+            ],
+        );
+
+        assert_eq!(ids(&delta.created), ["2", "3"]);
+        assert!(
+            delta
+                .created
+                .iter()
+                .all(|folder| folder.children.is_empty())
+        );
+        assert!(delta.destroyed.is_empty() && delta.resubscribed.is_empty());
+    }
+
+    /// A destroyed parent with its child: the child comes first.
+    #[test]
+    fn change_to_names_destroyed_folders_children_first() {
+        let delta = delta(
+            &[
+                mailbox("1", "Inbox", None, 0, 0),
+                mailbox("2", "Work", None, 0, 0),
+                mailbox("3", "Receipts", Some("2"), 0, 0),
+            ],
+            &[mailbox("1", "Inbox", None, 0, 0)],
+        );
+
+        assert_eq!(ids(&delta.destroyed), ["3", "2"]);
+        assert_eq!(delta.destroyed[0].path, "Work/Receipts");
+        assert!(delta.created.is_empty() && delta.resubscribed.is_empty());
+    }
+
+    /// A subscription change names the folder with its new value.
+    #[test]
+    fn change_to_names_a_subscription_change() {
+        let mut unsubscribed = mailbox("2", "Work", None, 0, 0);
+        unsubscribed.is_subscribed = Some(false);
+        let delta = delta(
+            &[
+                mailbox("1", "Inbox", None, 0, 0),
+                mailbox("2", "Work", None, 0, 0),
+            ],
+            &[mailbox("1", "Inbox", None, 0, 0), unsubscribed],
+        );
+
+        assert_eq!(ids(&delta.resubscribed), ["2"]);
+        assert!(!delta.resubscribed[0].subscribed);
+    }
+
+    /// A rename, a move and a new role each reshape the list.
+    #[test]
+    fn change_to_reshapes_for_a_rename_a_move_or_a_role() {
+        let before = [
+            mailbox("1", "Work", None, 0, 0),
+            mailbox("2", "Personal", None, 0, 0),
+            mailbox("3", "Receipts", Some("1"), 0, 0),
+        ];
+        let mut renamed = before.clone();
+        renamed[2].name = "Bills".to_owned();
+        let mut moved = before.clone();
+        moved[2].parent_id = Some(Id::from("2"));
+        let mut role_given = before.clone();
+        role_given[1].role = Some(role::ARCHIVE.to_owned());
+
+        let tree = FolderTree::from_mailboxes(&before).unwrap();
+        for after in [renamed, moved, role_given] {
+            let after = FolderTree::from_mailboxes(&after).unwrap();
+            assert_eq!(tree.change_to(&after), FolderListChange::Reshaped);
+        }
+    }
+
+    /// A new folder beside a rename still reshapes: a partial delta would
+    /// leave the renamed row at its old path.
+    #[test]
+    fn change_to_reshapes_when_a_rename_comes_with_a_new_folder() {
+        let before = FolderTree::from_mailboxes(&[mailbox("1", "Work", None, 0, 0)]).unwrap();
+        let after = FolderTree::from_mailboxes(&[
+            mailbox("1", "Plans", None, 0, 0),
+            mailbox("2", "Receipts", None, 0, 0),
+        ])
+        .unwrap();
+
+        assert_eq!(before.change_to(&after), FolderListChange::Reshaped);
     }
 }

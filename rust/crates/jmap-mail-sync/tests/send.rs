@@ -67,13 +67,10 @@ fn only(messages: Vec<MessageSummary>) -> MessageSummary {
 
 /// The envelope that a transport makes from the Camel `from` and `recipients`.
 fn envelope(from: &str, rcpt_to: &[&str]) -> Envelope {
-    Envelope {
-        mail_from: EnvelopeAddress::new(from),
-        rcpt_to: rcpt_to
-            .iter()
-            .map(|address| EnvelopeAddress::new(*address))
-            .collect(),
-    }
+    Envelope::new(
+        EnvelopeAddress::new(from),
+        rcpt_to.iter().map(|address| EnvelopeAddress::new(*address)),
+    )
 }
 
 #[test]

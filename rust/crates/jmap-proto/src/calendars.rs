@@ -27,6 +27,7 @@ type Principal = serde_json::Value;
 /// A calendar (draft §4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Calendar {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -71,6 +72,11 @@ impl Calendar {
         }
     }
 
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
@@ -106,6 +112,11 @@ impl Calendar {
         self
     }
 
+    pub fn with_my_rights(mut self, my_rights: CalendarRights) -> Self {
+        self.my_rights = Some(my_rights);
+        self
+    }
+
     pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
         self.extra = extra;
         self
@@ -115,6 +126,7 @@ impl Calendar {
 /// `Calendar.myRights` or `shareWith` entry (JMAP Calendars §4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarRights {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_read_free_busy: Option<bool>,
@@ -169,11 +181,52 @@ impl CalendarRights {
         self.extra = extra;
         self
     }
+
+    pub fn with_may_read_free_busy(mut self, value: bool) -> Self {
+        self.may_read_free_busy = Some(value);
+        self
+    }
+
+    pub fn with_may_read_items(mut self, value: bool) -> Self {
+        self.may_read_items = Some(value);
+        self
+    }
+
+    pub fn with_may_write_all(mut self, value: bool) -> Self {
+        self.may_write_all = Some(value);
+        self
+    }
+
+    pub fn with_may_write_own(mut self, value: bool) -> Self {
+        self.may_write_own = Some(value);
+        self
+    }
+
+    pub fn with_may_update_private(mut self, value: bool) -> Self {
+        self.may_update_private = Some(value);
+        self
+    }
+
+    pub fn with_may_rsvp(mut self, value: bool) -> Self {
+        self.may_rsvp = Some(value);
+        self
+    }
+
+    pub fn with_may_share(mut self, value: bool) -> Self {
+        self.may_share = Some(value);
+        self
+    }
+
+    pub fn with_may_delete(mut self, value: bool) -> Self {
+        self.may_delete = Some(value);
+        self
+    }
 }
 
 /// `Calendar/set` arguments (draft-ietf-jmap-calendars-28 §4.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarSetRequest {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,6 +266,7 @@ impl CalendarSetRequest {
 /// `calendarIds`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -496,6 +550,7 @@ impl CalendarEvent {
 /// JSCalendar RecurrenceRule (RFC 8984 §4.3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RecurrenceRule {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub rule_type: Option<String>,
@@ -553,6 +608,7 @@ pub struct RecurrenceRule {
 /// Negative values count from the end.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct NDay {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub day_type: Option<String>,
@@ -576,6 +632,11 @@ impl NDay {
 
     pub fn with_nth_of_period(mut self, nth: i32) -> Self {
         self.nth_of_period = Some(nth);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }
@@ -604,13 +665,53 @@ impl RecurrenceRule {
         self
     }
 
+    pub fn with_by_second(mut self, by_second: impl IntoIterator<Item = u32>) -> Self {
+        self.by_second = Some(by_second.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_minute(mut self, by_minute: impl IntoIterator<Item = u32>) -> Self {
+        self.by_minute = Some(by_minute.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_hour(mut self, by_hour: impl IntoIterator<Item = u32>) -> Self {
+        self.by_hour = Some(by_hour.into_iter().collect());
+        self
+    }
+
     pub fn with_by_day(mut self, by_day: impl IntoIterator<Item = NDay>) -> Self {
         self.by_day = Some(by_day.into_iter().collect());
         self
     }
 
+    pub fn with_by_month_day(mut self, by_month_day: impl IntoIterator<Item = i32>) -> Self {
+        self.by_month_day = Some(by_month_day.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_year_day(mut self, by_year_day: impl IntoIterator<Item = i32>) -> Self {
+        self.by_year_day = Some(by_year_day.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_week_no(mut self, by_week_no: impl IntoIterator<Item = i32>) -> Self {
+        self.by_week_no = Some(by_week_no.into_iter().collect());
+        self
+    }
+
     pub fn with_by_month(mut self, by_month: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.by_month = Some(by_month.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_by_set_position(mut self, by_set_position: impl IntoIterator<Item = i32>) -> Self {
+        self.by_set_position = Some(by_set_position.into_iter().collect());
+        self
+    }
+
+    pub fn with_first_day_of_week(mut self, first_day_of_week: impl Into<String>) -> Self {
+        self.first_day_of_week = Some(first_day_of_week.into());
         self
     }
 
@@ -623,12 +724,18 @@ impl RecurrenceRule {
         self.skip = Some(skip.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `CalendarEvent/query` filter conditions (draft §5.5). Flat conditions
 /// only. `after`/`before` are UTC instants compared against the event start.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEventQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_calendar: Option<Id>,
@@ -831,6 +938,7 @@ pub mod participant_attendance {
 /// JSCalendar Participant (jscalendarbis §3.4.6 / RFC 8984 §4.4.6): an attendee
 /// or organizer of the event.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct Participant {
     pub participant_type: Option<String>,
     pub name: Option<String>,
@@ -1080,11 +1188,76 @@ impl Participant {
         self.extra = extra;
         self
     }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_location_id(mut self, location_id: impl Into<String>) -> Self {
+        self.location_id = Some(location_id.into());
+        self
+    }
+
+    pub fn with_schedule_sequence(mut self, schedule_sequence: u32) -> Self {
+        self.schedule_sequence = Some(schedule_sequence);
+        self
+    }
+
+    pub fn with_schedule_status(
+        mut self,
+        schedule_status: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.schedule_status = Some(schedule_status.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_schedule_updated(mut self, schedule_updated: impl Into<UtcDate>) -> Self {
+        self.schedule_updated = Some(schedule_updated.into());
+        self
+    }
+
+    pub fn with_delegated_to(
+        mut self,
+        delegated_to: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.delegated_to = Some(delegated_to.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_delegated_from(
+        mut self,
+        delegated_from: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.delegated_from = Some(delegated_from.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_member_of(mut self, member_of: BTreeMap<String, bool>) -> Self {
+        self.member_of = Some(member_of);
+        self
+    }
+
+    pub fn with_progress(mut self, progress: impl Into<String>) -> Self {
+        self.progress = Some(progress.into());
+        self
+    }
+
+    pub fn with_progress_updated(mut self, progress_updated: impl Into<UtcDate>) -> Self {
+        self.progress_updated = Some(progress_updated.into());
+        self
+    }
 }
 
 /// JSCalendar Location (RFC 8984 §4.2.5): a physical location for the event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Location {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub location_type: Option<String>,
@@ -1132,11 +1305,22 @@ impl Location {
         self.coordinates = Some(coordinates.into());
         self
     }
+
+    pub fn with_relative_to(mut self, relative_to: impl Into<String>) -> Self {
+        self.relative_to = Some(relative_to.into());
+        self
+    }
+
+    pub fn with_location_types(mut self, location_types: BTreeMap<String, bool>) -> Self {
+        self.location_types = Some(location_types);
+        self
+    }
 }
 
 /// JSCalendar VirtualLocation (RFC 8984 §4.2.6): an online conference or meeting room.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct VirtualLocation {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub virtual_location_type: Option<String>,
@@ -1183,6 +1367,7 @@ impl VirtualLocation {
 /// JSCalendar Link (draft-ietf-calext-jscalendarbis-22 §1.5.11): external resource.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Link {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub link_type: Option<String>,
@@ -1243,6 +1428,7 @@ impl Link {
 /// JSCalendar Alert (RFC 8984 §4.5.2): an alarm or reminder for the event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Alert {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub alert_type: Option<String>,
@@ -1284,6 +1470,7 @@ impl Alert {
 /// JSCalendar OffsetTrigger (RFC 8984 §4.5.2): an alert trigger specified as an offset duration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct OffsetTrigger {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub trigger_type: Option<String>,
@@ -1310,6 +1497,7 @@ impl OffsetTrigger {
 /// Calendar user preferences (draft-ietf-jmap-calendars-28 §6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarPreferences {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -1345,6 +1533,7 @@ impl CalendarPreferences {
 /// Calendar preferences capability properties (draft-ietf-jmap-calendars-28 §6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarPreferencesCapability {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -1367,6 +1556,7 @@ impl CalendarPreferencesCapability {
 /// Extends [`SetRequest`] with `sendEventNotifications`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEventSetRequest {
     #[serde(flatten)]
     pub set: SetRequest<CalendarEvent>,
@@ -1417,6 +1607,7 @@ pub const PER_USER_PROPERTIES: &[&str] = &[
 /// `CalendarEvent/parse` arguments (draft-ietf-jmap-calendars-28 §5.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEventParseRequest {
     pub account_id: Id,
     pub blob_ids: Vec<Id>,
@@ -1445,6 +1636,7 @@ impl CalendarEventParseRequest {
 /// `CalendarEvent/parse` response (draft-ietf-jmap-calendars-28 §5.7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEventParseResponse {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1487,6 +1679,7 @@ impl CalendarEventParseResponse {
 /// Calendars capability properties (draft-ietf-jmap-calendars-28 §1.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarsCapability {
     #[serde(default)]
     pub max_size_attachments_per_event: u64,
@@ -1536,6 +1729,7 @@ pub mod priority {
 /// JSCalendar AbsoluteTrigger (RFC 8984 §4.5.2): an alert trigger specified as an absolute UTC timestamp.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct AbsoluteTrigger {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub trigger_type: Option<String>,
@@ -1557,6 +1751,7 @@ impl AbsoluteTrigger {
 /// JSCalendar Relation (RFC 8984 §1.4.10): how this event relates to another.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct EventRelation {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub relation_type: Option<String>,
@@ -1579,6 +1774,7 @@ impl EventRelation {
 /// `CalendarEvent/getFreeBusy` arguments (draft-ietf-jmap-calendars-28 §5.7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GetFreeBusyRequest {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1618,6 +1814,7 @@ impl GetFreeBusyRequest {
 /// One free/busy interval block within `CalendarEvent/getFreeBusy` (draft-ietf-jmap-calendars-28 §5.7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct FreeBusyBlock {
     pub utc_start: UtcDate,
     pub utc_end: UtcDate,
@@ -1660,6 +1857,7 @@ impl FreeBusyBlock {
 /// `CalendarEvent/getFreeBusy` response (draft-ietf-jmap-calendars-28 §5.7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct GetFreeBusyResponse {
     pub account_id: Id,
     #[serde(default)]
@@ -1716,6 +1914,7 @@ impl From<BTreeMap<String, Value>> for GroupEntries {
 /// JSCalendar Group (RFC 8984 §2.3 / §5.3): a collection of calendar objects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarGroup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -1824,6 +2023,7 @@ fn default_calendar_alert_type() -> String {
 /// A push notification for a calendar alert (draft-ietf-jmap-calendars-28 §6.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarAlert {
     #[serde(rename = "@type", default = "default_calendar_alert_type")]
     pub kind: String,
@@ -1875,6 +2075,7 @@ fn default_calendar_event_notification_type() -> String {
 /// A notification of changes to calendar events (draft-ietf-jmap-calendars-28 §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEventNotification {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -1953,6 +2154,7 @@ impl CalendarEventNotification {
 /// Filter for `CalendarEventNotification/query` (draft-ietf-jmap-calendars-28 §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEventNotificationQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<UtcDate>,
@@ -1996,6 +2198,7 @@ pub mod calendar_event_notification_type {
 /// Arguments for `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEventSendRequest {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2050,6 +2253,7 @@ impl CalendarEventSendRequest {
 /// A single calendar event to send via `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SendCalendarEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipient: Option<String>,
@@ -2092,6 +2296,7 @@ impl SendCalendarEvent {
 /// Response for `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct CalendarEventSendResponse {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2126,6 +2331,7 @@ impl CalendarEventSendResponse {
 /// Result of sending a single calendar event (draft-ietf-jmap-calendars-28 §7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct SendCalendarEventResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_status: Option<String>,
@@ -2157,6 +2363,7 @@ impl SendCalendarEventResult {
 /// Problem delivering an event to a participant (draft-ietf-jmap-calendars-28 §7.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ParticipantProblem {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -2203,6 +2410,7 @@ pub mod calendar_send_error {
 /// An RSVP reply to a calendar event invitation (draft-ietf-jmap-calendars-28 §10).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ParticipantReply {
     pub calendar_event_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2257,6 +2465,7 @@ pub mod participant_participation_status {
 /// identified when participating in events and scheduling.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ParticipantIdentity {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
@@ -2335,6 +2544,7 @@ pub mod participant_identity_set_error {
 /// Adds the `onSuccessSetIsDefault` argument to the standard `/set` shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ParticipantIdentitySetRequest {
     #[serde(flatten)]
     pub set: SetRequest<ParticipantIdentity>,

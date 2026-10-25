@@ -14,6 +14,7 @@ use crate::state::State;
 /// A JMAP API response mirroring [`crate::request::Request`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Response {
     #[serde(default)]
     pub method_responses: Vec<Invocation>,
@@ -34,6 +35,11 @@ impl Response {
 
     pub fn with_method_response(mut self, invocation: Invocation) -> Self {
         self.method_responses.push(invocation);
+        self
+    }
+
+    pub fn with_method_responses(mut self, method_responses: Vec<Invocation>) -> Self {
+        self.method_responses = method_responses;
         self
     }
 

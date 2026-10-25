@@ -234,10 +234,7 @@ fn an_event_moved_to_another_calendar_is_reported_as_removed_against_the_real_se
     let other_calendar = client
         .calendar_create(
             &account_id,
-            &Calendar {
-                name: format!("agent-calsync-move-target-{}", unique_suffix()),
-                ..Calendar::default()
-            },
+            &Calendar::new(format!("agent-calsync-move-target-{}", unique_suffix())),
         )
         .expect("Calendar/set create failed against the real server");
     let other_calendar_id = other_calendar

@@ -52,17 +52,18 @@ fn api(server: &MockServer, body: Value) -> Value {
 fn seed_calendar_event_with_link(server: &MockServer) -> String {
     server.with_account_mut(server.account_id(), |account| {
         let event_id = account.calendar_events.alloc_id();
-        let event = CalendarEvent {
-            id: Some(event_id.clone()),
-            links: Some(BTreeMap::from([(
+        let event = {
+            let mut event_out = CalendarEvent::default();
+            event_out.id = Some(event_id.clone());
+            event_out.links = Some(BTreeMap::from([(
                 "l1".to_owned(),
                 json!({
                     "@type": "Link",
                     "href": SAFE_LINK_URI,
                     "title": "Agenda",
                 }),
-            )])),
-            ..CalendarEvent::default()
+            )]));
+            event_out
         };
         account
             .calendar_events

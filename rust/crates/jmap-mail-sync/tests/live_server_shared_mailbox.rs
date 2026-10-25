@@ -167,10 +167,7 @@ fn a_shared_mailboxs_messages_are_readable_then_writable_as_the_grant_widens() {
     let mailbox = owner
         .mailbox_create(
             &owner_account_id,
-            &Mailbox {
-                name: format!("agent-mailsync-shared-{suffix}"),
-                ..Mailbox::default()
-            },
+            &Mailbox::new(format!("agent-mailsync-shared-{suffix}")),
         )
         .expect("Mailbox/set create failed against the real server");
     let mailbox_id = mailbox
@@ -181,10 +178,7 @@ fn a_shared_mailboxs_messages_are_readable_then_writable_as_the_grant_widens() {
     let staging = owner
         .mailbox_create(
             &owner_account_id,
-            &Mailbox {
-                name: format!("agent-mailsync-shared-staging-{suffix}"),
-                ..Mailbox::default()
-            },
+            &Mailbox::new(format!("agent-mailsync-shared-staging-{suffix}")),
         )
         .expect("Mailbox/set create failed against the real server (staging)");
     let staging_id = staging

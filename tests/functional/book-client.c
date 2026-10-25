@@ -18,7 +18,7 @@
  * API. A second binding would put a layer of this project between EDS and the
  * code under test.
  *
- * The command line selects one of twelve phases, because they need different
+ * The command line selects one of fifteen phases, because they need different
  * books. `write` starts from an empty book and adds a contact. `edit`,
  * `rename`, `repicture`, `recalendar`, `respouse`, `unspouse`, `renote`,
  * `unnote` and `rehandle` each start from a card that the mock has before EDS
@@ -37,6 +37,15 @@
  *     as a URI.
  *
  * `remove` deletes a seeded card.
+ *
+ * `save` writes a seeded card as EDS gives it to `<path>`, as an editor keeps it
+ * open. `modify-from` waits until a refresh replaces the cached card, then sets
+ * the email of the old copy in `<path>` and saves it.
+ * `rust/crates/jmap-functional/tests/book-stale-edit.rs` uses the two runs.
+ *
+ * `resave` saves a seeded card many times in a row with a manual-query view
+ * open, as the contact list of Evolution does.
+ * `rust/crates/jmap-functional/tests/book-save-during-push.rs` uses it.
  *
  * `list` makes no change. It prints all contacts in the book, sorted by full
  * name. `rust/crates/jmap-functional/tests/book-changes.rs` runs it two times
@@ -58,6 +67,9 @@
  *          functional-book-client <source-uid> unnote <contact-uid>
  *          functional-book-client <source-uid> rehandle <contact-uid> <handle>
  *          functional-book-client <source-uid> remove <contact-uid>
+ *          functional-book-client <source-uid> save <contact-uid> <path>
+ *          functional-book-client <source-uid> modify-from <path> <email>
+ *          functional-book-client <source-uid> resave <contact-uid> <count>
  *          functional-book-client <source-uid> list
  */
 
@@ -1096,6 +1108,161 @@ list_phase (EBookClient *book)
 	return 0;
 }
 
+/* The text of `contact`, as a new string. */
+static gchar *
+vcard_text (EContact *contact)
+{
+#if EDS_CHECK_VERSION(3, 59, 1)
+	return e_vcard_to_string (E_VCARD (contact));
+#else
+	return e_vcard_to_string (E_VCARD (contact), EVC_FORMAT_VCARD_30);
+#endif
+}
+
+/* The `save` phase: write a seeded card to `path`, as an editor keeps it open. */
+static int
+save_phase (EBookClient *book,
+            const gchar *uid,
+            const gchar *path)
+{
+	GError *error = NULL;
+	EContact *contact;
+	gchar *text;
+
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+
+	text = vcard_text (contact);
+	g_object_unref (contact);
+	if (!g_file_set_contents (path, text, -1, &error)) {
+		g_free (text);
+		return functional_fail ("save", error);
+	}
+	g_free (text);
+
+	return 0;
+}
+
+/* The `resave` phase: save a seeded card `count` times in a row, each time
+ * with a new email. The mock pushes a state change after each write, so the
+ * push of one save starts a refresh while the factory still works on that
+ * save. A save that gets no answer fails with the D-Bus timeout. */
+static int
+resave_phase (EBookClient *book,
+              const gchar *uid,
+              const gchar *count_text)
+{
+	GError *error = NULL;
+	EBookClientView *view = NULL;
+	EContact *contact;
+	guint count, ii;
+
+	count = (guint) g_ascii_strtoull (count_text, NULL, 10);
+	contact = wait_for_contact (book, uid);
+	if (!contact) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+	g_object_unref (contact);
+
+	/* Evolution shows the book in a manual-query view while the editor saves. */
+	if (!e_book_client_get_view_sync (book, "(contains \"x-evolution-any-field\" \"\")",
+					  &view, NULL, &error))
+		return functional_fail ("view", error);
+	e_book_client_view_set_flags (view, E_BOOK_CLIENT_VIEW_FLAGS_MANUAL_QUERY, &error);
+	if (error)
+		return functional_fail ("view-flags", error);
+	e_book_client_view_start (view, &error);
+	if (error)
+		return functional_fail ("view-start", error);
+
+	for (ii = 0; ii < count; ii++) {
+		gchar *email;
+		gboolean saved;
+
+		if (!e_book_client_get_contact_sync (book, uid, &contact, NULL, &error))
+			return functional_fail ("get", error);
+		email = g_strdup_printf ("save-%u@example.com", ii);
+		e_contact_set (contact, E_CONTACT_EMAIL_1, email);
+		g_free (email);
+		saved = e_book_client_modify_contact_sync (book, contact,
+							   E_BOOK_OPERATION_FLAG_NONE,
+							   NULL, &error);
+		g_object_unref (contact);
+		if (!saved) {
+			g_printerr ("save %u of %u got no answer\n", ii + 1, count);
+			return functional_fail ("modify", error);
+		}
+	}
+	g_print ("saves=%u\n", count);
+	g_object_unref (view);
+
+	return 0;
+}
+
+/* The `modify-from` phase: wait until a refresh replaces the cached card, then
+ * set the email of the old copy in `path` and save it. */
+static int
+modify_from_phase (EBookClient *book,
+                   const gchar *path,
+                   const gchar *email)
+{
+	GError *error = NULL;
+	EContact *contact;
+	gchar *old = NULL;
+	gchar *uid;
+	gboolean replaced = FALSE;
+	guint attempt;
+
+	if (!g_file_get_contents (path, &old, NULL, &error))
+		return functional_fail ("load", error);
+	contact = e_contact_new_from_vcard (old);
+	uid = e_contact_get (contact, E_CONTACT_UID);
+	if (!uid) {
+		g_printerr ("load: '%s' is not a vCard with a UID\n", path);
+		g_free (old);
+		g_object_unref (contact);
+		return 1;
+	}
+
+	/* The connect starts a refresh. Wait until it replaces the cached card. */
+	for (attempt = 0; attempt < 80 && !replaced; attempt++) {
+		EContact *cached = NULL;
+
+		if (e_book_client_get_contact_sync (book, uid, &cached, NULL, NULL)) {
+			gchar *text = vcard_text (cached);
+
+			replaced = g_strcmp0 (text, old) != 0;
+			g_free (text);
+			g_object_unref (cached);
+		}
+		if (!replaced)
+			g_usleep (G_USEC_PER_SEC / 4);
+	}
+	g_free (old);
+	if (!replaced) {
+		g_printerr ("refresh: the cached contact did not change\n");
+		g_free (uid);
+		g_object_unref (contact);
+		return 1;
+	}
+
+	e_contact_set (contact, E_CONTACT_EMAIL_1, email);
+	if (!e_book_client_modify_contact_sync (book, contact, E_BOOK_OPERATION_FLAG_NONE,
+						NULL, &error)) {
+		g_free (uid);
+		g_object_unref (contact);
+		return functional_fail ("modify", error);
+	}
+	g_free (uid);
+	g_object_unref (contact);
+
+	return 0;
+}
+
 static void
 usage (const gchar *program)
 {
@@ -1110,9 +1277,13 @@ usage (const gchar *program)
 		    "       %s <source-uid> unnote <contact-uid>\n"
 		    "       %s <source-uid> rehandle <contact-uid> <handle>\n"
 		    "       %s <source-uid> remove <contact-uid>\n"
+		    "       %s <source-uid> save <contact-uid> <path>\n"
+		    "       %s <source-uid> modify-from <path> <email>\n"
+		    "       %s <source-uid> resave <contact-uid> <count>\n"
 		    "       %s <source-uid> list\n",
 		    program, program, program, program, program, program, program,
-		    program, program, program, program, program);
+		    program, program, program, program, program, program, program,
+		    program);
 }
 
 int
@@ -1147,6 +1318,9 @@ main (int argc,
 	      (g_str_equal (phase, "unnote") && argc == 4) ||
 	      (g_str_equal (phase, "rehandle") && argc == 5) ||
 	      (g_str_equal (phase, "remove") && argc == 4) ||
+	      (g_str_equal (phase, "save") && argc == 5) ||
+	      (g_str_equal (phase, "modify-from") && argc == 5) ||
+	      (g_str_equal (phase, "resave") && argc == 5) ||
 	      (g_str_equal (phase, "list") && argc == 3))) {
 		usage (argv[0]);
 		return 2;
@@ -1226,6 +1400,12 @@ main (int argc,
 		status = unnote_phase (book, argv[3]);
 	else if (g_str_equal (phase, "rehandle"))
 		status = rehandle_phase (book, argv[3], argv[4]);
+	else if (g_str_equal (phase, "save"))
+		status = save_phase (book, argv[3], argv[4]);
+	else if (g_str_equal (phase, "modify-from"))
+		status = modify_from_phase (book, argv[3], argv[4]);
+	else if (g_str_equal (phase, "resave"))
+		status = resave_phase (book, argv[3], argv[4]);
 	else if (g_str_equal (phase, "list"))
 		status = list_phase (book);
 	else

@@ -393,14 +393,15 @@ fn seed_from_file(server: &MockServer, path: &str) -> Result<(), String> {
         let mut mailbox_ids = BTreeMap::new();
         for mailbox_seed in account_seed.mailboxes {
             let mailbox_id = Id::new(mailbox_seed.id.clone());
-            let mailbox = Mailbox {
-                id: Some(mailbox_id.clone()),
-                name: mailbox_seed.name,
-                parent_id: mailbox_seed.parent_id.map(Id::new),
-                role: mailbox_seed.role,
-                sort_order: Some(0),
-                is_subscribed: Some(mailbox_seed.is_subscribed.unwrap_or(true)),
-                ..Mailbox::default()
+            let mailbox = {
+                let mut mailbox = Mailbox::default();
+                mailbox.id = Some(mailbox_id.clone());
+                mailbox.name = mailbox_seed.name;
+                mailbox.parent_id = mailbox_seed.parent_id.map(Id::new);
+                mailbox.role = mailbox_seed.role;
+                mailbox.sort_order = Some(0);
+                mailbox.is_subscribed = Some(mailbox_seed.is_subscribed.unwrap_or(true));
+                mailbox
             };
             account.mailboxes.seed_with_id(mailbox_id.clone(), mailbox);
             mailbox_ids.insert(mailbox_seed.id, mailbox_id);

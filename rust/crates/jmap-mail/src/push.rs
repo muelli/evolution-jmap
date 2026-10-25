@@ -63,19 +63,27 @@
 //! Camel lists a folder that nobody has opened when somebody opens it.
 //!
 //! [`PUSHED_TYPES`] is the message half. The folder-list half is a `Mailbox`
-//! change. It needs a different Camel call, `camel_store_folder_info_stale`,
-//! but not for each such push. RFC 8621 puts the `totalEmails` and
-//! `unreadEmails` of a mailbox on the `Mailbox` object. Thus a delivery
-//! changes the type state as visibly as a folder that is created, destroyed,
-//! renamed, moved, subscribed or unsubscribed. The folder *tree* of Camel must
-//! know only about the second kind, because the refresh of the open folder
-//! already gives the counts to Camel. Thus
-//! [`refresh_folder_list_if_structural`] gets the tree again. It calls
-//! `camel_store_folder_info_stale` only if
-//! [`FolderTree::same_shape`](jmap_mail_sync::FolderTree::same_shape) shows a
-//! change of shape. That request is a network round trip. Thus it runs on the
-//! worker of [`FolderRefresh`] with the message refresh, not on the pump
-//! thread, for the same reason.
+//! change, but not each such push changes the folder list. RFC 8621 puts the
+//! `totalEmails` and `unreadEmails` of a mailbox on the `Mailbox` object. Thus
+//! a delivery changes the type state as visibly as a folder that is created,
+//! destroyed, renamed, moved, subscribed or unsubscribed. The folder *tree* of
+//! Camel must know only about the second kind, because the refresh of the open
+//! folder already gives the counts to Camel. Thus
+//! [`refresh_folder_list_if_structural`] gets the tree again and compares it
+//! with [`FolderTree::change_to`](jmap_mail_sync::FolderTree::change_to):
+//!
+//! - New folders, destroyed folders and subscription changes get one signal
+//!   for each folder (`folder-created`, `folder-deleted`, `folder-subscribed`,
+//!   `folder-unsubscribed`). The other rows of the Evolution folder tree stay
+//!   as they are, and the folder that the user has open stays selected.
+//! - A rename, a move or a new role calls `camel_store_folder_info_stale`.
+//!   Evolution then builds the full tree of the account again, and the
+//!   selection is lost. The old paths of the descendants are not known, so
+//!   `folder-renamed` cannot replace it.
+//!
+//! The new listing is a network round trip. Thus it runs on the worker of
+//! [`FolderRefresh`] with the message refresh, not on the pump thread, for the
+//! same reason.
 //!
 //! To tell a `Mailbox` push from an `Email` or `EmailDelivery` push, this
 //! module uses [`jmap_backend_core::push::start_for_with`]. That function gives
@@ -86,19 +94,24 @@
 //! requests. See [`start_push`](crate::store::JmapStore) for the full list.
 
 use std::ptr;
+use std::slice;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use eds_sys::camel_store_dup_opened_folders;
 use eds_sys::{
-    CamelFolder, CamelStore, camel_folder_refresh_info_sync, camel_store_folder_info_stale,
+    CamelFolder, CamelStore, CamelSubscribable, camel_folder_refresh_info_sync,
+    camel_store_folder_created, camel_store_folder_deleted, camel_store_folder_info_stale,
+    camel_subscribable_folder_subscribed, camel_subscribable_folder_unsubscribed,
 };
 use glib_sys::g_ptr_array_free;
 use glib_sys::{GError, GFALSE, GTRUE, g_clear_error};
 use gobject_sys::GObject;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::owned::Owned;
+use jmap_mail_sync::{FolderDelta, FolderListChange};
 
+use crate::folder_info::FolderInfoChain;
 use crate::store::JmapStore;
 
 /// The JMAP data types that request a message refresh, which is a pass
@@ -112,10 +125,9 @@ use crate::store::JmapStore;
 /// tests use only `Email`. A real server needs both.
 pub const PUSHED_TYPES: &[&str] = &["Email", "EmailDelivery"];
 
-/// The JMAP data type that can make Camel mark the folder *list* stale with
-/// `camel_store_folder_info_stale`, not with the message pass of
-/// [`FolderRefresh`]. Most `Mailbox` pushes only change the counts of a
-/// delivery, so most do not. See the module docs and
+/// The JMAP data type that can change the folder *list* of Camel, not with
+/// the message pass of [`FolderRefresh`]. Most `Mailbox` pushes only change
+/// the counts of a delivery, so most do not. See the module docs and
 /// [`refresh_folder_list_if_structural`] for which pushes do.
 pub const FOLDER_LIST_TYPES: &[&str] = &["Mailbox"];
 
@@ -360,7 +372,7 @@ pub unsafe fn refresh_open_folders(store: *mut CamelStore) {
 }
 
 /// The folder-list half of [`Work`]. It gets the tree again and tells Camel
-/// that the tree is stale only for a structural change (see the module docs).
+/// what changed (see the module docs).
 ///
 /// This is a network round trip ([`crate::store::JmapStore::folders`], with
 /// `Mailbox/changes`). Thus it runs on the worker of [`FolderRefresh`], never
@@ -375,12 +387,66 @@ pub unsafe fn refresh_folder_list_if_structural(store: *mut CamelStore) {
     let Some(jmap_store) = (unsafe { JmapStore::borrow(store) }) else {
         return;
     };
-    if jmap_store.folder_list_changed_structurally() {
-        tracing::debug!("a pushed Mailbox change was structural; marking the folder list stale");
-        // SAFETY: `store` is a live `CamelStore`, by the contract of this
-        // function. `camel_store_folder_info_stale` only requires
-        // `CAMEL_IS_STORE(store)`, and a live `JmapStore` satisfies it.
-        unsafe { camel_store_folder_info_stale(store) };
+    match jmap_store.pushed_folder_list_change() {
+        FolderListChange::Same => {}
+        FolderListChange::Delta(delta) => {
+            tracing::debug!(
+                destroyed = delta.destroyed.len(),
+                created = delta.created.len(),
+                resubscribed = delta.resubscribed.len(),
+                "a pushed Mailbox change added or removed folders; announcing each"
+            );
+            // SAFETY: as below.
+            unsafe { announce(store, &delta) };
+        }
+        FolderListChange::Reshaped => {
+            tracing::debug!(
+                "a pushed Mailbox change was structural; marking the folder list stale"
+            );
+            // SAFETY: `store` is a live `CamelStore`, by the contract of this
+            // function. `camel_store_folder_info_stale` only requires
+            // `CAMEL_IS_STORE(store)`, and a live `JmapStore` satisfies it.
+            unsafe { camel_store_folder_info_stale(store) };
+        }
+    }
+}
+
+/// Sends one signal for each folder of `delta`, as the vfuncs of
+/// [`crate::manage`] and [`crate::subscribe`] do for a change on this
+/// computer. The Evolution folder tree of a subscribable store adds and
+/// removes rows only on `folder-subscribed` and `folder-unsubscribed`.
+///
+/// # Safety
+///
+/// `store` must be a live [`JmapStore`].
+unsafe fn announce(store: *mut CamelStore, delta: &FolderDelta) {
+    let subscribable = store.cast::<CamelSubscribable>();
+    // SAFETY: `store` is live and implements `CamelSubscribable`. Each
+    // emitter queues its signal on the session and copies the chain, so the
+    // chain must live only for the call.
+    unsafe {
+        for folder in &delta.destroyed {
+            let chain = FolderInfoChain::from_forest(slice::from_ref(folder), Some(0));
+            if folder.subscribed {
+                camel_subscribable_folder_unsubscribed(subscribable, chain.as_ptr());
+            }
+            camel_store_folder_deleted(store, chain.as_ptr());
+        }
+        for folder in &delta.created {
+            let chain = FolderInfoChain::from_forest(slice::from_ref(folder), Some(0));
+            camel_store_folder_created(store, chain.as_ptr());
+            if folder.subscribed {
+                camel_subscribable_folder_subscribed(subscribable, chain.as_ptr());
+            }
+        }
+        for folder in &delta.resubscribed {
+            let chain = FolderInfoChain::from_forest(slice::from_ref(folder), Some(0));
+            if folder.subscribed {
+                camel_subscribable_folder_subscribed(subscribable, chain.as_ptr());
+            } else {
+                camel_subscribable_folder_unsubscribed(subscribable, chain.as_ptr());
+            }
+        }
     }
 }
 

@@ -35,12 +35,10 @@ pub fn quota_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         }
     }
 
-    to_result(&GetResponse {
-        account_id: request.account_id,
-        state: account.quotas.state(),
-        list,
-        not_found,
-    })
+    to_result(
+        &GetResponse::new(request.account_id, account.quotas.state(), list)
+            .with_not_found(not_found),
+    )
 }
 
 /// Handle `Quota/query` as RFC 9425 §4.4 defines.
@@ -64,15 +62,12 @@ pub fn quota_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
         .filter(|(_, quota)| quota_matches(quota, &filter))
         .count() as u64;
 
-    to_result(&QueryResponse {
-        account_id: request.account_id,
-        query_state: account.quotas.state(),
-        can_calculate_changes: false,
-        position: request.position.max(0) as u64,
-        ids,
-        total: request.calculate_total.then_some(total),
-        limit: None,
-    })
+    let mut response = QueryResponse::new(request.account_id, account.quotas.state(), ids)
+        .with_position(request.position.max(0) as u64);
+    if request.calculate_total {
+        response = response.with_total(total);
+    }
+    to_result(&response)
 }
 
 /// Apply RFC 9425 §4.4 filter rules.

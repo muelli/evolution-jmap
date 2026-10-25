@@ -80,28 +80,21 @@ fn principal_secret_and_send_to_cover_rfc9670() {
 fn share_notification_roundtrip_covers_rfc9670() {
     use jmap_proto::principals::{Principal, ShareNotification, share_notification_object_type};
     use jmap_proto::state::UtcDate;
-    use std::collections::BTreeMap;
 
     assert_eq!(share_notification_object_type::ADDRESS_BOOK, "AddressBook");
     assert_eq!(share_notification_object_type::CALENDAR, "Calendar");
     assert_eq!(share_notification_object_type::MAILBOX, "Mailbox");
 
-    let notif = ShareNotification {
-        id: Some("sn_1".into()),
-        created: UtcDate::new("2026-09-01T14:00:00Z"),
-        changed_by: Some(Principal {
-            name: "Alice Admin".to_owned(),
-            email: Some("alice@example.com".to_owned()),
-            ..Principal::default()
-        }),
-        object_type: share_notification_object_type::CALENDAR.to_owned(),
-        object_id: "cal_123".into(),
-        object_account_id: "A1".into(),
-        name: None,
-        old_rights: Some(serde_json::json!({"mayReadItems": true})),
-        new_rights: Some(serde_json::json!({"mayReadItems": true, "mayAddItems": true})),
-        extra: BTreeMap::new(),
-    };
+    let notif = ShareNotification::new(
+        UtcDate::new("2026-09-01T14:00:00Z"),
+        share_notification_object_type::CALENDAR,
+        "cal_123",
+        "A1",
+    )
+    .with_id("sn_1")
+    .with_changed_by(Principal::new("Alice Admin").with_email("alice@example.com"))
+    .with_old_rights(serde_json::json!({"mayReadItems": true}))
+    .with_new_rights(serde_json::json!({"mayReadItems": true, "mayAddItems": true}));
 
     let n_val = serde_json::to_value(&notif).unwrap();
     assert_eq!(n_val["id"], "sn_1");
@@ -119,7 +112,6 @@ fn share_notification_roundtrip_covers_rfc9670() {
 #[test]
 fn principals_capabilities_and_set_error_roundtrip_covers_rfc9670() {
     use jmap_proto::principals::{PrincipalsCapability, principal_set_error};
-    use std::collections::BTreeMap;
 
     assert_eq!(principal_set_error::FORBIDDEN, "forbidden");
     assert_eq!(
@@ -127,10 +119,7 @@ fn principals_capabilities_and_set_error_roundtrip_covers_rfc9670() {
         "principalAlreadyExists"
     );
 
-    let cap = PrincipalsCapability {
-        max_principals_per_get: Some(100),
-        extra: BTreeMap::new(),
-    };
+    let cap = PrincipalsCapability::new().with_max_principals_per_get(100);
     let cap_val = serde_json::to_value(&cap).unwrap();
     assert_eq!(cap_val["maxPrincipalsPerGet"], 100);
 
@@ -143,16 +132,13 @@ fn principal_secret_send_to_typed_and_query_filter_builders_roundtrip() {
     use jmap_proto::principals::{Principal, PrincipalQueryFilter};
     use std::collections::BTreeMap;
 
-    let p = Principal {
-        id: Some("p_typed".into()),
-        name: "Meeting Room 1".to_owned(),
-        secret: Some("secret123".to_owned()),
-        send_to: Some(BTreeMap::from([(
+    let p = Principal::new("Meeting Room 1")
+        .with_id("p_typed")
+        .with_secret("secret123")
+        .with_send_to(BTreeMap::from([(
             "imip".to_owned(),
             "mailto:room1@example.com".to_owned(),
-        )])),
-        ..Principal::default()
-    };
+        )]));
 
     let p_val = serde_json::to_value(&p).unwrap();
     assert_eq!(p_val["secret"], "secret123");
@@ -174,12 +160,9 @@ fn principal_secret_send_to_typed_and_query_filter_builders_roundtrip() {
 fn principal_is_personal_spec_roundtrip() {
     use jmap_proto::principals::Principal;
 
-    let p = Principal {
-        id: Some("p_self".into()),
-        name: "Self Principal".to_owned(),
-        is_personal: Some(true),
-        ..Principal::default()
-    };
+    let p = Principal::new("Self Principal")
+        .with_id("p_self")
+        .is_personal(true);
     let p_val = serde_json::to_value(&p).unwrap();
     assert_eq!(p_val["isPersonal"], true);
 
@@ -192,11 +175,7 @@ fn share_notification_builders_roundtrip() {
     use jmap_proto::UtcDate;
     use jmap_proto::principals::{Principal, ShareNotification, share_notification_object_type};
 
-    let changer = Principal {
-        id: Some("p_admin".into()),
-        name: "Admin User".to_owned(),
-        ..Principal::default()
-    };
+    let changer = Principal::new("Admin User").with_id("p_admin");
 
     let notif = ShareNotification::new(
         UtcDate::new("2026-09-01T15:00:00Z"),

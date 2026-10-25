@@ -11,6 +11,7 @@ use serde_json::Value;
 /// JMAP Object Metadata account capability properties (draft-ietf-jmap-metadata §1.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MetadataCapability {
     #[serde(default)]
     pub data_types: BTreeMap<String, DataTypeMetadataInfo>,
@@ -41,6 +42,7 @@ impl MetadataCapability {
 /// Metadata capabilities for a specific JMAP data type (draft-ietf-jmap-metadata §1.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DataTypeMetadataInfo {
     #[serde(default)]
     pub namespaces: Vec<String>,
@@ -96,6 +98,7 @@ impl DataTypeMetadataInfo {
 /// A text filter condition on metadata properties (draft-ietf-jmap-metadata §3.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MetadataTextFilter {
     pub path: String,
     pub text: String,
@@ -121,6 +124,7 @@ impl MetadataTextFilter {
 /// Filter condition for queries matching object metadata (draft-ietf-jmap-metadata §3.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct MetadataFilterCondition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata_exists: Option<String>,

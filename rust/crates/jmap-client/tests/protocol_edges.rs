@@ -55,11 +55,7 @@ fn backreference_to_failed_call_errors() {
 
     // c0 fails (unknown method) → c1's #ids back-reference cannot resolve.
     let mut get = GetRequest::all(account_id.clone());
-    get.ids_ref = Some(ResultReference {
-        result_of: "c0".to_owned(),
-        name: "ContactCard/query".to_owned(),
-        path: "/ids".to_owned(),
-    });
+    get.ids_ref = Some(ResultReference::new("c0", "ContactCard/query", "/ids"));
     let request = Request::new([CAPABILITY_CORE, CAPABILITY_CONTACTS])
         .call("ContactCard/nonexistentQuery", &json!({}), "c0")
         .unwrap()

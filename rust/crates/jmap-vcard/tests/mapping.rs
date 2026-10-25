@@ -76,9 +76,10 @@ fn uid_is_the_jmap_id_and_the_jscontact_uid_is_kept_aside() {
 
 #[test]
 fn a_card_without_a_jscontact_uid_omits_the_extra_property() {
-    let card = ContactCard {
-        id: Some("C9".into()),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C9".into());
+        card
     };
     let vcard = card_to_vcard(&card);
     assert_eq!(line(&vcard, "UID:"), "UID:C9");
@@ -132,19 +133,21 @@ fn a_vcard_from_evolution_has_no_jmap_id_yet() {
 
 #[test]
 fn maps_name_components_onto_the_structured_n_property() {
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Dr. Vera Marie Oldenburg MSc".to_owned()),
-            components: Some(vec![
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Dr. Vera Marie Oldenburg MSc".to_owned());
+            name_val.components = Some(vec![
                 NameComponent::new("title", "Dr."),
                 NameComponent::new("given", "Vera"),
                 NameComponent::new("given2", "Marie"),
                 NameComponent::new("surname", "Oldenburg"),
                 NameComponent::new("credential", "MSc"),
-            ]),
-            ..Name::default()
-        }),
-        ..ContactCard::default()
+            ]);
+            name_val
+        });
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -158,15 +161,17 @@ fn maps_name_components_onto_the_structured_n_property() {
 #[test]
 fn derives_the_missing_half_of_the_name() {
     // If `full` is absent, derive it from components in display order.
-    let components = ContactCard {
-        name: Some(Name {
-            components: Some(vec![
+    let components = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![
                 NameComponent::new("surname", "Oldenburg"),
                 NameComponent::new("given", "Vera"),
-            ]),
-            ..Name::default()
-        }),
-        ..ContactCard::default()
+            ]);
+            name_val
+        });
+        card
     };
     assert_eq!(
         line(&card_to_vcard(&components), "FN:"),
@@ -263,22 +268,21 @@ fn invents_keys_for_entries_that_have_none() {
 
 #[test]
 fn an_email_without_an_address_is_skipped_in_both_directions() {
-    let card = ContactCard {
-        emails: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.emails = Some(
             [
                 ("e1".to_owned(), ContactEmail::default()),
-                (
-                    "e2".to_owned(),
-                    ContactEmail {
-                        address: "vera@example.com".to_owned(),
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e2".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera@example.com".to_owned();
+                    v
+                }),
             ]
             .into(),
-        ),
-        phones: Some([("p1".to_owned(), ContactPhone::default())].into()),
-        ..ContactCard::default()
+        );
+        card.phones = Some([("p1".to_owned(), ContactPhone::default())].into());
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -304,8 +308,9 @@ fn maps_organizations_onto_the_structured_org_property() {
 #[test]
 fn maps_organization_units_onto_the_components_after_the_name() {
     // ORG keeps name then units, outermost first (RFC 2426 §3.5.5, RFC 9553 §2.2.3).
-    let card = ContactCard {
-        organizations: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -315,8 +320,8 @@ fn maps_organization_units_onto_the_components_after_the_name() {
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -332,8 +337,9 @@ fn maps_organization_units_onto_the_components_after_the_name() {
 #[test]
 fn an_organization_with_units_but_no_name_keeps_the_field_it_leaves_empty() {
     // Component one is the organization name, so units cannot move into it.
-    let card = ContactCard {
-        organizations: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -342,8 +348,8 @@ fn an_organization_with_units_but_no_name_keeps_the_field_it_leaves_empty() {
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -355,9 +361,10 @@ fn an_organization_with_units_but_no_name_keeps_the_field_it_leaves_empty() {
 
 #[test]
 fn an_organization_with_nothing_in_it_is_skipped_in_both_directions() {
-    let card = ContactCard {
-        organizations: Some([("o1".to_owned(), Organization::default())].into()),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some([("o1".to_owned(), Organization::default())].into());
+        card
     };
     assert!(!card_to_vcard(&card).contains("\r\nORG"));
 
@@ -369,8 +376,9 @@ fn an_organization_with_nothing_in_it_is_skipped_in_both_directions() {
 #[test]
 fn an_organization_with_an_empty_name_string_behaves_consistently() {
     // `name = ""` with no units states nothing, so no ORG line is emitted.
-    let card_empty_name = ContactCard {
-        organizations: Some(
+    let card_empty_name = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -380,8 +388,8 @@ fn an_organization_with_an_empty_name_string_behaves_consistently() {
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let org = &card_empty_name.organizations.as_ref().unwrap()["o1"];
     assert!(!states_organization(org));
@@ -391,8 +399,9 @@ fn an_organization_with_an_empty_name_string_behaves_consistently() {
     assert_eq!(back.organizations, None);
 
     // With units present, the empty first component is preserved via leading `;`.
-    let card_empty_name_with_units = ContactCard {
-        organizations: Some(
+    let card_empty_name_with_units = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -402,8 +411,8 @@ fn an_organization_with_an_empty_name_string_behaves_consistently() {
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let org_with_units = &card_empty_name_with_units.organizations.as_ref().unwrap()["o1"];
     assert!(states_organization(org_with_units));
@@ -464,19 +473,18 @@ fn maps_titles_onto_title_and_role_by_their_kind() {
 #[test]
 fn a_title_of_a_kind_vcard_has_no_property_for_is_dropped() {
     // Vendor kinds beyond `title` and `role` have no vCard 3.0 field, so skip them.
-    let card = ContactCard {
-        titles: Some(
-            [(
-                "t1".to_owned(),
-                Title {
-                    name: "Knight of the Realm".to_owned(),
-                    kind: Some("x-honour".to_owned()),
-                    ..Title::default()
-                },
-            )]
+    let card = {
+        let mut card = ContactCard::default();
+        card.titles = Some(
+            [("t1".to_owned(), {
+                let mut title = Title::default();
+                title.name = "Knight of the Realm".to_owned();
+                title.kind = Some("x-honour".to_owned());
+                title
+            })]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -487,9 +495,10 @@ fn a_title_of_a_kind_vcard_has_no_property_for_is_dropped() {
 
 #[test]
 fn a_title_with_no_name_is_skipped_in_both_directions() {
-    let card = ContactCard {
-        titles: Some([("t1".to_owned(), Title::default())].into()),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.titles = Some([("t1".to_owned(), Title::default())].into());
+        card
     };
     assert!(!card_to_vcard(&card).contains("\r\nTITLE"));
 
@@ -519,8 +528,9 @@ fn invents_a_key_for_a_title_that_has_none() {
 
 #[test]
 fn multiple_organizations_emit_distinct_vcard_lines_and_roundtrip() {
-    let card = ContactCard {
-        organizations: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [
                 (
                     "o1".to_owned(),
@@ -540,8 +550,8 @@ fn multiple_organizations_emit_distinct_vcard_lines_and_roundtrip() {
                 ),
             ]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -560,45 +570,38 @@ fn multiple_organizations_emit_distinct_vcard_lines_and_roundtrip() {
 
 #[test]
 fn multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip() {
-    let card = ContactCard {
-        titles: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.titles = Some(
             [
-                (
-                    "t1".to_owned(),
-                    Title {
-                        name: "Research Scientist".to_owned(),
-                        kind: None,
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "t2".to_owned(),
-                    Title {
-                        name: "Director of Engineering".to_owned(),
-                        kind: None,
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r1".to_owned(),
-                    Title {
-                        name: "Lead Investigator".to_owned(),
-                        kind: Some("role".to_owned()),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r2".to_owned(),
-                    Title {
-                        name: "Project Manager".to_owned(),
-                        kind: Some("role".to_owned()),
-                        ..Title::default()
-                    },
-                ),
+                ("t1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Research Scientist".to_owned();
+                    title.kind = None;
+                    title
+                }),
+                ("t2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Director of Engineering".to_owned();
+                    title.kind = None;
+                    title
+                }),
+                ("r1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Lead Investigator".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title
+                }),
+                ("r2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Project Manager".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title
+                }),
             ]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -627,8 +630,9 @@ fn multiple_titles_and_roles_emit_distinct_vcard_lines_and_roundtrip() {
 fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully() {
     // Keep ORG component order to match EDS slots.
     // Order is organization name, department, office, then extra units.
-    let card = ContactCard {
-        organizations: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -642,8 +646,8 @@ fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let org = &card.organizations.as_ref().unwrap()["o1"];
@@ -687,8 +691,9 @@ fn multi_component_org_with_three_or_more_units_and_office_roundtrips_faithfully
 #[test]
 fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_roundtrip() {
     // Keep a deep hierarchy with one name and five units.
-    let deep_card = ContactCard {
-        organizations: Some(
+    let deep_card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -704,8 +709,8 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let deep_vcard = card_to_vcard(&deep_card);
     assert_eq!(
@@ -717,8 +722,9 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
 
     // Keep unit positions for nameless organizations.
     // The writer uses a leading semicolon to hold the empty name slot.
-    let nameless_card = ContactCard {
-        organizations: Some(
+    let nameless_card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -733,8 +739,8 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let nameless_vcard = card_to_vcard(&nameless_card);
     assert_eq!(
@@ -769,8 +775,9 @@ fn multi_component_org_with_deep_hierarchy_and_trailing_or_intermediate_units_ro
 
 #[test]
 fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
-    let card = ContactCard {
-        organizations: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [
                 (
                     "o1".to_owned(),
@@ -799,53 +806,43 @@ fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
                 ),
             ]
             .into(),
-        ),
-        titles: Some(
+        );
+        card.titles = Some(
             [
-                (
-                    "t1".to_owned(),
-                    Title {
-                        name: "Chief Scientist".to_owned(),
-                        kind: None,
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "t2".to_owned(),
-                    Title {
-                        name: "Distinguished Engineer".to_owned(),
-                        kind: Some("title".to_owned()),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r1".to_owned(),
-                    Title {
-                        name: "Technical Lead".to_owned(),
-                        kind: Some("role".to_owned()),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r2".to_owned(),
-                    Title {
-                        name: "Steering Committee Member".to_owned(),
-                        kind: Some("role".to_owned()),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "x1".to_owned(),
-                    Title {
-                        name: "Honorary Fellow".to_owned(),
-                        kind: Some("x-honour".to_owned()),
-                        ..Title::default()
-                    },
-                ),
+                ("t1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Chief Scientist".to_owned();
+                    title.kind = None;
+                    title
+                }),
+                ("t2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Distinguished Engineer".to_owned();
+                    title.kind = Some("title".to_owned());
+                    title
+                }),
+                ("r1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Technical Lead".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title
+                }),
+                ("r2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Steering Committee Member".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title
+                }),
+                ("x1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Honorary Fellow".to_owned();
+                    title.kind = Some("x-honour".to_owned());
+                    title
+                }),
             ]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     for title in card.titles.as_ref().unwrap().values() {
@@ -890,38 +887,30 @@ fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
     // Expect four title keys after roundtrip: t1, t2, r1, r2.
     // Canonical kind is None for default titles.
     let expected_titles = [
-        (
-            "t1".to_owned(),
-            Title {
-                name: "Chief Scientist".to_owned(),
-                kind: None,
-                ..Title::default()
-            },
-        ),
-        (
-            "t2".to_owned(),
-            Title {
-                name: "Distinguished Engineer".to_owned(),
-                kind: None,
-                ..Title::default()
-            },
-        ),
-        (
-            "r1".to_owned(),
-            Title {
-                name: "Technical Lead".to_owned(),
-                kind: Some("role".to_owned()),
-                ..Title::default()
-            },
-        ),
-        (
-            "r2".to_owned(),
-            Title {
-                name: "Steering Committee Member".to_owned(),
-                kind: Some("role".to_owned()),
-                ..Title::default()
-            },
-        ),
+        ("t1".to_owned(), {
+            let mut title = Title::default();
+            title.name = "Chief Scientist".to_owned();
+            title.kind = None;
+            title
+        }),
+        ("t2".to_owned(), {
+            let mut title = Title::default();
+            title.name = "Distinguished Engineer".to_owned();
+            title.kind = None;
+            title
+        }),
+        ("r1".to_owned(), {
+            let mut title = Title::default();
+            title.name = "Technical Lead".to_owned();
+            title.kind = Some("role".to_owned());
+            title
+        }),
+        ("r2".to_owned(), {
+            let mut title = Title::default();
+            title.name = "Steering Committee Member".to_owned();
+            title.kind = Some("role".to_owned());
+            title
+        }),
     ]
     .into();
     assert_eq!(back.titles, Some(expected_titles));
@@ -929,8 +918,9 @@ fn multi_component_org_and_multiple_titles_roles_coexist_and_roundtrip() {
 
 #[test]
 fn multi_component_org_with_escaped_punctuation_roundtrips() {
-    let card = ContactCard {
-        organizations: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -944,8 +934,8 @@ fn multi_component_org_with_escaped_punctuation_roundtrips() {
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -970,9 +960,10 @@ fn components_of(address: &Address) -> Vec<(&str, &str)> {
 }
 
 fn one_address(key: &str, address: Address) -> ContactCard {
-    ContactCard {
-        addresses: Some([(key.to_owned(), address)].into()),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.addresses = Some([(key.to_owned(), address)].into());
+        card
     }
 }
 
@@ -1035,28 +1026,24 @@ fn maps_every_field_the_adr_value_has() {
 #[test]
 fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
     // vCard 3.0 has no ADR field for floor or room.
-    let card = one_address(
-        "a1",
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße"),
-                AddressComponent::new("floor", "3"),
-            ]),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße"),
+            AddressComponent::new("floor", "3"),
+        ]);
+        address_val
+    });
     assert_eq!(
         line(&card_to_vcard(&card), "ADR"),
         "ADR;X-JMAP-KEY=a1:;;Hauptstraße;;;;"
     );
 
-    let only_unmapped = one_address(
-        "a1",
-        Address {
-            components: Some(vec![AddressComponent::new("floor", "3")]),
-            ..Address::default()
-        },
-    );
+    let only_unmapped = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("floor", "3")]);
+        address_val
+    });
     assert!(!card_to_vcard(&only_unmapped).contains("\r\nADR"));
 }
 
@@ -1064,31 +1051,27 @@ fn an_address_component_of_a_kind_the_adr_value_has_no_field_for_is_dropped() {
 fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
     // RFC 9553 splits street name and house number; RFC 2426 has one street
     // slot, so both components share it in source order.
-    let english = one_address(
-        "a1",
-        Address {
-            components: Some(vec![
-                AddressComponent::new("number", "1"),
-                AddressComponent::new("name", "Main Street"),
-            ]),
-            ..Address::default()
-        },
-    );
+    let english = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("number", "1"),
+            AddressComponent::new("name", "Main Street"),
+        ]);
+        address_val
+    });
     assert_eq!(
         line(&card_to_vcard(&english), "ADR"),
         "ADR;X-JMAP-KEY=a1:;;1 Main Street;;;;"
     );
 
-    let german = one_address(
-        "a1",
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße"),
-                AddressComponent::new("number", "1"),
-            ]),
-            ..Address::default()
-        },
-    );
+    let german = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße"),
+            AddressComponent::new("number", "1"),
+        ]);
+        address_val
+    });
     let vcard = card_to_vcard(&german);
     assert_eq!(line(&vcard, "ADR"), "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1;;;;");
 
@@ -1104,13 +1087,11 @@ fn a_house_number_stated_apart_from_its_street_shares_the_street_field() {
 #[test]
 fn an_address_that_states_only_a_house_number_is_on_the_line() {
     // A standalone house number is valid address data, so emit ADR.
-    let card = one_address(
-        "a1",
-        Address {
-            components: Some(vec![AddressComponent::new("number", "1")]),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("number", "1")]);
+        address_val
+    });
     assert_eq!(
         line(&card_to_vcard(&card), "ADR"),
         "ADR;X-JMAP-KEY=a1:;;1;;;;"
@@ -1119,16 +1100,14 @@ fn an_address_that_states_only_a_house_number_is_on_the_line() {
 
 #[test]
 fn two_address_components_of_one_kind_share_the_field_they_map_onto() {
-    let card = one_address(
-        "a1",
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße 1"),
-                AddressComponent::new("name", "Hinterhaus"),
-            ]),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße 1"),
+            AddressComponent::new("name", "Hinterhaus"),
+        ]);
+        address_val
+    });
     assert_eq!(
         line(&card_to_vcard(&card), "ADR"),
         "ADR;X-JMAP-KEY=a1:;;Hauptstraße 1 Hinterhaus;;;;"
@@ -1198,13 +1177,11 @@ fn a_label_without_a_key_joins_the_address_of_the_same_type() {
 fn a_label_that_belongs_to_no_address_becomes_one_of_its_own() {
     // RFC 9553 allows `full` without components, so LABEL-only addresses keep
     // their key on LABEL and do not require an ADR line.
-    let card = one_address(
-        "a2",
-        Address {
-            full: Some("Postfach 42\n10115 Berlin".to_owned()),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a2", {
+        let mut address_val = Address::default();
+        address_val.full = Some("Postfach 42\n10115 Berlin".to_owned());
+        address_val
+    });
     let vcard = card_to_vcard(&card);
     assert!(!vcard.contains("\r\nADR"), "{vcard}");
     assert_eq!(
@@ -1232,14 +1209,12 @@ fn a_label_that_belongs_to_no_address_becomes_one_of_its_own() {
 
 #[test]
 fn an_address_written_out_as_nothing_gets_no_label_line() {
-    let card = one_address(
-        "a1",
-        Address {
-            components: Some(vec![AddressComponent::new("locality", "Berlin")]),
-            full: Some(String::new()),
-            ..Address::default()
-        },
-    );
+    let card = one_address("a1", {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", "Berlin")]);
+        address_val.full = Some(String::new());
+        address_val
+    });
     let vcard = card_to_vcard(&card);
     assert!(!vcard.contains("\r\nLABEL"), "{vcard}");
 
@@ -1251,38 +1226,35 @@ fn an_address_written_out_as_nothing_gets_no_label_line() {
 #[test]
 fn multiple_addresses_with_different_types_and_labels_pair_accurately() {
     let mut addresses = BTreeMap::new();
-    addresses.insert(
-        "a-work".to_owned(),
-        Address {
-            contexts: Some(json!({"work": true})),
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße 1"),
-                AddressComponent::new("locality", "Berlin"),
-                AddressComponent::new("postcode", "10115"),
-                AddressComponent::new("country", "Germany"),
-            ]),
-            full: Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned()),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a-home".to_owned(),
-        Address {
-            contexts: Some(json!({"private": true})),
-            components: Some(vec![
-                AddressComponent::new("name", "Heimweg 2"),
-                AddressComponent::new("locality", "München"),
-                AddressComponent::new("postcode", "80331"),
-                AddressComponent::new("country", "Germany"),
-            ]),
-            full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
-            ..Address::default()
-        },
-    );
+    addresses.insert("a-work".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße 1"),
+            AddressComponent::new("locality", "Berlin"),
+            AddressComponent::new("postcode", "10115"),
+            AddressComponent::new("country", "Germany"),
+        ]);
+        address_val.full = Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned());
+        address_val
+    });
+    addresses.insert("a-home".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"private": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Heimweg 2"),
+            AddressComponent::new("locality", "München"),
+            AddressComponent::new("postcode", "80331"),
+            AddressComponent::new("country", "Germany"),
+        ]);
+        address_val.full = Some("Heimweg 2\n80331 München\nGermany".to_owned());
+        address_val
+    });
 
-    let card = ContactCard {
-        addresses: Some(addresses),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.addresses = Some(addresses);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -1319,21 +1291,20 @@ fn multiple_addresses_with_different_types_and_labels_pair_accurately() {
 #[test]
 fn an_address_at_home_and_at_work_states_one_slot_rather_than_both() {
     let mut addresses = BTreeMap::new();
-    addresses.insert(
-        "a1".to_owned(),
-        Address {
-            contexts: Some(json!({"work": true, "private": true})),
-            components: Some(vec![
-                AddressComponent::new("name", "Hauptstraße 1"),
-                AddressComponent::new("locality", "Berlin"),
-            ]),
-            full: Some("Hauptstraße 1\n10115 Berlin".to_owned()),
-            ..Address::default()
-        },
-    );
-    let card = ContactCard {
-        addresses: Some(addresses),
-        ..ContactCard::default()
+    addresses.insert("a1".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"work": true, "private": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Hauptstraße 1"),
+            AddressComponent::new("locality", "Berlin"),
+        ]);
+        address_val.full = Some("Hauptstraße 1\n10115 Berlin".to_owned());
+        address_val
+    });
+    let card = {
+        let mut card = ContactCard::default();
+        card.addresses = Some(addresses);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -1350,18 +1321,17 @@ fn an_address_at_home_and_at_work_states_one_slot_rather_than_both() {
 #[test]
 fn a_phone_at_home_and_at_work_states_one_slot_rather_than_both() {
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+49 30 111".to_owned(),
-            contexts: Some(json!({"work": true, "private": true})),
-            features: Some(json!({"voice": true})),
-            ..ContactPhone::default()
-        },
-    );
-    let card = ContactCard {
-        phones: Some(phones),
-        ..ContactCard::default()
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+49 30 111".to_owned();
+        v.contexts = Some(json!({"work": true, "private": true}));
+        v.features = Some(json!({"voice": true}));
+        v
+    });
+    let card = {
+        let mut card = ContactCard::default();
+        card.phones = Some(phones);
+        card
     };
 
     // This case states one feature either way.
@@ -1376,18 +1346,17 @@ fn a_phone_at_home_and_at_work_states_one_slot_rather_than_both() {
 /// A phone with these `contexts` and `features`, written out.
 fn phone_line(contexts: Option<Value>, features: Option<Value>) -> String {
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+49 30 111".to_owned(),
-            contexts,
-            features,
-            ..ContactPhone::default()
-        },
-    );
-    let vcard = card_to_vcard(&ContactCard {
-        phones: Some(phones),
-        ..ContactCard::default()
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+49 30 111".to_owned();
+        v.contexts = contexts;
+        v.features = features;
+        v
+    });
+    let vcard = card_to_vcard(&{
+        let mut card = ContactCard::default();
+        card.phones = Some(phones);
+        card
     });
     line(&vcard, "TEL").to_owned()
 }
@@ -1463,17 +1432,16 @@ fn a_line_with_several_features_is_still_read_as_all_of_them() {
 #[test]
 fn an_email_at_home_and_at_work_still_states_both() {
     let mut emails = BTreeMap::new();
-    emails.insert(
-        "e1".to_owned(),
-        ContactEmail {
-            address: "vera@example.com".to_owned(),
-            contexts: Some(json!({"work": true, "private": true})),
-            ..ContactEmail::default()
-        },
-    );
-    let card = ContactCard {
-        emails: Some(emails),
-        ..ContactCard::default()
+    emails.insert("e1".to_owned(), {
+        let mut v = ContactEmail::default();
+        v.address = "vera@example.com".to_owned();
+        v.contexts = Some(json!({"work": true, "private": true}));
+        v
+    });
+    let card = {
+        let mut card = ContactCard::default();
+        card.emails = Some(emails);
+        card
     };
 
     // EDS files an `EMAIL` line by position: `E_CONTACT_EMAIL_1` to `_4`.
@@ -1525,18 +1493,17 @@ fn bare_label_without_type_pairs_with_untyped_address() {
 }
 
 fn one_note(key: &str, note: &str) -> ContactCard {
-    ContactCard {
-        notes: Some(
-            [(
-                key.to_owned(),
-                Note {
-                    note: note.to_owned(),
-                    ..Note::default()
-                },
-            )]
+    {
+        let mut card = ContactCard::default();
+        card.notes = Some(
+            [(key.to_owned(), {
+                let mut v = Note::default();
+                v.note = note.to_owned();
+                v
+            })]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
@@ -1602,19 +1569,18 @@ fn invents_a_key_for_a_note_that_has_none() {
 }
 
 fn one_anniversary(kind: &str, date: serde_json::Value) -> ContactCard {
-    ContactCard {
-        anniversaries: Some(
-            [(
-                "y1".to_owned(),
-                Anniversary {
-                    kind: kind.to_owned(),
-                    date: Some(date),
-                    ..Anniversary::default()
-                },
-            )]
+    {
+        let mut card = ContactCard::default();
+        card.anniversaries = Some(
+            [("y1".to_owned(), {
+                let mut v = Anniversary::default();
+                v.kind = kind.to_owned();
+                v.date = Some(date);
+                v
+            })]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
@@ -1791,37 +1757,32 @@ fn partial_dates_for_wedding_and_death_anniversaries_get_no_vcard_lines() {
 
 #[test]
 fn multiple_anniversaries_with_unmodeled_death_and_partial_dates_emit_only_full_dates() {
-    let card = ContactCard {
-        anniversaries: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.anniversaries = Some(
             [
-                (
-                    "y1".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(json!({"year": 1964})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y2".to_owned(),
-                    Anniversary {
-                        kind: "death".to_owned(),
-                        date: Some(json!({"year": 2019, "month": 10, "day": 15})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y3".to_owned(),
-                    Anniversary {
-                        kind: "wedding".to_owned(),
-                        date: Some(json!({"year": 1996, "month": 8, "day": 3})),
-                        ..Anniversary::default()
-                    },
-                ),
+                ("y1".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date = Some(json!({"year": 1964}));
+                    v
+                }),
+                ("y2".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "death".to_owned();
+                    v.date = Some(json!({"year": 2019, "month": 10, "day": 15}));
+                    v
+                }),
+                ("y3".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".to_owned();
+                    v.date = Some(json!({"year": 1996, "month": 8, "day": 3}));
+                    v
+                }),
             ]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -1835,18 +1796,17 @@ fn multiple_anniversaries_with_unmodeled_death_and_partial_dates_emit_only_full_
 }
 
 fn one_nickname(key: &str, name: &str) -> ContactCard {
-    ContactCard {
-        nicknames: Some(
-            [(
-                key.to_owned(),
-                Nickname {
-                    name: name.to_owned(),
-                    ..Nickname::default()
-                },
-            )]
+    {
+        let mut card = ContactCard::default();
+        card.nicknames = Some(
+            [(key.to_owned(), {
+                let mut v = Nickname::default();
+                v.name = name.to_owned();
+                v
+            })]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
@@ -1884,13 +1844,14 @@ fn each_nickname_gets_a_line_of_its_own() {
     // Use one line per nickname key. A comma list cannot carry per-entry keys,
     // and EDS reads NICKNAME as one string anyway.
     let mut card = one_nickname("k1", "Vee");
-    card.nicknames.as_mut().expect("nicknames").insert(
-        "k2".to_owned(),
-        Nickname {
-            name: "Vera the Elder".to_owned(),
-            ..Nickname::default()
-        },
-    );
+    card.nicknames
+        .as_mut()
+        .expect("nicknames")
+        .insert("k2".to_owned(), {
+            let mut v = Nickname::default();
+            v.name = "Vera the Elder".to_owned();
+            v
+        });
     let vcard = card_to_vcard(&card);
 
     assert_eq!(
@@ -1987,8 +1948,9 @@ fn invents_a_key_for_a_nickname_that_has_none() {
 }
 
 fn one_link(key: &str, uri: &str) -> ContactCard {
-    ContactCard {
-        links: Some(
+    {
+        let mut card = ContactCard::default();
+        card.links = Some(
             [(
                 key.to_owned(),
                 Link {
@@ -1997,8 +1959,8 @@ fn one_link(key: &str, uri: &str) -> ContactCard {
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
@@ -2094,35 +2056,26 @@ fn invents_a_key_for_a_link_that_has_none() {
 }
 
 fn one_calendar(key: &str, kind: Option<&str>, uri: &str) -> ContactCard {
-    ContactCard {
-        calendars: Some(
-            [(
-                key.to_owned(),
-                Calendar {
-                    kind: kind.map(str::to_owned),
-                    uri: uri.to_owned(),
-                    ..Calendar::default()
-                },
-            )]
+    {
+        let mut card = ContactCard::default();
+        card.calendars = Some(
+            [(key.to_owned(), {
+                let mut calendar = Calendar::default();
+                calendar.kind = kind.map(str::to_owned);
+                calendar.uri = uri.to_owned();
+                calendar
+            })]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
 fn one_scheduling_address(key: &str, uri: &str) -> ContactCard {
-    ContactCard {
-        scheduling_addresses: Some(
-            [(
-                key.to_owned(),
-                SchedulingAddress {
-                    uri: uri.to_owned(),
-                    ..SchedulingAddress::default()
-                },
-            )]
-            .into(),
-        ),
-        ..ContactCard::default()
+    {
+        let mut card = ContactCard::default();
+        card.scheduling_addresses = Some([(key.to_owned(), SchedulingAddress::new(uri))].into());
+        card
     }
 }
 
@@ -2228,29 +2181,26 @@ fn calendars_read_pref_and_media_type_parameters() {
 #[test]
 fn calendars_emit_the_eds_profile_without_pref_or_media_type_parameters() {
     let mut calendars = BTreeMap::new();
-    calendars.insert(
-        "c1".to_owned(),
-        Calendar {
-            kind: Some("calendar".to_owned()),
-            uri: "https://vera.example/cal/vera.ics".to_owned(),
-            media_type: Some("text/calendar".to_owned()),
-            pref: Some(1),
-            ..Calendar::default()
-        },
-    );
-    calendars.insert(
-        "c2".to_owned(),
-        Calendar {
-            kind: Some("freeBusy".to_owned()),
-            uri: "https://vera.example/fb/vera.ifb".to_owned(),
-            media_type: Some("text/calendar".to_owned()),
-            pref: Some(1),
-            ..Calendar::default()
-        },
-    );
-    let card = ContactCard {
-        calendars: Some(calendars),
-        ..ContactCard::default()
+    calendars.insert("c1".to_owned(), {
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("calendar".to_owned());
+        calendar.uri = "https://vera.example/cal/vera.ics".to_owned();
+        calendar.media_type = Some("text/calendar".to_owned());
+        calendar.pref = Some(1);
+        calendar
+    });
+    calendars.insert("c2".to_owned(), {
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("freeBusy".to_owned());
+        calendar.uri = "https://vera.example/fb/vera.ifb".to_owned();
+        calendar.media_type = Some("text/calendar".to_owned());
+        calendar.pref = Some(1);
+        calendar
+    });
+    let card = {
+        let mut card = ContactCard::default();
+        card.calendars = Some(calendars);
+        card
     };
 
     let vcard = unfolded(&card_to_vcard(&card));
@@ -2333,15 +2283,12 @@ fn scheduling_addresses_emit_the_eds_profile_without_pref_parameters() {
     let mut scheduling = BTreeMap::new();
     scheduling.insert(
         "s1".to_owned(),
-        SchedulingAddress {
-            uri: "mailto:vera-calendar@example.com".to_owned(),
-            pref: Some(1),
-            ..SchedulingAddress::default()
-        },
+        SchedulingAddress::new("mailto:vera-calendar@example.com").with_pref(1),
     );
-    let card = ContactCard {
-        scheduling_addresses: Some(scheduling),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.scheduling_addresses = Some(scheduling);
+        card
     };
 
     let vcard = unfolded(&card_to_vcard(&card));
@@ -2352,23 +2299,22 @@ fn scheduling_addresses_emit_the_eds_profile_without_pref_parameters() {
 }
 
 fn one_relation(key: &str, types: &[&str]) -> ContactCard {
-    ContactCard {
-        related_to: Some(
-            [(
-                key.to_owned(),
-                Relation {
-                    relation: Some(
-                        types
-                            .iter()
-                            .map(|kind| ((*kind).to_owned(), json!(true)))
-                            .collect(),
-                    ),
-                    ..Relation::default()
-                },
-            )]
+    {
+        let mut card = ContactCard::default();
+        card.related_to = Some(
+            [(key.to_owned(), {
+                let mut v = Relation::default();
+                v.relation = Some(
+                    types
+                        .iter()
+                        .map(|kind| ((*kind).to_owned(), json!(true)))
+                        .collect(),
+                );
+                v
+            })]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
@@ -2418,9 +2364,10 @@ fn a_relation_no_eds_field_holds_gets_no_line() {
     // Untyped relations are omitted too.
     let vcard = card_to_vcard(&one_relation("Jean Paul Oldenburg", &[]));
     assert!(!vcard.contains("SPOUSE"), "{vcard}");
-    let vcard = card_to_vcard(&ContactCard {
-        related_to: Some([("Jean Paul Oldenburg".to_owned(), Relation::default())].into()),
-        ..ContactCard::default()
+    let vcard = card_to_vcard(&{
+        let mut card = ContactCard::default();
+        card.related_to = Some([("Jean Paul Oldenburg".to_owned(), Relation::default())].into());
+        card
     });
     assert!(!vcard.contains("SPOUSE"), "{vcard}");
 }
@@ -2499,8 +2446,9 @@ fn one_photo(uri: &str, media_type: Option<&str>) -> ContactCard {
 }
 
 fn photo_of_kind(kind: Option<&str>, uri: &str, media_type: Option<&str>) -> ContactCard {
-    ContactCard {
-        media: Some(
+    {
+        let mut card = ContactCard::default();
+        card.media = Some(
             [(
                 "m1".to_owned(),
                 Media {
@@ -2511,8 +2459,8 @@ fn photo_of_kind(kind: Option<&str>, uri: &str, media_type: Option<&str>) -> Con
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
@@ -2816,13 +2764,14 @@ fn a_photo_survives_the_round_trip_it_is_stated_on() {
 }
 
 fn tagged(tags: &[&str]) -> ContactCard {
-    ContactCard {
-        keywords: Some(
+    {
+        let mut card = ContactCard::default();
+        card.keywords = Some(
             tags.iter()
                 .map(|tag| ((*tag).to_owned(), json!(true)))
                 .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
@@ -2901,9 +2850,10 @@ fn a_tag_no_categories_line_can_carry_gets_no_line() {
 #[test]
 fn a_keyword_set_to_anything_but_true_gets_no_line() {
     // RFC 9553 §1.4.3: Set values must be `true`; anything else is omitted.
-    let card = ContactCard {
-        keywords: Some([("hiking".to_owned(), json!(false))].into()),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.keywords = Some([("hiking".to_owned(), json!(false))].into());
+        card
     };
     assert!(!card_to_vcard(&card).contains("\r\nCATEGORIES"));
 }
@@ -2987,19 +2937,18 @@ fn categories_pref_parameter_is_read_and_not_emitted() {
 }
 
 fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
-    ContactCard {
-        online_services: Some(
-            [(
-                "s1".to_owned(),
-                OnlineService {
-                    service: service.map(str::to_owned),
-                    user: user.map(str::to_owned),
-                    ..OnlineService::default()
-                },
-            )]
+    {
+        let mut card = ContactCard::default();
+        card.online_services = Some(
+            [("s1".to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = service.map(str::to_owned);
+                v.user = user.map(str::to_owned);
+                v
+            })]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
@@ -3103,19 +3052,18 @@ fn mapped_service_is_retained_while_unmapped_sip_and_twitter_are_ignored() {
 }
 
 fn at_uri(service: Option<&str>, uri: &str) -> ContactCard {
-    ContactCard {
-        online_services: Some(
-            [(
-                "s1".to_owned(),
-                OnlineService {
-                    service: service.map(str::to_owned),
-                    uri: Some(uri.to_owned()),
-                    ..OnlineService::default()
-                },
-            )]
+    {
+        let mut card = ContactCard::default();
+        card.online_services = Some(
+            [("s1".to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = service.map(str::to_owned);
+                v.uri = Some(uri.to_owned());
+                v
+            })]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     }
 }
 
@@ -3480,42 +3428,47 @@ fn conventional_im_services_with_user_handles_are_drawn_and_roundtripped() {
 #[test]
 fn multiple_im_services_with_home_and_work_contexts_map_accurately() {
     let mut card = ContactCard::default();
-    let mut s1 = OnlineService {
-        service: Some("Jabber".to_owned()),
-        user: Some("vera@home.example".to_owned()),
-        ..OnlineService::default()
+    let mut s1 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("vera@home.example".to_owned());
+        v
     };
     s1.extra
         .insert("contexts".to_owned(), serde_json::json!({"private": true}));
 
-    let mut s2 = OnlineService {
-        service: Some("Jabber".to_owned()),
-        user: Some("vera@work.example".to_owned()),
-        ..OnlineService::default()
+    let mut s2 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("vera@work.example".to_owned());
+        v
     };
     s2.extra
         .insert("contexts".to_owned(), serde_json::json!({"work": true}));
 
-    let mut s3 = OnlineService {
-        service: Some("Matrix".to_owned()),
-        user: Some("@vera:matrix.example".to_owned()),
-        ..OnlineService::default()
+    let mut s3 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".to_owned());
+        v.user = Some("@vera:matrix.example".to_owned());
+        v
     };
     s3.extra
         .insert("contexts".to_owned(), serde_json::json!({"work": true}));
 
-    let mut s4 = OnlineService {
-        service: Some("Skype".to_owned()),
-        user: Some("vera_skype".to_owned()),
-        ..OnlineService::default()
+    let mut s4 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Skype".to_owned());
+        v.user = Some("vera_skype".to_owned());
+        v
     };
     s4.extra
         .insert("contexts".to_owned(), serde_json::json!({"private": true}));
 
-    let mut s5 = OnlineService {
-        service: Some("Gadu-Gadu".to_owned()),
-        user: Some("123456".to_owned()),
-        ..OnlineService::default()
+    let mut s5 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Gadu-Gadu".to_owned());
+        v.user = Some("123456".to_owned());
+        v
     };
     s5.extra
         .insert("contexts".to_owned(), serde_json::json!({"work": true}));
@@ -3671,30 +3624,28 @@ END:VCARD\r\n";
 
 #[test]
 fn maps_notes_with_multiple_entries_and_newlines_faithfully() {
-    let mut card = ContactCard {
-        id: Some("C10".into()),
-        name: Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
-        }),
-        ..ContactCard::default()
+    let mut card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C10".into());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
+        });
+        card
     };
     card.notes = Some(
         [
-            (
-                "n1".to_owned(),
-                Note {
-                    note: "First paragraph.\nSecond paragraph with details.".to_owned(),
-                    ..Note::default()
-                },
-            ),
-            (
-                "n2".to_owned(),
-                Note {
-                    note: "Follow-up note for 2026 meeting.".to_owned(),
-                    ..Note::default()
-                },
-            ),
+            ("n1".to_owned(), {
+                let mut v = Note::default();
+                v.note = "First paragraph.\nSecond paragraph with details.".to_owned();
+                v
+            }),
+            ("n2".to_owned(), {
+                let mut v = Note::default();
+                v.note = "Follow-up note for 2026 meeting.".to_owned();
+                v
+            }),
         ]
         .into_iter()
         .collect(),
@@ -3725,32 +3676,30 @@ fn maps_notes_with_multiple_entries_and_newlines_faithfully() {
 
 #[test]
 fn maps_calendars_freebusy_and_links_faithfully() {
-    let mut card = ContactCard {
-        id: Some("C11".into()),
-        name: Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
-        }),
-        ..ContactCard::default()
+    let mut card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C11".into());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
+        });
+        card
     };
     card.calendars = Some(
         [
-            (
-                "c1".to_owned(),
-                Calendar {
-                    kind: Some("calendar".to_owned()),
-                    uri: "https://example.com/team-calendar.ics".to_owned(),
-                    ..Calendar::default()
-                },
-            ),
-            (
-                "f1".to_owned(),
-                Calendar {
-                    kind: Some("freeBusy".to_owned()),
-                    uri: "https://example.com/busy-schedule.ifb".to_owned(),
-                    ..Calendar::default()
-                },
-            ),
+            ("c1".to_owned(), {
+                let mut calendar = Calendar::default();
+                calendar.kind = Some("calendar".to_owned());
+                calendar.uri = "https://example.com/team-calendar.ics".to_owned();
+                calendar
+            }),
+            ("f1".to_owned(), {
+                let mut calendar = Calendar::default();
+                calendar.kind = Some("freeBusy".to_owned());
+                calendar.uri = "https://example.com/busy-schedule.ifb".to_owned();
+                calendar
+            }),
         ]
         .into_iter()
         .collect(),
@@ -3796,33 +3745,31 @@ fn maps_calendars_freebusy_and_links_faithfully() {
 
 #[test]
 fn maps_nicknames_spouse_and_keywords_faithfully() {
-    let mut card = ContactCard {
-        id: Some("C12".into()),
-        name: Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
-        }),
-        ..ContactCard::default()
+    let mut card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C12".into());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
+        });
+        card
     };
     card.nicknames = Some(
-        [(
-            "k1".to_owned(),
-            Nickname {
-                name: "Vee".to_owned(),
-                ..Nickname::default()
-            },
-        )]
+        [("k1".to_owned(), {
+            let mut v = Nickname::default();
+            v.name = "Vee".to_owned();
+            v
+        })]
         .into_iter()
         .collect(),
     );
     card.related_to = Some(
-        [(
-            "Alex Olden".to_owned(),
-            Relation {
-                relation: Some([("spouse".to_owned(), json!(true))].into_iter().collect()),
-                ..Relation::default()
-            },
-        )]
+        [("Alex Olden".to_owned(), {
+            let mut v = Relation::default();
+            v.relation = Some([("spouse".to_owned(), json!(true))].into_iter().collect());
+            v
+        })]
         .into_iter()
         .collect(),
     );
@@ -3874,66 +3821,55 @@ fn maps_nicknames_spouse_and_keywords_faithfully() {
 
 #[test]
 fn maps_phones_with_multiple_types_features_and_pref_faithfully() {
-    let card = ContactCard {
-        phones: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.phones = Some(
             [
-                (
-                    "p1".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 111111".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        features: Some(json!({"voice": true})),
-                        pref: Some(1),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p2".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 222222".to_owned(),
-                        contexts: Some(json!({"private": true})),
-                        features: Some(json!({"voice": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p3".to_owned(),
-                    ContactPhone {
-                        number: "+49 170 333333".to_owned(),
-                        features: Some(json!({"mobile": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p4".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 444444".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        features: Some(json!({"fax": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p5".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 555555".to_owned(),
-                        features: Some(json!({"pager": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p6".to_owned(),
-                    ContactPhone {
-                        number: "+49 30 666666".to_owned(),
-                        features: Some(json!({"video": true})),
-                        ..ContactPhone::default()
-                    },
-                ),
+                ("p1".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 111111".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.features = Some(json!({"voice": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("p2".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 222222".to_owned();
+                    v.contexts = Some(json!({"private": true}));
+                    v.features = Some(json!({"voice": true}));
+                    v
+                }),
+                ("p3".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 170 333333".to_owned();
+                    v.features = Some(json!({"mobile": true}));
+                    v
+                }),
+                ("p4".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 444444".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.features = Some(json!({"fax": true}));
+                    v
+                }),
+                ("p5".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 555555".to_owned();
+                    v.features = Some(json!({"pager": true}));
+                    v
+                }),
+                ("p6".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+49 30 666666".to_owned();
+                    v.features = Some(json!({"video": true}));
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -3999,41 +3935,36 @@ fn maps_phones_with_multiple_types_features_and_pref_faithfully() {
 
 #[test]
 fn maps_emails_with_multiple_contexts_and_pref_faithfully() {
-    let card = ContactCard {
-        emails: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.emails = Some(
             [
-                (
-                    "e1".to_owned(),
-                    ContactEmail {
-                        address: "vera.work@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e2".to_owned(),
-                    ContactEmail {
-                        address: "vera.home@example.com".to_owned(),
-                        contexts: Some(json!({"private": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e3".to_owned(),
-                    ContactEmail {
-                        address: "vera.direct@example.com".to_owned(),
-                        contexts: None,
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e1".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.work@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("e2".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.home@example.com".to_owned();
+                    v.contexts = Some(json!({"private": true}));
+                    v.pref = None;
+                    v
+                }),
+                ("e3".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.direct@example.com".to_owned();
+                    v.contexts = None;
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -4072,19 +4003,21 @@ fn maps_emails_with_multiple_contexts_and_pref_faithfully() {
 
 #[test]
 fn maps_name_with_all_components_and_empty_prefix_suffix_faithfully() {
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Prof. Dr. Vera Marie Oldenburg MSc Ph.D.".to_owned()),
-            components: Some(vec![
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Prof. Dr. Vera Marie Oldenburg MSc Ph.D.".to_owned());
+            name_val.components = Some(vec![
                 NameComponent::new("title", "Prof. Dr."),
                 NameComponent::new("given", "Vera"),
                 NameComponent::new("given2", "Marie"),
                 NameComponent::new("surname", "Oldenburg"),
                 NameComponent::new("credential", "MSc Ph.D."),
-            ]),
-            ..Name::default()
-        }),
-        ..ContactCard::default()
+            ]);
+            name_val
+        });
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -4112,13 +4045,15 @@ fn maps_contact_with_unmodeled_crypto_keys_and_personal_info_safely() {
         "personalInfo".to_owned(),
         json!({"expertise": ["Rust", "Evolution"]}),
     );
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Vera Oldenburg".to_owned()),
-            ..Name::default()
-        }),
-        extra,
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Oldenburg".to_owned());
+            name_val
+        });
+        card.extra = extra;
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -4132,46 +4067,45 @@ fn maps_contact_with_unmodeled_crypto_keys_and_personal_info_safely() {
 #[test]
 fn maps_multiple_addresses_with_custom_extended_and_po_box_components() {
     let mut addresses = std::collections::BTreeMap::new();
-    addresses.insert(
-        "a1".to_owned(),
-        Address {
-            contexts: Some(json!({"work": true})),
-            components: Some(vec![
-                AddressComponent::new("postOfficeBox", "PO Box 42"),
-                AddressComponent::new("apartment", "Suite 100"),
-                AddressComponent::new("name", "Hauptstraße 1"),
-                AddressComponent::new("locality", "Berlin"),
-                AddressComponent::new("region", "Brandenburg"),
-                AddressComponent::new("postcode", "10115"),
-                AddressComponent::new("country", "Germany"),
-            ]),
-            full: Some("PO Box 42\nSuite 100\nHauptstraße 1\n10115 Berlin\nGermany".to_owned()),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a2".to_owned(),
-        Address {
-            contexts: Some(json!({"private": true})),
-            components: Some(vec![
-                AddressComponent::new("name", "Heimweg 2"),
-                AddressComponent::new("locality", "München"),
-                AddressComponent::new("region", "Bayern"),
-                AddressComponent::new("postcode", "80331"),
-                AddressComponent::new("country", "Germany"),
-            ]),
-            full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
-            ..Address::default()
-        },
-    );
+    addresses.insert("a1".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("postOfficeBox", "PO Box 42"),
+            AddressComponent::new("apartment", "Suite 100"),
+            AddressComponent::new("name", "Hauptstraße 1"),
+            AddressComponent::new("locality", "Berlin"),
+            AddressComponent::new("region", "Brandenburg"),
+            AddressComponent::new("postcode", "10115"),
+            AddressComponent::new("country", "Germany"),
+        ]);
+        address_val.full =
+            Some("PO Box 42\nSuite 100\nHauptstraße 1\n10115 Berlin\nGermany".to_owned());
+        address_val
+    });
+    addresses.insert("a2".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.contexts = Some(json!({"private": true}));
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "Heimweg 2"),
+            AddressComponent::new("locality", "München"),
+            AddressComponent::new("region", "Bayern"),
+            AddressComponent::new("postcode", "80331"),
+            AddressComponent::new("country", "Germany"),
+        ]);
+        address_val.full = Some("Heimweg 2\n80331 München\nGermany".to_owned());
+        address_val
+    });
 
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
-        }),
-        addresses: Some(addresses),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
+        });
+        card.addresses = Some(addresses);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -4216,13 +4150,15 @@ fn maps_contact_with_unmodeled_office_and_organization_extra_safely() {
         },
     );
 
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Vera Olden".to_owned()),
-            ..Name::default()
-        }),
-        organizations: Some(organizations),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Vera Olden".to_owned());
+            name_val
+        });
+        card.organizations = Some(organizations);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -4586,28 +4522,31 @@ fn phone_feature_slot_resolution_order_is_fully_determined() {
 #[test]
 fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
     // Bare-year PartialDate stays unstated because vCard BDAY needs year-month-day.
-    let birth_bare_year = Anniversary {
-        kind: "birth".to_owned(),
-        date: Some(json!({"@type": "PartialDate", "year": 1984})),
-        ..Anniversary::default()
+    let birth_bare_year = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".to_owned();
+        v.date = Some(json!({"@type": "PartialDate", "year": 1984}));
+        v
     };
     assert!(!states_anniversary(&birth_bare_year));
     assert_eq!(anniversary_date(&birth_bare_year), None);
     assert!(!states_a_point_in_time(&birth_bare_year));
 
-    let wedding_bare_year = Anniversary {
-        kind: "wedding".to_owned(),
-        date: Some(json!({"@type": "PartialDate", "year": 1996})),
-        ..Anniversary::default()
+    let wedding_bare_year = {
+        let mut v = Anniversary::default();
+        v.kind = "wedding".to_owned();
+        v.date = Some(json!({"@type": "PartialDate", "year": 1996}));
+        v
     };
     assert!(!states_anniversary(&wedding_bare_year));
     assert_eq!(anniversary_date(&wedding_bare_year), None);
     assert!(!states_a_point_in_time(&wedding_bare_year));
 
-    let death_bare_year = Anniversary {
-        kind: "death".to_owned(),
-        date: Some(json!({"@type": "PartialDate", "year": 2019})),
-        ..Anniversary::default()
+    let death_bare_year = {
+        let mut v = Anniversary::default();
+        v.kind = "death".to_owned();
+        v.date = Some(json!({"@type": "PartialDate", "year": 2019}));
+        v
     };
     assert!(!states_anniversary(&death_bare_year));
     assert_eq!(anniversary_date(&death_bare_year), None);
@@ -4652,85 +4591,66 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
         );
     }
 
-    let mixed_card = ContactCard {
-        anniversaries: Some(
+    let mixed_card = {
+        let mut card = ContactCard::default();
+        card.anniversaries = Some(
             [
-                (
-                    "y1".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(json!({"@type": "PartialDate", "year": 1984})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y2".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 1984, "month": 6, "day": 21}),
-                        ),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y3".to_owned(),
-                    Anniversary {
-                        kind: "wedding".to_owned(),
-                        date: Some(json!({"@type": "PartialDate", "year": 1996})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y4".to_owned(),
-                    Anniversary {
-                        kind: "wedding".to_owned(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}),
-                        ),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y5".to_owned(),
-                    Anniversary {
-                        kind: "death".to_owned(),
-                        date: Some(json!({"@type": "PartialDate", "year": 2019})),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y6".to_owned(),
-                    Anniversary {
-                        kind: "death".to_owned(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 2019, "month": 10, "day": 15}),
-                        ),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y7".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(
-                            json!({"@type": "PartialDate", "year": 800, "month": 6, "day": 21}),
-                        ),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y8".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(json!({"@type": "PartialDate", "year": 800})),
-                        ..Anniversary::default()
-                    },
-                ),
+                ("y1".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date = Some(json!({"@type": "PartialDate", "year": 1984}));
+                    v
+                }),
+                ("y2".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 1984, "month": 6, "day": 21}));
+                    v
+                }),
+                ("y3".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".to_owned();
+                    v.date = Some(json!({"@type": "PartialDate", "year": 1996}));
+                    v
+                }),
+                ("y4".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".to_owned();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}));
+                    v
+                }),
+                ("y5".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "death".to_owned();
+                    v.date = Some(json!({"@type": "PartialDate", "year": 2019}));
+                    v
+                }),
+                ("y6".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "death".to_owned();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 2019, "month": 10, "day": 15}));
+                    v
+                }),
+                ("y7".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 800, "month": 6, "day": 21}));
+                    v
+                }),
+                ("y8".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date = Some(json!({"@type": "PartialDate", "year": 800}));
+                    v
+                }),
             ]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let emitted = card_to_vcard(&mixed_card);
@@ -4767,37 +4687,34 @@ fn bare_year_dates_characterization_and_eds_clamping_roundtrip() {
 fn bare_year_and_partial_dates_with_custom_attributes_roundtrip() {
     // PartialDate values with custom calendar attributes and bare years stay safe.
     // The mapper must not panic or emit malformed vCard lines.
-    let card = ContactCard {
-        anniversaries: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.anniversaries = Some(
             [
-                (
-                    "y1".to_owned(),
-                    Anniversary {
-                        kind: "birth".to_owned(),
-                        date: Some(json!({
-                            "@type": "PartialDate",
-                            "year": 2567,
-                            "calendarScale": "buddhist"
-                        })),
-                        ..Anniversary::default()
-                    },
-                ),
-                (
-                    "y2".to_owned(),
-                    Anniversary {
-                        kind: "wedding".to_owned(),
-                        date: Some(json!({
-                            "@type": "PartialDate",
-                            "year": 5784,
-                            "calendarScale": "hebrew"
-                        })),
-                        ..Anniversary::default()
-                    },
-                ),
+                ("y1".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".to_owned();
+                    v.date = Some(json!({
+                        "@type": "PartialDate",
+                        "year": 2567,
+                        "calendarScale": "buddhist"
+                    }));
+                    v
+                }),
+                ("y2".to_owned(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".to_owned();
+                    v.date = Some(json!({
+                        "@type": "PartialDate",
+                        "year": 5784,
+                        "calendarScale": "hebrew"
+                    }));
+                    v
+                }),
             ]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -4818,21 +4735,15 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     let empty_unit = OrgUnit::new("");
     assert!(!states_org_unit(&empty_unit));
 
-    let empty_with_sort_as = OrgUnit {
-        name: "".to_owned(),
-        extra: [("sortAs".to_owned(), json!("Alpha"))].into(),
-        ..OrgUnit::default()
-    };
+    let mut empty_with_sort_as = OrgUnit::new("");
+    empty_with_sort_as.extra = [("sortAs".to_owned(), json!("Alpha"))].into();
     assert!(!states_org_unit(&empty_with_sort_as));
 
     let normal_unit = OrgUnit::new("Engineering");
     assert!(states_org_unit(&normal_unit));
 
-    let normal_with_sort_as = OrgUnit {
-        name: "Engineering".to_owned(),
-        extra: [("sortAs".to_owned(), json!("Eng"))].into(),
-        ..OrgUnit::default()
-    };
+    let mut normal_with_sort_as = OrgUnit::new("Engineering");
+    normal_with_sort_as.extra = [("sortAs".to_owned(), json!("Eng"))].into();
     assert!(states_org_unit(&normal_with_sort_as));
 
     let whitespace_unit = OrgUnit::new("   ");
@@ -4875,26 +4786,24 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
 fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
     // Case 1: employer name with only empty units.
     // Emit the employer name alone on ORG. Drop empty units from wire output.
-    let card1 = ContactCard {
-        organizations: Some(
+    let card1 = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
                     name: Some("Acme Corp".to_owned()),
-                    units: Some(vec![
-                        OrgUnit::new(""),
-                        OrgUnit {
-                            name: "".to_owned(),
-                            extra: [("sortAs".to_owned(), json!("Secret"))].into(),
-                            ..OrgUnit::default()
-                        },
-                    ]),
+                    units: Some(vec![OrgUnit::new(""), {
+                        let mut unit = OrgUnit::new("");
+                        unit.extra = [("sortAs".to_owned(), json!("Secret"))].into();
+                        unit
+                    }]),
                     ..Organization::default()
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let vcard1 = card_to_vcard(&card1);
     assert_eq!(line(&vcard1, "ORG"), "ORG;X-JMAP-KEY=o1:Acme Corp");
@@ -4905,8 +4814,9 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
 
     // Case 2: employer name with empty and non-empty units.
     // Omit empty units. Keep non-empty units in order.
-    let card2 = ContactCard {
-        organizations: Some(
+    let card2 = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -4914,10 +4824,10 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
                     units: Some(vec![
                         OrgUnit::new(""),
                         OrgUnit::new("Research"),
-                        OrgUnit {
-                            name: "".to_owned(),
-                            extra: [("sortAs".to_owned(), json!("OpticsSort"))].into(),
-                            ..OrgUnit::default()
+                        {
+                            let mut unit = OrgUnit::new("");
+                            unit.extra = [("sortAs".to_owned(), json!("OpticsSort"))].into();
+                            unit
                         },
                         OrgUnit::new("Optics"),
                         OrgUnit::new(""),
@@ -4926,8 +4836,8 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let vcard2 = card_to_vcard(&card2);
     assert_eq!(
@@ -4944,8 +4854,9 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
 
     // Case 3: nameless org with leading empty unit and valid units.
     // A leading semicolon keeps the department slot. Empty units are omitted.
-    let card3 = ContactCard {
-        organizations: Some(
+    let card3 = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -4955,8 +4866,8 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let vcard3 = card_to_vcard(&card3);
     assert_eq!(line(&vcard3, "ORG"), "ORG;X-JMAP-KEY=o1:;Engineering");
@@ -5006,23 +4917,27 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         "Alice"
     )));
     // `states_name` checks mapped components, full name, or file-as.
-    assert!(states_name(&Name {
-        full: Some("Alice".to_string()),
-        ..Name::default()
+    assert!(states_name(&{
+        let mut name_val = Name::default();
+        name_val.full = Some("Alice".to_string());
+        name_val
     }));
-    assert!(states_name(&Name {
-        components: Some(vec![NameComponent::new("given", "Alice")]),
-        ..Name::default()
+    assert!(states_name(&{
+        let mut name_val = Name::default();
+        name_val.components = Some(vec![NameComponent::new("given", "Alice")]);
+        name_val
     }));
     assert!(!states_name(&Name::default()));
-    assert!(!states_name(&Name {
-        full: Some("".to_string()),
-        components: Some(vec![]),
-        ..Name::default()
+    assert!(!states_name(&{
+        let mut name_val = Name::default();
+        name_val.full = Some("".to_string());
+        name_val.components = Some(vec![]);
+        name_val
     }));
-    assert!(!states_name(&Name {
-        components: Some(vec![NameComponent::new("unmapped_kind", "value")]),
-        ..Name::default()
+    assert!(!states_name(&{
+        let mut name_val = Name::default();
+        name_val.components = Some(vec![NameComponent::new("unmapped_kind", "value")]);
+        name_val
     }));
 
     // `maps_context` supports only `work` and `private`.
@@ -5057,66 +4972,79 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
     )));
 
     // `states_address` needs address fields or an address label.
-    assert!(states_address(&Address {
-        components: Some(vec![AddressComponent::new("locality", "Berlin")]),
-        ..Address::default()
+    assert!(states_address(&{
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", "Berlin")]);
+        address_val
     }));
-    assert!(states_address(&Address {
-        full: Some("123 Main St, Berlin".into()),
-        ..Address::default()
+    assert!(states_address(&{
+        let mut address_val = Address::default();
+        address_val.full = Some("123 Main St, Berlin".into());
+        address_val
     }));
-    assert!(!states_address(&Address {
-        full: Some("".into()),
-        ..Address::default()
+    assert!(!states_address(&{
+        let mut address_val = Address::default();
+        address_val.full = Some("".into());
+        address_val
     }));
-    assert!(!states_address(&Address {
-        components: Some(vec![AddressComponent::new("locality", "")]),
-        ..Address::default()
+    assert!(!states_address(&{
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", "")]);
+        address_val
     }));
-    assert!(!states_address(&Address {
-        components: Some(vec![AddressComponent::new("unmapped_kind", "Value")]),
-        ..Address::default()
+    assert!(!states_address(&{
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("unmapped_kind", "Value")]);
+        address_val
     }));
     assert!(!states_address(&Address::default()));
     assert_eq!(
-        address_label(&Address {
-            full: Some("Main Street".into()),
-            ..Address::default()
+        address_label(&{
+            let mut address_val = Address::default();
+            address_val.full = Some("Main Street".into());
+            address_val
         }),
         Some("Main Street")
     );
     assert_eq!(
-        address_label(&Address {
-            full: Some("".into()),
-            ..Address::default()
+        address_label(&{
+            let mut address_val = Address::default();
+            address_val.full = Some("".into());
+            address_val
         }),
         None
     );
 
     // Check simple field predicates and `title_kind`.
-    assert!(states_email(&ContactEmail {
-        address: "alice@example.com".into(),
-        ..ContactEmail::default()
+    assert!(states_email(&{
+        let mut v = ContactEmail::default();
+        v.address = "alice@example.com".into();
+        v
     }));
-    assert!(!states_email(&ContactEmail {
-        address: "".into(),
-        ..ContactEmail::default()
+    assert!(!states_email(&{
+        let mut v = ContactEmail::default();
+        v.address = "".into();
+        v
     }));
-    assert!(states_phone(&ContactPhone {
-        number: "+49 30 123456".into(),
-        ..ContactPhone::default()
+    assert!(states_phone(&{
+        let mut v = ContactPhone::default();
+        v.number = "+49 30 123456".into();
+        v
     }));
-    assert!(!states_phone(&ContactPhone {
-        number: "".into(),
-        ..ContactPhone::default()
+    assert!(!states_phone(&{
+        let mut v = ContactPhone::default();
+        v.number = "".into();
+        v
     }));
-    assert!(states_note(&Note {
-        note: "Important contact".into(),
-        ..Note::default()
+    assert!(states_note(&{
+        let mut v = Note::default();
+        v.note = "Important contact".into();
+        v
     }));
-    assert!(!states_note(&Note {
-        note: "".into(),
-        ..Note::default()
+    assert!(!states_note(&{
+        let mut v = Note::default();
+        v.note = "".into();
+        v
     }));
     assert!(states_link(&Link {
         uri: "https://example.com".into(),
@@ -5126,13 +5054,15 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         uri: "".into(),
         ..Link::default()
     }));
-    assert!(states_nickname(&Nickname {
-        name: "Ali".into(),
-        ..Nickname::default()
+    assert!(states_nickname(&{
+        let mut v = Nickname::default();
+        v.name = "Ali".into();
+        v
     }));
-    assert!(!states_nickname(&Nickname {
-        name: "".into(),
-        ..Nickname::default()
+    assert!(!states_nickname(&{
+        let mut v = Nickname::default();
+        v.name = "".into();
+        v
     }));
     assert_eq!(title_kind(None), "title");
     assert_eq!(title_kind(Some("role")), "role");
@@ -5141,79 +5071,97 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
 #[test]
 fn calendar_and_spouse_predicates_fidelity() {
     // `states_calendar` needs a non-empty URI and a mapped kind.
-    assert!(states_calendar(&Calendar {
-        kind: Some("calendar".into()),
-        uri: "https://calendar.example.com".into(),
-        ..Calendar::default()
+    assert!(states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("calendar".into());
+        calendar.uri = "https://calendar.example.com".into();
+        calendar
     }));
-    assert!(states_calendar(&Calendar {
-        kind: Some("freeBusy".into()),
-        uri: "https://fb.example.com".into(),
-        ..Calendar::default()
+    assert!(states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("freeBusy".into());
+        calendar.uri = "https://fb.example.com".into();
+        calendar
     }));
-    assert!(!states_calendar(&Calendar {
-        kind: Some("calendar".into()),
-        uri: "".into(),
-        ..Calendar::default()
+    assert!(!states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("calendar".into());
+        calendar.uri = "".into();
+        calendar
     }));
-    assert!(!states_calendar(&Calendar {
-        kind: Some("unmapped_kind".into()),
-        uri: "https://calendar.example.com".into(),
-        ..Calendar::default()
+    assert!(!states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = Some("unmapped_kind".into());
+        calendar.uri = "https://calendar.example.com".into();
+        calendar
     }));
-    assert!(!states_calendar(&Calendar {
-        kind: None,
-        uri: "https://calendar.example.com".into(),
-        ..Calendar::default()
+    assert!(!states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = None;
+        calendar.uri = "https://calendar.example.com".into();
+        calendar
     }));
-    assert!(!states_calendar(&Calendar {
-        kind: None,
-        uri: "".into(),
-        ..Calendar::default()
+    assert!(!states_calendar(&{
+        let mut calendar = Calendar::default();
+        calendar.kind = None;
+        calendar.uri = "".into();
+        calendar
     }));
 
     // Check `states_spouse` and `states_nothing_but_the_marriage`.
-    let rel_spouse_only = Relation {
-        relation: Some([("spouse".into(), json!(true))].into()),
-        extra: [("@type".into(), json!("Relation"))].into(),
+    let rel_spouse_only = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".into(), json!(true))].into());
+        v.extra = [("@type".into(), json!("Relation"))].into();
+        v
     };
     assert!(states_spouse("Bob", &rel_spouse_only));
     assert!(states_nothing_but_the_marriage(&rel_spouse_only));
 
-    let rel_no_extra = Relation {
-        relation: Some([("spouse".into(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_no_extra = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".into(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
     assert!(states_nothing_but_the_marriage(&rel_no_extra));
 
-    let rel_with_kin = Relation {
-        relation: Some([("spouse".into(), json!(true)), ("kin".into(), json!(true))].into()),
-        extra: [("@type".into(), json!("Relation"))].into(),
+    let rel_with_kin = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".into(), json!(true)), ("kin".into(), json!(true))].into());
+        v.extra = [("@type".into(), json!("Relation"))].into();
+        v
     };
     assert!(states_spouse("Bob", &rel_with_kin));
     assert!(!states_nothing_but_the_marriage(&rel_with_kin));
 
-    let rel_kin_only = Relation {
-        relation: Some([("kin".into(), json!(true))].into()),
-        extra: [("@type".into(), json!("Relation"))].into(),
+    let rel_kin_only = {
+        let mut v = Relation::default();
+        v.relation = Some([("kin".into(), json!(true))].into());
+        v.extra = [("@type".into(), json!("Relation"))].into();
+        v
     };
     assert!(!states_spouse("Bob", &rel_kin_only));
     assert!(!states_nothing_but_the_marriage(&rel_kin_only));
 
-    let rel_with_custom_extra = Relation {
-        relation: Some([("spouse".into(), json!(true))].into()),
-        extra: [
+    let rel_with_custom_extra = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".into(), json!(true))].into());
+        v.extra = [
             ("@type".into(), json!("Relation")),
             ("customField".into(), json!("value")),
         ]
-        .into(),
+        .into();
+        v
     };
     assert!(states_spouse("Bob", &rel_with_custom_extra));
     assert!(!states_nothing_but_the_marriage(&rel_with_custom_extra));
 
-    let rel_empty = Relation {
-        relation: None,
-        extra: [("@type".into(), json!("Relation"))].into(),
+    let rel_empty = {
+        let mut v = Relation::default();
+        v.relation = None;
+        v.extra = [("@type".into(), json!("Relation"))].into();
+        v
     };
     assert!(!states_spouse("Bob", &rel_empty));
     assert!(states_nothing_but_the_marriage(&rel_empty));
@@ -5307,40 +5255,47 @@ fn media_photo_and_online_service_predicates_and_comparisons() {
     assert!(!same_photo(&m_data1, &m_uri1));
 
     // Check online-service predicates and helper mappings.
-    let s_matrix = OnlineService {
-        service: Some("Matrix".into()),
-        user: Some("@alice:matrix.org".into()),
-        ..OnlineService::default()
+    let s_matrix = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.user = Some("@alice:matrix.org".into());
+        v
     };
-    let s_matrix_uri = OnlineService {
-        service: Some("Matrix".into()),
-        uri: Some("matrix:alice".into()),
-        ..OnlineService::default()
+    let s_matrix_uri = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.uri = Some("matrix:alice".into());
+        v
     };
-    let s_matrix_crlf = OnlineService {
-        service: Some("Matrix".into()),
-        user: Some("@alice\r:matrix.org".into()),
-        ..OnlineService::default()
+    let s_matrix_crlf = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.user = Some("@alice\r:matrix.org".into());
+        v
     };
-    let s_matrix_spaced = OnlineService {
-        service: Some("Matrix".into()),
-        user: Some(" @alice:matrix.org ".into()),
-        ..OnlineService::default()
+    let s_matrix_spaced = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.user = Some(" @alice:matrix.org ".into());
+        v
     };
-    let s_matrix_empty = OnlineService {
-        service: Some("Matrix".into()),
-        user: Some("".into()),
-        ..OnlineService::default()
+    let s_matrix_empty = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.user = Some("".into());
+        v
     };
-    let s_unmapped = OnlineService {
-        service: Some("UnmappedService".into()),
-        user: Some("alice".into()),
-        ..OnlineService::default()
+    let s_unmapped = {
+        let mut v = OnlineService::default();
+        v.service = Some("UnmappedService".into());
+        v.user = Some("alice".into());
+        v
     };
-    let s_wrong_scheme_uri = OnlineService {
-        service: Some("Matrix".into()),
-        uri: Some("https:alice".into()),
-        ..OnlineService::default()
+    let s_wrong_scheme_uri = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.uri = Some("https:alice".into());
+        v
     };
 
     assert!(states_online_service(&s_matrix));
@@ -5373,55 +5328,65 @@ fn media_photo_and_online_service_predicates_and_comparisons() {
 
 #[test]
 fn anniversary_date_validation_and_point_in_time_predicates() {
-    let bday_valid = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 5, "day": 12})),
-        ..Anniversary::default()
+    let bday_valid = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 5, "day": 12}));
+        v
     };
-    let wedding_valid = Anniversary {
-        kind: "wedding".into(),
-        date: Some(json!({"year": 2010, "month": 6, "day": 20})),
-        ..Anniversary::default()
+    let wedding_valid = {
+        let mut v = Anniversary::default();
+        v.kind = "wedding".into();
+        v.date = Some(json!({"year": 2010, "month": 6, "day": 20}));
+        v
     };
-    let death_unmapped = Anniversary {
-        kind: "death".into(),
-        date: Some(json!({"year": 2020, "month": 1, "day": 1})),
-        ..Anniversary::default()
+    let death_unmapped = {
+        let mut v = Anniversary::default();
+        v.kind = "death".into();
+        v.date = Some(json!({"year": 2020, "month": 1, "day": 1}));
+        v
     };
-    let bday_month_zero = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 0, "day": 12})),
-        ..Anniversary::default()
+    let bday_month_zero = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 0, "day": 12}));
+        v
     };
-    let bday_month_13 = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 13, "day": 12})),
-        ..Anniversary::default()
+    let bday_month_13 = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 13, "day": 12}));
+        v
     };
-    let bday_day_zero = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 5, "day": 0})),
-        ..Anniversary::default()
+    let bday_day_zero = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 5, "day": 0}));
+        v
     };
-    let bday_day_32 = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 1990, "month": 5, "day": 32})),
-        ..Anniversary::default()
+    let bday_day_32 = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 1990, "month": 5, "day": 32}));
+        v
     };
-    let bday_year_zero = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 0, "month": 5, "day": 12})),
-        ..Anniversary::default()
+    let bday_year_zero = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 0, "month": 5, "day": 12}));
+        v
     };
-    let bday_year_10000 = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"year": 10000, "month": 5, "day": 12})),
-        ..Anniversary::default()
+    let bday_year_10000 = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"year": 10000, "month": 5, "day": 12}));
+        v
     };
-    let bday_timestamp = Anniversary {
-        kind: "birth".into(),
-        date: Some(json!({"utc": "1990-05-12T10:30:00Z"})),
-        ..Anniversary::default()
+    let bday_timestamp = {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"utc": "1990-05-12T10:30:00Z"}));
+        v
     };
 
     assert!(states_anniversary(&bday_valid));
@@ -5440,10 +5405,11 @@ fn anniversary_date_validation_and_point_in_time_predicates() {
 
     assert!(states_a_point_in_time(&bday_timestamp));
     assert!(!states_a_point_in_time(&bday_valid));
-    assert!(!states_a_point_in_time(&Anniversary {
-        kind: "birth".into(),
-        date: None,
-        ..Anniversary::default()
+    assert!(!states_a_point_in_time(&{
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = None;
+        v
     }));
 }
 
@@ -5772,17 +5738,19 @@ fn jscontact_group_card_with_members_map_in_extra_characterization() {
         }),
     );
 
-    let card = ContactCard {
-        id: Some("grp-1".into()),
-        uid: Some("urn:uuid:grp-1".to_owned()),
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        name: Some(Name {
-            full: Some("Frontend Working Group".to_owned()),
-            ..Name::default()
-        }),
-        extra,
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("grp-1".into());
+        card.uid = Some("urn:uuid:grp-1".to_owned());
+        card.card_type = Some("Card".to_owned());
+        card.version = Some("1.0".to_owned());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Frontend Working Group".to_owned());
+            name_val
+        });
+        card.extra = extra;
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -6494,40 +6462,38 @@ fn jscontact_server_localizations_and_preferred_languages_characterization() {
         }),
     );
 
-    let card = ContactCard {
-        id: Some("srv-loc-01".into()),
-        uid: Some("urn:uuid:srv-loc-01".to_owned()),
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        name: Some(Name {
-            full: Some("Clara Schumann".to_owned()),
-            ..Name::default()
-        }),
-        titles: Some(
-            [(
-                "t1".to_owned(),
-                Title {
-                    name: "Chief Architect".to_owned(),
-                    kind: Some("title".to_owned()),
-                    ..Title::default()
-                },
-            )]
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("srv-loc-01".into());
+        card.uid = Some("urn:uuid:srv-loc-01".to_owned());
+        card.card_type = Some("Card".to_owned());
+        card.version = Some("1.0".to_owned());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Clara Schumann".to_owned());
+            name_val
+        });
+        card.titles = Some(
+            [("t1".to_owned(), {
+                let mut title = Title::default();
+                title.name = "Chief Architect".to_owned();
+                title.kind = Some("title".to_owned());
+                title
+            })]
             .into_iter()
             .collect(),
-        ),
-        notes: Some(
-            [(
-                "n1".to_owned(),
-                Note {
-                    note: "English Note".to_owned(),
-                    ..Note::default()
-                },
-            )]
+        );
+        card.notes = Some(
+            [("n1".to_owned(), {
+                let mut v = Note::default();
+                v.note = "English Note".to_owned();
+                v
+            })]
             .into_iter()
             .collect(),
-        ),
-        extra,
-        ..ContactCard::default()
+        );
+        card.extra = extra;
+        card
     };
 
     let emitted = card_to_vcard(&card);
@@ -6570,50 +6536,43 @@ fn jscontact_server_localizations_and_preferred_languages_characterization() {
 fn email_pref_ordering_primary_selection_and_tie_breaking() {
     // 1. Multiple emails with distinct pref values: emit lowest pref first.
     // EDS maps the first email to E_CONTACT_EMAIL_1, then higher ranks and None.
-    let card = ContactCard {
-        emails: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.emails = Some(
             [
-                (
-                    "e_sec".to_owned(),
-                    ContactEmail {
-                        address: "second@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(2),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_pri".to_owned(),
-                    ContactEmail {
-                        address: "first@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_ten".to_owned(),
-                    ContactEmail {
-                        address: "tenth@example.com".to_owned(),
-                        contexts: Some(json!({"home": true})),
-                        pref: Some(10),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_none".to_owned(),
-                    ContactEmail {
-                        address: "unranked@example.com".to_owned(),
-                        contexts: Some(json!({"other": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e_sec".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "second@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(2);
+                    v
+                }),
+                ("e_pri".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "first@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("e_ten".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "tenth@example.com".to_owned();
+                    v.contexts = Some(json!({"home": true}));
+                    v.pref = Some(10);
+                    v
+                }),
+                ("e_none".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "unranked@example.com".to_owned();
+                    v.contexts = Some(json!({"other": true}));
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let emitted = card_to_vcard(&card);
@@ -6646,30 +6605,27 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
     );
 
     // 2. Break ties on equal `pref` values by key.
-    let tie_card = ContactCard {
-        emails: Some(
+    let tie_card = {
+        let mut card = ContactCard::default();
+        card.emails = Some(
             [
-                (
-                    "e_beta".to_owned(),
-                    ContactEmail {
-                        address: "beta@example.com".to_owned(),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_alpha".to_owned(),
-                    ContactEmail {
-                        address: "alpha@example.com".to_owned(),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e_beta".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "beta@example.com".to_owned();
+                    v.pref = Some(1);
+                    v
+                }),
+                ("e_alpha".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "alpha@example.com".to_owned();
+                    v.pref = Some(1);
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let tie_emitted = card_to_vcard(&tie_card);
     let tie_lines: Vec<&str> = tie_emitted
@@ -6681,30 +6637,27 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
     assert!(tie_lines[1].contains("X-JMAP-KEY=e_beta"));
 
     // 3. Use key order when all `pref` values are `None`.
-    let none_card = ContactCard {
-        emails: Some(
+    let none_card = {
+        let mut card = ContactCard::default();
+        card.emails = Some(
             [
-                (
-                    "e_z".to_owned(),
-                    ContactEmail {
-                        address: "z@example.com".to_owned(),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_a".to_owned(),
-                    ContactEmail {
-                        address: "a@example.com".to_owned(),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e_z".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "z@example.com".to_owned();
+                    v.pref = None;
+                    v
+                }),
+                ("e_a".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "a@example.com".to_owned();
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let none_emitted = card_to_vcard(&none_card);
     let none_lines: Vec<&str> = none_emitted
@@ -6724,43 +6677,38 @@ fn email_pref_ordering_primary_selection_and_tie_breaking() {
 #[test]
 fn phone_pref_ordering_primary_selection_and_slotting() {
     // 1. Phones with distinct pref values: lowest pref emitted first
-    let card = ContactCard {
-        phones: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.phones = Some(
             [
-                (
-                    "p_work_sec".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0200".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        features: Some(json!({"voice": true})),
-                        pref: Some(2),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p_work_pri".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0100".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        features: Some(json!({"voice": true})),
-                        pref: Some(1),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p_home".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0300".to_owned(),
-                        contexts: Some(json!({"home": true})),
-                        pref: None,
-                        ..ContactPhone::default()
-                    },
-                ),
+                ("p_work_sec".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0200".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.features = Some(json!({"voice": true}));
+                    v.pref = Some(2);
+                    v
+                }),
+                ("p_work_pri".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0100".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.features = Some(json!({"voice": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("p_home".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0300".to_owned();
+                    v.contexts = Some(json!({"home": true}));
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let emitted = card_to_vcard(&card);
@@ -6787,30 +6735,27 @@ fn phone_pref_ordering_primary_selection_and_slotting() {
     );
 
     // 2. Tie-breaking by key when prefs match
-    let tie_card = ContactCard {
-        phones: Some(
+    let tie_card = {
+        let mut card = ContactCard::default();
+        card.phones = Some(
             [
-                (
-                    "p_b".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0002".to_owned(),
-                        pref: Some(1),
-                        ..ContactPhone::default()
-                    },
-                ),
-                (
-                    "p_a".to_owned(),
-                    ContactPhone {
-                        number: "+1 555 0001".to_owned(),
-                        pref: Some(1),
-                        ..ContactPhone::default()
-                    },
-                ),
+                ("p_b".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0002".to_owned();
+                    v.pref = Some(1);
+                    v
+                }),
+                ("p_a".to_owned(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0001".to_owned();
+                    v.pref = Some(1);
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let tie_emitted = card_to_vcard(&tie_card);
     let tie_lines: Vec<&str> = tie_emitted
@@ -6836,44 +6781,42 @@ fn address_pref_ordering_and_primary_selection_with_label_pairing() {
     let mut extra_sec = BTreeMap::new();
     extra_sec.insert("pref".to_owned(), json!(2));
 
-    let card = ContactCard {
-        addresses: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.addresses = Some(
             [
-                (
-                    "a_sec".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("name", "Secondary Weg 2")]),
-                        contexts: Some(json!({"home": true})),
-                        full: None,
-                        extra: extra_sec,
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_pri".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("name", "Primary Allee 1")]),
-                        contexts: Some(json!({"home": true})),
-                        full: Some("Primary Allee 1\n10115 Berlin\nGermany".to_owned()),
-                        extra: extra_pri,
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_work".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("name", "Work Str 42")]),
-                        contexts: Some(json!({"work": true})),
-                        full: None,
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
+                ("a_sec".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("name", "Secondary Weg 2")]);
+                    address_val.contexts = Some(json!({"home": true}));
+                    address_val.full = None;
+                    address_val.extra = extra_sec;
+                    address_val
+                }),
+                ("a_pri".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("name", "Primary Allee 1")]);
+                    address_val.contexts = Some(json!({"home": true}));
+                    address_val.full = Some("Primary Allee 1\n10115 Berlin\nGermany".to_owned());
+                    address_val.extra = extra_pri;
+                    address_val
+                }),
+                ("a_work".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("name", "Work Str 42")]);
+                    address_val.contexts = Some(json!({"work": true}));
+                    address_val.full = None;
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let emitted = card_to_vcard(&card);
@@ -6978,8 +6921,9 @@ fn adr_all_seven_structured_components_roundtrip() {
     // RFC 2426 §3.2.1 and RFC 6350 §6.3.1 define seven structured components in order:
     // 0: postOfficeBox, 1: apartment (extended address), 2: name (street),
     // 3: locality, 4: region, 5: postcode, 6: country.
-    let full_address = Address {
-        components: Some(vec![
+    let full_address = {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
             AddressComponent::new("postOfficeBox", "PO Box 777"),
             AddressComponent::new("apartment", "Suite 400, Floor 4"),
             AddressComponent::new("name", "500 Silicon Way"),
@@ -6987,11 +6931,12 @@ fn adr_all_seven_structured_components_roundtrip() {
             AddressComponent::new("region", "California"),
             AddressComponent::new("postcode", "94043"),
             AddressComponent::new("country", "United States of America"),
-        ]),
-        contexts: Some(json!({"work": true})),
-        full: Some("Acme Corp\nPO Box 777\nSuite 400\nMountain View, CA 94043\nUSA".to_owned()),
-        extra: BTreeMap::new(),
-        ..Address::default()
+        ]);
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.full =
+            Some("Acme Corp\nPO Box 777\nSuite 400\nMountain View, CA 94043\nUSA".to_owned());
+        address_val.extra = BTreeMap::new();
+        address_val
     };
 
     let card = one_address("a1", full_address);
@@ -7237,70 +7182,64 @@ fn multiple_addresses_with_mixed_labels_and_contexts_pairing() {
     // a3: Label-only address (no ADR)
     // a4: Structured address without LABEL
     let mut addresses = BTreeMap::new();
-    addresses.insert(
-        "a1".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("postOfficeBox", "Box 10"),
-                AddressComponent::new("apartment", "Suite 1"),
-                AddressComponent::new("name", "100 Work Way"),
-                AddressComponent::new("locality", "Work City"),
-                AddressComponent::new("region", "WA"),
-                AddressComponent::new("postcode", "98101"),
-                AddressComponent::new("country", "USA"),
-            ]),
-            contexts: Some(json!({"work": true})),
-            full: Some("Work Label\n100 Work Way\nSeattle, WA".to_owned()),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a2".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "200 Home St"),
-                AddressComponent::new("locality", "Home Town"),
-                AddressComponent::new("country", "USA"),
-            ]),
-            contexts: Some(json!({"private": true})),
-            full: Some("Home Label\n200 Home St\nHome Town, USA".to_owned()),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a3".to_owned(),
-        Address {
-            components: None,
-            contexts: None,
-            full: Some("Postal Delivery Only\nPO Box 9999\nRemote City".to_owned()),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
-    addresses.insert(
-        "a4".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "400 Unlabelled St"),
-                AddressComponent::new("locality", "Plain City"),
-                AddressComponent::new("country", "USA"),
-            ]),
-            contexts: None,
-            full: None,
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
+    addresses.insert("a1".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("postOfficeBox", "Box 10"),
+            AddressComponent::new("apartment", "Suite 1"),
+            AddressComponent::new("name", "100 Work Way"),
+            AddressComponent::new("locality", "Work City"),
+            AddressComponent::new("region", "WA"),
+            AddressComponent::new("postcode", "98101"),
+            AddressComponent::new("country", "USA"),
+        ]);
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.full = Some("Work Label\n100 Work Way\nSeattle, WA".to_owned());
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
+    addresses.insert("a2".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "200 Home St"),
+            AddressComponent::new("locality", "Home Town"),
+            AddressComponent::new("country", "USA"),
+        ]);
+        address_val.contexts = Some(json!({"private": true}));
+        address_val.full = Some("Home Label\n200 Home St\nHome Town, USA".to_owned());
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
+    addresses.insert("a3".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = None;
+        address_val.contexts = None;
+        address_val.full = Some("Postal Delivery Only\nPO Box 9999\nRemote City".to_owned());
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
+    addresses.insert("a4".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "400 Unlabelled St"),
+            AddressComponent::new("locality", "Plain City"),
+            AddressComponent::new("country", "USA"),
+        ]);
+        address_val.contexts = None;
+        address_val.full = None;
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
 
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Multi Address User".to_owned()),
-            ..Name::default()
-        }),
-        addresses: Some(addresses),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Multi Address User".to_owned());
+            name_val
+        });
+        card.addresses = Some(addresses);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -7354,31 +7293,35 @@ fn adr_predicates_and_component_restoration_comprehensive() {
     }
 
     // 2. states_address evaluation
-    let valid_comp_addr = Address {
-        components: Some(vec![AddressComponent::new("locality", "Berlin")]),
-        full: None,
-        ..Address::default()
+    let valid_comp_addr = {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("locality", "Berlin")]);
+        address_val.full = None;
+        address_val
     };
     assert!(states_address(&valid_comp_addr));
 
-    let valid_label_addr = Address {
-        components: None,
-        full: Some("Some Label".to_owned()),
-        ..Address::default()
+    let valid_label_addr = {
+        let mut address_val = Address::default();
+        address_val.components = None;
+        address_val.full = Some("Some Label".to_owned());
+        address_val
     };
     assert!(states_address(&valid_label_addr));
 
-    let unmapped_only_addr = Address {
-        components: Some(vec![AddressComponent::new("floor", "3")]),
-        full: None,
-        ..Address::default()
+    let unmapped_only_addr = {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![AddressComponent::new("floor", "3")]);
+        address_val.full = None;
+        address_val
     };
     assert!(!states_address(&unmapped_only_addr));
 
-    let empty_label_only_addr = Address {
-        components: None,
-        full: Some("".to_owned()),
-        ..Address::default()
+    let empty_label_only_addr = {
+        let mut address_val = Address::default();
+        address_val.components = None;
+        address_val.full = Some("".to_owned());
+        address_val
     };
     assert!(!states_address(&empty_label_only_addr));
 
@@ -7827,34 +7770,32 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
     note_extra.insert("created".to_owned(), json!("2026-08-19T10:00:00Z"));
     note_extra.insert("author".to_owned(), json!("admin"));
 
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Server Card With Extra".to_owned()),
-            ..Name::default()
-        }),
-        emails: Some(
-            [(
-                "e1".to_owned(),
-                ContactEmail {
-                    address: "extra@example.com".to_owned(),
-                    ..ContactEmail::default()
-                },
-            )]
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Server Card With Extra".to_owned());
+            name_val
+        });
+        card.emails = Some(
+            [("e1".to_owned(), {
+                let mut v = ContactEmail::default();
+                v.address = "extra@example.com".to_owned();
+                v
+            })]
             .into(),
-        ),
-        notes: Some(
-            [(
-                "n1".to_owned(),
-                Note {
-                    note: "Modeled note".to_owned(),
-                    extra: note_extra,
-                    ..Note::default()
-                },
-            )]
+        );
+        card.notes = Some(
+            [("n1".to_owned(), {
+                let mut v = Note::default();
+                v.note = "Modeled note".to_owned();
+                v.extra = note_extra;
+                v
+            })]
             .into(),
-        ),
-        extra,
-        ..ContactCard::default()
+        );
+        card.extra = extra;
+        card
     };
 
     // 1. Emit only modeled fields. Ignore `card.extra`.
@@ -7951,14 +7892,12 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         with 100% lossless fidelity upon reading back from vCard 3.0 format.";
 
     let mut notes = BTreeMap::new();
-    notes.insert(
-        "n1".to_owned(),
-        Note {
-            note: long_note_text.to_owned(),
-            extra: BTreeMap::new(),
-            ..Note::default()
-        },
-    );
+    notes.insert("n1".to_owned(), {
+        let mut v = Note::default();
+        v.note = long_note_text.to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     // Build an inline `PHOTO` payload as a data URI.
     let binary_data: Vec<u8> = (0..350).map(|i| (i % 256) as u8).collect();
@@ -7977,15 +7916,17 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         },
     );
 
-    let card = ContactCard {
-        id: Some("C-FOLD-1".into()),
-        name: Some(Name {
-            full: Some("Line Folding Verification".to_owned()),
-            ..Name::default()
-        }),
-        notes: Some(notes),
-        media: Some(media),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-FOLD-1".into());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Line Folding Verification".to_owned());
+            name_val
+        });
+        card.notes = Some(notes);
+        card.media = Some(media);
+        card
     };
 
     // Emit vCard text.
@@ -8174,23 +8115,23 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
             );
 
             let mut notes = BTreeMap::new();
-            notes.insert(
-                "n1".to_owned(),
-                Note {
-                    note: note_text.clone(),
-                    extra: BTreeMap::new(),
-                    ..Note::default()
-                },
-            );
+            notes.insert("n1".to_owned(), {
+                let mut v = Note::default();
+                v.note = note_text.clone();
+                v.extra = BTreeMap::new();
+                v
+            });
 
-            let card = ContactCard {
-                id: Some("C-UTF8".into()),
-                name: Some(Name {
-                    full: Some(format!("UTF8 Test {label} pad {pad_len}")),
-                    ..Name::default()
-                }),
-                notes: Some(notes),
-                ..ContactCard::default()
+            let card = {
+                let mut card = ContactCard::default();
+                card.id = Some("C-UTF8".into());
+                card.name = Some({
+                    let mut name_val = Name::default();
+                    name_val.full = Some(format!("UTF8 Test {label} pad {pad_len}"));
+                    name_val
+                });
+                card.notes = Some(notes);
+                card
             };
 
             let vcard = card_to_vcard(&card);
@@ -8254,19 +8195,18 @@ fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
         let value = "X".repeat(value_len);
 
         let mut notes = BTreeMap::new();
-        notes.insert(
-            "n1".to_owned(),
-            Note {
-                note: value.clone(),
-                extra: BTreeMap::new(),
-                ..Note::default()
-            },
-        );
+        notes.insert("n1".to_owned(), {
+            let mut v = Note::default();
+            v.note = value.clone();
+            v.extra = BTreeMap::new();
+            v
+        });
 
-        let card = ContactCard {
-            id: Some("C-BOUND".into()),
-            notes: Some(notes),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-BOUND".into());
+            card.notes = Some(notes);
+            card
         };
 
         let vcard = card_to_vcard(&card);
@@ -8312,19 +8252,18 @@ fn rfc2426_line_folding_with_escaped_delimiters_and_backslashes() {
     let long_note_with_escapes = multiline_note.repeat(4);
 
     let mut notes = BTreeMap::new();
-    notes.insert(
-        "n1".to_owned(),
-        Note {
-            note: long_note_with_escapes.clone(),
-            extra: BTreeMap::new(),
-            ..Note::default()
-        },
-    );
+    notes.insert("n1".to_owned(), {
+        let mut v = Note::default();
+        v.note = long_note_with_escapes.clone();
+        v.extra = BTreeMap::new();
+        v
+    });
 
-    let card = ContactCard {
-        id: Some("C-ESC-FOLD".into()),
-        notes: Some(notes),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-ESC-FOLD".into());
+        card.notes = Some(notes);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -8358,19 +8297,18 @@ fn rfc2426_value_escaping_note_with_all_four_special_characters_roundtrip() {
     let note_text = "First line of notes.\nSecond line with comma, semicolon; and backslash \\.\nThird line with literal escapes: \\n \\, \\; \\\\ and more.";
 
     let mut notes = BTreeMap::new();
-    notes.insert(
-        "n1".to_owned(),
-        Note {
-            note: note_text.to_owned(),
-            extra: BTreeMap::new(),
-            ..Note::default()
-        },
-    );
+    notes.insert("n1".to_owned(), {
+        let mut v = Note::default();
+        v.note = note_text.to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
-    let card = ContactCard {
-        id: Some("C-ESC-NOTE".into()),
-        notes: Some(notes),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-ESC-NOTE".into());
+        card.notes = Some(notes);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -8425,10 +8363,11 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
         },
     );
 
-    let card = ContactCard {
-        id: Some("C-ESC-ORG".into()),
-        organizations: Some(orgs),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-ESC-ORG".into());
+        card.organizations = Some(orgs);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -8473,10 +8412,11 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
             ..Organization::default()
         },
     );
-    let nameless_card = ContactCard {
-        id: Some("C-NAMELESS-ESC-ORG".into()),
-        organizations: Some(nameless_orgs),
-        ..ContactCard::default()
+    let nameless_card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-NAMELESS-ESC-ORG".into());
+        card.organizations = Some(nameless_orgs);
+        card
     };
     let nameless_vcard = card_to_vcard(&nameless_card);
     assert!(
@@ -8502,8 +8442,7 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
     let mut addresses = BTreeMap::new();
     addresses.insert(
         "a1".to_owned(),
-        Address {
-            components: Some(vec![
+        { let mut address_val = Address::default(); address_val.components = Some(vec![
                 AddressComponent::new("postOfficeBox", "PO Box 123; Station B"),
                 AddressComponent::new("apartment", "Apt 4B, Room 12; Building C"),
                 AddressComponent::new("name", "123 Main St; 2nd Floor, West Wing"),
@@ -8511,20 +8450,17 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
                 AddressComponent::new("region", "California; Northern"),
                 AddressComponent::new("postcode", "94105; 94107"),
                 AddressComponent::new("country", "United States; North America"),
-            ]),
-            contexts: Some(json!({"work": true})),
-            full: Some(
+            ]); address_val.contexts = Some(json!({"work": true})); address_val.full = Some(
                 "PO Box 123; Station B\nApt 4B, Room 12; Building C\n123 Main St; 2nd Floor, West Wing\nSan Francisco; Bay Area, California; Northern 94105; 94107\nUnited States; North America"
                     .to_owned(),
-            ),
-            extra: BTreeMap::new(), ..Address::default()
-        },
+            ); address_val.extra = BTreeMap::new(); address_val },
     );
 
-    let card = ContactCard {
-        id: Some("C-ESC-ADR".into()),
-        addresses: Some(addresses),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-ESC-ADR".into());
+        card.addresses = Some(addresses);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -8572,66 +8508,55 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
 fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
     // Tests escaping of \n, \,, \;, \\ across all mapped vCard properties
     let mut nicknames = BTreeMap::new();
-    nicknames.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "Ali, Baba; Chief\\Boss\nLead".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
+    nicknames.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Ali, Baba; Chief\\Boss\nLead".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut titles = BTreeMap::new();
-    titles.insert(
-        "t1".to_owned(),
-        Title {
-            name: "Director, Architecture; Core \\ Systems\nLead".to_owned(),
-            kind: Some("title".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
-    titles.insert(
-        "t2".to_owned(),
-        Title {
-            name: "Lead, Quality; Assurance \\ Test\nSpecialist".to_owned(),
-            kind: Some("role".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
+    titles.insert("t1".to_owned(), {
+        let mut title = Title::default();
+        title.name = "Director, Architecture; Core \\ Systems\nLead".to_owned();
+        title.kind = Some("title".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
+    titles.insert("t2".to_owned(), {
+        let mut title = Title::default();
+        title.name = "Lead, Quality; Assurance \\ Test\nSpecialist".to_owned();
+        title.kind = Some("role".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
 
     let mut related_to = BTreeMap::new();
-    related_to.insert(
-        "Bob, Smith; Jr.\\II".to_owned(),
-        Relation {
-            relation: Some([("spouse".to_string(), json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
+    related_to.insert("Bob, Smith; Jr.\\II".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut emails = BTreeMap::new();
-    emails.insert(
-        "e1".to_owned(),
-        ContactEmail {
-            address: "alice+tag,filter;opt=1\\test@example.com".to_owned(),
-            contexts: Some(json!({"work": true})),
-            pref: Some(1),
-            ..ContactEmail::default()
-        },
-    );
+    emails.insert("e1".to_owned(), {
+        let mut v = ContactEmail::default();
+        v.address = "alice+tag,filter;opt=1\\test@example.com".to_owned();
+        v.contexts = Some(json!({"work": true}));
+        v.pref = Some(1);
+        v
+    });
 
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+1 (555) 123-4567, ext; 890 \\ test".to_owned(),
-            contexts: Some(json!({"work": true})),
-            features: Some(json!({"voice": true})),
-            pref: Some(1),
-            ..ContactPhone::default()
-        },
-    );
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 (555) 123-4567, ext; 890 \\ test".to_owned();
+        v.contexts = Some(json!({"work": true}));
+        v.features = Some(json!({"voice": true}));
+        v.pref = Some(1);
+        v
+    });
 
     let mut links = BTreeMap::new();
     links.insert(
@@ -8649,28 +8574,30 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
     keywords.insert("Tag 2; with semicolon".to_owned(), json!(true));
     keywords.insert("Tag 3\\backslash".to_owned(), json!(true));
 
-    let card = ContactCard {
-        id: Some("C-ALL-ESC".into()),
-        name: Some(Name {
-            full: Some("Dr. Alice Smith, Ph.D.; Junior\\Senior".to_owned()),
-            components: Some(vec![
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-ALL-ESC".into());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Dr. Alice Smith, Ph.D.; Junior\\Senior".to_owned());
+            name_val.components = Some(vec![
                 NameComponent::new("surname", "Smith, Jr."),
                 NameComponent::new("given", "Alice; Marie"),
                 NameComponent::new("given2", "B.\\C."),
                 NameComponent::new("title", "Dr., Prof."),
                 NameComponent::new("credential", "III; Esq."),
-            ]),
-            extra: BTreeMap::new(),
-            ..Name::default()
-        }),
-        nicknames: Some(nicknames),
-        titles: Some(titles),
-        related_to: Some(related_to),
-        emails: Some(emails),
-        phones: Some(phones),
-        links: Some(links),
-        keywords: Some(keywords),
-        ..ContactCard::default()
+            ]);
+            name_val.extra = BTreeMap::new();
+            name_val
+        });
+        card.nicknames = Some(nicknames);
+        card.titles = Some(titles);
+        card.related_to = Some(related_to);
+        card.emails = Some(emails);
+        card.phones = Some(phones);
+        card.links = Some(links);
+        card.keywords = Some(keywords);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -8742,19 +8669,18 @@ fn rfc2426_value_escaping_no_double_escaping_multiroundtrip() {
     // vcard1 -> card1 -> vcard2 -> card2 -> vcard3 -> card3
     let complex_text = "Text with single backslash \\, literal \\n, literal \\,, literal \\;, and double \\\\ backslashes.";
     let mut notes = BTreeMap::new();
-    notes.insert(
-        "n1".to_owned(),
-        Note {
-            note: complex_text.to_owned(),
-            extra: BTreeMap::new(),
-            ..Note::default()
-        },
-    );
+    notes.insert("n1".to_owned(), {
+        let mut v = Note::default();
+        v.note = complex_text.to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
-    let card0 = ContactCard {
-        id: Some("C-MULTI-ROUND".into()),
-        notes: Some(notes),
-        ..ContactCard::default()
+    let card0 = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-MULTI-ROUND".into());
+        card.notes = Some(notes);
+        card
     };
 
     let vcard1 = card_to_vcard(&card0);
@@ -8836,26 +8762,30 @@ fn rfc2426_inbound_unescaping_variants_and_boundary_cases() {
 #[test]
 fn categories_empty_absent_and_refused_permutations_roundtrip() {
     // Empty, absent, or refused keywords all collapse to `keywords: None`.
-    let card_none = ContactCard {
-        name: Some(Name {
-            full: Some("Alice Smith".to_owned()),
-            ..Name::default()
-        }),
-        keywords: None,
-        ..ContactCard::default()
+    let card_none = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Smith".to_owned());
+            name_val
+        });
+        card.keywords = None;
+        card
     };
     let vcard_none = card_to_vcard(&card_none);
     assert!(!vcard_none.contains("\r\nCATEGORIES:"));
     let parsed_none = vcard_to_card(&vcard_none).expect("parse none card");
     assert_eq!(parsed_none.keywords, None);
 
-    let card_empty_map = ContactCard {
-        name: Some(Name {
-            full: Some("Alice Smith".to_owned()),
-            ..Name::default()
-        }),
-        keywords: Some(BTreeMap::new()),
-        ..ContactCard::default()
+    let card_empty_map = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Smith".to_owned());
+            name_val
+        });
+        card.keywords = Some(BTreeMap::new());
+        card
     };
     let vcard_empty_map = card_to_vcard(&card_empty_map);
     assert!(!vcard_empty_map.contains("\r\nCATEGORIES:"));
@@ -8876,12 +8806,14 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
     let reemitted_commas = card_to_vcard(&parsed_inbound_commas);
     assert!(!reemitted_commas.contains("\r\nCATEGORIES:"));
 
-    let card_refused = ContactCard {
-        name: Some(Name {
-            full: Some("Alice Smith".to_owned()),
-            ..Name::default()
-        }),
-        keywords: Some(
+    let card_refused = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Smith".to_owned());
+            name_val
+        });
+        card.keywords = Some(
             [
                 ("".to_owned(), json!(true)),
                 (" leading".to_owned(), json!(true)),
@@ -8892,8 +8824,8 @@ fn categories_empty_absent_and_refused_permutations_roundtrip() {
                 ("string_val".to_owned(), json!("tag")),
             ]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let vcard_refused = card_to_vcard(&card_refused);
     assert!(!vcard_refused.contains("\r\nCATEGORIES:"));
@@ -8927,13 +8859,15 @@ fn categories_single_tag_variations_and_escaped_delimiters_roundtrip() {
     ];
 
     for (tag, expected_line) in test_cases {
-        let card = ContactCard {
-            name: Some(Name {
-                full: Some("Bob Builder".to_owned()),
-                ..Name::default()
-            }),
-            keywords: Some([(tag.to_owned(), json!(true))].into()),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.name = Some({
+                let mut name_val = Name::default();
+                name_val.full = Some("Bob Builder".to_owned());
+                name_val
+            });
+            card.keywords = Some([(tag.to_owned(), json!(true))].into());
+            card
         };
 
         let vcard = card_to_vcard(&card);
@@ -8981,13 +8915,15 @@ fn categories_multiple_tags_sorted_order_and_escaping_roundtrip() {
         map.insert(tag.to_owned(), json!(true));
     }
 
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Charlie Davis".to_owned()),
-            ..Name::default()
-        }),
-        keywords: Some(map),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Charlie Davis".to_owned());
+            name_val
+        });
+        card.keywords = Some(map);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -9123,13 +9059,15 @@ fn categories_unicode_and_multibyte_utf8_roundtrip() {
         map.insert(tag.to_owned(), json!(true));
     }
 
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Fiona Gallagher".to_owned()),
-            ..Name::default()
-        }),
-        keywords: Some(map),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Fiona Gallagher".to_owned());
+            name_val
+        });
+        card.keywords = Some(map);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -9202,12 +9140,14 @@ fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
     assert!(!states_keyword("Work", &json!({})));
 
     // 6. Mixed valid and refused tags emit only the valid tags.
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("George Harris".to_owned()),
-            ..Name::default()
-        }),
-        keywords: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("George Harris".to_owned());
+            name_val
+        });
+        card.keywords = Some(
             [
                 ("Valid Tag A".to_owned(), json!(true)),
                 (" leading".to_owned(), json!(true)),
@@ -9217,8 +9157,8 @@ fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
                 ("Valid Tag B".to_owned(), json!(true)),
             ]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -9242,18 +9182,17 @@ fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
 
     // Single nickname roundtrip.
     let mut single_nick = BTreeMap::new();
-    single_nick.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "Vee".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    let card = ContactCard {
-        id: Some("C-NICK-SINGLE".into()),
-        nicknames: Some(single_nick),
-        ..ContactCard::default()
+    single_nick.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Vee".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-NICK-SINGLE".into());
+        card.nicknames = Some(single_nick);
+        card
     };
     let vcard = card_to_vcard(&card);
     assert_eq!(line(&vcard, "NICKNAME"), "NICKNAME;X-JMAP-KEY=k1:Vee");
@@ -9266,34 +9205,29 @@ fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
 
     // 2. Multiple nicknames emitted as distinct lines
     let mut multi_nicks = BTreeMap::new();
-    multi_nicks.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "Vee".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    multi_nicks.insert(
-        "k2".to_owned(),
-        Nickname {
-            name: "Vera the Elder".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    multi_nicks.insert(
-        "k3".to_owned(),
-        Nickname {
-            name: "Chief Architect".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    let multi_card = ContactCard {
-        id: Some("C-NICK-MULTI".into()),
-        nicknames: Some(multi_nicks),
-        ..ContactCard::default()
+    multi_nicks.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Vee".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    multi_nicks.insert("k2".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Vera the Elder".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    multi_nicks.insert("k3".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Chief Architect".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    let multi_card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-NICK-MULTI".into());
+        card.nicknames = Some(multi_nicks);
+        card
     };
     let multi_vcard = card_to_vcard(&multi_card);
     assert_eq!(multi_vcard.matches("\r\nNICKNAME;X-JMAP-KEY=").count(), 3);
@@ -9389,47 +9323,40 @@ fn nickname_comma_separated_text_list_inbound_and_escaping_fidelity() {
 fn nickname_special_characters_escaping_unicode_and_parameters() {
     // Tests nicknames with semicolons, backslashes, newlines, UTF-8 unicode, and parameters:
     let mut nicks = BTreeMap::new();
-    nicks.insert(
-        "k_special".to_owned(),
-        Nickname {
-            name: "Nick;Name\\With\nNewline & \"Quotes\"".to_owned(),
-            extra: [
-                ("pref".to_owned(), json!(1)),
-                ("contexts".to_owned(), json!({"work": true})),
-            ]
-            .into(),
-            ..Nickname::default()
-        },
-    );
-    nicks.insert(
-        "k_unicode_jp".to_owned(),
-        Nickname {
-            name: "たなかさん (田中)".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicks.insert(
-        "k_unicode_cyrillic".to_owned(),
-        Nickname {
-            name: "Саша (Александр)".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicks.insert(
-        "k_unicode_emoji".to_owned(),
-        Nickname {
-            name: "🌟 SuperStar 🦊".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
+    nicks.insert("k_special".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Nick;Name\\With\nNewline & \"Quotes\"".to_owned();
+        v.extra = [
+            ("pref".to_owned(), json!(1)),
+            ("contexts".to_owned(), json!({"work": true})),
+        ]
+        .into();
+        v
+    });
+    nicks.insert("k_unicode_jp".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "たなかさん (田中)".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicks.insert("k_unicode_cyrillic".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Саша (Александр)".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicks.insert("k_unicode_emoji".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "🌟 SuperStar 🦊".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
-    let card = ContactCard {
-        id: Some("C-NICK-SPECIAL".into()),
-        nicknames: Some(nicks),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-NICK-SPECIAL".into());
+        card.nicknames = Some(nicks);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -9464,38 +9391,37 @@ fn nickname_special_characters_escaping_unicode_and_parameters() {
 #[test]
 fn nickname_empty_absent_and_predicate_fidelity() {
     // Tests states_nickname predicate and empty/absent nickname handling:
-    assert!(states_nickname(&Nickname {
-        name: "Nick".into(),
-        extra: BTreeMap::new(),
-        ..Nickname::default()
+    assert!(states_nickname(&{
+        let mut v = Nickname::default();
+        v.name = "Nick".into();
+        v.extra = BTreeMap::new();
+        v
     }));
-    assert!(!states_nickname(&Nickname {
-        name: "".into(),
-        extra: BTreeMap::new(),
-        ..Nickname::default()
+    assert!(!states_nickname(&{
+        let mut v = Nickname::default();
+        v.name = "".into();
+        v.extra = BTreeMap::new();
+        v
     }));
 
     // Empty nicknames are not emitted
     let mut nicks = BTreeMap::new();
-    nicks.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicks.insert(
-        "k2".to_owned(),
-        Nickname {
-            name: "Valid Nick".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    let card = ContactCard {
-        nicknames: Some(nicks),
-        ..ContactCard::default()
+    nicks.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicks.insert("k2".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Valid Nick".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    let card = {
+        let mut card = ContactCard::default();
+        card.nicknames = Some(nicks);
+        card
     };
     let vcard = card_to_vcard(&card);
     assert_eq!(vcard.matches("\r\nNICKNAME").count(), 1);
@@ -9553,10 +9479,11 @@ fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
         },
     );
 
-    let card = ContactCard {
-        id: Some("C-URL-MULTI".into()),
-        links: Some(links),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-URL-MULTI".into());
+        card.links = Some(links);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -9647,10 +9574,11 @@ fn url_kind_filtering_and_contact_uri_omission() {
         },
     );
 
-    let card = ContactCard {
-        id: Some("C-URL-KINDS".into()),
-        links: Some(links),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-URL-KINDS".into());
+        card.links = Some(links);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -9745,10 +9673,11 @@ fn url_query_parameters_punctuation_and_encoding_fidelity() {
         },
     );
 
-    let card = ContactCard {
-        id: Some("C-URL-COMPLEX".into()),
-        links: Some(links),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-URL-COMPLEX".into());
+        card.links = Some(links);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -9820,9 +9749,10 @@ fn url_empty_absent_and_predicate_fidelity() {
             ..Link::default()
         },
     );
-    let card = ContactCard {
-        links: Some(links),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.links = Some(links);
+        card
     };
     let vcard = card_to_vcard(&card);
     assert_eq!(vcard.matches("\r\nURL").count(), 1);
@@ -9859,9 +9789,10 @@ fn url_empty_absent_and_predicate_fidelity() {
             ..Link::default()
         },
     );
-    let rich_card = ContactCard {
-        links: Some(extra_links),
-        ..ContactCard::default()
+    let rich_card = {
+        let mut card = ContactCard::default();
+        card.links = Some(extra_links);
+        card
     };
     let rich_vcard = card_to_vcard(&rich_card);
     let parsed_rich = vcard_to_card(&rich_vcard).expect("parse rich url");
@@ -9889,30 +9820,27 @@ fn url_and_calendar_properties_coexistence_and_slotting() {
     );
 
     let mut cals = BTreeMap::new();
-    cals.insert(
-        "c1".to_owned(),
-        Calendar {
-            uri: "https://cal.example.com/alice.ics".to_owned(),
-            kind: Some("calendar".to_owned()),
-            extra: BTreeMap::new(),
-            ..Calendar::default()
-        },
-    );
-    cals.insert(
-        "c2".to_owned(),
-        Calendar {
-            uri: "https://cal.example.com/fb/alice.ifb".to_owned(),
-            kind: Some("freeBusy".to_owned()),
-            extra: BTreeMap::new(),
-            ..Calendar::default()
-        },
-    );
+    cals.insert("c1".to_owned(), {
+        let mut calendar = Calendar::default();
+        calendar.uri = "https://cal.example.com/alice.ics".to_owned();
+        calendar.kind = Some("calendar".to_owned());
+        calendar.extra = BTreeMap::new();
+        calendar
+    });
+    cals.insert("c2".to_owned(), {
+        let mut calendar = Calendar::default();
+        calendar.uri = "https://cal.example.com/fb/alice.ifb".to_owned();
+        calendar.kind = Some("freeBusy".to_owned());
+        calendar.extra = BTreeMap::new();
+        calendar
+    });
 
-    let card = ContactCard {
-        id: Some("C-URL-CAL-COEXIST".into()),
-        links: Some(links),
-        calendars: Some(cals),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-URL-CAL-COEXIST".into());
+        card.links = Some(links);
+        card.calendars = Some(cals);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -10109,15 +10037,17 @@ fn non_ascii_multilingual_names_and_components_roundtrip() {
             components.push(NameComponent::new("credential", suf));
         }
 
-        let card = ContactCard {
-            id: Some(format!("C-NAME-{}", label.replace(' ', "-")).into()),
-            name: Some(Name {
-                full: Some(full_name.to_owned()),
-                components: (!components.is_empty()).then_some(components),
-                extra: BTreeMap::new(),
-                ..Name::default()
-            }),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some(format!("C-NAME-{}", label.replace(' ', "-")).into());
+            card.name = Some({
+                let mut name_val = Name::default();
+                name_val.full = Some(full_name.to_owned());
+                name_val.components = (!components.is_empty()).then_some(components);
+                name_val.extra = BTreeMap::new();
+                name_val
+            });
+            card
         };
 
         let vcard1 = card_to_vcard(&card);
@@ -10196,39 +10126,34 @@ fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
     );
 
     let mut titles = BTreeMap::new();
-    titles.insert(
-        "t1".to_owned(),
-        Title {
-            name: "Directeur Général Adjoint".to_owned(),
-            kind: Some("title".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
-    titles.insert(
-        "t2".to_owned(),
-        Title {
-            name: "Главный архитектор систем".to_owned(),
-            kind: Some("role".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
-    titles.insert(
-        "t3".to_owned(),
-        Title {
-            name: "開発最高責任者".to_owned(),
-            kind: Some("title".to_owned()),
-            extra: BTreeMap::new(),
-            ..Title::default()
-        },
-    );
+    titles.insert("t1".to_owned(), {
+        let mut title = Title::default();
+        title.name = "Directeur Général Adjoint".to_owned();
+        title.kind = Some("title".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
+    titles.insert("t2".to_owned(), {
+        let mut title = Title::default();
+        title.name = "Главный архитектор систем".to_owned();
+        title.kind = Some("role".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
+    titles.insert("t3".to_owned(), {
+        let mut title = Title::default();
+        title.name = "開発最高責任者".to_owned();
+        title.kind = Some("title".to_owned());
+        title.extra = BTreeMap::new();
+        title
+    });
 
-    let card = ContactCard {
-        id: Some("C-NONASCII-ORG-TITLE".into()),
-        organizations: Some(orgs),
-        titles: Some(titles),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-NONASCII-ORG-TITLE".into());
+        card.organizations = Some(orgs);
+        card.titles = Some(titles);
+        card
     };
 
     let vcard1 = card_to_vcard(&card);
@@ -10277,66 +10202,60 @@ fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
 fn non_ascii_structured_addresses_and_labels_roundtrip() {
     let mut addrs = BTreeMap::new();
     // French address with accents and special characters
-    addrs.insert(
-        "a_fr".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("postOfficeBox", "Boîte Postale 42"),
-                AddressComponent::new("apartment", "Bâtiment B, Étage 3, Porte 12"),
-                AddressComponent::new("name", "12 Rue de l'Étoile"),
-                AddressComponent::new("locality", "Épinay-sur-Seine"),
-                AddressComponent::new("region", "Île-de-France"),
-                AddressComponent::new("postcode", "93800"),
-                AddressComponent::new("country", "France"),
-            ]),
-            full: Some(
-                "12 Rue de l'Étoile\nBâtiment B, Étage 3\n93800 Épinay-sur-Seine\nFrance"
-                    .to_owned(),
-            ),
-            contexts: Some(json!({"work": true})),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
+    addrs.insert("a_fr".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("postOfficeBox", "Boîte Postale 42"),
+            AddressComponent::new("apartment", "Bâtiment B, Étage 3, Porte 12"),
+            AddressComponent::new("name", "12 Rue de l'Étoile"),
+            AddressComponent::new("locality", "Épinay-sur-Seine"),
+            AddressComponent::new("region", "Île-de-France"),
+            AddressComponent::new("postcode", "93800"),
+            AddressComponent::new("country", "France"),
+        ]);
+        address_val.full = Some(
+            "12 Rue de l'Étoile\nBâtiment B, Étage 3\n93800 Épinay-sur-Seine\nFrance".to_owned(),
+        );
+        address_val.contexts = Some(json!({"work": true}));
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
     // German address with umlauts and eszett
-    addrs.insert(
-        "a_de".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("apartment", "Hinterhaus 2. Stock"),
-                AddressComponent::new("name", "Goethestraße 42"),
-                AddressComponent::new("locality", "München"),
-                AddressComponent::new("region", "Bayern"),
-                AddressComponent::new("postcode", "80336"),
-                AddressComponent::new("country", "Deutschland"),
-            ]),
-            full: Some("Goethestraße 42\n80336 München\nDeutschland".to_owned()),
-            contexts: Some(json!({"home": true})),
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
+    addrs.insert("a_de".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("apartment", "Hinterhaus 2. Stock"),
+            AddressComponent::new("name", "Goethestraße 42"),
+            AddressComponent::new("locality", "München"),
+            AddressComponent::new("region", "Bayern"),
+            AddressComponent::new("postcode", "80336"),
+            AddressComponent::new("country", "Deutschland"),
+        ]);
+        address_val.full = Some("Goethestraße 42\n80336 München\nDeutschland".to_owned());
+        address_val.contexts = Some(json!({"home": true}));
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
     // Japanese address with Kanji
-    addrs.insert(
-        "a_ja".to_owned(),
-        Address {
-            components: Some(vec![
-                AddressComponent::new("name", "千代田区千代田1-1"),
-                AddressComponent::new("region", "東京都"),
-                AddressComponent::new("postcode", "100-8111"),
-                AddressComponent::new("country", "日本"),
-            ]),
-            full: Some("〒100-8111 東京都千代田区千代田1-1\n日本".to_owned()),
-            contexts: None,
-            extra: BTreeMap::new(),
-            ..Address::default()
-        },
-    );
+    addrs.insert("a_ja".to_owned(), {
+        let mut address_val = Address::default();
+        address_val.components = Some(vec![
+            AddressComponent::new("name", "千代田区千代田1-1"),
+            AddressComponent::new("region", "東京都"),
+            AddressComponent::new("postcode", "100-8111"),
+            AddressComponent::new("country", "日本"),
+        ]);
+        address_val.full = Some("〒100-8111 東京都千代田区千代田1-1\n日本".to_owned());
+        address_val.contexts = None;
+        address_val.extra = BTreeMap::new();
+        address_val
+    });
 
-    let card = ContactCard {
-        id: Some("C-NONASCII-ADR".into()),
-        addresses: Some(addrs),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-NONASCII-ADR".into());
+        card.addresses = Some(addrs);
+        card
     };
 
     let vcard1 = card_to_vcard(&card);
@@ -10411,37 +10330,28 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
     let mut notes = BTreeMap::new();
     notes.insert(
         "n1".to_owned(),
-        Note {
-            note: "München ist eine wunderschöne Stadt mit vielen Parks und Museen.\nRené & Hélène apprécient beaucoup la gastronomie française: café, croissants, crème brûlée.\n∀x ∈ ℝ: x² ≥ 0 (math symbols test 🧑‍💻🚀🌟)".to_owned(),
-            extra: BTreeMap::new(), ..Note::default()
-        },
+        { let mut v = Note::default(); v.note = "München ist eine wunderschöne Stadt mit vielen Parks und Museen.\nRené & Hélène apprécient beaucoup la gastronomie française: café, croissants, crème brûlée.\n∀x ∈ ℝ: x² ≥ 0 (math symbols test 🧑‍💻🚀🌟)".to_owned(); v.extra = BTreeMap::new(); v },
     );
 
     let mut nicknames = BTreeMap::new();
-    nicknames.insert(
-        "k1".to_owned(),
-        Nickname {
-            name: "Schätzchen".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicknames.insert(
-        "k2".to_owned(),
-        Nickname {
-            name: "Маша (Мария)".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
-    nicknames.insert(
-        "k3".to_owned(),
-        Nickname {
-            name: "たなか (田中)".to_owned(),
-            extra: BTreeMap::new(),
-            ..Nickname::default()
-        },
-    );
+    nicknames.insert("k1".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Schätzchen".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicknames.insert("k2".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "Маша (Мария)".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
+    nicknames.insert("k3".to_owned(), {
+        let mut v = Nickname::default();
+        v.name = "たなか (田中)".to_owned();
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut keywords = BTreeMap::new();
     keywords.insert("Amis".to_owned(), json!(true));
@@ -10453,21 +10363,21 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
     let mut related_to = BTreeMap::new();
     let mut spouse_rel = BTreeMap::new();
     spouse_rel.insert("spouse".to_owned(), json!(true));
-    related_to.insert(
-        "Hélène Müller-Mayer".to_owned(),
-        Relation {
-            relation: Some(spouse_rel),
-            extra: BTreeMap::new(),
-        },
-    );
+    related_to.insert("Hélène Müller-Mayer".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some(spouse_rel);
+        v.extra = BTreeMap::new();
+        v
+    });
 
-    let card = ContactCard {
-        id: Some("C-NONASCII-MIXED".into()),
-        notes: Some(notes),
-        nicknames: Some(nicknames),
-        keywords: Some(keywords),
-        related_to: Some(related_to),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-NONASCII-MIXED".into());
+        card.notes = Some(notes);
+        card.nicknames = Some(nicknames);
+        card.keywords = Some(keywords);
+        card.related_to = Some(related_to);
+        card
     };
 
     let vcard1 = card_to_vcard(&card);
@@ -11165,10 +11075,11 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
         },
     );
 
-    let multi_card = ContactCard {
-        id: Some("C-MULTI-PHOTO".into()),
-        media: Some(media_map),
-        ..ContactCard::default()
+    let multi_card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-MULTI-PHOTO".into());
+        card.media = Some(media_map);
+        card
     };
 
     let vcard = card_to_vcard(&multi_card);
@@ -11280,10 +11191,11 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
         "none kind is not stateable"
     );
 
-    let mixed_card = ContactCard {
-        id: Some("C-MIXED-MEDIA".into()),
-        media: Some(mixed_media),
-        ..ContactCard::default()
+    let mixed_card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-MIXED-MEDIA".into());
+        card.media = Some(mixed_media);
+        card
     };
     let mixed_vcard = card_to_vcard(&mixed_card);
     assert_eq!(
@@ -12312,13 +12224,15 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
         "document must not be stateable on vCard 3.0 PHOTO"
     );
 
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Media Test Contact".to_owned()),
-            ..Name::default()
-        }),
-        media: Some(media),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Media Test Contact".to_owned());
+            name_val
+        });
+        card.media = Some(media);
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -13051,9 +12965,10 @@ fn phone_whitespace_punctuation_and_uri_schemes_handling() {
 
     // Predicates: states_phone
     let empty_phone = ContactPhone::default();
-    let whitespace_phone = ContactPhone {
-        number: "   ".to_string(),
-        ..ContactPhone::default()
+    let whitespace_phone = {
+        let mut v = ContactPhone::default();
+        v.number = "   ".to_string();
+        v
     };
     assert!(!states_phone(&empty_phone));
     assert!(states_phone(&whitespace_phone)); // Non-empty string; states_phone checks !is_empty()
@@ -13245,29 +13160,41 @@ fn evolution_blog_and_video_urls_links_roundtrip() {
 #[test]
 fn evolution_remaining_x_properties_coexistence_and_predicates() {
     // Tests predicates: states_manager, states_assistant, states_spouse, states_link
-    let rel_valid_mgr = Relation {
-        relation: Some([("manager".to_string(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_valid_mgr = {
+        let mut v = Relation::default();
+        v.relation = Some([("manager".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_valid_asst = Relation {
-        relation: Some([("assistant".to_string(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_valid_asst = {
+        let mut v = Relation::default();
+        v.relation = Some([("assistant".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_valid_spouse = Relation {
-        relation: Some([("spouse".to_string(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_valid_spouse = {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_other = Relation {
-        relation: Some([("colleague".to_string(), json!(true))].into()),
-        extra: BTreeMap::new(),
+    let rel_other = {
+        let mut v = Relation::default();
+        v.relation = Some([("colleague".to_string(), json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_non_bool = Relation {
-        relation: Some([("manager".to_string(), json!(1))].into()),
-        extra: BTreeMap::new(),
+    let rel_non_bool = {
+        let mut v = Relation::default();
+        v.relation = Some([("manager".to_string(), json!(1))].into());
+        v.extra = BTreeMap::new();
+        v
     };
-    let rel_empty = Relation {
-        relation: None,
-        extra: BTreeMap::new(),
+    let rel_empty = {
+        let mut v = Relation::default();
+        v.relation = None;
+        v.extra = BTreeMap::new();
+        v
     };
 
     // Valid person names
@@ -13455,70 +13382,59 @@ fn email_four_slots_and_attribute_list_matrix_roundtrip() {
     // Emission order is by `(pref.unwrap_or(u32::MAX), key)` and drives slot assignment.
 
     // Six emails: one preferred, five unranked, with deterministic key ordering.
-    let card = ContactCard {
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        emails: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.card_type = Some("Card".to_owned());
+        card.version = Some("1.0".to_owned());
+        card.emails = Some(
             [
-                (
-                    "e_work_pri".to_owned(),
-                    ContactEmail {
-                        address: "vera.work@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: Some(1),
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_home".to_owned(),
-                    ContactEmail {
-                        address: "vera.home@example.com".to_owned(),
-                        contexts: Some(json!({"private": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_direct".to_owned(),
-                    ContactEmail {
-                        address: "vera.direct@example.com".to_owned(),
-                        contexts: Some(json!({"work": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_billing".to_owned(),
-                    ContactEmail {
-                        address: "billing@example.com".to_owned(),
-                        contexts: Some(json!({"work": true, "private": true})),
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_support".to_owned(),
-                    ContactEmail {
-                        address: "support@example.com".to_owned(),
-                        contexts: None,
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
-                (
-                    "e_archive".to_owned(),
-                    ContactEmail {
-                        address: "archive@example.com".to_owned(),
-                        contexts: None,
-                        pref: None,
-                        ..ContactEmail::default()
-                    },
-                ),
+                ("e_work_pri".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.work@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v
+                }),
+                ("e_home".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.home@example.com".to_owned();
+                    v.contexts = Some(json!({"private": true}));
+                    v.pref = None;
+                    v
+                }),
+                ("e_direct".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "vera.direct@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = None;
+                    v
+                }),
+                ("e_billing".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "billing@example.com".to_owned();
+                    v.contexts = Some(json!({"work": true, "private": true}));
+                    v.pref = None;
+                    v
+                }),
+                ("e_support".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "support@example.com".to_owned();
+                    v.contexts = None;
+                    v.pref = None;
+                    v
+                }),
+                ("e_archive".to_owned(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "archive@example.com".to_owned();
+                    v.contexts = None;
+                    v.pref = None;
+                    v
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let emitted = card_to_vcard(&card);
@@ -13631,61 +13547,56 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     let mut extra_work = BTreeMap::new();
     extra_work.insert("pref".to_owned(), json!(1));
 
-    let card_all3 = ContactCard {
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        addresses: Some(
+    let card_all3 = {
+        let mut card = ContactCard::default();
+        card.card_type = Some("Card".to_owned());
+        card.version = Some("1.0".to_owned());
+        card.addresses = Some(
             [
-                (
-                    "a_work".to_owned(),
-                    Address {
-                        components: Some(vec![
-                            AddressComponent::new("name", "Hauptstraße 1"),
-                            AddressComponent::new("locality", "Berlin"),
-                            AddressComponent::new("postcode", "10115"),
-                            AddressComponent::new("country", "Germany"),
-                        ]),
-                        contexts: Some(json!({"work": true})),
-                        full: Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned()),
-                        extra: extra_work,
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_home".to_owned(),
-                    Address {
-                        components: Some(vec![
-                            AddressComponent::new("name", "Heimweg 2"),
-                            AddressComponent::new("locality", "München"),
-                            AddressComponent::new("postcode", "80331"),
-                            AddressComponent::new("country", "Germany"),
-                        ]),
-                        contexts: Some(json!({"private": true})),
-                        full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_other".to_owned(),
-                    Address {
-                        components: Some(vec![
-                            AddressComponent::new("postOfficeBox", "Postfach 42"),
-                            AddressComponent::new("locality", "Hamburg"),
-                            AddressComponent::new("postcode", "20095"),
-                            AddressComponent::new("country", "Germany"),
-                        ]),
-                        contexts: None,
-                        full: Some("Postfach 42\n20095 Hamburg\nGermany".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
+                ("a_work".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = Some(vec![
+                        AddressComponent::new("name", "Hauptstraße 1"),
+                        AddressComponent::new("locality", "Berlin"),
+                        AddressComponent::new("postcode", "10115"),
+                        AddressComponent::new("country", "Germany"),
+                    ]);
+                    address_val.contexts = Some(json!({"work": true}));
+                    address_val.full = Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned());
+                    address_val.extra = extra_work;
+                    address_val
+                }),
+                ("a_home".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = Some(vec![
+                        AddressComponent::new("name", "Heimweg 2"),
+                        AddressComponent::new("locality", "München"),
+                        AddressComponent::new("postcode", "80331"),
+                        AddressComponent::new("country", "Germany"),
+                    ]);
+                    address_val.contexts = Some(json!({"private": true}));
+                    address_val.full = Some("Heimweg 2\n80331 München\nGermany".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a_other".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = Some(vec![
+                        AddressComponent::new("postOfficeBox", "Postfach 42"),
+                        AddressComponent::new("locality", "Hamburg"),
+                        AddressComponent::new("postcode", "20095"),
+                        AddressComponent::new("country", "Germany"),
+                    ]);
+                    address_val.contexts = None;
+                    address_val.full = Some("Postfach 42\n20095 Hamburg\nGermany".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let emitted_all3 = card_to_vcard(&card_all3);
@@ -13753,46 +13664,41 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     assert_eq!(re_emitted_all3, emitted_all3);
 
     // 2. All 3 slots use standalone `LABEL` only, without structured `ADR`.
-    let card_labels_only = ContactCard {
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        addresses: Some(
+    let card_labels_only = {
+        let mut card = ContactCard::default();
+        card.card_type = Some("Card".to_owned());
+        card.version = Some("1.0".to_owned());
+        card.addresses = Some(
             [
-                (
-                    "a1".to_owned(),
-                    Address {
-                        components: None,
-                        contexts: Some(json!({"work": true})),
-                        full: Some("Work Label Only\nBerlin".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a2".to_owned(),
-                    Address {
-                        components: None,
-                        contexts: Some(json!({"private": true})),
-                        full: Some("Home Label Only\nMünchen".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a3".to_owned(),
-                    Address {
-                        components: None,
-                        contexts: None,
-                        full: Some("Other Label Only\nHamburg".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
+                ("a1".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = None;
+                    address_val.contexts = Some(json!({"work": true}));
+                    address_val.full = Some("Work Label Only\nBerlin".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a2".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = None;
+                    address_val.contexts = Some(json!({"private": true}));
+                    address_val.full = Some("Home Label Only\nMünchen".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a3".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = None;
+                    address_val.contexts = None;
+                    address_val.full = Some("Other Label Only\nHamburg".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let emitted_labels = card_to_vcard(&card_labels_only);
@@ -13813,46 +13719,43 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
     assert_eq!(parsed_labels, card_labels_only);
 
     // 3. Mixed slots: work uses `ADR` plus `LABEL`, home uses `LABEL` only, other uses `ADR` only.
-    let card_mixed = ContactCard {
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        addresses: Some(
+    let card_mixed = {
+        let mut card = ContactCard::default();
+        card.card_type = Some("Card".to_owned());
+        card.version = Some("1.0".to_owned());
+        card.addresses = Some(
             [
-                (
-                    "a_work".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("name", "Work Street 10")]),
-                        contexts: Some(json!({"work": true})),
-                        full: Some("Work Street 10\nBerlin".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_home".to_owned(),
-                    Address {
-                        components: None,
-                        contexts: Some(json!({"private": true})),
-                        full: Some("Home Label Only\nCologne".to_owned()),
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
-                (
-                    "a_other".to_owned(),
-                    Address {
-                        components: Some(vec![AddressComponent::new("locality", "Frankfurt")]),
-                        contexts: None,
-                        full: None,
-                        extra: BTreeMap::new(),
-                        ..Address::default()
-                    },
-                ),
+                ("a_work".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("name", "Work Street 10")]);
+                    address_val.contexts = Some(json!({"work": true}));
+                    address_val.full = Some("Work Street 10\nBerlin".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a_home".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components = None;
+                    address_val.contexts = Some(json!({"private": true}));
+                    address_val.full = Some("Home Label Only\nCologne".to_owned());
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
+                ("a_other".to_owned(), {
+                    let mut address_val = Address::default();
+                    address_val.components =
+                        Some(vec![AddressComponent::new("locality", "Frankfurt")]);
+                    address_val.contexts = None;
+                    address_val.full = None;
+                    address_val.extra = BTreeMap::new();
+                    address_val
+                }),
             ]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let emitted_mixed = card_to_vcard(&card_mixed);
@@ -13912,43 +13815,39 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
 #[test]
 fn email_and_address_label_edge_cases_and_parameter_permutations() {
     // 1. Multi-line labels with escaped delimiters: newlines, commas, semicolons, backslashes
-    let card = ContactCard {
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        addresses: Some(
-            [(
-                "a_complex".to_owned(),
-                Address {
-                    components: Some(vec![
-                        AddressComponent::new("name", "Suite 400, Floor 2"),
-                        AddressComponent::new("locality", "San Francisco; Bay Area"),
-                        AddressComponent::new("country", "United States \\ USA"),
-                    ]),
-                    contexts: Some(json!({"work": true})),
-                    full: Some(
-                        "Acme Corp, Suite 400\\nDept; Ops\\nSan Francisco, CA\\nUSA".to_owned(),
-                    ),
-                    extra: BTreeMap::new(),
-                    ..Address::default()
-                },
-            )]
+    let card = {
+        let mut card = ContactCard::default();
+        card.card_type = Some("Card".to_owned());
+        card.version = Some("1.0".to_owned());
+        card.addresses = Some(
+            [("a_complex".to_owned(), {
+                let mut address_val = Address::default();
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", "Suite 400, Floor 2"),
+                    AddressComponent::new("locality", "San Francisco; Bay Area"),
+                    AddressComponent::new("country", "United States \\ USA"),
+                ]);
+                address_val.contexts = Some(json!({"work": true}));
+                address_val.full =
+                    Some("Acme Corp, Suite 400\\nDept; Ops\\nSan Francisco, CA\\nUSA".to_owned());
+                address_val.extra = BTreeMap::new();
+                address_val
+            })]
             .into_iter()
             .collect(),
-        ),
-        emails: Some(
-            [(
-                "e1".to_owned(),
-                ContactEmail {
-                    address: "complex+user@example.com".to_owned(),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    ..ContactEmail::default()
-                },
-            )]
+        );
+        card.emails = Some(
+            [("e1".to_owned(), {
+                let mut v = ContactEmail::default();
+                v.address = "complex+user@example.com".to_owned();
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v
+            })]
             .into_iter()
             .collect(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let emitted = card_to_vcard(&card);
@@ -14921,18 +14820,16 @@ fn trailing_whitespace_with_vcard_21_and_quoted_printable_fixpoint() {
 
 #[test]
 fn name_with_empty_full_string_and_components_reaches_fixed_point() {
-    let card = ContactCard {
-        name: Some(Name {
-            components: Some(vec![NameComponent {
-                kind: "given".to_string(),
-                value: "TestGiven".to_string(),
-                extra: BTreeMap::new(),
-            }]),
-            full: Some("".to_string()),
-            extra: BTreeMap::new(),
-            ..Name::default()
-        }),
-        ..Default::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![NameComponent::new("given", "TestGiven")]);
+            name_val.full = Some("".to_string());
+            name_val.extra = BTreeMap::new();
+            name_val
+        });
+        card
     };
 
     let vcard1 = card_to_vcard(&card);
@@ -15084,15 +14981,17 @@ fn file_as_and_sort_string_coexistence_without_clobbering() {
     let mut extra = BTreeMap::new();
     extra.insert("fileAs".to_string(), json!("Einstein, Albert"));
     extra.insert("sortAs".to_string(), json!("Einstein"));
-    let card_dual = ContactCard {
-        uid: Some("dual-sort-file-01".to_string()),
-        name: Some(Name {
-            full: Some("Albert Einstein".to_string()),
-            components: None,
-            extra,
-            ..Name::default()
-        }),
-        ..Default::default()
+    let card_dual = {
+        let mut card = ContactCard::default();
+        card.uid = Some("dual-sort-file-01".to_string());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Albert Einstein".to_string());
+            name_val.components = None;
+            name_val.extra = extra;
+            name_val
+        });
+        card
     };
 
     let emitted_dual = card_to_vcard(&card_dual);
@@ -15135,52 +15034,57 @@ fn file_as_escaping_special_characters_and_unicode() {
 #[test]
 fn file_as_card_level_and_name_level_emission() {
     // 1. file_as in card.name.extra with "file_as" underscore key
-    let card1 = ContactCard {
-        uid: Some("fa-001".to_string()),
-        name: Some(Name {
-            full: Some("John Doe".to_string()),
-            components: None,
-            extra: {
+    let card1 = {
+        let mut card = ContactCard::default();
+        card.uid = Some("fa-001".to_string());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("John Doe".to_string());
+            name_val.components = None;
+            name_val.extra = {
                 let mut m = BTreeMap::new();
                 m.insert("file_as".to_string(), json!("Doe, John (Name Extra)"));
                 m
-            },
-            ..Name::default()
-        }),
-        ..Default::default()
+            };
+            name_val
+        });
+        card
     };
     let emitted1 = card_to_vcard(&card1);
     assert!(emitted1.contains("X-EVOLUTION-FILE-AS:Doe\\, John (Name Extra)"));
     assert!(states_file_as(card1.name.as_ref()));
 
     // 2. fileAs in card.extra
-    let card2 = ContactCard {
-        uid: Some("fa-002".to_string()),
-        name: None,
-        extra: {
+    let card2 = {
+        let mut card = ContactCard::default();
+        card.uid = Some("fa-002".to_string());
+        card.name = None;
+        card.extra = {
             let mut m = BTreeMap::new();
             m.insert("fileAs".to_string(), json!("Doe, John (Card Extra)"));
             m
-        },
-        ..Default::default()
+        };
+        card
     };
     let emitted2 = card_to_vcard(&card2);
     assert!(emitted2.contains("X-EVOLUTION-FILE-AS:Doe\\, John (Card Extra)"));
 
     // 3. Empty string / whitespace-only fileAs is filtered and states_file_as is false
-    let card3 = ContactCard {
-        uid: Some("fa-003".to_string()),
-        name: Some(Name {
-            full: Some("John Doe".to_string()),
-            components: None,
-            extra: {
+    let card3 = {
+        let mut card = ContactCard::default();
+        card.uid = Some("fa-003".to_string());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("John Doe".to_string());
+            name_val.components = None;
+            name_val.extra = {
                 let mut m = BTreeMap::new();
                 m.insert("fileAs".to_string(), json!("   "));
                 m
-            },
-            ..Name::default()
-        }),
-        ..Default::default()
+            };
+            name_val
+        });
+        card
     };
     let emitted3 = card_to_vcard(&card3);
     assert!(!emitted3.contains("X-EVOLUTION-FILE-AS"));
@@ -16013,12 +15917,13 @@ fn im_scheme_long_tail_aliases_and_canonical_uri_resolution() {
         assert_eq!(services["s1"].uri, None);
         assert_eq!(services["s1"].service.as_deref(), Some(service));
 
-        let service_entry = OnlineService {
-            service: Some(service.to_owned()),
-            uri: Some(uri.to_owned()),
-            user: None,
-            extra: BTreeMap::new(),
-            ..OnlineService::default()
+        let service_entry = {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.uri = Some(uri.to_owned());
+            v.user = None;
+            v.extra = BTreeMap::new();
+            v
         };
         assert_eq!(
             online_service_handle(&service_entry),
@@ -16057,12 +15962,13 @@ fn im_scheme_action_query_and_invalid_handle_rejection() {
             "{service} uri '{uri}' was unexpectedly drawn on {header}: {vcard}"
         );
 
-        let service_entry = OnlineService {
-            service: Some(service.to_owned()),
-            uri: Some(uri.to_owned()),
-            user: None,
-            extra: BTreeMap::new(),
-            ..OnlineService::default()
+        let service_entry = {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.uri = Some(uri.to_owned());
+            v.user = None;
+            v.extra = BTreeMap::new();
+            v
         };
         assert!(
             !states_online_service(&service_entry),
@@ -16076,65 +15982,51 @@ fn twitter_sip_and_unslotted_social_services_characterization_and_rationale() {
     // 1. Contact on server with slotted and unslotted/unmodeled onlineServices
     let mut card = ContactCard::default();
     let mut services = BTreeMap::new();
-    services.insert(
-        "s_jabber".to_owned(),
-        OnlineService {
-            service: Some("Jabber".to_owned()),
-            user: Some("vera@jabber.example".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_twitter".to_owned(),
-        OnlineService {
-            service: Some("Twitter".to_owned()),
-            user: Some("@vera_tw".to_owned()),
-            uri: Some("https://twitter.com/vera_tw".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_sip".to_owned(),
-        OnlineService {
-            service: Some("SIP".to_owned()),
-            uri: Some("sip:vera@example.com".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_telegram".to_owned(),
-        OnlineService {
-            service: Some("Telegram".to_owned()),
-            user: Some("vera_tg".to_owned()),
-            uri: Some("tg://resolve?domain=vera_tg".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_discord".to_owned(),
-        OnlineService {
-            service: Some("Discord".to_owned()),
-            user: Some("vera#1234".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_signal".to_owned(),
-        OnlineService {
-            service: Some("Signal".to_owned()),
-            user: Some("+1555123456".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_mastodon".to_owned(),
-        OnlineService {
-            service: Some("Mastodon".to_owned()),
-            user: Some("@vera@social.example".to_owned()),
-            uri: Some("acct:vera@social.example".to_owned()),
-            ..OnlineService::default()
-        },
-    );
+    services.insert("s_jabber".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("vera@jabber.example".to_owned());
+        v
+    });
+    services.insert("s_twitter".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Twitter".to_owned());
+        v.user = Some("@vera_tw".to_owned());
+        v.uri = Some("https://twitter.com/vera_tw".to_owned());
+        v
+    });
+    services.insert("s_sip".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("SIP".to_owned());
+        v.uri = Some("sip:vera@example.com".to_owned());
+        v
+    });
+    services.insert("s_telegram".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Telegram".to_owned());
+        v.user = Some("vera_tg".to_owned());
+        v.uri = Some("tg://resolve?domain=vera_tg".to_owned());
+        v
+    });
+    services.insert("s_discord".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Discord".to_owned());
+        v.user = Some("vera#1234".to_owned());
+        v
+    });
+    services.insert("s_signal".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Signal".to_owned());
+        v.user = Some("+1555123456".to_owned());
+        v
+    });
+    services.insert("s_mastodon".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Mastodon".to_owned());
+        v.user = Some("@vera@social.example".to_owned());
+        v.uri = Some("acct:vera@social.example".to_owned());
+        v
+    });
     card.online_services = Some(services);
 
     // 2. Outbound vCard contains ONLY mapped slotted services (Jabber)
@@ -16255,10 +16147,11 @@ fn crypto_keys_and_logo_server_state_untouched_characterization() {
     use jmap_vcard::contact::{same_photo, states_media};
 
     // 1. Server-side contact card carrying cryptoKeys in extra and mixed media (photo, logo, sound)
-    let mut card = ContactCard {
-        card_type: Some("Card".to_owned()),
-        version: Some("1.0".to_owned()),
-        ..ContactCard::default()
+    let mut card = {
+        let mut card = ContactCard::default();
+        card.card_type = Some("Card".to_owned());
+        card.version = Some("1.0".to_owned());
+        card
     };
 
     // JSContact RFC 9553 §2.7.1 cryptoKeys
@@ -16421,59 +16314,57 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
     let mut rel_extra = BTreeMap::new();
     rel_extra.insert("label".to_string(), json!("Emergency Contact"));
 
-    let card = ContactCard {
-        id: Some("C-GEN-SYNC".into()),
-        name: Some(Name {
-            full: Some("John Doe".into()),
-            components: Some(vec![
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-GEN-SYNC".into());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("John Doe".into());
+            name_val.components = Some(vec![
                 NameComponent::new("given", "John"),
                 NameComponent::new("surname", "Doe"),
-            ]),
-            extra: name_extra,
-            ..Name::default()
-        }),
-        emails: Some(
-            [(
-                "e1".to_string(),
-                ContactEmail {
-                    address: "support@example.com".into(),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    extra: email_extra,
-                },
-            )]
+            ]);
+            name_val.extra = name_extra;
+            name_val
+        });
+        card.emails = Some(
+            [("e1".to_string(), {
+                let mut v = ContactEmail::default();
+                v.address = "support@example.com".into();
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v.extra = email_extra;
+                v
+            })]
             .into(),
-        ),
-        phones: Some(
-            [(
-                "p1".to_string(),
-                ContactPhone {
-                    number: "+1-555-0199".into(),
-                    features: Some(json!({"voice": true})),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    extra: phone_extra,
-                },
-            )]
+        );
+        card.phones = Some(
+            [("p1".to_string(), {
+                let mut v = ContactPhone::default();
+                v.number = "+1-555-0199".into();
+                v.features = Some(json!({"voice": true}));
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v.extra = phone_extra;
+                v
+            })]
             .into(),
-        ),
-        addresses: Some(
-            [(
-                "a1".to_string(),
-                Address {
-                    components: Some(vec![
-                        AddressComponent::new("name", "100 Industrial Pkwy"),
-                        AddressComponent::new("locality", "Springfield"),
-                    ]),
-                    contexts: Some(json!({"work": true})),
-                    full: Some("100 Industrial Pkwy, Springfield".into()),
-                    extra: adr_extra,
-                    ..Address::default()
-                },
-            )]
+        );
+        card.addresses = Some(
+            [("a1".to_string(), {
+                let mut address_val = Address::default();
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", "100 Industrial Pkwy"),
+                    AddressComponent::new("locality", "Springfield"),
+                ]);
+                address_val.contexts = Some(json!({"work": true}));
+                address_val.full = Some("100 Industrial Pkwy, Springfield".into());
+                address_val.extra = adr_extra;
+                address_val
+            })]
             .into(),
-        ),
-        links: Some(
+        );
+        card.links = Some(
             [(
                 "l1".to_string(),
                 Link {
@@ -16484,19 +16375,18 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
                 },
             )]
             .into(),
-        ),
-        related_to: Some(
-            [(
-                "r1".to_string(),
-                Relation {
-                    relation: Some([("partner".to_string(), json!(true))].into()),
-                    extra: rel_extra,
-                },
-            )]
+        );
+        card.related_to = Some(
+            [("r1".to_string(), {
+                let mut v = Relation::default();
+                v.relation = Some([("partner".to_string(), json!(true))].into());
+                v.extra = rel_extra;
+                v
+            })]
             .into(),
-        ),
-        extra: card_extra,
-        ..ContactCard::default()
+        );
+        card.extra = card_extra;
+        card
     };
 
     // Export₁ must emit X-EVOLUTION-FILE-AS (preferring name-level fileAs) and standard properties
@@ -17437,49 +17327,43 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
 
     let mut related_to = BTreeMap::new();
     // Mapped relations (have EDS slots)
-    related_to.insert(
-        "Eve Spouse".to_owned(),
-        Relation {
-            relation: Some([("spouse".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
-    related_to.insert(
-        "Bob Manager".to_owned(),
-        Relation {
-            relation: Some([("manager".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
-    related_to.insert(
-        "Carol Assistant".to_owned(),
-        Relation {
-            relation: Some([("assistant".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
+    related_to.insert("Eve Spouse".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("spouse".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
+    related_to.insert("Bob Manager".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("manager".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
+    related_to.insert("Carol Assistant".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("assistant".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
     // Unmapped relations have no EDS slots: agent, child, colleague.
-    related_to.insert(
-        "David Agent".to_owned(),
-        Relation {
-            relation: Some([("agent".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
-    related_to.insert(
-        "Frank Child".to_owned(),
-        Relation {
-            relation: Some([("child".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
-    related_to.insert(
-        "Grace Colleague".to_owned(),
-        Relation {
-            relation: Some([("colleague".to_owned(), serde_json::json!(true))].into()),
-            extra: BTreeMap::new(),
-        },
-    );
+    related_to.insert("David Agent".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("agent".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
+    related_to.insert("Frank Child".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("child".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
+    related_to.insert("Grace Colleague".to_owned(), {
+        let mut v = Relation::default();
+        v.relation = Some([("colleague".to_owned(), serde_json::json!(true))].into());
+        v.extra = BTreeMap::new();
+        v
+    });
 
     let mut media = BTreeMap::new();
     let photo = Media {
@@ -17518,16 +17402,18 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
         }),
     );
 
-    let card = ContactCard {
-        id: Some("C-SERVER-PRESERVE".into()),
-        name: Some(Name {
-            full: Some("Alice Representative".into()),
-            ..Name::default()
-        }),
-        related_to: Some(related_to),
-        media: Some(media),
-        extra,
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-SERVER-PRESERVE".into());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Representative".into());
+            name_val
+        });
+        card.related_to = Some(related_to);
+        card.media = Some(media);
+        card.extra = extra;
+        card
     };
 
     // 1. Verify predicate evaluations
@@ -18871,155 +18757,235 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
     let mut name_extra = BTreeMap::new();
     name_extra.insert("fileAs".to_string(), json!("SelfConsistency, Test"));
 
-    let card = ContactCard {
-        id: Some("C-SELF-CONSISTENCY-1".into()),
-        name: Some(Name {
-            full: Some("Dr. Test SelfConsistency".into()),
-            components: Some(vec![
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-SELF-CONSISTENCY-1".into());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Dr. Test SelfConsistency".into());
+            name_val.components = Some(vec![
                 NameComponent::new("prefix", "Dr."),
                 NameComponent::new("given", "Test"),
                 NameComponent::new("surname", "SelfConsistency"),
-            ]),
-            extra: name_extra, ..Name::default()
-        }),
-        nicknames: Some([("n1".to_string(), Nickname { name: "SelfTest".into(), extra: BTreeMap::new(),
-            ..Nickname::default()
-        })].into()),
-        emails: Some([
-            ("e1".to_string(), ContactEmail {
-                address: "selftest.work@example.com".into(),
-                contexts: Some(json!({"work": true})),
-                pref: Some(1),
-                extra: BTreeMap::new(),
-            }),
-            ("e2".to_string(), ContactEmail {
-                address: "selftest.home@example.org".into(),
-                contexts: Some(json!({"private": true})),
-                pref: None,
-                extra: BTreeMap::new(),
-            }),
-        ].into()),
-        phones: Some([
-            ("p1".to_string(), ContactPhone {
-                number: "+1 555 0100".into(),
-                features: Some(json!({"voice": true, "mobile": true})),
-                contexts: Some(json!({"work": true})),
-                pref: Some(1),
-                extra: BTreeMap::new(),
-            }),
-            ("p2".to_string(), ContactPhone {
-                number: "+1 555 0199".into(),
-                features: Some(json!({"fax": true})),
-                contexts: Some(json!({"work": true})),
-                pref: None,
-                extra: BTreeMap::new(),
-            }),
-        ].into()),
-        addresses: Some([
-            ("a1".to_string(), Address {
-                components: Some(vec![
+            ]);
+            name_val.extra = name_extra;
+            name_val
+        });
+        card.nicknames = Some(
+            [("n1".to_string(), {
+                let mut v = Nickname::default();
+                v.name = "SelfTest".into();
+                v.extra = BTreeMap::new();
+                v
+            })]
+            .into(),
+        );
+        card.emails = Some(
+            [
+                ("e1".to_string(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "selftest.work@example.com".into();
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("e2".to_string(), {
+                    let mut v = ContactEmail::default();
+                    v.address = "selftest.home@example.org".into();
+                    v.contexts = Some(json!({"private": true}));
+                    v.pref = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+            ]
+            .into(),
+        );
+        card.phones = Some(
+            [
+                ("p1".to_string(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0100".into();
+                    v.features = Some(json!({"voice": true, "mobile": true}));
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = Some(1);
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("p2".to_string(), {
+                    let mut v = ContactPhone::default();
+                    v.number = "+1 555 0199".into();
+                    v.features = Some(json!({"fax": true}));
+                    v.contexts = Some(json!({"work": true}));
+                    v.pref = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+            ]
+            .into(),
+        );
+        card.addresses = Some(
+            [("a1".to_string(), {
+                let mut address_val = Address::default();
+                address_val.components = Some(vec![
                     AddressComponent::new("name", "100 Innovation Way"),
                     AddressComponent::new("locality", "Cambridge"),
                     AddressComponent::new("region", "MA"),
                     AddressComponent::new("postcode", "02139"),
                     AddressComponent::new("country", "USA"),
-                ]),
-                contexts: Some(json!({"work": true})),
-                full: Some("100 Innovation Way, Cambridge, MA 02139, USA".into()),
-                extra: BTreeMap::new(), ..Address::default()
-        }),
-        ].into()),
-        organizations: Some([
-            ("o1".to_string(), Organization {
-                name: Some("SelfConsistency Labs Inc.".into()),
-                units: Some(vec![OrgUnit::new("Core Engine"), OrgUnit::new("Protocols")]),
-                extra: BTreeMap::new(), ..Organization::default()
-        }),
-        ].into()),
-        titles: Some([
-            ("t1".to_string(), Title {
-                name: "Chief Architect".into(),
-                kind: Some("title".into()),
-                extra: BTreeMap::new(), ..Title::default()
-        }),
-            ("t2".to_string(), Title {
-                name: "Principal Investigator".into(),
-                kind: Some("role".into()),
-                extra: BTreeMap::new(), ..Title::default()
-        }),
-        ].into()),
-        anniversaries: Some([
-            ("bday".to_string(), Anniversary {
-                kind: "birth".into(),
-                date: Some(json!({"@type": "PartialDate", "year": 1980, "month": 5, "day": 20})),
-                extra: BTreeMap::new(),
-            }),
-            ("anniv".to_string(), Anniversary {
-                kind: "wedding".into(),
-                date: Some(json!({"@type": "PartialDate", "year": 2008, "month": 10, "day": 12})),
-                extra: BTreeMap::new(),
-            }),
-        ].into()),
-        related_to: Some([
-            ("Spouse Partner".to_string(), Relation {
-                relation: Some([("spouse".to_string(), json!(true))].into()),
-                extra: BTreeMap::new(),
-            }),
-            ("Manager Leader".to_string(), Relation {
-                relation: Some([("manager".to_string(), json!(true))].into()),
-                extra: BTreeMap::new(),
-            }),
-            ("Assistant Helper".to_string(), Relation {
-                relation: Some([("assistant".to_string(), json!(true))].into()),
-                extra: BTreeMap::new(),
-            }),
-        ].into()),
-        online_services: Some([
-            ("s1".to_string(), OnlineService {
-                service: Some("Jabber".into()),
-                user: Some("selftest@jabber.org".into()),
-                uri: None,
-                extra: BTreeMap::new(), ..OnlineService::default()
-        }),
-            ("s2".to_string(), OnlineService {
-                service: Some("Matrix".into()),
-                user: Some("selftest:matrix.org".into()),
-                uri: None,
-                extra: BTreeMap::new(), ..OnlineService::default()
-        }),
-        ].into()),
-        links: Some([
-            ("l1".to_string(), Link {
-                uri: "https://blog.selftest.example".into(),
-                kind: Some("blog".into()),
-                extra: BTreeMap::new(), ..Link::default()
-        }),
-            ("l2".to_string(), Link {
-                uri: "https://video.selftest.example/watch".into(),
-                kind: Some("video".into()),
-                extra: BTreeMap::new(), ..Link::default()
-        }),
-        ].into()),
-        notes: Some([
-            ("n1".to_string(), Note {
-                note: "Self-consistency verification note.\nLine 2 of multi-line note.".into(),
-                extra: BTreeMap::new(), ..Note::default()
-        }),
-        ].into()),
-        keywords: Some([
-            ("Testing".into(), json!(true)),
-            ("SelfConsistency".into(), json!(true)),
-            ("Evolution".into(), json!(true)),
-        ].into()),
-        media: Some([
+                ]);
+                address_val.contexts = Some(json!({"work": true}));
+                address_val.full = Some("100 Innovation Way, Cambridge, MA 02139, USA".into());
+                address_val.extra = BTreeMap::new();
+                address_val
+            })]
+            .into(),
+        );
+        card.organizations = Some(
+            [(
+                "o1".to_string(),
+                Organization {
+                    name: Some("SelfConsistency Labs Inc.".into()),
+                    units: Some(vec![OrgUnit::new("Core Engine"), OrgUnit::new("Protocols")]),
+                    extra: BTreeMap::new(),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        );
+        card.titles = Some(
+            [
+                ("t1".to_string(), {
+                    let mut title = Title::default();
+                    title.name = "Chief Architect".into();
+                    title.kind = Some("title".into());
+                    title.extra = BTreeMap::new();
+                    title
+                }),
+                ("t2".to_string(), {
+                    let mut title = Title::default();
+                    title.name = "Principal Investigator".into();
+                    title.kind = Some("role".into());
+                    title.extra = BTreeMap::new();
+                    title
+                }),
+            ]
+            .into(),
+        );
+        card.anniversaries = Some(
+            [
+                ("bday".to_string(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "birth".into();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 1980, "month": 5, "day": 20}));
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("anniv".to_string(), {
+                    let mut v = Anniversary::default();
+                    v.kind = "wedding".into();
+                    v.date =
+                        Some(json!({"@type": "PartialDate", "year": 2008, "month": 10, "day": 12}));
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+            ]
+            .into(),
+        );
+        card.related_to = Some(
+            [
+                ("Spouse Partner".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("spouse".to_string(), json!(true))].into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("Manager Leader".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("manager".to_string(), json!(true))].into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("Assistant Helper".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("assistant".to_string(), json!(true))].into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+            ]
+            .into(),
+        );
+        card.online_services = Some(
+            [
+                ("s1".to_string(), {
+                    let mut v = OnlineService::default();
+                    v.service = Some("Jabber".into());
+                    v.user = Some("selftest@jabber.org".into());
+                    v.uri = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("s2".to_string(), {
+                    let mut v = OnlineService::default();
+                    v.service = Some("Matrix".into());
+                    v.user = Some("selftest:matrix.org".into());
+                    v.uri = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+            ]
+            .into(),
+        );
+        card.links = Some(
+            [
+                (
+                    "l1".to_string(),
+                    Link {
+                        uri: "https://blog.selftest.example".into(),
+                        kind: Some("blog".into()),
+                        extra: BTreeMap::new(),
+                        ..Link::default()
+                    },
+                ),
+                (
+                    "l2".to_string(),
+                    Link {
+                        uri: "https://video.selftest.example/watch".into(),
+                        kind: Some("video".into()),
+                        extra: BTreeMap::new(),
+                        ..Link::default()
+                    },
+                ),
+            ]
+            .into(),
+        );
+        card.notes = Some(
+            [("n1".to_string(), {
+                let mut v = Note::default();
+                v.note = "Self-consistency verification note.\nLine 2 of multi-line note.".into();
+                v.extra = BTreeMap::new();
+                v
+            })]
+            .into(),
+        );
+        card.keywords = Some(
+            [
+                ("Testing".into(), json!(true)),
+                ("SelfConsistency".into(), json!(true)),
+                ("Evolution".into(), json!(true)),
+            ]
+            .into(),
+        );
+        card.media = Some([
             ("m1".to_string(), Media {
                 kind: Some("photo".into()),
                 uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into(),
                 media_type: Some("image/png".into()),
                 extra: BTreeMap::new(), ..Media::default()
         }),
-        ].into()),
-        ..ContactCard::default()
+        ].into());
+        card
     };
 
     // 1. Export to vCard 3.0
@@ -19361,62 +19327,60 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
     let mut rel_extra_agent = BTreeMap::new();
     rel_extra_agent.insert("label".to_string(), json!("Legal Representative"));
 
-    let card = ContactCard {
-        id: Some("C-GEN-SYNC-B6".into()),
-        name: Some(Name {
-            full: Some("Fuzz Sync".into()),
-            components: Some(vec![
+    let card = {
+        let mut card = ContactCard::default();
+        card.id = Some("C-GEN-SYNC-B6".into());
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Fuzz Sync".into());
+            name_val.components = Some(vec![
                 NameComponent::new("given", "Fuzz"),
                 NameComponent::new("surname", "Sync"),
-            ]),
-            extra: name_extra,
-            ..Name::default()
-        }),
-        emails: Some(
-            [(
-                "e1".to_string(),
-                ContactEmail {
-                    address: "fuzz@example.com".into(),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    extra: email_extra,
-                },
-            )]
+            ]);
+            name_val.extra = name_extra;
+            name_val
+        });
+        card.emails = Some(
+            [("e1".to_string(), {
+                let mut v = ContactEmail::default();
+                v.address = "fuzz@example.com".into();
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v.extra = email_extra;
+                v
+            })]
             .into(),
-        ),
-        phones: Some(
-            [(
-                "p1".to_string(),
-                ContactPhone {
-                    number: "+1-555-0188".into(),
-                    features: Some(json!({"voice": true, "mobile": true})),
-                    contexts: Some(json!({"work": true})),
-                    pref: Some(1),
-                    extra: phone_extra,
-                },
-            )]
+        );
+        card.phones = Some(
+            [("p1".to_string(), {
+                let mut v = ContactPhone::default();
+                v.number = "+1-555-0188".into();
+                v.features = Some(json!({"voice": true, "mobile": true}));
+                v.contexts = Some(json!({"work": true}));
+                v.pref = Some(1);
+                v.extra = phone_extra;
+                v
+            })]
             .into(),
-        ),
-        addresses: Some(
-            [(
-                "a1".to_string(),
-                Address {
-                    components: Some(vec![
-                        AddressComponent::new("name", "500 Silicon Ave"),
-                        AddressComponent::new("locality", "Palo Alto"),
-                        AddressComponent::new("region", "CA"),
-                        AddressComponent::new("postcode", "94301"),
-                        AddressComponent::new("country", "USA"),
-                    ]),
-                    contexts: Some(json!({"work": true})),
-                    full: Some("500 Silicon Ave, Palo Alto, CA 94301, USA".into()),
-                    extra: adr_extra,
-                    ..Address::default()
-                },
-            )]
+        );
+        card.addresses = Some(
+            [("a1".to_string(), {
+                let mut address_val = Address::default();
+                address_val.components = Some(vec![
+                    AddressComponent::new("name", "500 Silicon Ave"),
+                    AddressComponent::new("locality", "Palo Alto"),
+                    AddressComponent::new("region", "CA"),
+                    AddressComponent::new("postcode", "94301"),
+                    AddressComponent::new("country", "USA"),
+                ]);
+                address_val.contexts = Some(json!({"work": true}));
+                address_val.full = Some("500 Silicon Ave, Palo Alto, CA 94301, USA".into());
+                address_val.extra = adr_extra;
+                address_val
+            })]
             .into(),
-        ),
-        media: Some(
+        );
+        card.media = Some(
             [
                 (
                     "m1".to_string(),
@@ -19450,60 +19414,53 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                 ),
             ]
             .into(),
-        ),
-        related_to: Some(
+        );
+        card.related_to = Some(
             [
-                (
-                    "Alice Spouse".to_string(),
-                    Relation {
-                        relation: Some([("spouse".to_string(), json!(true))].into()),
-                        extra: rel_extra_spouse,
-                    },
-                ),
-                (
-                    "Bob Agent".to_string(),
-                    Relation {
-                        relation: Some([("agent".to_string(), json!(true))].into()),
-                        extra: rel_extra_agent,
-                    },
-                ),
-                (
-                    "Carol Colleague".to_string(),
-                    Relation {
-                        relation: Some([("colleague".to_string(), json!(true))].into()),
-                        extra: BTreeMap::new(),
-                    },
-                ),
+                ("Alice Spouse".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("spouse".to_string(), json!(true))].into());
+                    v.extra = rel_extra_spouse;
+                    v
+                }),
+                ("Bob Agent".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("agent".to_string(), json!(true))].into());
+                    v.extra = rel_extra_agent;
+                    v
+                }),
+                ("Carol Colleague".to_string(), {
+                    let mut v = Relation::default();
+                    v.relation = Some([("colleague".to_string(), json!(true))].into());
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
-        ),
-        online_services: Some(
+        );
+        card.online_services = Some(
             [
-                (
-                    "s1".to_string(),
-                    OnlineService {
-                        service: Some("Jabber".to_string()),
-                        user: Some("fuzz@jabber.org".to_string()),
-                        uri: None,
-                        extra: BTreeMap::new(),
-                        ..OnlineService::default()
-                    },
-                ),
-                (
-                    "s2".to_string(),
-                    OnlineService {
-                        service: Some("Skype".to_string()),
-                        user: Some("fuzz_skype".to_string()),
-                        uri: None,
-                        extra: BTreeMap::new(),
-                        ..OnlineService::default()
-                    },
-                ),
+                ("s1".to_string(), {
+                    let mut v = OnlineService::default();
+                    v.service = Some("Jabber".to_string());
+                    v.user = Some("fuzz@jabber.org".to_string());
+                    v.uri = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("s2".to_string(), {
+                    let mut v = OnlineService::default();
+                    v.service = Some("Skype".to_string());
+                    v.user = Some("fuzz_skype".to_string());
+                    v.uri = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
-        ),
-        extra: card_extra,
-        ..ContactCard::default()
+        );
+        card.extra = card_extra;
+        card
     };
 
     // 2. Outbound vCard 3.0 excludes unmodeled fields and AGENT/SOUND/LOGO/KEY payloads.
@@ -19603,8 +19560,9 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
     // 1. Multiple organizations (o1, o2, o3) with distinct unit hierarchies.
     // 2. Multiple titles and roles associated with organizations via organizationId.
     // 3. Lossless roundtrip through standard vCard 3.0 lines with X-JMAP-KEY parameter tracking.
-    let card = ContactCard {
-        organizations: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [
                 (
                     "o1".to_owned(),
@@ -19640,49 +19598,42 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
                 ),
             ]
             .into(),
-        ),
-        titles: Some(
+        );
+        card.titles = Some(
             [
-                (
-                    "t1".to_owned(),
-                    Title {
-                        name: "Principal Optical Engineer".to_owned(),
-                        kind: None, // default kind is "title"
-                        extra: [("organizationId".to_string(), json!("o1"))].into(),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "t2".to_owned(),
-                    Title {
-                        name: "Senior Research Fellow".to_owned(),
-                        kind: Some("title".to_owned()),
-                        extra: [("organizationId".to_string(), json!("o2"))].into(),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r1".to_owned(),
-                    Title {
-                        name: "Chief Architect & Science Lead".to_owned(),
-                        kind: Some("role".to_owned()),
-                        extra: [("organizationId".to_string(), json!("o1"))].into(),
-                        ..Title::default()
-                    },
-                ),
-                (
-                    "r2".to_owned(),
-                    Title {
-                        name: "Advisory Council Member".to_owned(),
-                        kind: Some("role".to_owned()),
-                        extra: [("organizationId".to_string(), json!("o2"))].into(),
-                        ..Title::default()
-                    },
-                ),
+                ("t1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Principal Optical Engineer".to_owned();
+                    title.kind = None;
+                    // default kind is "title"
+                    title.extra = [("organizationId".to_string(), json!("o1"))].into();
+                    title
+                }),
+                ("t2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Senior Research Fellow".to_owned();
+                    title.kind = Some("title".to_owned());
+                    title.extra = [("organizationId".to_string(), json!("o2"))].into();
+                    title
+                }),
+                ("r1".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Chief Architect & Science Lead".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title.extra = [("organizationId".to_string(), json!("o1"))].into();
+                    title
+                }),
+                ("r2".to_owned(), {
+                    let mut title = Title::default();
+                    title.name = "Advisory Council Member".to_owned();
+                    title.kind = Some("role".to_owned());
+                    title.extra = [("organizationId".to_string(), json!("o2"))].into();
+                    title
+                }),
             ]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -19759,8 +19710,9 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     // ORG components beyond office are not shown there, but must still roundtrip.
 
     // 1. Company only.
-    let c1 = ContactCard {
-        organizations: Some(
+    let c1 = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -19770,8 +19722,8 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let v1 = card_to_vcard(&c1);
     assert_eq!(line(&v1, "ORG"), "ORG;X-JMAP-KEY=o1:Megacorp Inc");
@@ -19781,8 +19733,9 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     );
 
     // 2. Company plus department.
-    let c2 = ContactCard {
-        organizations: Some(
+    let c2 = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -19792,8 +19745,8 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let v2 = card_to_vcard(&c2);
     assert_eq!(line(&v2, "ORG"), "ORG;X-JMAP-KEY=o1:Megacorp Inc;Aerospace");
@@ -19803,8 +19756,9 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     );
 
     // 3. Company plus department plus office.
-    let c3 = ContactCard {
-        organizations: Some(
+    let c3 = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -19814,8 +19768,8 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let v3 = card_to_vcard(&c3);
     assert_eq!(
@@ -19828,8 +19782,9 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     );
 
     // 4. Company plus department plus office plus one extra unit.
-    let c4 = ContactCard {
-        organizations: Some(
+    let c4 = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -19843,8 +19798,8 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let v4 = card_to_vcard(&c4);
     assert_eq!(
@@ -19857,8 +19812,9 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
     );
 
     // 5. Company plus five units.
-    let c6 = ContactCard {
-        organizations: Some(
+    let c6 = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -19874,8 +19830,8 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
     let v6 = card_to_vcard(&c6);
     assert_eq!(
@@ -19908,8 +19864,9 @@ fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity(
 #[test]
 fn multi_component_org_special_characters_escaping_and_fixpoint() {
     // ORG components with escaped separators, backslashes, and UTF-8 stay stable.
-    let card = ContactCard {
-        organizations: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -19923,8 +19880,8 @@ fn multi_component_org_special_characters_escaping_and_fixpoint() {
                 },
             )]
             .into(),
-        ),
-        ..ContactCard::default()
+        );
+        card
     };
 
     let vcard1 = card_to_vcard(&card);
@@ -20070,18 +20027,17 @@ fn tel_type_home_voice_fax_and_unqualified_voice_fax_slot_narrowing_and_editor_v
     // 1. `TEL;TYPE=HOME,VOICE,FAX` narrows to `HOME,FAX` to avoid
     // aliasing `E_CONTACT_PHONE_HOME` and `E_CONTACT_PHONE_HOME_FAX`.
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+1 555 0200".to_owned(),
-            contexts: Some(json!({"private": true})),
-            features: Some(json!({"voice": true, "fax": true})),
-            ..ContactPhone::default()
-        },
-    );
-    let home_card = ContactCard {
-        phones: Some(phones),
-        ..ContactCard::default()
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 0200".to_owned();
+        v.contexts = Some(json!({"private": true}));
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v
+    });
+    let home_card = {
+        let mut card = ContactCard::default();
+        card.phones = Some(phones);
+        card
     };
     let home_vcard = card_to_vcard(&home_card);
     assert_eq!(
@@ -20095,18 +20051,17 @@ fn tel_type_home_voice_fax_and_unqualified_voice_fax_slot_narrowing_and_editor_v
     // 2. Bare `TEL;TYPE=VOICE,FAX` narrows to `FAX` so Evolution maps it to
     // "Other Fax" instead of dropping it as an ambiguous match.
     let mut bare_phones = BTreeMap::new();
-    bare_phones.insert(
-        "p2".to_owned(),
-        ContactPhone {
-            number: "+1 555 0300".to_owned(),
-            contexts: None,
-            features: Some(json!({"voice": true, "fax": true})),
-            ..ContactPhone::default()
-        },
-    );
-    let bare_card = ContactCard {
-        phones: Some(bare_phones),
-        ..ContactCard::default()
+    bare_phones.insert("p2".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 0300".to_owned();
+        v.contexts = None;
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v
+    });
+    let bare_card = {
+        let mut card = ContactCard::default();
+        card.phones = Some(bare_phones);
+        card
     };
     let bare_vcard = card_to_vcard(&bare_card);
     assert_eq!(
@@ -20205,18 +20160,17 @@ fn tel_multi_feature_hierarchy_complete_pairwise_and_composite_matrix() {
 
     for (features_json, expected_type, winning_feature, suppressed) in cases {
         let mut phones = BTreeMap::new();
-        phones.insert(
-            "p1".to_owned(),
-            ContactPhone {
-                number: "+1 555 0999".to_owned(),
-                contexts: None,
-                features: Some(features_json.clone()),
-                ..ContactPhone::default()
-            },
-        );
-        let card = ContactCard {
-            phones: Some(phones),
-            ..ContactCard::default()
+        phones.insert("p1".to_owned(), {
+            let mut v = ContactPhone::default();
+            v.number = "+1 555 0999".to_owned();
+            v.contexts = None;
+            v.features = Some(features_json.clone());
+            v
+        });
+        let card = {
+            let mut card = ContactCard::default();
+            card.phones = Some(phones);
+            card
         };
         let vcard = card_to_vcard(&card);
         let expected_line = format!("TEL;X-JMAP-KEY=p1;TYPE={expected_type}:+1 555 0999");
@@ -20245,47 +20199,40 @@ fn tel_multi_feature_hierarchy_complete_pairwise_and_composite_matrix() {
 #[test]
 fn tel_multi_feature_and_multi_context_roundtrip_fixpoint_stability() {
     let mut phones = BTreeMap::new();
-    phones.insert(
-        "p1".to_owned(),
-        ContactPhone {
-            number: "+1 555 1001".to_owned(),
-            contexts: Some(json!({"work": true})),
-            features: Some(json!({"voice": true, "fax": true})),
-            pref: Some(1),
-            ..ContactPhone::default()
-        },
-    );
-    phones.insert(
-        "p2".to_owned(),
-        ContactPhone {
-            number: "+1 555 1002".to_owned(),
-            contexts: Some(json!({"private": true})),
-            features: Some(json!({"voice": true, "fax": true})),
-            pref: Some(2),
-            ..ContactPhone::default()
-        },
-    );
-    phones.insert(
-        "p3".to_owned(),
-        ContactPhone {
-            number: "+1 555 1003".to_owned(),
-            contexts: Some(json!({"work": true})),
-            features: Some(json!({"mobile": true, "pager": true})),
-            ..ContactPhone::default()
-        },
-    );
-    phones.insert(
-        "p4".to_owned(),
-        ContactPhone {
-            number: "+1 555 1004".to_owned(),
-            contexts: None,
-            features: Some(json!({"voice": true, "fax": true})),
-            ..ContactPhone::default()
-        },
-    );
-    let card1 = ContactCard {
-        phones: Some(phones),
-        ..ContactCard::default()
+    phones.insert("p1".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 1001".to_owned();
+        v.contexts = Some(json!({"work": true}));
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v.pref = Some(1);
+        v
+    });
+    phones.insert("p2".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 1002".to_owned();
+        v.contexts = Some(json!({"private": true}));
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v.pref = Some(2);
+        v
+    });
+    phones.insert("p3".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 1003".to_owned();
+        v.contexts = Some(json!({"work": true}));
+        v.features = Some(json!({"mobile": true, "pager": true}));
+        v
+    });
+    phones.insert("p4".to_owned(), {
+        let mut v = ContactPhone::default();
+        v.number = "+1 555 1004".to_owned();
+        v.contexts = None;
+        v.features = Some(json!({"voice": true, "fax": true}));
+        v
+    });
+    let card1 = {
+        let mut card = ContactCard::default();
+        card.phones = Some(phones);
+        card
     };
 
     // Pass 1: JSContact -> vCard
@@ -20374,17 +20321,16 @@ fn im_uri_schemes_all_10_services_and_18_aliases_roundtrip_matrix() {
 
         // 1. Test outbound emission from JSContact with `uri`
         let mut services = BTreeMap::new();
-        services.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(service.to_owned()),
-                uri: Some(uri_str.clone()),
-                ..OnlineService::default()
-            },
-        );
-        let card_with_uri = ContactCard {
-            online_services: Some(services.clone()),
-            ..ContactCard::default()
+        services.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.uri = Some(uri_str.clone());
+            v
+        });
+        let card_with_uri = {
+            let mut card = ContactCard::default();
+            card.online_services = Some(services.clone());
+            card
         };
 
         assert!(
@@ -20407,17 +20353,16 @@ fn im_uri_schemes_all_10_services_and_18_aliases_roundtrip_matrix() {
 
         // 2. Test outbound emission from JSContact with explicit `user`
         let mut services_user = BTreeMap::new();
-        services_user.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(service.to_owned()),
-                user: Some(handle.to_owned()),
-                ..OnlineService::default()
-            },
-        );
-        let card_with_user = ContactCard {
-            online_services: Some(services_user),
-            ..ContactCard::default()
+        services_user.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.user = Some(handle.to_owned());
+            v
+        });
+        let card_with_user = {
+            let mut card = ContactCard::default();
+            card.online_services = Some(services_user);
+            card
         };
         let vcard_from_user = card_to_vcard(&card_with_user);
         assert_eq!(
@@ -20481,69 +20426,56 @@ fn evolution_contact_editor_im_slotted_fields_vs_unslotted_twitter_and_sip_chara
 
     // Mix slotted services with unslotted and unmodeled ones.
     let mut services = BTreeMap::new();
-    services.insert(
-        "s_jabber".to_owned(),
-        OnlineService {
-            service: Some("Jabber".to_owned()),
-            user: Some("vera@jabber.example".to_owned()),
-            extra: [("contexts".to_owned(), json!({"home": true}))].into(),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_skype".to_owned(),
-        OnlineService {
-            service: Some("Skype".to_owned()),
-            user: Some("vera_skype".to_owned()),
-            extra: [("contexts".to_owned(), json!({"work": true}))].into(),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_matrix".to_owned(),
-        OnlineService {
-            service: Some("Matrix".to_owned()),
-            user: Some("@vera:matrix.org".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_twitter".to_owned(),
-        OnlineService {
-            service: Some("Twitter".to_owned()),
-            user: Some("@vera_tw".to_owned()),
-            uri: Some("https://twitter.com/vera_tw".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_sip".to_owned(),
-        OnlineService {
-            service: Some("SIP".to_owned()),
-            uri: Some("sip:vera@example.com".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_discord".to_owned(),
-        OnlineService {
-            service: Some("Discord".to_owned()),
-            user: Some("vera#1234".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_signal".to_owned(),
-        OnlineService {
-            service: Some("Signal".to_owned()),
-            user: Some("+1555123456".to_owned()),
-            ..OnlineService::default()
-        },
-    );
+    services.insert("s_jabber".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("vera@jabber.example".to_owned());
+        v.extra = [("contexts".to_owned(), json!({"home": true}))].into();
+        v
+    });
+    services.insert("s_skype".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Skype".to_owned());
+        v.user = Some("vera_skype".to_owned());
+        v.extra = [("contexts".to_owned(), json!({"work": true}))].into();
+        v
+    });
+    services.insert("s_matrix".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".to_owned());
+        v.user = Some("@vera:matrix.org".to_owned());
+        v
+    });
+    services.insert("s_twitter".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Twitter".to_owned());
+        v.user = Some("@vera_tw".to_owned());
+        v.uri = Some("https://twitter.com/vera_tw".to_owned());
+        v
+    });
+    services.insert("s_sip".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("SIP".to_owned());
+        v.uri = Some("sip:vera@example.com".to_owned());
+        v
+    });
+    services.insert("s_discord".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Discord".to_owned());
+        v.user = Some("vera#1234".to_owned());
+        v
+    });
+    services.insert("s_signal".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Signal".to_owned());
+        v.user = Some("+1555123456".to_owned());
+        v
+    });
 
-    let card = ContactCard {
-        online_services: Some(services),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.online_services = Some(services);
+        card
     };
 
     // Outbound serialization keeps only slotted services.
@@ -20673,17 +20605,16 @@ fn im_uri_schemes_action_query_fragment_and_percent_encoding_rejection_matrix() 
 
     for &(service, invalid_uri, reason) in rejected_uris {
         let mut services = BTreeMap::new();
-        services.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(service.to_owned()),
-                uri: Some(invalid_uri.to_owned()),
-                ..OnlineService::default()
-            },
-        );
-        let card = ContactCard {
-            online_services: Some(services),
-            ..ContactCard::default()
+        services.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.uri = Some(invalid_uri.to_owned());
+            v
+        });
+        let card = {
+            let mut card = ContactCard::default();
+            card.online_services = Some(services);
+            card
         };
 
         // Reject stating any invalid URI.
@@ -20756,17 +20687,16 @@ fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
 
     for &(service_input, expected_x_prop) in service_variations {
         let mut services = BTreeMap::new();
-        services.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(service_input.to_owned()),
-                user: Some("test_user".to_owned()),
-                ..OnlineService::default()
-            },
-        );
-        let card = ContactCard {
-            online_services: Some(services),
-            ..ContactCard::default()
+        services.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(service_input.to_owned());
+            v.user = Some("test_user".to_owned());
+            v
+        });
+        let card = {
+            let mut card = ContactCard::default();
+            card.online_services = Some(services);
+            card
         };
 
         assert!(
@@ -20792,17 +20722,16 @@ fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
         "Discord",
     ] {
         let mut services = BTreeMap::new();
-        services.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(unmapped.to_owned()),
-                user: Some("test_user".to_owned()),
-                ..OnlineService::default()
-            },
-        );
-        let card = ContactCard {
-            online_services: Some(services),
-            ..ContactCard::default()
+        services.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(unmapped.to_owned());
+            v.user = Some("test_user".to_owned());
+            v
+        });
+        let card = {
+            let mut card = ContactCard::default();
+            card.online_services = Some(services);
+            card
         };
         assert!(
             !states_online_service(&card.online_services.as_ref().unwrap()["s1"]),
@@ -20817,18 +20746,17 @@ fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
 
     // 2. User vs URI precedence: explicit user takes precedence over secondary URI
     let mut prec_services = BTreeMap::new();
-    prec_services.insert(
-        "s1".to_owned(),
-        OnlineService {
-            service: Some("Jabber".to_owned()),
-            user: Some("explicit_handle@jabber.org".to_owned()),
-            uri: Some("xmpp:different_uri_handle@jabber.org".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    let prec_card = ContactCard {
-        online_services: Some(prec_services),
-        ..ContactCard::default()
+    prec_services.insert("s1".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("explicit_handle@jabber.org".to_owned());
+        v.uri = Some("xmpp:different_uri_handle@jabber.org".to_owned());
+        v
+    });
+    let prec_card = {
+        let mut card = ContactCard::default();
+        card.online_services = Some(prec_services);
+        card
     };
     let s_obj = &prec_card.online_services.as_ref().unwrap()["s1"];
     assert_eq!(
@@ -21579,43 +21507,36 @@ fn evolution_contact_editor_clamping_and_sync_diff_safety() {
     // Sync preserves unstated bare-year and death anniversaries without
     // generating phantom deletions or modifications.
     let mut anniversaries = BTreeMap::new();
-    anniversaries.insert(
-        "y1".to_owned(),
-        Anniversary {
-            kind: "birth".into(),
-            date: Some(json!({"@type": "PartialDate", "year": 1984})), // bare year
-            ..Anniversary::default()
-        },
-    );
-    anniversaries.insert(
-        "y2".to_owned(),
-        Anniversary {
-            kind: "wedding".into(),
-            date: Some(json!({"@type": "PartialDate", "year": 2005, "month": 11, "day": 15})), // full date
-            ..Anniversary::default()
-        },
-    );
-    anniversaries.insert(
-        "y3".to_owned(),
-        Anniversary {
-            kind: "death".into(),
-            date: Some(json!({"@type": "PartialDate", "year": 2020, "month": 1, "day": 15})), // death date
-            ..Anniversary::default()
-        },
-    );
-    anniversaries.insert(
-        "y4".to_owned(),
-        Anniversary {
-            kind: "birth".into(),
-            date: Some(json!({"@type": "Timestamp", "utc": "1990-05-12T10:30:00Z"})), // timestamp point-in-time
-            ..Anniversary::default()
-        },
-    );
+    anniversaries.insert("y1".to_owned(), {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"@type": "PartialDate", "year": 1984}));
+        v
+    });
+    anniversaries.insert("y2".to_owned(), {
+        let mut v = Anniversary::default();
+        v.kind = "wedding".into();
+        v.date = Some(json!({"@type": "PartialDate", "year": 2005, "month": 11, "day": 15}));
+        v
+    });
+    anniversaries.insert("y3".to_owned(), {
+        let mut v = Anniversary::default();
+        v.kind = "death".into();
+        v.date = Some(json!({"@type": "PartialDate", "year": 2020, "month": 1, "day": 15}));
+        v
+    });
+    anniversaries.insert("y4".to_owned(), {
+        let mut v = Anniversary::default();
+        v.kind = "birth".into();
+        v.date = Some(json!({"@type": "Timestamp", "utc": "1990-05-12T10:30:00Z"}));
+        v
+    });
 
-    let card = ContactCard {
-        uid: Some("contact-100".into()),
-        anniversaries: Some(anniversaries.clone()),
-        ..ContactCard::default()
+    let card = {
+        let mut card = ContactCard::default();
+        card.uid = Some("contact-100".into());
+        card.anniversaries = Some(anniversaries.clone());
+        card
     };
 
     // Wire output carries only representable anniversaries: y2 and y4.
@@ -21791,46 +21712,51 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
     // The empty-is-absent filter now derives once.
     // vCard and ContactCard stabilize by pass 2.
     let test_names = vec![
-        Name {
-            components: Some(vec![NameComponent::new("given", "0")]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+        {
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![NameComponent::new("given", "0")]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
         },
-        Name {
-            components: Some(vec![NameComponent::new("given", "𞋀")]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+        {
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![NameComponent::new("given", "𞋀")]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
         },
-        Name {
-            components: Some(vec![
+        {
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![
                 NameComponent::new("given", "Alice"),
                 NameComponent::new("surname", "Smith"),
-            ]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+            ]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
         },
-        Name {
-            components: Some(vec![
+        {
+            let mut name_val = Name::default();
+            name_val.components = Some(vec![
                 NameComponent::new("prefix", "Dr."),
                 NameComponent::new("given", "René"),
                 NameComponent::new("middle", "Jean"),
                 NameComponent::new("surname", "Müller"),
                 NameComponent::new("suffix", "III"),
-            ]),
-            full: Some(String::new()),
-            extra: BTreeMap::new(),
-            ..Name::default()
+            ]);
+            name_val.full = Some(String::new());
+            name_val.extra = BTreeMap::new();
+            name_val
         },
     ];
 
     for name in test_names {
-        let card = ContactCard {
-            id: Some("C-NAME-FIXPOINT".into()),
-            name: Some(name),
-            ..ContactCard::default()
+        let card = {
+            let mut card = ContactCard::default();
+            card.id = Some("C-NAME-FIXPOINT".into());
+            card.name = Some(name);
+            card
         };
 
         let vcard1 = card_to_vcard(&card);
@@ -22030,9 +21956,10 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     assert!(!states_organization(&org_empty_name_empty_units));
 
     // Empty name and no units still emit no ORG line.
-    let card_empty_org = ContactCard {
-        organizations: Some([("o1".to_owned(), org_empty_name_no_units.clone())].into()),
-        ..Default::default()
+    let card_empty_org = {
+        let mut card = ContactCard::default();
+        card.organizations = Some([("o1".to_owned(), org_empty_name_no_units.clone())].into());
+        card
     };
     let vcard_empty_org = card_to_vcard(&card_empty_org);
     assert!(
@@ -22041,8 +21968,9 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     );
 
     // Named organizations without units emit a single ORG component.
-    let card_named_org = ContactCard {
-        organizations: Some(
+    let card_named_org = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -22052,15 +21980,16 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
                 },
             )]
             .into(),
-        ),
-        ..Default::default()
+        );
+        card
     };
     let vcard_named_org = card_to_vcard(&card_named_org);
     assert_eq!(line(&vcard_named_org, "ORG"), "ORG;X-JMAP-KEY=o1:Acme Corp");
 
     // Empty unit components are dropped on write.
-    let card_named_org_empty_units = ContactCard {
-        organizations: Some(
+    let card_named_org_empty_units = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -22070,8 +21999,8 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
                 },
             )]
             .into(),
-        ),
-        ..Default::default()
+        );
+        card
     };
     let vcard_named_org_empty_units = card_to_vcard(&card_named_org_empty_units);
     assert_eq!(
@@ -22080,8 +22009,9 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
     );
 
     // Empty name with non-empty units keeps the leading empty ORG slot.
-    let card_empty_name_valid_units = ContactCard {
-        organizations: Some(
+    let card_empty_name_valid_units = {
+        let mut card = ContactCard::default();
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -22091,8 +22021,8 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
                 },
             )]
             .into(),
-        ),
-        ..Default::default()
+        );
+        card
     };
     let vcard_empty_name_valid_units = card_to_vcard(&card_empty_name_valid_units);
     assert_eq!(
@@ -22104,12 +22034,14 @@ fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
 #[test]
 fn empty_org_name_normalisation_and_fixpoint_stability() {
     // Start with an explicit empty name and non-empty units.
-    let initial_card = ContactCard {
-        name: Some(Name {
-            full: Some("Alice Smith".to_owned()),
-            ..Default::default()
-        }),
-        organizations: Some(
+    let initial_card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Alice Smith".to_owned());
+            name_val
+        });
+        card.organizations = Some(
             [(
                 "o1".to_owned(),
                 Organization {
@@ -22119,8 +22051,8 @@ fn empty_org_name_normalisation_and_fixpoint_stability() {
                 },
             )]
             .into(),
-        ),
-        ..Default::default()
+        );
+        card
     };
 
     // Pass 1.
@@ -22159,12 +22091,14 @@ fn empty_org_name_normalisation_and_fixpoint_stability() {
 
 #[test]
 fn empty_org_name_multiple_organizations_matrix() {
-    let card = ContactCard {
-        name: Some(Name {
-            full: Some("Bob MultiOrg".to_owned()),
-            ..Default::default()
-        }),
-        organizations: Some(
+    let card = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Bob MultiOrg".to_owned());
+            name_val
+        });
+        card.organizations = Some(
             [
                 (
                     "o1".to_owned(),
@@ -22200,8 +22134,8 @@ fn empty_org_name_multiple_organizations_matrix() {
                 ),
             ]
             .into(),
-        ),
-        ..Default::default()
+        );
+        card
     };
 
     let vcard = card_to_vcard(&card);
@@ -22445,23 +22379,27 @@ fn eds_360_chat_handles_and_sort_order_measured_non_issue_characterization() {
     // E_CONTACT_NAME_OR_ORG sort order is EDS-owned derived state.
     // This mapping writes X-EVOLUTION-FILE-AS when stated and does not read
     // E_CONTACT_NAME_OR_ORG directly.
-    let card_with_file_as = ContactCard {
-        name: Some(Name {
-            full: Some("Albert Einstein".to_owned()),
-            extra: [("fileAs".to_owned(), json!("Einstein, Albert"))].into(),
-            ..Default::default()
-        }),
-        ..Default::default()
+    let card_with_file_as = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Albert Einstein".to_owned());
+            name_val.extra = [("fileAs".to_owned(), json!("Einstein, Albert"))].into();
+            name_val
+        });
+        card
     };
     let emitted_file_as = card_to_vcard(&card_with_file_as);
     assert!(emitted_file_as.contains("X-EVOLUTION-FILE-AS:Einstein\\, Albert\r\n"));
 
-    let card_without_file_as = ContactCard {
-        name: Some(Name {
-            full: Some("Albert Einstein".to_owned()),
-            ..Default::default()
-        }),
-        ..Default::default()
+    let card_without_file_as = {
+        let mut card = ContactCard::default();
+        card.name = Some({
+            let mut name_val = Name::default();
+            name_val.full = Some("Albert Einstein".to_owned());
+            name_val
+        });
+        card
     };
     let emitted_no_file_as = card_to_vcard(&card_without_file_as);
     assert!(!emitted_no_file_as.contains("X-EVOLUTION-FILE-AS"));
@@ -22600,18 +22538,17 @@ fn vcardprops_extension_properties_drop_after_parse_and_emit_in_eds_profile() {
 #[test]
 fn vcardname_source_property_identity_is_not_retained_in_eds_profile() {
     let mut online_services = BTreeMap::new();
-    online_services.insert(
-        "s1".to_owned(),
-        OnlineService {
-            service: Some("Jabber".to_owned()),
-            user: Some("alice@jabber.example".to_owned()),
-            extra: [("vCardName".to_owned(), json!("socialprofile"))].into(),
-            ..OnlineService::default()
-        },
-    );
-    let source = ContactCard {
-        online_services: Some(online_services),
-        ..ContactCard::default()
+    online_services.insert("s1".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("alice@jabber.example".to_owned());
+        v.extra = [("vCardName".to_owned(), json!("socialprofile"))].into();
+        v
+    });
+    let source = {
+        let mut card = ContactCard::default();
+        card.online_services = Some(online_services);
+        card
     };
 
     let emitted = card_to_vcard(&source);

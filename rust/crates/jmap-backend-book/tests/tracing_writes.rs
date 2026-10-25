@@ -317,7 +317,14 @@ fn save_load_and_remove_contact_trace_structured_fields() {
     let mut loaded_contact = ptr::null_mut();
     let (_, captured_load) = capture(|| {
         let result = unsafe {
-            ops::load_contact(&sync, new_uid, &mut loaded_contact, &mut extra, &mut error)
+            ops::load_contact(
+                &sync,
+                new_uid,
+                ptr::null(),
+                &mut loaded_contact,
+                &mut extra,
+                &mut error,
+            )
         };
         assert_eq!(result, GTRUE);
     });
