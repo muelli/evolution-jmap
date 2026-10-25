@@ -133,7 +133,7 @@ pub const FOLDER_LIST_TYPES: &[&str] = &["Mailbox"];
 
 /// The work that a merged pass on the worker of [`FolderRefresh`] must do.
 /// One `StateChange` can request one kind, both kinds or neither. For
-/// neither, no pass starts. See [`Actions`] for the source of these values.
+/// neither, no pass starts. See `Actions` for the source of these values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Work {
     /// Refresh the messages of each open folder, with [`refresh_open_folders`].

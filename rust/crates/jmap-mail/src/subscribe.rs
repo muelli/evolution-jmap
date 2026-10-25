@@ -23,7 +23,7 @@
 //! ## Tests
 //!
 //! `tests/subscriptions.rs` tests `folder_is_subscribed` and [`set_subscribed`]
-//! against the mock server with [`JmapStore::detached`] stores.
+//! against the mock server with `JmapStore::detached` stores.
 //!
 //! `tests/emissions.rs` tests the signal. It needs a store made through a
 //! `CamelSession`, because `camel_subscribable_folder_*` queues the signal on

@@ -581,7 +581,7 @@ impl MessageCache {
     /// different way. "View Source" in `e-mail-formatter-source.c` is this
     /// fallback. No caller reads the path as a promise that the file exists.
     ///
-    /// `None` for the same reason that [`Self::key`] refuses: a uid that is not
+    /// `None` for the same reason that `Self::key` refuses: a uid that is not
     /// a valid JMAP id is never a file name that this cache creates.
     pub fn filename(&self, uid: &str) -> Option<String> {
         let key = self.key(uid)?;

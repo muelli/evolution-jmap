@@ -23,7 +23,7 @@
 //! §4.1 gives the rule for which is which: a `types` naming `"Email"`
 //! applies, and so — this is the part easy to miss — does one that is absent
 //! or empty, because an empty `types` means "every data type this account
-//! has", not "none". [`applies_to_mail`] is that rule, kept as a plain
+//! has", not "none". `applies_to_mail` is that rule, kept as a plain
 //! function over [`Quota`] so it can be tested without a `CamelFolder` to call
 //! the vfunc on.
 //!
@@ -40,7 +40,7 @@
 //!
 //! `CamelFolderQuotaInfo` is a linked list rather than an array — one node per
 //! quota, `used`/`total` and a `next` Camel walks until it is NULL — built by
-//! [`chain`] straight out of the filtered list. An account with nothing that
+//! `chain` straight out of the filtered list. An account with nothing that
 //! applies to Mail is not a failure of the connection or the account, but it
 //! is not silence either: `get_quota_info_sync`'s own contract is NULL *with*
 //! the error set for "nothing to report", the same one IMAPX's own
