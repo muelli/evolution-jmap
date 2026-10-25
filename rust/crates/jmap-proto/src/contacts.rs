@@ -1480,6 +1480,7 @@ impl Media {
 /// service or protocol knows them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct OnlineService {
     /// The name of the service or protocol: `Jabber`, `Matrix`, `Skype`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1519,6 +1520,11 @@ impl OnlineService {
 
     pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
         self.uri = Some(uri.into());
+        self
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
         self
     }
 

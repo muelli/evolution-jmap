@@ -2940,14 +2940,12 @@ fn on_service(service: Option<&str>, user: Option<&str>) -> ContactCard {
     {
         let mut card = ContactCard::default();
         card.online_services = Some(
-            [(
-                "s1".to_owned(),
-                OnlineService {
-                    service: service.map(str::to_owned),
-                    user: user.map(str::to_owned),
-                    ..OnlineService::default()
-                },
-            )]
+            [("s1".to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = service.map(str::to_owned);
+                v.user = user.map(str::to_owned);
+                v
+            })]
             .into(),
         );
         card
@@ -3057,14 +3055,12 @@ fn at_uri(service: Option<&str>, uri: &str) -> ContactCard {
     {
         let mut card = ContactCard::default();
         card.online_services = Some(
-            [(
-                "s1".to_owned(),
-                OnlineService {
-                    service: service.map(str::to_owned),
-                    uri: Some(uri.to_owned()),
-                    ..OnlineService::default()
-                },
-            )]
+            [("s1".to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = service.map(str::to_owned);
+                v.uri = Some(uri.to_owned());
+                v
+            })]
             .into(),
         );
         card
@@ -3432,42 +3428,47 @@ fn conventional_im_services_with_user_handles_are_drawn_and_roundtripped() {
 #[test]
 fn multiple_im_services_with_home_and_work_contexts_map_accurately() {
     let mut card = ContactCard::default();
-    let mut s1 = OnlineService {
-        service: Some("Jabber".to_owned()),
-        user: Some("vera@home.example".to_owned()),
-        ..OnlineService::default()
+    let mut s1 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("vera@home.example".to_owned());
+        v
     };
     s1.extra
         .insert("contexts".to_owned(), serde_json::json!({"private": true}));
 
-    let mut s2 = OnlineService {
-        service: Some("Jabber".to_owned()),
-        user: Some("vera@work.example".to_owned()),
-        ..OnlineService::default()
+    let mut s2 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("vera@work.example".to_owned());
+        v
     };
     s2.extra
         .insert("contexts".to_owned(), serde_json::json!({"work": true}));
 
-    let mut s3 = OnlineService {
-        service: Some("Matrix".to_owned()),
-        user: Some("@vera:matrix.example".to_owned()),
-        ..OnlineService::default()
+    let mut s3 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".to_owned());
+        v.user = Some("@vera:matrix.example".to_owned());
+        v
     };
     s3.extra
         .insert("contexts".to_owned(), serde_json::json!({"work": true}));
 
-    let mut s4 = OnlineService {
-        service: Some("Skype".to_owned()),
-        user: Some("vera_skype".to_owned()),
-        ..OnlineService::default()
+    let mut s4 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Skype".to_owned());
+        v.user = Some("vera_skype".to_owned());
+        v
     };
     s4.extra
         .insert("contexts".to_owned(), serde_json::json!({"private": true}));
 
-    let mut s5 = OnlineService {
-        service: Some("Gadu-Gadu".to_owned()),
-        user: Some("123456".to_owned()),
-        ..OnlineService::default()
+    let mut s5 = {
+        let mut v = OnlineService::default();
+        v.service = Some("Gadu-Gadu".to_owned());
+        v.user = Some("123456".to_owned());
+        v
     };
     s5.extra
         .insert("contexts".to_owned(), serde_json::json!({"work": true}));
@@ -5254,40 +5255,47 @@ fn media_photo_and_online_service_predicates_and_comparisons() {
     assert!(!same_photo(&m_data1, &m_uri1));
 
     // Check online-service predicates and helper mappings.
-    let s_matrix = OnlineService {
-        service: Some("Matrix".into()),
-        user: Some("@alice:matrix.org".into()),
-        ..OnlineService::default()
+    let s_matrix = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.user = Some("@alice:matrix.org".into());
+        v
     };
-    let s_matrix_uri = OnlineService {
-        service: Some("Matrix".into()),
-        uri: Some("matrix:alice".into()),
-        ..OnlineService::default()
+    let s_matrix_uri = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.uri = Some("matrix:alice".into());
+        v
     };
-    let s_matrix_crlf = OnlineService {
-        service: Some("Matrix".into()),
-        user: Some("@alice\r:matrix.org".into()),
-        ..OnlineService::default()
+    let s_matrix_crlf = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.user = Some("@alice\r:matrix.org".into());
+        v
     };
-    let s_matrix_spaced = OnlineService {
-        service: Some("Matrix".into()),
-        user: Some(" @alice:matrix.org ".into()),
-        ..OnlineService::default()
+    let s_matrix_spaced = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.user = Some(" @alice:matrix.org ".into());
+        v
     };
-    let s_matrix_empty = OnlineService {
-        service: Some("Matrix".into()),
-        user: Some("".into()),
-        ..OnlineService::default()
+    let s_matrix_empty = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.user = Some("".into());
+        v
     };
-    let s_unmapped = OnlineService {
-        service: Some("UnmappedService".into()),
-        user: Some("alice".into()),
-        ..OnlineService::default()
+    let s_unmapped = {
+        let mut v = OnlineService::default();
+        v.service = Some("UnmappedService".into());
+        v.user = Some("alice".into());
+        v
     };
-    let s_wrong_scheme_uri = OnlineService {
-        service: Some("Matrix".into()),
-        uri: Some("https:alice".into()),
-        ..OnlineService::default()
+    let s_wrong_scheme_uri = {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".into());
+        v.uri = Some("https:alice".into());
+        v
     };
 
     assert!(states_online_service(&s_matrix));
@@ -15909,12 +15917,13 @@ fn im_scheme_long_tail_aliases_and_canonical_uri_resolution() {
         assert_eq!(services["s1"].uri, None);
         assert_eq!(services["s1"].service.as_deref(), Some(service));
 
-        let service_entry = OnlineService {
-            service: Some(service.to_owned()),
-            uri: Some(uri.to_owned()),
-            user: None,
-            extra: BTreeMap::new(),
-            ..OnlineService::default()
+        let service_entry = {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.uri = Some(uri.to_owned());
+            v.user = None;
+            v.extra = BTreeMap::new();
+            v
         };
         assert_eq!(
             online_service_handle(&service_entry),
@@ -15953,12 +15962,13 @@ fn im_scheme_action_query_and_invalid_handle_rejection() {
             "{service} uri '{uri}' was unexpectedly drawn on {header}: {vcard}"
         );
 
-        let service_entry = OnlineService {
-            service: Some(service.to_owned()),
-            uri: Some(uri.to_owned()),
-            user: None,
-            extra: BTreeMap::new(),
-            ..OnlineService::default()
+        let service_entry = {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.uri = Some(uri.to_owned());
+            v.user = None;
+            v.extra = BTreeMap::new();
+            v
         };
         assert!(
             !states_online_service(&service_entry),
@@ -15972,65 +15982,51 @@ fn twitter_sip_and_unslotted_social_services_characterization_and_rationale() {
     // 1. Contact on server with slotted and unslotted/unmodeled onlineServices
     let mut card = ContactCard::default();
     let mut services = BTreeMap::new();
-    services.insert(
-        "s_jabber".to_owned(),
-        OnlineService {
-            service: Some("Jabber".to_owned()),
-            user: Some("vera@jabber.example".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_twitter".to_owned(),
-        OnlineService {
-            service: Some("Twitter".to_owned()),
-            user: Some("@vera_tw".to_owned()),
-            uri: Some("https://twitter.com/vera_tw".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_sip".to_owned(),
-        OnlineService {
-            service: Some("SIP".to_owned()),
-            uri: Some("sip:vera@example.com".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_telegram".to_owned(),
-        OnlineService {
-            service: Some("Telegram".to_owned()),
-            user: Some("vera_tg".to_owned()),
-            uri: Some("tg://resolve?domain=vera_tg".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_discord".to_owned(),
-        OnlineService {
-            service: Some("Discord".to_owned()),
-            user: Some("vera#1234".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_signal".to_owned(),
-        OnlineService {
-            service: Some("Signal".to_owned()),
-            user: Some("+1555123456".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_mastodon".to_owned(),
-        OnlineService {
-            service: Some("Mastodon".to_owned()),
-            user: Some("@vera@social.example".to_owned()),
-            uri: Some("acct:vera@social.example".to_owned()),
-            ..OnlineService::default()
-        },
-    );
+    services.insert("s_jabber".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("vera@jabber.example".to_owned());
+        v
+    });
+    services.insert("s_twitter".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Twitter".to_owned());
+        v.user = Some("@vera_tw".to_owned());
+        v.uri = Some("https://twitter.com/vera_tw".to_owned());
+        v
+    });
+    services.insert("s_sip".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("SIP".to_owned());
+        v.uri = Some("sip:vera@example.com".to_owned());
+        v
+    });
+    services.insert("s_telegram".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Telegram".to_owned());
+        v.user = Some("vera_tg".to_owned());
+        v.uri = Some("tg://resolve?domain=vera_tg".to_owned());
+        v
+    });
+    services.insert("s_discord".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Discord".to_owned());
+        v.user = Some("vera#1234".to_owned());
+        v
+    });
+    services.insert("s_signal".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Signal".to_owned());
+        v.user = Some("+1555123456".to_owned());
+        v
+    });
+    services.insert("s_mastodon".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Mastodon".to_owned());
+        v.user = Some("@vera@social.example".to_owned());
+        v.uri = Some("acct:vera@social.example".to_owned());
+        v
+    });
     card.online_services = Some(services);
 
     // 2. Outbound vCard contains ONLY mapped slotted services (Jabber)
@@ -18922,26 +18918,22 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
         );
         card.online_services = Some(
             [
-                (
-                    "s1".to_string(),
-                    OnlineService {
-                        service: Some("Jabber".into()),
-                        user: Some("selftest@jabber.org".into()),
-                        uri: None,
-                        extra: BTreeMap::new(),
-                        ..OnlineService::default()
-                    },
-                ),
-                (
-                    "s2".to_string(),
-                    OnlineService {
-                        service: Some("Matrix".into()),
-                        user: Some("selftest:matrix.org".into()),
-                        uri: None,
-                        extra: BTreeMap::new(),
-                        ..OnlineService::default()
-                    },
-                ),
+                ("s1".to_string(), {
+                    let mut v = OnlineService::default();
+                    v.service = Some("Jabber".into());
+                    v.user = Some("selftest@jabber.org".into());
+                    v.uri = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("s2".to_string(), {
+                    let mut v = OnlineService::default();
+                    v.service = Some("Matrix".into());
+                    v.user = Some("selftest:matrix.org".into());
+                    v.uri = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
         );
@@ -19448,26 +19440,22 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
         );
         card.online_services = Some(
             [
-                (
-                    "s1".to_string(),
-                    OnlineService {
-                        service: Some("Jabber".to_string()),
-                        user: Some("fuzz@jabber.org".to_string()),
-                        uri: None,
-                        extra: BTreeMap::new(),
-                        ..OnlineService::default()
-                    },
-                ),
-                (
-                    "s2".to_string(),
-                    OnlineService {
-                        service: Some("Skype".to_string()),
-                        user: Some("fuzz_skype".to_string()),
-                        uri: None,
-                        extra: BTreeMap::new(),
-                        ..OnlineService::default()
-                    },
-                ),
+                ("s1".to_string(), {
+                    let mut v = OnlineService::default();
+                    v.service = Some("Jabber".to_string());
+                    v.user = Some("fuzz@jabber.org".to_string());
+                    v.uri = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
+                ("s2".to_string(), {
+                    let mut v = OnlineService::default();
+                    v.service = Some("Skype".to_string());
+                    v.user = Some("fuzz_skype".to_string());
+                    v.uri = None;
+                    v.extra = BTreeMap::new();
+                    v
+                }),
             ]
             .into(),
         );
@@ -20333,14 +20321,12 @@ fn im_uri_schemes_all_10_services_and_18_aliases_roundtrip_matrix() {
 
         // 1. Test outbound emission from JSContact with `uri`
         let mut services = BTreeMap::new();
-        services.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(service.to_owned()),
-                uri: Some(uri_str.clone()),
-                ..OnlineService::default()
-            },
-        );
+        services.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.uri = Some(uri_str.clone());
+            v
+        });
         let card_with_uri = {
             let mut card = ContactCard::default();
             card.online_services = Some(services.clone());
@@ -20367,14 +20353,12 @@ fn im_uri_schemes_all_10_services_and_18_aliases_roundtrip_matrix() {
 
         // 2. Test outbound emission from JSContact with explicit `user`
         let mut services_user = BTreeMap::new();
-        services_user.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(service.to_owned()),
-                user: Some(handle.to_owned()),
-                ..OnlineService::default()
-            },
-        );
+        services_user.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.user = Some(handle.to_owned());
+            v
+        });
         let card_with_user = {
             let mut card = ContactCard::default();
             card.online_services = Some(services_user);
@@ -20442,65 +20426,51 @@ fn evolution_contact_editor_im_slotted_fields_vs_unslotted_twitter_and_sip_chara
 
     // Mix slotted services with unslotted and unmodeled ones.
     let mut services = BTreeMap::new();
-    services.insert(
-        "s_jabber".to_owned(),
-        OnlineService {
-            service: Some("Jabber".to_owned()),
-            user: Some("vera@jabber.example".to_owned()),
-            extra: [("contexts".to_owned(), json!({"home": true}))].into(),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_skype".to_owned(),
-        OnlineService {
-            service: Some("Skype".to_owned()),
-            user: Some("vera_skype".to_owned()),
-            extra: [("contexts".to_owned(), json!({"work": true}))].into(),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_matrix".to_owned(),
-        OnlineService {
-            service: Some("Matrix".to_owned()),
-            user: Some("@vera:matrix.org".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_twitter".to_owned(),
-        OnlineService {
-            service: Some("Twitter".to_owned()),
-            user: Some("@vera_tw".to_owned()),
-            uri: Some("https://twitter.com/vera_tw".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_sip".to_owned(),
-        OnlineService {
-            service: Some("SIP".to_owned()),
-            uri: Some("sip:vera@example.com".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_discord".to_owned(),
-        OnlineService {
-            service: Some("Discord".to_owned()),
-            user: Some("vera#1234".to_owned()),
-            ..OnlineService::default()
-        },
-    );
-    services.insert(
-        "s_signal".to_owned(),
-        OnlineService {
-            service: Some("Signal".to_owned()),
-            user: Some("+1555123456".to_owned()),
-            ..OnlineService::default()
-        },
-    );
+    services.insert("s_jabber".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("vera@jabber.example".to_owned());
+        v.extra = [("contexts".to_owned(), json!({"home": true}))].into();
+        v
+    });
+    services.insert("s_skype".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Skype".to_owned());
+        v.user = Some("vera_skype".to_owned());
+        v.extra = [("contexts".to_owned(), json!({"work": true}))].into();
+        v
+    });
+    services.insert("s_matrix".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Matrix".to_owned());
+        v.user = Some("@vera:matrix.org".to_owned());
+        v
+    });
+    services.insert("s_twitter".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Twitter".to_owned());
+        v.user = Some("@vera_tw".to_owned());
+        v.uri = Some("https://twitter.com/vera_tw".to_owned());
+        v
+    });
+    services.insert("s_sip".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("SIP".to_owned());
+        v.uri = Some("sip:vera@example.com".to_owned());
+        v
+    });
+    services.insert("s_discord".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Discord".to_owned());
+        v.user = Some("vera#1234".to_owned());
+        v
+    });
+    services.insert("s_signal".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Signal".to_owned());
+        v.user = Some("+1555123456".to_owned());
+        v
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -20635,14 +20605,12 @@ fn im_uri_schemes_action_query_fragment_and_percent_encoding_rejection_matrix() 
 
     for &(service, invalid_uri, reason) in rejected_uris {
         let mut services = BTreeMap::new();
-        services.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(service.to_owned()),
-                uri: Some(invalid_uri.to_owned()),
-                ..OnlineService::default()
-            },
-        );
+        services.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(service.to_owned());
+            v.uri = Some(invalid_uri.to_owned());
+            v
+        });
         let card = {
             let mut card = ContactCard::default();
             card.online_services = Some(services);
@@ -20719,14 +20687,12 @@ fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
 
     for &(service_input, expected_x_prop) in service_variations {
         let mut services = BTreeMap::new();
-        services.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(service_input.to_owned()),
-                user: Some("test_user".to_owned()),
-                ..OnlineService::default()
-            },
-        );
+        services.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(service_input.to_owned());
+            v.user = Some("test_user".to_owned());
+            v
+        });
         let card = {
             let mut card = ContactCard::default();
             card.online_services = Some(services);
@@ -20756,14 +20722,12 @@ fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
         "Discord",
     ] {
         let mut services = BTreeMap::new();
-        services.insert(
-            "s1".to_owned(),
-            OnlineService {
-                service: Some(unmapped.to_owned()),
-                user: Some("test_user".to_owned()),
-                ..OnlineService::default()
-            },
-        );
+        services.insert("s1".to_owned(), {
+            let mut v = OnlineService::default();
+            v.service = Some(unmapped.to_owned());
+            v.user = Some("test_user".to_owned());
+            v
+        });
         let card = {
             let mut card = ContactCard::default();
             card.online_services = Some(services);
@@ -20782,15 +20746,13 @@ fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
 
     // 2. User vs URI precedence: explicit user takes precedence over secondary URI
     let mut prec_services = BTreeMap::new();
-    prec_services.insert(
-        "s1".to_owned(),
-        OnlineService {
-            service: Some("Jabber".to_owned()),
-            user: Some("explicit_handle@jabber.org".to_owned()),
-            uri: Some("xmpp:different_uri_handle@jabber.org".to_owned()),
-            ..OnlineService::default()
-        },
-    );
+    prec_services.insert("s1".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("explicit_handle@jabber.org".to_owned());
+        v.uri = Some("xmpp:different_uri_handle@jabber.org".to_owned());
+        v
+    });
     let prec_card = {
         let mut card = ContactCard::default();
         card.online_services = Some(prec_services);
@@ -22576,15 +22538,13 @@ fn vcardprops_extension_properties_drop_after_parse_and_emit_in_eds_profile() {
 #[test]
 fn vcardname_source_property_identity_is_not_retained_in_eds_profile() {
     let mut online_services = BTreeMap::new();
-    online_services.insert(
-        "s1".to_owned(),
-        OnlineService {
-            service: Some("Jabber".to_owned()),
-            user: Some("alice@jabber.example".to_owned()),
-            extra: [("vCardName".to_owned(), json!("socialprofile"))].into(),
-            ..OnlineService::default()
-        },
-    );
+    online_services.insert("s1".to_owned(), {
+        let mut v = OnlineService::default();
+        v.service = Some("Jabber".to_owned());
+        v.user = Some("alice@jabber.example".to_owned());
+        v.extra = [("vCardName".to_owned(), json!("socialprofile"))].into();
+        v
+    });
     let source = {
         let mut card = ContactCard::default();
         card.online_services = Some(online_services);

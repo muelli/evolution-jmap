@@ -402,13 +402,12 @@ prop_compose! {
             "\\PC*",
         ]),
     ) -> OnlineService {
-        OnlineService {
-            service,
-            user,
-            uri,
-            extra: BTreeMap::new(),
-            ..OnlineService::default()
-        }
+        let mut v = OnlineService::default();
+        v.service = service;
+        v.user = user;
+        v.uri = uri;
+        v.extra = BTreeMap::new();
+        v
     }
 }
 

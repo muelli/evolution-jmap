@@ -923,12 +923,7 @@ const SERVICE_B: &str = "Yahoo";
 /// The shape in which every real `vcard_to_card` parse builds an online-service
 /// entry: a plain `user`, never a `uri`.
 fn user_stated(service: &str, handle: String) -> OnlineService {
-    OnlineService {
-        service: Some(service.to_owned()),
-        user: Some(handle),
-        uri: None,
-        ..OnlineService::default()
-    }
+    OnlineService::new().with_service(service).with_user(handle)
 }
 
 fn arb_online_service() -> impl Strategy<Value = OnlineService> {
@@ -964,12 +959,9 @@ enum CurrentShape {
 fn shaped(shape: CurrentShape, handle: String) -> OnlineService {
     match shape {
         CurrentShape::UserStated => user_stated(SERVICE_A, handle),
-        CurrentShape::UriDrawn => OnlineService {
-            service: Some(SERVICE_A.to_owned()),
-            user: None,
-            uri: Some(format!("skype:{handle}")),
-            ..OnlineService::default()
-        },
+        CurrentShape::UriDrawn => OnlineService::new()
+            .with_service(SERVICE_A)
+            .with_uri(format!("skype:{handle}")),
     }
 }
 

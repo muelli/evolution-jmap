@@ -1888,13 +1888,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     if let Some(service) = matched_service
                         && plain_handle(handle)
                     {
-                        let entry_obj = OnlineService {
-                            service: Some(service.to_owned()),
-                            user: Some(handle.to_owned()),
-                            uri: None,
-                            extra: BTreeMap::new(),
-                            ..OnlineService::default()
-                        };
+                        let entry_obj = OnlineService::new()
+                            .with_service(service.to_owned())
+                            .with_user(handle.to_owned());
                         online_services.insert(entry_key(entry, "s", &online_services), entry_obj);
                     }
                 }
@@ -1910,13 +1906,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 if handle.is_empty() {
                     continue;
                 }
-                let entry_obj = OnlineService {
-                    service: Some(service.to_owned()),
-                    user: Some(handle),
-                    uri: None,
-                    extra: BTreeMap::new(),
-                    ..OnlineService::default()
-                };
+                let entry_obj = OnlineService::new()
+                    .with_service(service.to_owned())
+                    .with_user(handle);
                 online_services.insert(entry_key(entry, "s", &online_services), entry_obj);
             }
         }

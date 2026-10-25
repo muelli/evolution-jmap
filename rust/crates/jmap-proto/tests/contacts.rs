@@ -597,15 +597,13 @@ fn jscontact_spec_properties_roundtrip() {
     )]));
     card.online_services = Some(BTreeMap::from([(
         "s1".to_owned(),
-        OnlineService {
-            service: Some("Matrix".to_owned()),
-            user: Some("@ada:example.org".to_owned()),
-            uri: Some("matrix:@ada:example.org".to_owned()),
-            contexts: Some(serde_json::json!({"work": true})),
-            pref: Some(1),
-            label: Some("Matrix Handle".to_owned()),
-            ..OnlineService::default()
-        },
+        OnlineService::new()
+            .with_service("Matrix")
+            .with_user("@ada:example.org")
+            .with_uri("matrix:@ada:example.org")
+            .with_contexts(serde_json::json!({"work": true}))
+            .with_pref(1)
+            .with_label("Matrix Handle"),
     )]));
 
     let c_json = serde_json::to_value(&card).unwrap();

@@ -956,32 +956,26 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // Skype and Matrix entries also have contexts.
     card.online_services = Some(
         [
-            (
-                SEEDED_SERVICE_KEY.to_owned(),
-                OnlineService {
-                    service: Some(SEEDED_SERVICE.to_owned()),
-                    uri: Some(SEEDED_SERVICE_URI.to_owned()),
-                    ..OnlineService::default()
-                },
-            ),
-            (
-                SEEDED_SKYPE_SERVICE_KEY.to_owned(),
-                OnlineService {
-                    service: Some(SEEDED_SKYPE_SERVICE.to_owned()),
-                    uri: Some(SEEDED_SKYPE_SERVICE_URI.to_owned()),
-                    extra: [("contexts".to_owned(), serde_json::json!({"private": true}))].into(),
-                    ..OnlineService::default()
-                },
-            ),
-            (
-                SEEDED_MATRIX_SERVICE_KEY.to_owned(),
-                OnlineService {
-                    service: Some(SEEDED_MATRIX_SERVICE.to_owned()),
-                    user: Some(SEEDED_MATRIX_SERVICE_HANDLE.to_owned()),
-                    extra: [("contexts".to_owned(), serde_json::json!({"work": true}))].into(),
-                    ..OnlineService::default()
-                },
-            ),
+            (SEEDED_SERVICE_KEY.to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = Some(SEEDED_SERVICE.to_owned());
+                v.uri = Some(SEEDED_SERVICE_URI.to_owned());
+                v
+            }),
+            (SEEDED_SKYPE_SERVICE_KEY.to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = Some(SEEDED_SKYPE_SERVICE.to_owned());
+                v.uri = Some(SEEDED_SKYPE_SERVICE_URI.to_owned());
+                v.extra = [("contexts".to_owned(), serde_json::json!({"private": true}))].into();
+                v
+            }),
+            (SEEDED_MATRIX_SERVICE_KEY.to_owned(), {
+                let mut v = OnlineService::default();
+                v.service = Some(SEEDED_MATRIX_SERVICE.to_owned());
+                v.user = Some(SEEDED_MATRIX_SERVICE_HANDLE.to_owned());
+                v.extra = [("contexts".to_owned(), serde_json::json!({"work": true}))].into();
+                v
+            }),
         ]
         .into_iter()
         .collect(),
