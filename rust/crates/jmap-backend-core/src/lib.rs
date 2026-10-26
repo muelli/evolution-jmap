@@ -17,6 +17,9 @@
 //! - [`trampoline`] stops a Rust panic from unwinding into C, which is
 //!   undefined behaviour.
 //! - [`cancel`] bridges a `GCancellable` to the client's [`CancelFlag`].
+//! - [`factory`] holds [`factory::BackendTypeCell`], the dynamically
+//!   registered `GType` that every backend factory remembers for its
+//!   backend.
 //! - [`connect`] is `connect_sync` without the collection it opens: the
 //!   credentials, the `out_auth_result` classification, and the resolution
 //!   of which server-side collection a source represents.
@@ -50,6 +53,7 @@ pub mod cancel;
 pub mod connect;
 pub mod error;
 pub mod extension;
+pub mod factory;
 pub mod forever;
 pub mod i18n;
 pub mod instance;
