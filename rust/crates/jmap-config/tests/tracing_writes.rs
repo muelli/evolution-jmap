@@ -12,17 +12,11 @@ use jmap_client::transport::UreqTransport;
 use jmap_config::config_lookup::probe_host;
 use jmap_config::oauth2_setup::discover_and_register;
 use jmap_mock::MockServer;
-use jmap_tracing_capture::capture;
+use jmap_tracing_capture::{capture, has};
 use serde_json::json;
 use tracing::Level;
 
 const REDIRECT_URI: &str = "https://client.example.org/callback";
-
-fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
-    captured
-        .iter()
-        .any(|(l, n, v)| *l == level && n == name && v == value)
-}
 
 fn metadata(origin: &str) -> serde_json::Value {
     json!({

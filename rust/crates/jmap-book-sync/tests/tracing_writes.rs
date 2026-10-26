@@ -7,7 +7,7 @@
 mod common;
 
 use common::Fixture;
-use jmap_tracing_capture::capture;
+use jmap_tracing_capture::{capture, has};
 use tracing::Level;
 
 const NEW_CONTACT: &str = "BEGIN:VCARD\r\n\
@@ -17,12 +17,6 @@ FN:Vera Oldenburg\r\n\
 N:Oldenburg;Vera;;;\r\n\
 EMAIL;TYPE=WORK:vera@example.com\r\n\
 END:VCARD\r\n";
-
-fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
-    captured
-        .iter()
-        .any(|(l, n, v)| *l == level && n == name && v == value)
-}
 
 #[test]
 fn creating_a_contact_traces_the_account_and_address_book_on_success() {

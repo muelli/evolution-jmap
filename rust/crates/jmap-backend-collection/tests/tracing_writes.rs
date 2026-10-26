@@ -43,7 +43,7 @@ use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Child, ChildKind, CollectionLayout, Doomed, Fanout, Parts, Requested};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
-use jmap_tracing_capture::capture;
+use jmap_tracing_capture::{capture, has};
 use tracing::Level;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -56,12 +56,6 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn untraced<T>(run: impl FnOnce() -> T) -> T {
     capture(run).0
-}
-
-fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
-    captured
-        .iter()
-        .any(|(l, n, v)| *l == level && n == name && v == value)
 }
 
 fn connection() -> Connection {

@@ -16,14 +16,8 @@ use jmap_mail_sync::{Filing, FolderInfo, KeywordChange, Keywords, MailSync};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{Envelope, EnvelopeAddress, role};
-use jmap_tracing_capture::capture;
+use jmap_tracing_capture::{capture, has};
 use tracing::Level;
-
-fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
-    captured
-        .iter()
-        .any(|(l, n, v)| *l == level && n == name && v == value)
-}
 
 struct Fixture {
     server: MockServer,

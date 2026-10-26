@@ -8,14 +8,8 @@ use jmap_client::{Client, Credentials};
 use jmap_collection_sync::{ChildKind, Doomed, Requested, create_collection, delete_collection};
 use jmap_mock::{DEFAULT_ACCOUNT_ID, MockServer};
 use jmap_proto::Id;
-use jmap_tracing_capture::capture;
+use jmap_tracing_capture::{capture, has};
 use tracing::Level;
-
-fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
-    captured
-        .iter()
-        .any(|(l, n, v)| *l == level && n == name && v == value)
-}
 
 fn client(server: &MockServer) -> Client {
     Client::connect(server.origin(), Credentials::none())

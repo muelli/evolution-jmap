@@ -8,7 +8,7 @@ mod common;
 
 use common::Fixture;
 use jmap_proto::Id;
-use jmap_tracing_capture::capture;
+use jmap_tracing_capture::{capture, has};
 use tracing::Level;
 
 const NEW_EVENT: &str = "BEGIN:VCALENDAR\r\n\
@@ -20,12 +20,6 @@ DTSTART;TZID=Europe/Berlin:20260115T130000\r\n\
 DURATION:PT90M\r\n\
 END:VEVENT\r\n\
 END:VCALENDAR\r\n";
-
-fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
-    captured
-        .iter()
-        .any(|(l, n, v)| *l == level && n == name && v == value)
-}
 
 #[test]
 fn creating_an_event_traces_the_account_and_calendar_on_success() {
