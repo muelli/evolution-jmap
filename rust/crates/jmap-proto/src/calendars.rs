@@ -1892,6 +1892,7 @@ pub mod calendar_free_busy_status {
 
 /// Group entries representation (RFC 8984 §5.3.1), supporting both the standard
 /// array of calendar objects and keyed maps.
+/// Stays exhaustive: an untagged two-case type fixed by the RFC, not a type a server extends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GroupEntries {

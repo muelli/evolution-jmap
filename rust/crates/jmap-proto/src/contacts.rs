@@ -2180,6 +2180,7 @@ impl Pronouns {
 
 /// JSContact pronouns value, supporting either an RFC 9553 §2.2.4 map of
 /// `Pronouns` or a shorthand plain string.
+/// Stays exhaustive: an untagged two-case type fixed by the RFC, not a type a server extends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PronounsValue {
