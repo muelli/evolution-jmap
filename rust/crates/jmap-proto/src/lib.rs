@@ -104,6 +104,7 @@ pub mod calendars;
 pub mod contacts;
 #[warn(missing_docs)]
 pub mod error;
+#[warn(missing_docs)]
 pub mod filenode;
 #[warn(missing_docs)]
 pub mod id;
@@ -122,6 +123,7 @@ pub mod quota;
 pub mod request;
 #[warn(missing_docs)]
 pub mod response;
+#[warn(missing_docs)]
 pub mod session;
 #[warn(missing_docs)]
 pub mod sieve;
