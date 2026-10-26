@@ -1284,7 +1284,7 @@ fn diff_pref(
 
 /// Escapes a map key for a JSON Pointer (RFC 6901 §3).
 fn escape(key: &str) -> String {
-    key.replace('~', "~0").replace('/', "~1")
+    jmap_proto::text::escape_pointer_segment(key)
 }
 
 fn value_or_null(value: Option<&String>) -> Value {

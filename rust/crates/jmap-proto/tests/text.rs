@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use jmap_proto::text::{
-    MAX_LINE_OCTETS, caret_decoded, caret_encoded, fold_overlong_lines, has_uri_scheme,
-    is_valid_scheme, split_uri, uri_scheme,
+    MAX_LINE_OCTETS, caret_decoded, caret_encoded, escape_pointer_segment, fold_overlong_lines,
+    has_uri_scheme, is_valid_scheme, split_uri, uri_scheme,
 };
 use proptest::prelude::*;
 
@@ -127,6 +127,16 @@ fn uri_scheme_extraction_and_splitting() {
     assert!(has_uri_scheme("http://example.com"));
     assert!(!has_uri_scheme("not-a-uri"));
     assert!(!has_uri_scheme(":empty"));
+}
+
+#[test]
+fn escape_pointer_segment_escapes_tilde_before_slash() {
+    // Escaping order matters: a literal `~` must become `~0` before a `/`
+    // becomes `~1`, or the `~1` for `/` would itself be re-escaped to `~01`.
+    assert_eq!(escape_pointer_segment("a/b"), "a~1b");
+    assert_eq!(escape_pointer_segment("a~b"), "a~0b");
+    assert_eq!(escape_pointer_segment("a~1b"), "a~01b");
+    assert_eq!(escape_pointer_segment("plain"), "plain");
 }
 
 proptest! {

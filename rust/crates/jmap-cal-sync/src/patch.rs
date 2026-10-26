@@ -418,7 +418,7 @@ fn name_of(key: &str) -> String {
 /// Returns a map key as a patch path segment. RFC 8620 §5.3 uses JSON pointer
 /// segments, so a `~` or a `/` in a server key gets escaped (RFC 6901 §3).
 fn escaped(key: &str) -> String {
-    key.replace('~', "~0").replace('/', "~1")
+    jmap_proto::text::escape_pointer_segment(key)
 }
 
 /// Patches the online places of the event. This is the second property that this
