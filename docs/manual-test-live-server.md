@@ -16,9 +16,30 @@ feature.
 ## 1. Get a server
 
 Use any JMAP server where you can create temporary accounts. The tests are
-written against Stalwart. In Stalwart, you can create accounts from the admin
-UI or with `stalwart-cli`. A Fastmail account works for the read-only tests.
-Basic authentication against Fastmail needs an app password.
+written against Stalwart and Cyrus IMAP.
+
+### Cyrus IMAP oracle container (local Podman)
+
+Run the Cyrus test server in rootless Podman:
+
+```console
+$ ./ci/cyrus-oracle.sh start
+$ eval $(./ci/cyrus-oracle.sh env)
+```
+
+This starts the container and exports `JMAP_LIVE_SERVER_*` variables for
+read-only, write, and recipient accounts, ready for running the test suite.
+To stop the Cyrus container:
+
+```console
+$ ./ci/cyrus-oracle.sh stop
+```
+
+### Stalwart or other deployments
+
+In Stalwart, you can create accounts from the admin UI or with
+`stalwart-cli`. A Fastmail account works for the read-only tests. Basic
+authentication against Fastmail needs an app password.
 
 ## 2. Set the environment
 
@@ -127,6 +148,7 @@ and `jmap-mail-sync`) take their sizes from `JMAP_SCALE_TEST_CARDS`,
 | Mail import, expunge, folders, keywords, filing, search | `jmap-mail-sync/tests/live_server_*.rs` | step 3 |
 | Sending between two accounts | `jmap-client` (`send_email_delivers_to_a_second_account_on_the_real_server`), `jmap-mail-sync/tests/live_server_send.rs` | steps 3 and 3a |
 | Shared address books, calendars and mailboxes | `*/tests/live_server_shared*.rs` | steps 3 and 3a |
+| CalendarEvent/parse differential fidelity across iCalendar fixtures | `jmap-client/tests/live_server.rs` | step 3 |
 | Meeting invitations | `jmap-cal-sync/tests/live_server_scheduling.rs` | steps 3 and 3a |
 | Undo window of a delete: no destroy before the due time, undo, refused destroy (takes about one minute) | `jmap-backend-collection/tests/live_server_deferred_delete.rs` | steps 3 and 3a |
 | OAuth 2.0 discovery and dynamic client registration | `jmap-config/tests/live_server_discover_and_register.rs` | step 2 (URL only) |

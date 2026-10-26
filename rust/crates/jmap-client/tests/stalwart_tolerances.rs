@@ -592,6 +592,71 @@ fn finding_13_calendar_event_parse_reports_multi_event_blob_as_not_parsable() {
     );
 }
 
+/// Exact wire JSON returned by Cyrus on `CalendarEvent/parse` for a multi-event blob.
+/// Cyrus packages multiple events into a JSCalendar `Group` object with `entries`.
+const CYRUS_CALENDAR_EVENT_PARSE_RESPONSE_GROUP_TWO_EVENTS: &str = r#"{"methodResponses":[["CalendarEvent/parse",{"accountId":"d333333","parsed":{"blob1":{"@type":"Group","entries":[{"@type":"Event","uid":"multi-event-probe-1","title":"First Event","start":"2026-10-06T12:00:00","updated":"2026-10-06T00:00:00Z"},{"@type":"Event","uid":"multi-event-probe-2","title":"Second Event","start":"2026-10-07T12:00:00","updated":"2026-10-06T00:00:00Z"}]}},"notParsable":null,"notFound":null},"c0"]],"sessionState":"0"}"#;
+
+/// Exact wire JSON returned by Cyrus on `CalendarEvent/parse` when an iCalendar blob
+/// is represented as a JSCalendar `Group` with a single entry.
+const CYRUS_CALENDAR_EVENT_PARSE_RESPONSE_GROUP_SINGLE_EVENT: &str = r#"{"methodResponses":[["CalendarEvent/parse",{"accountId":"d333333","parsed":{"blob1":{"@type":"Group","entries":[{"@type":"Event","uid":"single-event-probe","title":"Single Event","start":"2026-10-06T12:00:00","updated":"2026-10-06T00:00:00Z"}]}},"notParsable":null,"notFound":null},"c0"]],"sessionState":"0"}"#;
+
+#[test]
+fn cyrus_calendar_event_parse_reports_multi_event_group_as_not_parsable() {
+    let client = Client::builder()
+        .transport(MockCalendarEventTransport {
+            session_body: STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS_AND_PARSE,
+            response_body: CYRUS_CALENDAR_EVENT_PARSE_RESPONSE_GROUP_TWO_EVENTS,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let request = CalendarEventParseRequest::new(account_id.clone(), vec![Id::new("blob1")]);
+    let response = client
+        .event_parse(&request)
+        .expect("event_parse succeeds on wire");
+
+    let blob1 = Id::new("blob1");
+    assert!(
+        response
+            .parsed
+            .as_ref()
+            .is_none_or(|parsed| !parsed.contains_key(&blob1)),
+        "a multi-event group must not surface in parsed"
+    );
+    assert_eq!(
+        response.not_parsable.as_deref(),
+        Some([blob1].as_slice()),
+        "a multi-event group must be demoted to notParsable"
+    );
+}
+
+#[test]
+fn cyrus_calendar_event_parse_unwraps_single_event_group() {
+    let client = Client::builder()
+        .transport(MockCalendarEventTransport {
+            session_body: STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS_AND_PARSE,
+            response_body: CYRUS_CALENDAR_EVENT_PARSE_RESPONSE_GROUP_SINGLE_EVENT,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let request = CalendarEventParseRequest::new(account_id.clone(), vec![Id::new("blob1")]);
+    let response = client
+        .event_parse(&request)
+        .expect("event_parse succeeds on wire");
+
+    let blob1 = Id::new("blob1");
+    let parsed_map = response.parsed.expect("parsed map must be present");
+    let event = parsed_map
+        .get(&blob1)
+        .expect("unwrapped event for blob1 must be present");
+    assert_eq!(event.title.as_deref(), Some("Single Event"));
+    assert_eq!(event.uid.as_deref(), Some("single-event-probe"));
+    assert!(response.not_parsable.is_none());
+}
+
 /// Exact wire JSON returned by live Stalwart 0.16.22 on
 /// ContactCard/set create when onlineServices has no uri.
 /// Stalwart accepts the creation and returns the allocated id.
