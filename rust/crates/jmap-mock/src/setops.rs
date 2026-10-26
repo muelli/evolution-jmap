@@ -251,3 +251,46 @@ where
     }
     Ok(response)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::simple_set_with_validation;
+    use crate::state::Store;
+    use jmap_proto::error;
+    use jmap_proto::methods::SetRequest;
+    use serde_json::Value;
+
+    #[test]
+    fn simple_set_with_validation_rejects_stale_if_in_state() {
+        let mut store: Store<Value> = Store::new("obj-");
+
+        let response = simple_set_with_validation(
+            &mut store,
+            SetRequest::new("account").if_in_state("stale-state"),
+            |_, _| Ok(()),
+            |_, _, _| Ok(()),
+            |_, _| Ok(()),
+        );
+
+        let error = response.expect_err("stale ifInState should fail");
+        assert_eq!(error.error_type, error::method::STATE_MISMATCH);
+    }
+
+    #[test]
+    fn simple_set_with_validation_accepts_matching_if_in_state() {
+        let mut store: Store<Value> = Store::new("obj-");
+        let current_state = store.state();
+
+        let response = simple_set_with_validation(
+            &mut store,
+            SetRequest::new("account").if_in_state(current_state.clone()),
+            |_, _| Ok(()),
+            |_, _, _| Ok(()),
+            |_, _| Ok(()),
+        )
+        .expect("matching ifInState should succeed");
+
+        assert_eq!(response.old_state, Some(current_state.clone()));
+        assert_eq!(response.new_state, Some(current_state));
+    }
+}
