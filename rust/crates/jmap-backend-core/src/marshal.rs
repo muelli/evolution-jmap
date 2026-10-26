@@ -27,13 +27,25 @@
 use std::ffi::CStr;
 
 use eds_sys::{
-    E_SOURCE_CREDENTIAL_PASSWORD, ENamedParameters, ESource, e_named_parameters_get,
-    e_source_get_extension, e_source_has_extension,
+    E_CONFLICT_RESOLUTION_FAIL, E_CONFLICT_RESOLUTION_KEEP_SERVER, E_SOURCE_CREDENTIAL_PASSWORD,
+    EConflictResolution, ENamedParameters, ESource, e_named_parameters_get, e_source_get_extension,
+    e_source_has_extension,
 };
 use glib_sys::{GFALSE, GSList, GType, g_free, g_strdup, gchar};
 use gobject_sys::g_type_check_instance_is_a;
+use jmap_object_sync::OnConflict;
 
 use crate::error::cstring_lossy;
+
+/// The [`OnConflict`] for an `EConflictResolution`. The local save is the
+/// newer value, so any value other than "keep server" or "fail" keeps it.
+pub fn on_conflict(resolution: EConflictResolution) -> OnConflict {
+    match resolution {
+        E_CONFLICT_RESOLUTION_KEEP_SERVER => OnConflict::KeepServer,
+        E_CONFLICT_RESOLUTION_FAIL => OnConflict::Fail,
+        _ => OnConflict::KeepLocal,
+    }
+}
 
 /// A C string that the caller owns, as an owned `Option<String>`.
 ///

@@ -27,6 +27,7 @@ testing = []
 [dependencies]
 eds-sys = { workspace = true }
 evolution-jmap-client = { workspace = true }
+evolution-jmap-object-sync = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
