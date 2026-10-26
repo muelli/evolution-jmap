@@ -60,6 +60,7 @@ pub mod instance;
 pub mod invoke;
 pub mod logging;
 pub mod marshal;
+pub mod meta;
 pub mod mime;
 pub mod module;
 pub mod oauth2;
