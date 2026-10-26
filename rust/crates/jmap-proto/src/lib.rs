@@ -108,11 +108,14 @@ pub mod filenode;
 pub mod id;
 #[cfg(feature = "mail")]
 pub mod mail;
+#[warn(missing_docs)]
 pub mod metadata;
 pub mod methods;
 #[cfg(feature = "principals")]
 pub mod principals;
+#[warn(missing_docs)]
 pub mod push;
+#[warn(missing_docs)]
 pub mod quota;
 #[warn(missing_docs)]
 pub mod request;
@@ -125,6 +128,7 @@ pub mod state;
 #[cfg(feature = "calendars")]
 pub mod tasks;
 pub mod text;
+#[warn(missing_docs)]
 pub mod websocket;
 
 pub use id::Id;

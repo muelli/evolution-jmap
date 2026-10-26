@@ -21,11 +21,17 @@ pub const SUBPROTOCOL: &str = "jmap";
 
 /// Standard RFC 8887 `@type` message type values.
 pub mod message_type {
+    /// The `@type` value for a client-to-server request frame.
     pub const REQUEST: &str = "Request";
+    /// The `@type` value for a server-to-client response frame.
     pub const RESPONSE: &str = "Response";
+    /// The `@type` value for a request-level error frame.
     pub const REQUEST_ERROR: &str = "RequestError";
+    /// The `@type` value for a request to enable push notifications.
     pub const PUSH_ENABLE: &str = "WebSocketPushEnable";
+    /// The `@type` value for a request to disable push notifications.
     pub const PUSH_DISABLE: &str = "WebSocketPushDisable";
+    /// The `@type` value for a pushed state change notification.
     pub const STATE_CHANGE: &str = "StateChange";
 }
 
@@ -34,19 +40,26 @@ pub mod message_type {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct WebSocketRequest {
+    /// The literal `@type` value, always `"Request"`.
     #[serde(rename = "@type")]
     pub message_type: String,
+    /// A client-chosen id echoed back on the matching response frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// The capability URIs this request uses.
     pub using: Vec<String>,
+    /// The method calls to invoke, in order.
     pub method_calls: Vec<Invocation>,
+    /// Client-chosen ids for objects this request may create, mapped to their place in it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_ids: Option<BTreeMap<Id, Id>>,
+    /// Extra properties the server sent that this struct does not name.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 impl WebSocketRequest {
+    /// Create a request using the given capability URIs, with no method calls yet.
     pub fn new(using: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
             message_type: message_type::REQUEST.to_owned(),
@@ -58,6 +71,7 @@ impl WebSocketRequest {
         }
     }
 
+    /// Set the client-chosen id echoed back on the matching response frame.
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = Some(id.into());
         self
@@ -75,11 +89,13 @@ impl WebSocketRequest {
         Ok(self)
     }
 
+    /// Append an already-built method call invocation.
     pub fn with_invocation(mut self, invocation: Invocation) -> Self {
         self.method_calls.push(invocation);
         self
     }
 
+    /// Set the client-chosen ids for objects this request may create.
     pub fn with_created_ids(mut self, created_ids: BTreeMap<Id, Id>) -> Self {
         self.created_ids = Some(created_ids);
         self
@@ -91,16 +107,22 @@ impl WebSocketRequest {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct WebSocketResponse {
+    /// The literal `@type` value, always `"Response"`.
     #[serde(rename = "@type")]
     pub message_type: String,
+    /// The id echoed back from the matching request frame, if it had one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// The method responses, in the order the server executed them.
     #[serde(default)]
     pub method_responses: Vec<Invocation>,
+    /// The client-chosen ids from the request, mapped to the server ids created for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_ids: Option<BTreeMap<Id, Id>>,
+    /// The current session state, if the server included it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_state: Option<State>,
+    /// Extra properties the server sent that this struct does not name.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -119,25 +141,30 @@ impl Default for WebSocketResponse {
 }
 
 impl WebSocketResponse {
+    /// Create an empty response with no method responses yet.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Set the id echoed back from the matching request frame.
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = Some(id.into());
         self
     }
 
+    /// Append one method response.
     pub fn with_method_response(mut self, invocation: Invocation) -> Self {
         self.method_responses.push(invocation);
         self
     }
 
+    /// Set the client-chosen ids mapped to the server ids created for them.
     pub fn with_created_ids(mut self, created_ids: BTreeMap<Id, Id>) -> Self {
         self.created_ids = Some(created_ids);
         self
     }
 
+    /// Set the current session state.
     pub fn with_session_state(mut self, session_state: impl Into<State>) -> Self {
         self.session_state = Some(session_state.into());
         self
@@ -155,21 +182,28 @@ impl WebSocketResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct WebSocketRequestError {
+    /// The literal `@type` value, always `"RequestError"`.
     #[serde(rename = "@type")]
     pub message_type: String,
+    /// The id echoed back from the matching request frame, if it had one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// The problem type URI identifying the kind of error.
     #[serde(rename = "type")]
     pub error_type: String,
+    /// The HTTP status code the error corresponds to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
+    /// A human-readable description of the error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Extra properties the server sent that this struct does not name.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 impl WebSocketRequestError {
+    /// Create an error of the given problem type.
     pub fn new(error_type: impl Into<String>) -> Self {
         Self {
             message_type: message_type::REQUEST_ERROR.to_owned(),
@@ -181,16 +215,19 @@ impl WebSocketRequestError {
         }
     }
 
+    /// Set the id echoed back from the matching request frame.
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = Some(id.into());
         self
     }
 
+    /// Set the HTTP status code the error corresponds to.
     pub fn with_status(mut self, status: u16) -> Self {
         self.status = Some(status);
         self
     }
 
+    /// Set a human-readable description of the error.
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
@@ -202,10 +239,13 @@ impl WebSocketRequestError {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct WebSocketPushEnable {
+    /// The literal `@type` value, always `"WebSocketPushEnable"`.
     #[serde(rename = "@type")]
     pub message_type: String,
+    /// The data types to push notifications for; `None` means all types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_types: Option<Vec<String>>,
+    /// Extra properties the server sent that this struct does not name.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -221,10 +261,12 @@ impl Default for WebSocketPushEnable {
 }
 
 impl WebSocketPushEnable {
+    /// Create a request enabling push for all data types.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Restrict push notifications to the given data types.
     pub fn with_data_types(
         mut self,
         data_types: impl IntoIterator<Item = impl Into<String>>,
@@ -239,8 +281,10 @@ impl WebSocketPushEnable {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct WebSocketPushDisable {
+    /// The literal `@type` value, always `"WebSocketPushDisable"`.
     #[serde(rename = "@type")]
     pub message_type: String,
+    /// Extra properties the server sent that this struct does not name.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -255,6 +299,7 @@ impl Default for WebSocketPushDisable {
 }
 
 impl WebSocketPushDisable {
+    /// Create a request disabling push notifications.
     pub fn new() -> Self {
         Self::default()
     }
