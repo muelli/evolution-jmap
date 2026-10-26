@@ -1990,6 +1990,7 @@ impl EnvelopeAddress {
 
 /// Release schedule for delayed message submission (RFC 4865, RFC 8621 §7).
 /// Configured as a `mailFrom.parameters` entry.
+/// Stays exhaustive: an untagged two-case type fixed by the RFC, not a type a server extends.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Schedule {
     /// Hold for this many seconds (RFC 4865 `HOLDFOR`, at most 99999999).

@@ -371,6 +371,7 @@ impl Comparator {
 
 /// A `Foo/query` filter (RFC 8620 §5.5).
 /// Represents a leaf condition of type `F` or an untagged boolean combination of filters.
+/// Stays exhaustive: an untagged two-case type fixed by the RFC, not a type a server extends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Filter<F> {
@@ -542,6 +543,7 @@ impl UploadResponse {
 /// `Core/echo` method arguments and response (RFC 8620 §5.8).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(transparent)]
+#[non_exhaustive]
 pub struct Echo<T = Value> {
     pub payload: T,
 }
