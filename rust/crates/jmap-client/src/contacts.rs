@@ -132,7 +132,7 @@ impl Client {
         account_id: &Id,
         filter: ContactCardQueryFilter,
     ) -> Result<Vec<Id>, Error> {
-        self.query_every_id(USING, "ContactCard/query", account_id, filter)
+        self.query_every_id(USING, "ContactCard/query", account_id, filter, None)
     }
 
     /// Parse an uploaded vCard blob into a `ContactCard` (RFC 9610 Section 3.4).

@@ -240,6 +240,25 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
+    /// Query all email IDs matching `filter`, optionally sorted by `sort`.
+    ///
+    /// Fetches all pages across `Email/query`, validating the returned count
+    /// against `total` (RFC 8620 Section 5.5) and tracking against the client ID budget.
+    pub fn email_query_every_id(
+        &self,
+        account_id: &Id,
+        filter: impl Into<Filter<EmailQueryFilter>>,
+        sort: Option<Vec<Comparator>>,
+    ) -> Result<Vec<Id>, Error> {
+        self.query_every_id(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "Email/query",
+            account_id,
+            filter.into(),
+            sort,
+        )
+    }
+
     /// Fetch current `Email` state string without downloading messages.
     ///
     /// Issues an empty `Email/get` request (RFC 8620 Section 5.1).

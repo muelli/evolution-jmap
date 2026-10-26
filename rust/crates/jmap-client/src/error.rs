@@ -145,6 +145,14 @@ impl Error {
         )
     }
 
+    /// Return true if the error indicates incremental sync is impossible and a full resync is needed.
+    ///
+    /// This returns true for RFC 8620 Section 5.2 `cannotCalculateChanges`, as well as
+    /// non-conforming servers that return `invalidArguments` with a description mentioning state.
+    pub fn needs_full_resync(&self) -> bool {
+        self.is_cannot_calculate_changes() || self.is_unrecognized_changes_state()
+    }
+
     /// Return true if the failure was caused by rate limiting or resource limits.
     ///
     /// Matches [`Error::RateLimited`], HTTP 429, request limit problems,
@@ -415,6 +423,43 @@ mod tests {
 
         let transport = Error::Transport("failed".into());
         assert!(!transport.is_cannot_calculate_changes());
+    }
+
+    #[test]
+    fn needs_full_resync_reports_true_for_cannot_calculate_changes_and_unrecognized_state() {
+        let cannot_calc = Error::Method(jmap_proto::error::MethodError::new(
+            jmap_proto::error::method::CANNOT_CALCULATE_CHANGES,
+        ));
+        assert!(cannot_calc.needs_full_resync());
+
+        let invalid_args_state = Error::Method(
+            jmap_proto::error::MethodError::new(jmap_proto::error::method::INVALID_ARGUMENTS)
+                .with_description("unrecognized state string"),
+        );
+        assert!(invalid_args_state.needs_full_resync());
+
+        let invalid_args_no_desc = Error::Method(jmap_proto::error::MethodError::new(
+            jmap_proto::error::method::INVALID_ARGUMENTS,
+        ));
+        assert!(!invalid_args_no_desc.needs_full_resync());
+
+        let invalid_args_other = Error::Method(
+            jmap_proto::error::MethodError::new(jmap_proto::error::method::INVALID_ARGUMENTS)
+                .with_description("unknown filter condition"),
+        );
+        assert!(!invalid_args_other.needs_full_resync());
+
+        let not_found = Error::Method(jmap_proto::error::MethodError::new("notFound"));
+        assert!(!not_found.needs_full_resync());
+
+        let http = Error::Http {
+            status: 400,
+            problem: None,
+        };
+        assert!(!http.needs_full_resync());
+
+        let transport = Error::Transport("connection reset".into());
+        assert!(!transport.needs_full_resync());
     }
 
     #[test]
