@@ -288,13 +288,9 @@ impl SourceConfig {
     /// does not guess which part is correct.
     fn split_resource(&self) -> (Option<&str>, &str) {
         let resource = self.resource_id.as_deref().unwrap_or_default();
-        match resource.split_once('/') {
-            Some((account, collection))
-                if !account.is_empty() && !collection.is_empty() && !collection.contains('/') =>
-            {
-                (Some(account), collection)
-            }
-            _ => (None, resource),
+        match jmap_proto::id::split_shared_identity(resource) {
+            Some((account, collection)) => (Some(account), collection),
+            None => (None, resource),
         }
     }
 
