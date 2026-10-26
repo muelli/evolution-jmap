@@ -104,6 +104,7 @@ pub mod calendars;
 pub mod contacts;
 pub mod error;
 pub mod filenode;
+#[warn(missing_docs)]
 pub mod id;
 #[cfg(feature = "mail")]
 pub mod mail;
@@ -113,10 +114,13 @@ pub mod methods;
 pub mod principals;
 pub mod push;
 pub mod quota;
+#[warn(missing_docs)]
 pub mod request;
+#[warn(missing_docs)]
 pub mod response;
 pub mod session;
 pub mod sieve;
+#[warn(missing_docs)]
 pub mod state;
 #[cfg(feature = "calendars")]
 pub mod tasks;

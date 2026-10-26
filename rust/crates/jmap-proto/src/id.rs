@@ -11,14 +11,17 @@ use serde::{Deserialize, Serialize};
 pub struct Id(String);
 
 impl Id {
+    /// Create an `Id` from a string.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
+    /// Return the id as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// Check if the id is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

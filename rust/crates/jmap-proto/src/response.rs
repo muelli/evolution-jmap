@@ -16,15 +16,20 @@ use crate::state::State;
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Response {
+    /// The method call results, in call order.
     #[serde(default)]
     pub method_responses: Vec<Invocation>,
+    /// Id assignments for objects a `create` call made, keyed by the
+    /// client-provided creation id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_ids: Option<BTreeMap<Id, Id>>,
+    /// The session state at response time.
     #[serde(default)]
     pub session_state: State,
 }
 
 impl Response {
+    /// Create a `Response` with the given session state and no method responses.
     pub fn new(session_state: impl Into<State>) -> Self {
         Self {
             method_responses: Vec::new(),
@@ -33,16 +38,19 @@ impl Response {
         }
     }
 
+    /// Append one method response.
     pub fn with_method_response(mut self, invocation: Invocation) -> Self {
         self.method_responses.push(invocation);
         self
     }
 
+    /// Replace the method responses.
     pub fn with_method_responses(mut self, method_responses: Vec<Invocation>) -> Self {
         self.method_responses = method_responses;
         self
     }
 
+    /// Set the created-id map.
     pub fn with_created_ids(mut self, created_ids: BTreeMap<Id, Id>) -> Self {
         self.created_ids = Some(created_ids);
         self
