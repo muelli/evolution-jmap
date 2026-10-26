@@ -1442,6 +1442,7 @@ impl SchedulingAddress {
 /// JSContact Media (RFC 9553 §2.6.4): one media resource the card carries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Media {
     /// What the resource is: `photo`, `sound` or `logo` per RFC 9553 §2.6.4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1489,6 +1490,11 @@ impl Media {
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
         self
     }
 }

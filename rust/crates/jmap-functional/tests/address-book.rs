@@ -873,23 +873,19 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
     // round trip.
     card.media = Some(
         [
-            (
-                SEEDED_PHOTO_KEY.to_owned(),
-                Media {
-                    kind: Some("photo".to_owned()),
-                    uri: format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"),
-                    media_type: Some(PHOTO_MEDIA_TYPE.to_owned()),
-                    ..Media::default()
-                },
-            ),
-            (
-                SEEDED_LOGO_KEY.to_owned(),
-                Media {
-                    kind: Some("logo".to_owned()),
-                    uri: SEEDED_LOGO_URI.to_owned(),
-                    ..Media::default()
-                },
-            ),
+            (SEEDED_PHOTO_KEY.to_owned(), {
+                let mut media = Media::default();
+                media.kind = Some("photo".to_owned());
+                media.uri = format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}");
+                media.media_type = Some(PHOTO_MEDIA_TYPE.to_owned());
+                media
+            }),
+            (SEEDED_LOGO_KEY.to_owned(), {
+                let mut media = Media::default();
+                media.kind = Some("logo".to_owned());
+                media.uri = SEEDED_LOGO_URI.to_owned();
+                media
+            }),
         ]
         .into_iter()
         .collect(),

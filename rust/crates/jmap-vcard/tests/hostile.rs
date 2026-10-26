@@ -27,14 +27,12 @@ fn card_with_email_key(key: &str) -> ContactCard {
 /// Build a card with one `photo` media entry under `m1`.
 fn card_with_photo_uri(uri: &str) -> ContactCard {
     let mut media = BTreeMap::new();
-    media.insert(
-        "m1".to_owned(),
-        Media {
-            kind: Some("photo".to_owned()),
-            uri: uri.to_owned(),
-            ..Media::default()
-        },
-    );
+    media.insert("m1".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = uri.to_owned();
+        media
+    });
     {
         let mut card = ContactCard::default();
         card.id = Some("C1".into());

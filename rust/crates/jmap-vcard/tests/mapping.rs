@@ -2424,15 +2424,13 @@ fn photo_of_kind(kind: Option<&str>, uri: &str, media_type: Option<&str>) -> Con
     {
         let mut card = ContactCard::default();
         card.media = Some(
-            [(
-                "m1".to_owned(),
-                Media {
-                    kind: kind.map(str::to_owned),
-                    uri: uri.to_owned(),
-                    media_type: media_type.map(str::to_owned),
-                    ..Media::default()
-                },
-            )]
+            [("m1".to_owned(), {
+                let mut media = Media::default();
+                media.kind = kind.map(str::to_owned);
+                media.uri = uri.to_owned();
+                media.media_type = media_type.map(str::to_owned);
+                media
+            })]
             .into(),
         );
         card
@@ -3523,30 +3521,24 @@ fn photo_with_value_uri_and_multiple_media_kinds_emits_only_photo_and_roundtrips
     let mut card = ContactCard::simple("b1", "Vera Oldenburg", "vera@example.com");
     card.media = Some(
         [
-            (
-                "m1".to_owned(),
-                Media {
-                    kind: Some("photo".to_owned()),
-                    uri: "https://example.com/avatar.png".to_owned(),
-                    ..Media::default()
-                },
-            ),
-            (
-                "m2".to_owned(),
-                Media {
-                    kind: Some("logo".to_owned()),
-                    uri: "https://example.com/logo.png".to_owned(),
-                    ..Media::default()
-                },
-            ),
-            (
-                "m3".to_owned(),
-                Media {
-                    kind: Some("sound".to_owned()),
-                    uri: "https://example.com/pronunciation.ogg".to_owned(),
-                    ..Media::default()
-                },
-            ),
+            ("m1".to_owned(), {
+                let mut media = Media::default();
+                media.kind = Some("photo".to_owned());
+                media.uri = "https://example.com/avatar.png".to_owned();
+                media
+            }),
+            ("m2".to_owned(), {
+                let mut media = Media::default();
+                media.kind = Some("logo".to_owned());
+                media.uri = "https://example.com/logo.png".to_owned();
+                media
+            }),
+            ("m3".to_owned(), {
+                let mut media = Media::default();
+                media.kind = Some("sound".to_owned());
+                media.uri = "https://example.com/pronunciation.ogg".to_owned();
+                media
+            }),
         ]
         .into_iter()
         .collect(),
@@ -5141,70 +5133,83 @@ fn calendar_and_spouse_predicates_fidelity() {
 #[test]
 fn media_photo_and_online_service_predicates_and_comparisons() {
     // Check `states_media` and `same_photo`.
-    let m_uri1 = Media {
-        kind: Some("photo".into()),
-        uri: "https://example.com/photo1.jpg".into(),
-        ..Media::default()
+    let m_uri1 = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "https://example.com/photo1.jpg".into();
+        media
     };
-    let m_uri2 = Media {
-        kind: Some("photo".into()),
-        uri: "https://example.com/photo1.jpg".into(),
-        ..Media::default()
+    let m_uri2 = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "https://example.com/photo1.jpg".into();
+        media
     };
-    let m_uri3 = Media {
-        kind: Some("photo".into()),
-        uri: "https://example.com/photo2.jpg".into(),
-        ..Media::default()
+    let m_uri3 = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "https://example.com/photo2.jpg".into();
+        media
     };
-    let m_logo = Media {
-        kind: Some("logo".into()),
-        uri: "https://example.com/logo.png".into(),
-        ..Media::default()
+    let m_logo = {
+        let mut media = Media::default();
+        media.kind = Some("logo".into());
+        media.uri = "https://example.com/logo.png".into();
+        media
     };
-    let m_sound = Media {
-        kind: Some("sound".into()),
-        uri: "https://example.com/audio.mp3".into(),
-        ..Media::default()
+    let m_sound = {
+        let mut media = Media::default();
+        media.kind = Some("sound".into());
+        media.uri = "https://example.com/audio.mp3".into();
+        media
     };
-    let m_empty_uri = Media {
-        kind: Some("photo".into()),
-        uri: "".into(),
-        ..Media::default()
+    let m_empty_uri = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "".into();
+        media
     };
-    let m_none_kind = Media {
-        kind: None,
-        uri: "https://example.com/photo.jpg".into(),
-        ..Media::default()
+    let m_none_kind = {
+        let mut media = Media::default();
+        media.kind = None;
+        media.uri = "https://example.com/photo.jpg".into();
+        media
     };
-    let m_data1 = Media {
-        kind: Some("photo".into()),
-        uri: "data:image/jpeg;base64,aGVsbG8=".into(),
-        ..Media::default()
+    let m_data1 = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "data:image/jpeg;base64,aGVsbG8=".into();
+        media
     };
-    let m_data2 = Media {
-        kind: Some("photo".into()),
-        uri: "data:image/jpeg;base64,aGVsbG8=".into(),
-        ..Media::default()
+    let m_data2 = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "data:image/jpeg;base64,aGVsbG8=".into();
+        media
     };
-    let m_data_case = Media {
-        kind: Some("photo".into()),
-        uri: "data:image/JPEG;base64,aGVsbG8=".into(),
-        ..Media::default()
+    let m_data_case = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "data:image/JPEG;base64,aGVsbG8=".into();
+        media
     };
-    let m_data_diff_bytes = Media {
-        kind: Some("photo".into()),
-        uri: "data:image/jpeg;base64,d29ybGQ=".into(),
-        ..Media::default()
+    let m_data_diff_bytes = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "data:image/jpeg;base64,d29ybGQ=".into();
+        media
     };
-    let m_data_diff_type = Media {
-        kind: Some("photo".into()),
-        uri: "data:image/png;base64,aGVsbG8=".into(),
-        ..Media::default()
+    let m_data_diff_type = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "data:image/png;base64,aGVsbG8=".into();
+        media
     };
-    let m_data_invalid = Media {
-        kind: Some("photo".into()),
-        uri: "data:image/jpeg;base64,!!!invalid!!!".into(),
-        ..Media::default()
+    let m_data_invalid = {
+        let mut media = Media::default();
+        media.kind = Some("photo".into());
+        media.uri = "data:image/jpeg;base64,!!!invalid!!!".into();
+        media
     };
 
     assert!(states_media(&m_uri1));
@@ -7876,16 +7881,14 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
     let photo_uri = format!("data:image/jpeg;base64,{base64_payload}");
 
     let mut media = BTreeMap::new();
-    media.insert(
-        "m1".to_owned(),
-        Media {
-            kind: Some("photo".to_owned()),
-            uri: photo_uri.clone(),
-            media_type: Some("image/jpeg".to_owned()),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
+    media.insert("m1".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = photo_uri.clone();
+        media.media_type = Some("image/jpeg".to_owned());
+        media.extra = BTreeMap::new();
+        media
+    });
 
     let card = {
         let mut card = ContactCard::default();
@@ -10860,61 +10863,69 @@ fn photo_uri_variant_and_lossy_media_type_characterization() {
 #[test]
 fn photo_eds_photo_field_replacements_and_same_photo_equality() {
     // 1. same_photo equality comparisons:
-    let inline_jpeg = Media {
-        kind: Some("photo".to_owned()),
-        uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
-        media_type: Some("image/jpeg".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let inline_jpeg = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = format!("data:image/jpeg;base64,{PAYLOAD}");
+        media.media_type = Some("image/jpeg".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
-    let inline_jpeg_caps = Media {
-        kind: Some("photo".to_owned()),
-        uri: format!("data:image/JPEG;base64,{PAYLOAD}"),
-        media_type: Some("image/JPEG".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let inline_jpeg_caps = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = format!("data:image/JPEG;base64,{PAYLOAD}");
+        media.media_type = Some("image/JPEG".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
-    let inline_jpeg_unpadded = Media {
-        kind: Some("photo".to_owned()),
-        uri: format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('=')),
-        media_type: Some("image/jpeg".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let inline_jpeg_unpadded = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('='));
+        media.media_type = Some("image/jpeg".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
-    let inline_png = Media {
-        kind: Some("photo".to_owned()),
-        uri: format!("data:image/png;base64,{PAYLOAD}"),
-        media_type: Some("image/png".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let inline_png = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = format!("data:image/png;base64,{PAYLOAD}");
+        media.media_type = Some("image/png".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
-    let inline_diff_payload = Media {
-        kind: Some("photo".to_owned()),
-        uri: "data:image/jpeg;base64,AQIDBA==".to_owned(),
-        media_type: Some("image/jpeg".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let inline_diff_payload = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "data:image/jpeg;base64,AQIDBA==".to_owned();
+        media.media_type = Some("image/jpeg".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
-    let uri_photo1 = Media {
-        kind: Some("photo".to_owned()),
-        uri: "https://example.com/alice.jpg".to_owned(),
-        media_type: None,
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let uri_photo1 = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "https://example.com/alice.jpg".to_owned();
+        media.media_type = None;
+        media.extra = BTreeMap::new();
+        media
     };
-    let uri_photo2 = Media {
-        kind: Some("photo".to_owned()),
-        uri: "https://example.com/bob.jpg".to_owned(),
-        media_type: None,
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let uri_photo2 = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "https://example.com/bob.jpg".to_owned();
+        media.media_type = None;
+        media.extra = BTreeMap::new();
+        media
     };
-    let non_photo = Media {
-        kind: Some("logo".to_owned()),
-        uri: "https://example.com/logo.png".to_owned(),
-        media_type: None,
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let non_photo = {
+        let mut media = Media::default();
+        media.kind = Some("logo".to_owned());
+        media.uri = "https://example.com/logo.png".to_owned();
+        media.media_type = None;
+        media.extra = BTreeMap::new();
+        media
     };
 
     // Inline comparisons
@@ -10979,36 +10990,30 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
 fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     // 1. Multiple PHOTO entries on one card.
     let mut media_map = BTreeMap::new();
-    media_map.insert(
-        "m1".to_owned(),
-        Media {
-            kind: Some("photo".to_owned()),
-            uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
-            media_type: Some("image/jpeg".to_owned()),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
-    media_map.insert(
-        "m2".to_owned(),
-        Media {
-            kind: Some("photo".to_owned()),
-            uri: "https://example.com/profile-large.jpg".to_owned(),
-            media_type: None,
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
-    media_map.insert(
-        "m3".to_owned(),
-        Media {
-            kind: Some("photo".to_owned()),
-            uri: "data:image/png;base64,AQIDBA==".to_owned(),
-            media_type: Some("image/png".to_owned()),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
+    media_map.insert("m1".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = format!("data:image/jpeg;base64,{PAYLOAD}");
+        media.media_type = Some("image/jpeg".to_owned());
+        media.extra = BTreeMap::new();
+        media
+    });
+    media_map.insert("m2".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "https://example.com/profile-large.jpg".to_owned();
+        media.media_type = None;
+        media.extra = BTreeMap::new();
+        media
+    });
+    media_map.insert("m3".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "data:image/png;base64,AQIDBA==".to_owned();
+        media.media_type = Some("image/png".to_owned());
+        media.extra = BTreeMap::new();
+        media
+    });
 
     let multi_card = {
         let mut card = ContactCard::default();
@@ -11056,56 +11061,46 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
 
     // 2. Non-photo media filtering: logos, sounds, documents, and unmapped kinds
     let mut mixed_media = BTreeMap::new();
-    mixed_media.insert(
-        "m1".to_owned(),
-        Media {
-            kind: Some("photo".to_owned()),
-            uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
-            media_type: Some("image/jpeg".to_owned()),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
-    mixed_media.insert(
-        "m2".to_owned(),
-        Media {
-            kind: Some("logo".to_owned()),
-            uri: "https://example.com/corp-logo.png".to_owned(),
-            media_type: Some("image/png".to_owned()),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
-    mixed_media.insert(
-        "m3".to_owned(),
-        Media {
-            kind: Some("sound".to_owned()),
-            uri: "https://example.com/pronunciation.ogg".to_owned(),
-            media_type: Some("audio/ogg".to_owned()),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
-    mixed_media.insert(
-        "m4".to_owned(),
-        Media {
-            kind: Some("document".to_owned()),
-            uri: "https://example.com/resume.pdf".to_owned(),
-            media_type: Some("application/pdf".to_owned()),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
-    mixed_media.insert(
-        "m5".to_owned(),
-        Media {
-            kind: None,
-            uri: "https://example.com/unknown.dat".to_owned(),
-            media_type: None,
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
+    mixed_media.insert("m1".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = format!("data:image/jpeg;base64,{PAYLOAD}");
+        media.media_type = Some("image/jpeg".to_owned());
+        media.extra = BTreeMap::new();
+        media
+    });
+    mixed_media.insert("m2".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("logo".to_owned());
+        media.uri = "https://example.com/corp-logo.png".to_owned();
+        media.media_type = Some("image/png".to_owned());
+        media.extra = BTreeMap::new();
+        media
+    });
+    mixed_media.insert("m3".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("sound".to_owned());
+        media.uri = "https://example.com/pronunciation.ogg".to_owned();
+        media.media_type = Some("audio/ogg".to_owned());
+        media.extra = BTreeMap::new();
+        media
+    });
+    mixed_media.insert("m4".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("document".to_owned());
+        media.uri = "https://example.com/resume.pdf".to_owned();
+        media.media_type = Some("application/pdf".to_owned());
+        media.extra = BTreeMap::new();
+        media
+    });
+    mixed_media.insert("m5".to_owned(), {
+        let mut media = Media::default();
+        media.kind = None;
+        media.uri = "https://example.com/unknown.dat".to_owned();
+        media.media_type = None;
+        media.extra = BTreeMap::new();
+        media
+    });
 
     // Predicates
     assert!(states_media(&mixed_media["m1"]), "photo is stateable");
@@ -12103,46 +12098,38 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
     // `PatchObject` keeps those non-photo media entries untouched during sync.
 
     let mut media = BTreeMap::new();
-    media.insert(
-        "m_photo".to_owned(),
-        Media {
-            kind: Some("photo".to_owned()),
-            media_type: Some("image/jpeg".to_owned()),
-            uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned(),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
-    media.insert(
-        "m_logo".to_owned(),
-        Media {
-            kind: Some("logo".to_owned()),
-            media_type: Some("image/png".to_owned()),
-            uri: "https://example.com/company_logo.png".to_owned(),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
-    media.insert(
-        "m_sound".to_owned(),
-        Media {
-            kind: Some("sound".to_owned()),
-            media_type: Some("audio/wav".to_owned()),
-            uri: "data:audio/wav;base64,UklGRg==".to_owned(),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
-    media.insert(
-        "m_doc".to_owned(),
-        Media {
-            kind: Some("document".to_owned()),
-            media_type: Some("application/pdf".to_owned()),
-            uri: "https://example.com/resume.pdf".to_owned(),
-            extra: BTreeMap::new(),
-            ..Media::default()
-        },
-    );
+    media.insert("m_photo".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.media_type = Some("image/jpeg".to_owned());
+        media.uri = "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned();
+        media.extra = BTreeMap::new();
+        media
+    });
+    media.insert("m_logo".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("logo".to_owned());
+        media.media_type = Some("image/png".to_owned());
+        media.uri = "https://example.com/company_logo.png".to_owned();
+        media.extra = BTreeMap::new();
+        media
+    });
+    media.insert("m_sound".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("sound".to_owned());
+        media.media_type = Some("audio/wav".to_owned());
+        media.uri = "data:audio/wav;base64,UklGRg==".to_owned();
+        media.extra = BTreeMap::new();
+        media
+    });
+    media.insert("m_doc".to_owned(), {
+        let mut media = Media::default();
+        media.kind = Some("document".to_owned());
+        media.media_type = Some("application/pdf".to_owned());
+        media.uri = "https://example.com/resume.pdf".to_owned();
+        media.extra = BTreeMap::new();
+        media
+    });
 
     // states_media predicate validation
     assert!(states_media(&media["m_photo"]), "photo must be stateable");
@@ -16121,25 +16108,29 @@ fn crypto_keys_and_logo_server_state_untouched_characterization() {
 
     // JSContact RFC 9553 §2.6.4 media
     let mut media = BTreeMap::new();
-    let photo = Media {
-        kind: Some("photo".to_owned()),
-        uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
-        media_type: Some("image/png".to_owned()),
-        extra: BTreeMap::new(), ..Media::default()
-        };
-    let logo = Media {
-        kind: Some("logo".to_owned()),
-        uri: "https://example.com/corp_logo.svg".to_owned(),
-        media_type: Some("image/svg+xml".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let photo = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned();
+        media.media_type = Some("image/png".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
-    let sound = Media {
-        kind: Some("sound".to_owned()),
-        uri: "https://example.com/pronunciation.ogg".to_owned(),
-        media_type: Some("audio/ogg".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let logo = {
+        let mut media = Media::default();
+        media.kind = Some("logo".to_owned());
+        media.uri = "https://example.com/corp_logo.svg".to_owned();
+        media.media_type = Some("image/svg+xml".to_owned());
+        media.extra = BTreeMap::new();
+        media
+    };
+    let sound = {
+        let mut media = Media::default();
+        media.kind = Some("sound".to_owned());
+        media.uri = "https://example.com/pronunciation.ogg".to_owned();
+        media.media_type = Some("audio/ogg".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
     media.insert("m_photo".to_owned(), photo.clone());
     media.insert("m_logo".to_owned(), logo.clone());
@@ -17306,26 +17297,29 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
     });
 
     let mut media = BTreeMap::new();
-    let photo = Media {
-        kind: Some("photo".to_owned()),
-        uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned(),
-        media_type: Some("image/jpeg".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let photo = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned();
+        media.media_type = Some("image/jpeg".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
-    let sound = Media {
-        kind: Some("sound".to_owned()),
-        uri: "https://example.com/pronounce.mp3".to_owned(),
-        media_type: Some("audio/mpeg".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let sound = {
+        let mut media = Media::default();
+        media.kind = Some("sound".to_owned());
+        media.uri = "https://example.com/pronounce.mp3".to_owned();
+        media.media_type = Some("audio/mpeg".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
-    let logo = Media {
-        kind: Some("logo".to_owned()),
-        uri: "https://example.com/corp_logo.png".to_owned(),
-        media_type: Some("image/png".to_owned()),
-        extra: BTreeMap::new(),
-        ..Media::default()
+    let logo = {
+        let mut media = Media::default();
+        media.kind = Some("logo".to_owned());
+        media.uri = "https://example.com/corp_logo.png".to_owned();
+        media.media_type = Some("image/png".to_owned());
+        media.extra = BTreeMap::new();
+        media
     };
     media.insert("m_photo".to_owned(), photo.clone());
     media.insert("m_sound".to_owned(), sound.clone());
@@ -18912,12 +18906,14 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
             .into(),
         );
         card.media = Some([
-            ("m1".to_string(), Media {
-                kind: Some("photo".into()),
-                uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into(),
-                media_type: Some("image/png".into()),
-                extra: BTreeMap::new(), ..Media::default()
-        }),
+            ("m1".to_string(), {
+                let mut media = Media::default();
+                media.kind = Some("photo".into());
+                media.uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into();
+                media.media_type = Some("image/png".into());
+                media.extra = BTreeMap::new();
+                media
+            }),
         ].into());
         card
     };
@@ -19316,36 +19312,30 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
         );
         card.media = Some(
             [
-                (
-                    "m1".to_string(),
-                    Media {
-                        kind: Some("photo".to_string()),
-                        uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string(),
-                        media_type: Some("image/jpeg".to_string()),
-                        extra: BTreeMap::new(),
-                        ..Media::default()
-                    },
-                ),
-                (
-                    "m2".to_string(),
-                    Media {
-                        kind: Some("sound".to_string()),
-                        uri: "https://example.com/audio.ogg".to_string(),
-                        media_type: Some("audio/ogg".to_string()),
-                        extra: BTreeMap::new(),
-                        ..Media::default()
-                    },
-                ),
-                (
-                    "m3".to_string(),
-                    Media {
-                        kind: Some("logo".to_string()),
-                        uri: "https://example.com/logo.png".to_string(),
-                        media_type: Some("image/png".to_string()),
-                        extra: BTreeMap::new(),
-                        ..Media::default()
-                    },
-                ),
+                ("m1".to_string(), {
+                    let mut media = Media::default();
+                    media.kind = Some("photo".to_string());
+                    media.uri = "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string();
+                    media.media_type = Some("image/jpeg".to_string());
+                    media.extra = BTreeMap::new();
+                    media
+                }),
+                ("m2".to_string(), {
+                    let mut media = Media::default();
+                    media.kind = Some("sound".to_string());
+                    media.uri = "https://example.com/audio.ogg".to_string();
+                    media.media_type = Some("audio/ogg".to_string());
+                    media.extra = BTreeMap::new();
+                    media
+                }),
+                ("m3".to_string(), {
+                    let mut media = Media::default();
+                    media.kind = Some("logo".to_string());
+                    media.uri = "https://example.com/logo.png".to_string();
+                    media.media_type = Some("image/png".to_string());
+                    media.extra = BTreeMap::new();
+                    media
+                }),
             ]
             .into(),
         );
@@ -21022,69 +21012,79 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
 
 #[test]
 fn same_photo_and_states_media_comprehensive_decision_matrix() {
-    let p_uri1 = Media {
-        kind: Some("photo".to_owned()),
-        uri: "https://example.com/avatar.jpg".to_owned(),
-        media_type: None,
-        ..Media::default()
+    let p_uri1 = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "https://example.com/avatar.jpg".to_owned();
+        media.media_type = None;
+        media
     };
-    let p_uri1_same = Media {
-        kind: Some("photo".to_owned()),
-        uri: "https://example.com/avatar.jpg".to_owned(),
-        media_type: Some("image/jpeg".to_owned()), // media_type ignored for URI photos
-        ..Media::default()
+    let p_uri1_same = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "https://example.com/avatar.jpg".to_owned();
+        media.media_type = Some("image/jpeg".to_owned()); // media_type ignored for URI photos
+        media
     };
-    let p_uri2 = Media {
-        kind: Some("photo".to_owned()),
-        uri: "https://example.com/other.png".to_owned(),
-        media_type: None,
-        ..Media::default()
+    let p_uri2 = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "https://example.com/other.png".to_owned();
+        media.media_type = None;
+        media
     };
 
     // Inline photos with identical decoded bytes but different padding / case
-    let p_inline_padded = Media {
-        kind: Some("photo".to_owned()),
-        uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
-        media_type: Some("image/jpeg".to_owned()),
-        ..Media::default()
+    let p_inline_padded = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = format!("data:image/jpeg;base64,{PAYLOAD}");
+        media.media_type = Some("image/jpeg".to_owned());
+        media
     };
-    let p_inline_unpadded = Media {
-        kind: Some("photo".to_owned()),
-        uri: format!("data:image/JPEG;base64,{}", PAYLOAD.trim_end_matches('=')),
-        media_type: Some("image/JPEG".to_owned()),
-        ..Media::default()
+    let p_inline_unpadded = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = format!("data:image/JPEG;base64,{}", PAYLOAD.trim_end_matches('='));
+        media.media_type = Some("image/JPEG".to_owned());
+        media
     };
-    let p_inline_different_bytes = Media {
-        kind: Some("photo".to_owned()),
-        uri: "data:image/jpeg;base64,ZGlmZmVyZW50".to_owned(),
-        media_type: Some("image/jpeg".to_owned()),
-        ..Media::default()
+    let p_inline_different_bytes = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = "data:image/jpeg;base64,ZGlmZmVyZW50".to_owned();
+        media.media_type = Some("image/jpeg".to_owned());
+        media
     };
-    let p_inline_different_type = Media {
-        kind: Some("photo".to_owned()),
-        uri: format!("data:image/png;base64,{PAYLOAD}"),
-        media_type: Some("image/png".to_owned()),
-        ..Media::default()
+    let p_inline_different_type = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = format!("data:image/png;base64,{PAYLOAD}");
+        media.media_type = Some("image/png".to_owned());
+        media
     };
 
     // Non-photo media
-    let logo_media = Media {
-        kind: Some("logo".to_owned()),
-        uri: "https://example.com/logo.png".to_owned(),
-        media_type: None,
-        ..Media::default()
+    let logo_media = {
+        let mut media = Media::default();
+        media.kind = Some("logo".to_owned());
+        media.uri = "https://example.com/logo.png".to_owned();
+        media.media_type = None;
+        media
     };
-    let sound_media = Media {
-        kind: Some("sound".to_owned()),
-        uri: "https://example.com/audio.ogg".to_owned(),
-        media_type: None,
-        ..Media::default()
+    let sound_media = {
+        let mut media = Media::default();
+        media.kind = Some("sound".to_owned());
+        media.uri = "https://example.com/audio.ogg".to_owned();
+        media.media_type = None;
+        media
     };
-    let empty_uri_media = Media {
-        kind: Some("photo".to_owned()),
-        uri: String::new(),
-        media_type: None,
-        ..Media::default()
+    let empty_uri_media = {
+        let mut media = Media::default();
+        media.kind = Some("photo".to_owned());
+        media.uri = String::new();
+        media.media_type = None;
+        media
     };
 
     // 1. states_media checks

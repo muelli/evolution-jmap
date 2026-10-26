@@ -2130,12 +2130,13 @@ fn is_known_image_subtype(subtype: &str) -> bool {
 /// A media entry for a contact picture.
 /// `PHOTO` states this kind, so this reader accepts only this kind.
 fn photo_entry(uri: String, media_type: Option<String>) -> Media {
-    Media {
-        kind: Some(PHOTO_KIND.to_owned()),
-        uri,
-        media_type,
-        extra: BTreeMap::new(),
-        ..Media::default()
+    {
+        let mut media = Media::default();
+        media.kind = Some(PHOTO_KIND.to_owned());
+        media.uri = uri;
+        media.media_type = media_type;
+        media.extra = BTreeMap::new();
+        media
     }
 }
 
