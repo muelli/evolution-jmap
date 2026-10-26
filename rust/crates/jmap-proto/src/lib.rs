@@ -102,6 +102,7 @@ pub mod blob;
 pub mod calendars;
 #[cfg(feature = "contacts")]
 pub mod contacts;
+#[warn(missing_docs)]
 pub mod error;
 pub mod filenode;
 #[warn(missing_docs)]
@@ -122,6 +123,7 @@ pub mod request;
 #[warn(missing_docs)]
 pub mod response;
 pub mod session;
+#[warn(missing_docs)]
 pub mod sieve;
 #[warn(missing_docs)]
 pub mod state;
