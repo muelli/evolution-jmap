@@ -21,11 +21,9 @@ use glib_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::connect::{self, open_calendar};
 use jmap_backend_cal::ops::{self, Outcome};
-use jmap_backend_core::source::{ConnectTarget, OwnedSource, SourceConfig};
+use jmap_backend_core::source::OwnedSource;
 use jmap_cal_sync::Itip;
 use jmap_client::Credentials;
-use jmap_mock::MockServer;
-use jmap_proto::Id;
 use jmap_tracing_capture::capture;
 use tracing::Level;
 
@@ -45,42 +43,8 @@ fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &s
         .any(|(l, n, v)| *l == level && n == name && v == value)
 }
 
-struct Fixture {
-    server: MockServer,
-    calendar_id: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let calendar_id = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            let account = state.account_mut(&account_id).unwrap();
-            account.seed_calendar("Personal", true)
-        };
-        Self {
-            server,
-            calendar_id,
-        }
-    }
-
-    fn config(&self) -> SourceConfig {
-        SourceConfig {
-            target: ConnectTarget::Origin(self.server.origin().to_owned()),
-            user: None,
-            resource_id: Some(self.calendar_id.to_string()),
-            rebase_urls: false,
-        }
-    }
-
-    fn sync(&self) -> jmap_cal_sync::CalSync {
-        capture(|| open_calendar(&self.config(), Credentials::none()).expect("connected"))
-            .0
-            .sync
-    }
-}
+mod common;
+use common::Fixture;
 
 struct TestSource(OwnedSource);
 
@@ -152,7 +116,7 @@ fn open_calendar_traces_account_id_and_calendar_id() {
             &captured,
             Level::DEBUG,
             "calendar_id",
-            fixture.calendar_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected calendar_id in open_calendar, got {captured:?}"
     );
@@ -195,7 +159,7 @@ fn list_existing_traces_structured_fields() {
             &captured,
             Level::DEBUG,
             "calendar_id",
-            fixture.calendar_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected calendar_id in list_existing, got {captured:?}"
     );
@@ -274,7 +238,7 @@ fn get_changes_traces_structured_fields() {
             &captured,
             Level::DEBUG,
             "calendar_id",
-            fixture.calendar_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected calendar_id in get_changes, got {captured:?}"
     );
@@ -330,7 +294,7 @@ fn save_load_and_remove_component_trace_structured_fields() {
             &captured_save,
             Level::DEBUG,
             "calendar_id",
-            fixture.calendar_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected calendar_id in save_component, got {captured_save:?}"
     );
@@ -376,7 +340,7 @@ fn save_load_and_remove_component_trace_structured_fields() {
             &captured_load,
             Level::DEBUG,
             "calendar_id",
-            fixture.calendar_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected calendar_id in load_component, got {captured_load:?}"
     );
@@ -404,7 +368,7 @@ fn save_load_and_remove_component_trace_structured_fields() {
             &captured_remove,
             Level::DEBUG,
             "calendar_id",
-            fixture.calendar_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected calendar_id in remove_component, got {captured_remove:?}"
     );
@@ -457,7 +421,7 @@ fn connect_from_source_traces_structured_fields() {
             &captured,
             Level::DEBUG,
             "calendar_id",
-            fixture.calendar_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected calendar_id in connect, got {captured:?}"
     );
@@ -520,7 +484,7 @@ fn get_free_busy_traces_structured_fields() {
             &captured,
             Level::DEBUG,
             "calendar_id",
-            fixture.calendar_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected calendar_id in get_free_busy, got {captured:?}"
     );
@@ -556,7 +520,7 @@ fn on_source_changed_traces_structured_fields() {
             &captured,
             Level::DEBUG,
             "calendar_id",
-            fixture.calendar_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected calendar_id in on_source_changed, got {captured:?}"
     );

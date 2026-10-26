@@ -19,10 +19,8 @@ use glib_sys::{GError, GFALSE, GSList, GTRUE, g_free, g_slist_free_full, gchar};
 use gobject_sys::g_object_unref;
 use jmap_backend_book::connect::{self, open_book};
 use jmap_backend_book::ops::{self, Outcome};
-use jmap_backend_core::source::{ConnectTarget, OwnedSource, SourceConfig};
+use jmap_backend_core::source::OwnedSource;
 use jmap_client::Credentials;
-use jmap_mock::MockServer;
-use jmap_proto::Id;
 use jmap_tracing_capture::capture;
 use tracing::Level;
 
@@ -43,39 +41,8 @@ fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &s
         .any(|(l, n, v)| *l == level && n == name && v == value)
 }
 
-struct Fixture {
-    server: MockServer,
-    book_id: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let book_id = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            let account = state.account_mut(&account_id).unwrap();
-            account.seed_address_book("Personal", true)
-        };
-        Self { server, book_id }
-    }
-
-    fn config(&self) -> SourceConfig {
-        SourceConfig {
-            target: ConnectTarget::Origin(self.server.origin().to_owned()),
-            user: None,
-            resource_id: Some(self.book_id.to_string()),
-            rebase_urls: false,
-        }
-    }
-
-    fn sync(&self) -> jmap_book_sync::BookSync {
-        capture(|| open_book(&self.config(), Credentials::none()).expect("connected"))
-            .0
-            .sync
-    }
-}
+mod common;
+use common::Fixture;
 
 struct TestSource(OwnedSource);
 
@@ -123,7 +90,7 @@ fn open_book_traces_account_id_and_address_book_id() {
             &captured,
             Level::DEBUG,
             "address_book_id",
-            fixture.book_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected address_book_id in open_book, got {captured:?}"
     );
@@ -166,7 +133,7 @@ fn list_existing_traces_structured_fields() {
             &captured,
             Level::DEBUG,
             "address_book_id",
-            fixture.book_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected address_book_id in list_existing, got {captured:?}"
     );
@@ -244,7 +211,7 @@ fn get_changes_traces_structured_fields() {
             &captured,
             Level::DEBUG,
             "address_book_id",
-            fixture.book_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected address_book_id in get_changes, got {captured:?}"
     );
@@ -299,7 +266,7 @@ fn save_load_and_remove_contact_trace_structured_fields() {
             &captured_save,
             Level::DEBUG,
             "address_book_id",
-            fixture.book_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected address_book_id in save_contact, got {captured_save:?}"
     );
@@ -408,7 +375,7 @@ fn connect_from_source_traces_structured_fields() {
             &captured,
             Level::DEBUG,
             "address_book_id",
-            fixture.book_id.as_ref()
+            fixture.ours.as_ref()
         ),
         "expected address_book_id in connect, got {captured:?}"
     );

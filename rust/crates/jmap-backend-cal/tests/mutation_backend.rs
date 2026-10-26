@@ -7,58 +7,11 @@ use eds_sys::e_cal_meta_backend_get_type;
 use jmap_backend_cal::backend::{JmapCalBackend, parent_class};
 use jmap_backend_core::push::PushRefresh;
 use jmap_backend_core::subclass::ObjectSubclass;
-use jmap_cal_sync::CalSync;
 use jmap_client::eventsource::expand_url;
-use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
-use jmap_proto::Id;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-    calendar: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let calendar = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            state
-                .account_mut(&account_id)
-                .unwrap()
-                .seed_calendar("Personal", true)
-        };
-        Self {
-            server,
-            account_id,
-            calendar,
-        }
-    }
-
-    fn sync(&self) -> CalSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        CalSync::new(client, self.account_id.clone(), self.calendar.clone())
-    }
-
-    fn push_subscription(&self) -> PushRefresh {
-        let url = expand_url(
-            &format!("{}/eventsource", self.server.origin()),
-            &["CalendarEvent"],
-            false,
-            0,
-        );
-        PushRefresh::start(
-            url,
-            Vec::new(),
-            self.account_id.clone(),
-            vec!["CalendarEvent".to_owned()],
-            |_types: &[String]| {},
-        )
-    }
-}
+mod common;
+use common::Fixture;
 
 #[test]
 fn inspect_connection_evaluates_closure_and_returns_result() {
@@ -75,7 +28,7 @@ fn inspect_connection_evaluates_closure_and_returns_result() {
         backend.inspect_connection(|s| (s.account_id().clone(), s.calendar_id().clone()));
     assert_eq!(
         inspected,
-        Some((fixture.account_id.clone(), fixture.calendar.clone()))
+        Some((fixture.account_id.clone(), fixture.ours.clone()))
     );
 
     assert!(backend.drop_connection());

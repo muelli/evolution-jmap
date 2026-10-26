@@ -7,58 +7,11 @@ use eds_sys::e_book_meta_backend_get_type;
 use jmap_backend_book::backend::{JmapBookBackend, parent_class};
 use jmap_backend_core::push::PushRefresh;
 use jmap_backend_core::subclass::ObjectSubclass;
-use jmap_book_sync::BookSync;
 use jmap_client::eventsource::expand_url;
-use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
-use jmap_proto::Id;
 
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-    book: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let book = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            state
-                .account_mut(&account_id)
-                .unwrap()
-                .seed_address_book("Personal", true)
-        };
-        Self {
-            server,
-            account_id,
-            book,
-        }
-    }
-
-    fn sync(&self) -> BookSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        BookSync::new(client, self.account_id.clone(), self.book.clone())
-    }
-
-    fn push_subscription(&self) -> PushRefresh {
-        let url = expand_url(
-            &format!("{}/eventsource", self.server.origin()),
-            &["ContactCard"],
-            false,
-            0,
-        );
-        PushRefresh::start(
-            url,
-            Vec::new(),
-            self.account_id.clone(),
-            vec!["ContactCard".to_owned()],
-            |_types: &[String]| {},
-        )
-    }
-}
+mod common;
+use common::Fixture;
 
 #[test]
 fn inspect_connection_evaluates_closure_and_returns_result() {
@@ -75,7 +28,7 @@ fn inspect_connection_evaluates_closure_and_returns_result() {
         backend.inspect_connection(|s| (s.account_id().clone(), s.address_book_id().clone()));
     assert_eq!(
         inspected,
-        Some((fixture.account_id.clone(), fixture.book.clone()))
+        Some((fixture.account_id.clone(), fixture.ours.clone()))
     );
 
     assert!(backend.drop_connection());

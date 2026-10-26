@@ -10,14 +10,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eds_sys::{
-    E_CAL_OPERATION_FLAG_NONE, E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackendClass,
-    ECalBackendSyncClass, ECalMetaBackend, ECalMetaBackendClass, ECalMetaBackendInfo,
-    ICalComponent, e_backend_get_type, e_cal_meta_backend_get_type, e_cal_meta_backend_info_free,
-    e_client_error_quark,
+    E_CAL_OPERATION_FLAG_NONE, EBackendClass, ECalBackendSyncClass, ECalMetaBackend,
+    ECalMetaBackendClass, ECalMetaBackendInfo, ICalComponent, e_backend_get_type,
+    e_cal_meta_backend_get_type, e_cal_meta_backend_info_free,
 };
 use glib_sys::{
-    GError, GFALSE, GSList, GTRUE, g_error_free, g_free, g_slist_free_full, g_slist_length,
-    g_slist_nth_data, gchar,
+    GError, GFALSE, GSList, GTRUE, g_free, g_slist_free_full, g_slist_length, g_slist_nth_data,
+    gchar,
 };
 use gobject_sys::{
     GTypeQuery, g_type_class_peek, g_type_class_ref, g_type_class_unref, g_type_name,
@@ -27,12 +26,8 @@ use jmap_backend_cal::backend::{JmapCalBackend, JmapCalBackendClass, parent_clas
 use jmap_backend_cal::marshal;
 use jmap_backend_core::push::PushRefresh;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
-use jmap_cal_sync::CalSync;
 use jmap_client::eventsource::expand_url;
-use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
-use jmap_proto::Id;
-use jmap_proto::calendars::CalendarEvent;
 
 /// The class EDS dispatches through, kept referenced for the test duration.
 struct Class(*mut JmapCalBackendClass);
@@ -69,83 +64,8 @@ impl Drop for Class {
     }
 }
 
-/// Detached backend instance for tests without GObject initialization.
-struct Detached(Box<JmapCalBackend>);
-
-impl Detached {
-    fn new() -> Self {
-        Self(JmapCalBackend::detached())
-    }
-
-    fn as_ptr(&mut self) -> *mut ECalMetaBackend {
-        ptr::from_mut(&mut *self.0).cast()
-    }
-}
-
-/// Test fixture providing a mock server and CalSync connection.
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-    calendar: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let calendar = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            state
-                .account_mut(&account_id)
-                .unwrap()
-                .seed_calendar("Personal", true)
-        };
-        Self {
-            server,
-            account_id,
-            calendar,
-        }
-    }
-
-    fn client(&self) -> Client {
-        Client::connect(self.server.origin(), Credentials::none()).unwrap()
-    }
-
-    fn sync(&self) -> CalSync {
-        CalSync::new(
-            self.client(),
-            self.account_id.clone(),
-            self.calendar.clone(),
-        )
-    }
-
-    fn seed(&self, title: &str, start: &str) -> Id {
-        self.client()
-            .event_create(
-                &self.account_id,
-                &CalendarEvent::simple(self.calendar.clone(), title, start, "PT1H"),
-            )
-            .unwrap()
-            .id
-            .expect("server assigned id")
-    }
-}
-
-/// Asserts that a failed call reported the account as offline, and frees the error.
-unsafe fn assert_offline(error: &mut *mut GError) {
-    unsafe {
-        assert!(!error.is_null(), "the call failed without setting an error");
-        assert_eq!((**error).domain, e_client_error_quark(), "error domain");
-        assert_eq!(
-            (**error).code,
-            E_CLIENT_ERROR_REPOSITORY_OFFLINE as i32,
-            "error code"
-        );
-        g_error_free(*error);
-        *error = ptr::null_mut();
-    }
-}
+mod common;
+use common::{Detached, Fixture, assert_offline};
 
 // ---------------------------------------------------------------------------
 // the type itself
@@ -398,7 +318,7 @@ fn every_operation_without_a_connection_reports_offline_instead_of_crashing() {
 #[test]
 fn a_connected_backend_dispatches_list_existing_to_the_sync_layer() {
     let fixture = Fixture::start();
-    let seeded = fixture.seed("Sprint review", "2026-03-04T09:00:00");
+    let seeded = fixture.seed_default("Sprint review", "2026-03-04T09:00:00");
 
     let class = Class::get();
     let mut backend = Detached::new();
@@ -437,7 +357,7 @@ fn a_connected_backend_dispatches_list_existing_to_the_sync_layer() {
 #[test]
 fn a_connected_backend_dispatches_load_component_to_the_sync_layer() {
     let fixture = Fixture::start();
-    let id = fixture.seed("Sprint review", "2026-03-04T09:00:00");
+    let id = fixture.seed_default("Sprint review", "2026-03-04T09:00:00");
     let uid = CString::new(id.to_string()).unwrap();
 
     let class = Class::get();

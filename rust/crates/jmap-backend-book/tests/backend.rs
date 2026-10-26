@@ -10,13 +10,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eds_sys::{
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackendClass, EBookMetaBackend, EBookMetaBackendClass,
-    EBookMetaBackendInfo, EContact, e_backend_get_type, e_book_meta_backend_get_type,
-    e_book_meta_backend_info_free, e_client_error_quark,
+    EBackendClass, EBookMetaBackend, EBookMetaBackendClass, EBookMetaBackendInfo, EContact,
+    e_backend_get_type, e_book_meta_backend_get_type, e_book_meta_backend_info_free,
 };
 use glib_sys::{
-    GError, GFALSE, GSList, GTRUE, g_error_free, g_free, g_slist_free_full, g_slist_length,
-    g_slist_nth_data, gchar,
+    GError, GFALSE, GSList, GTRUE, g_free, g_slist_free_full, g_slist_length, g_slist_nth_data,
+    gchar,
 };
 use gobject_sys::{
     GTypeQuery, g_type_class_peek, g_type_class_ref, g_type_class_unref, g_type_name,
@@ -26,12 +25,8 @@ use jmap_backend_book::backend::{JmapBookBackend, JmapBookBackendClass, parent_c
 use jmap_backend_book::marshal;
 use jmap_backend_core::push::PushRefresh;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
-use jmap_book_sync::BookSync;
 use jmap_client::eventsource::expand_url;
-use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
-use jmap_proto::Id;
-use jmap_proto::contacts::ContactCard;
 
 /// The class EDS would dispatch through, kept referenced for the test's
 /// duration so the vfunc pointers stay valid.
@@ -69,77 +64,8 @@ impl Drop for Class {
     }
 }
 
-/// Detached backend instance for test isolation.
-struct Detached(Box<JmapBookBackend>);
-
-impl Detached {
-    fn new() -> Self {
-        Self(JmapBookBackend::detached())
-    }
-
-    fn as_ptr(&mut self) -> *mut EBookMetaBackend {
-        std::ptr::from_mut(&mut *self.0).cast()
-    }
-}
-
-/// Mock server and `BookSync` test fixture.
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-    book: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let book = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            state
-                .account_mut(&account_id)
-                .unwrap()
-                .seed_address_book("Personal", true)
-        };
-        Self {
-            server,
-            account_id,
-            book,
-        }
-    }
-
-    fn sync(&self) -> BookSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        BookSync::new(client, self.account_id.clone(), self.book.clone())
-    }
-
-    fn seed(&self, full_name: &str, email: &str) -> Id {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        client
-            .contact_create(
-                &self.account_id,
-                &ContactCard::simple(self.book.clone(), full_name, email),
-            )
-            .unwrap()
-            .id
-            .expect("server assigned id")
-    }
-}
-
-/// Asserts that a failed call set `E_CLIENT_ERROR_REPOSITORY_OFFLINE` and frees the error.
-unsafe fn assert_offline(error: &mut *mut GError) {
-    unsafe {
-        assert!(!error.is_null(), "the call failed without setting an error");
-        assert_eq!((**error).domain, e_client_error_quark(), "error domain");
-        assert_eq!(
-            (**error).code,
-            E_CLIENT_ERROR_REPOSITORY_OFFLINE as i32,
-            "error code"
-        );
-        g_error_free(*error);
-        *error = ptr::null_mut();
-    }
-}
+mod common;
+use common::{Detached, Fixture, assert_offline};
 
 // ---------------------------------------------------------------------------
 // the type itself
@@ -309,7 +235,7 @@ fn every_operation_without_a_connection_reports_offline_instead_of_crashing() {
 #[test]
 fn a_connected_backend_dispatches_list_existing_to_the_sync_layer() {
     let fixture = Fixture::start();
-    let seeded = fixture.seed("Vera Oldenburg", "vera@example.com");
+    let seeded = fixture.seed_default("Vera Oldenburg", "vera@example.com");
 
     let class = Class::get();
     let mut backend = Detached::new();
@@ -348,7 +274,7 @@ fn a_connected_backend_dispatches_list_existing_to_the_sync_layer() {
 #[test]
 fn a_connected_backend_dispatches_load_contact_to_the_sync_layer() {
     let fixture = Fixture::start();
-    let id = fixture.seed("Vera Oldenburg", "vera@example.com");
+    let id = fixture.seed_default("Vera Oldenburg", "vera@example.com");
     let uid = CString::new(id.to_string()).unwrap();
 
     let class = Class::get();
