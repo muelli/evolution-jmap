@@ -64,7 +64,8 @@
 //!
 //! ## What this connects, and its limits
 //!
-//! [`jmap_backend_collection::create_resource`] and `delete_resource` were
+//! [`jmap_backend_collection::create_resource`](../../jmap_backend_collection/create_resource/index.html)
+//! and [`delete_resource`](../../jmap_backend_collection/delete_resource/index.html) were
 //! written for D1 but the GUI never called them: nothing could put a scratch
 //! source below a JMAP account for the registry to process. The same applies to
 //! the colour write-back of D2, which needs a properties dialog with a

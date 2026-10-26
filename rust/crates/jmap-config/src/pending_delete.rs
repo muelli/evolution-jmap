@@ -41,7 +41,7 @@ pub type Extension = SettingExtension<PendingDelete>;
 ///
 /// The module load of each process that parses a JMAP child source must call
 /// this. EDS ignores a keyfile group with no registered type, so without this
-/// call a restart loses the due time. [`read`] and [`write`] also call it.
+/// call a restart loses the due time. [`read`] and [`write()`] also call it.
 pub fn ensure_registered() {
     setting_extension::ensure_registered::<PendingDelete>();
 }

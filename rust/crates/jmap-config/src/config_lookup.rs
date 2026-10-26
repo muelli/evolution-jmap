@@ -5,7 +5,7 @@
 //! Details" step of Evolution. This worker closes the OAuth 2.0 gap of M7.
 //!
 //! [`oauth2_service`](crate::oauth2_service) and
-//! [`oauth2_setup::discover_and_register`] are both complete. Before this
+//! [`crate::oauth2_setup::discover_and_register`] are both complete. Before this
 //! module, nothing called the latter. The manual server-settings page that
 //! [`backend::insert_widgets`](crate::backend) builds has no trigger for a
 //! blocking network probe. Such a trigger could block the GTK main thread, or
@@ -121,7 +121,8 @@ use crate::oauth2::{self, Config};
 use crate::oauth2_setup::discover_and_register;
 
 /// The private-use URI scheme that this crate registers with RFC 7591 and that
-/// [`crate::oauth2_service::Service::get_redirect_uri`] returns.
+/// the OAuth2 service vtable's `get_redirect_uri` callback returns, via
+/// [`crate::oauth2::redirect_uri`].
 ///
 /// The module docs tell why this works with the WebKit consent prompter of EDS,
 /// and the RFC 8252 out-of-band URN does not.
@@ -170,7 +171,7 @@ const PRIORITY: gint = E_CONFIG_LOOKUP_RESULT_PRIORITY_IMAP as gint - 100;
 ///
 /// `discover_and_register` cannot use the return value directly. A `servers`
 /// entry or an SRV target can contain a scheme and a port, which
-/// [`parse_target`] reads. An SRV target has the form `host:port`.
+/// `parse_target` reads. An SRV target has the form `host:port`.
 /// `parse_target` reads that as a bare, secure host with that port, which is
 /// correct for each target of a JMAP SRV record.
 pub fn probe_host(
