@@ -293,4 +293,21 @@ mod tests {
         assert_eq!(response.old_state, Some(current_state.clone()));
         assert_eq!(response.new_state, Some(current_state));
     }
+
+    #[test]
+    fn simple_set_with_validation_omits_empty_updated_and_destroyed() {
+        let mut store: Store<Value> = Store::new("obj-");
+
+        let response = simple_set_with_validation(
+            &mut store,
+            SetRequest::new("account"),
+            |_, _| Ok(()),
+            |_, _, _| Ok(()),
+            |_, _| Ok(()),
+        )
+        .expect("no-op set should succeed");
+
+        assert_eq!(response.updated, None);
+        assert_eq!(response.destroyed, None);
+    }
 }
