@@ -67,7 +67,7 @@
 //! occur during an unrelated refresh of the *source* folder's summary. That
 //! refresh can have a listing from before this `Email/set`, which correctly names
 //! the message. If the refresh applies that listing after the removal, the row
-//! comes back. [`FolderLock`] closes that window, as the wrappers of the other
+//! comes back. `FolderLock` closes that window, as the wrappers of the other
 //! three vfuncs do.
 
 use std::ffi::{CStr, CString};

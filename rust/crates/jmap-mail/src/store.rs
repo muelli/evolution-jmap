@@ -444,7 +444,7 @@ impl JmapStore {
     }
 
     /// For tests only. It gives access to the one part of
-    /// [`JmapStore::refresh_credentials`] that a test can reach without a
+    /// `JmapStore::refresh_credentials` that a test can reach without a
     /// `CamelService`: new credentials on the pooled connection.
     #[cfg(feature = "testing")]
     pub fn inspect_connection<R>(&self, f: impl FnOnce(&MailSync) -> R) -> Option<R> {

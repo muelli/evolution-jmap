@@ -68,7 +68,7 @@
 //!
 //! ## The seventh vfunc: one call, answered from the same tree
 //!
-//! The Evolution account wizard calls [`initial_setup_sync`] only after the
+//! The Evolution account wizard calls `initial_setup_sync` only after the
 //! first successful connection of a new account. `CAMEL_STORE_SUPPORTS_INITIAL_SETUP`
 //! enables the call. The `instance_init` of [`crate::store`] sets this flag
 //! together with the vfunc pointer that this module installs. The answer is
@@ -79,7 +79,7 @@
 //!
 //! RFC 8621 §2 gives a `role` to `sent` and `drafts` mailboxes, as it does to
 //! `inbox`, `trash` and `junk`. This vfunc reads the same tree that
-//! [`open_by_role`] reads for those three. The difference is the result: a
+//! `open_by_role` reads for those three. The difference is the result: a
 //! string for Evolution, not a folder for Camel. If the server assigns neither
 //! role, nothing is saved. This agrees with the documented contract:
 //! "The function should return TRUE even if it didn't populate anything."
