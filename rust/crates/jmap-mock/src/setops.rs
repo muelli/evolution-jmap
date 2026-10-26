@@ -309,5 +309,8 @@ mod tests {
 
         assert_eq!(response.updated, None);
         assert_eq!(response.destroyed, None);
+        assert_eq!(response.not_created, None);
+        assert_eq!(response.not_updated, None);
+        assert_eq!(response.not_destroyed, None);
     }
 }
