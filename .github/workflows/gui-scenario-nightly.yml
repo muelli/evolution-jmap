@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Nightly run of every GUI scenario (ci/gui-scenario/) against jmap-mockd:
+# a real Evolution, driven through AT-SPI, in the same podman image as
+# ci/gui-scenario/run.sh builds for a local run (its base is the same
+# install scripts the gui-smoke job uses on the host). Not on every push:
+# ci/gui-scenario/run.sh builds its own image first, so this is slower
+# than the push gate and worth spending deliberately, once a day instead.
+# Dispatch by hand with: gh workflow run gui-scenario-nightly.yml
+
+name: GUI scenario (nightly)
+
+on:
+  schedule:
+    - cron: "23 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  gui-scenario:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: ci/install-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gui-scenario
+          workspaces: rust
+      - run: cmake -S . -B build -G Ninja
+      - run: cmake --build build
+      - name: Run every scenario
+        run: |
+          scenarios=$(cd ci/gui-scenario/scenarios && ls *.py | sed 's/\.py$//')
+          ci/gui-scenario/run.sh $scenarios
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gui-scenario-artifacts
+          path: build/gui-scenario
