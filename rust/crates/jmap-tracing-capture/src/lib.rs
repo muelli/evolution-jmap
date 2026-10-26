@@ -133,6 +133,14 @@ pub fn capture<T>(run: impl FnOnce() -> T) -> (T, Captured) {
     (result, captured)
 }
 
+/// Reports whether `captured` holds an event at `level` with a field named
+/// `name` whose value is exactly `value`.
+pub fn has(captured: &Captured, level: Level, name: &str, value: &str) -> bool {
+    captured
+        .iter()
+        .any(|(l, n, v)| *l == level && n == name && v == value)
+}
+
 /// Restores the thread's scope to an enclosing `capture`, if one exists,
 /// even when `run` panics.
 struct Restore(Option<Arc<Mutex<Captured>>>);

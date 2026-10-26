@@ -10,7 +10,7 @@ use jmap_mail_sync::{Filing, KeywordChange, Keywords, Outgoing};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
-use jmap_tracing_capture::capture;
+use jmap_tracing_capture::{capture, has};
 use tracing::Level;
 
 mod common;
@@ -30,12 +30,6 @@ impl Fixture {
             "2026-01-15T09:30:00Z",
         ))
     }
-}
-
-fn has(captured: &[(Level, String, String)], level: Level, name: &str, value: &str) -> bool {
-    captured
-        .iter()
-        .any(|(l, n, v)| *l == level && n == name && v == value)
 }
 
 #[test]
