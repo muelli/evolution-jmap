@@ -9,6 +9,7 @@
 //! - Line folding adhering to RFC 5545 §3.1 and RFC 2426 §2.6 (75-octet limit)
 //! - Caret encoding and decoding adhering to RFC 6868 §3
 //! - URI scheme syntax validation adhering to RFC 3986 §3.1
+//! - JSON Pointer segment escaping adhering to RFC 6901 §3
 
 /// The standard line length limit in octets before folding, excluding line break (RFC 5545 §3.1, RFC 2426 §2.6).
 pub const MAX_LINE_OCTETS: usize = 75;
@@ -139,4 +140,11 @@ pub fn split_uri(value: &str) -> Option<(&str, &str)> {
 /// Returns true when `value` begins with an RFC 3986 §3.1 scheme followed by a colon.
 pub fn has_uri_scheme(value: &str) -> bool {
     uri_scheme(value).is_some()
+}
+
+/// Escapes a map key for use as one segment of a JSON Pointer (RFC 6901 §3).
+///
+/// Escape `~` first, or the `~1` that replaces a `/` becomes `~01`.
+pub fn escape_pointer_segment(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
 }

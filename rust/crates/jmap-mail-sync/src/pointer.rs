@@ -8,14 +8,11 @@
 //! a map member (a keyword or a mailbox) whose name comes from the server.
 //! A pointer gives `/` and `~` a meaning: unescaped, a member called `a/b`
 //! addresses a `b` member of an `a` object that does not exist.
-//!
-//! All escaping is in this one function, so no copy of it can become out of
-//! date.
 
 /// The patch key for `name` inside `property`.
-///
-/// The escapes and their order come from RFC 6901 §3. Escape `~` first, or
-/// the `~1` that replaces a `/` becomes `~01`.
 pub(crate) fn member(property: &str, name: &str) -> String {
-    format!("{property}/{}", name.replace('~', "~0").replace('/', "~1"))
+    format!(
+        "{property}/{}",
+        jmap_proto::text::escape_pointer_segment(name)
+    )
 }
