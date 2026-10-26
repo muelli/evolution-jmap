@@ -397,6 +397,89 @@ where
     }
 }
 
+/// One candidate collection, as [`resolve_collection`] needs it: enough to
+/// pick the right one and to know whether EDS may write to it.
+///
+/// `is_writable` is the caller's own rights check already resolved to a
+/// plain bool (a collection with no rights information is writable; see
+/// `AddressBookRights::is_writable` and `CalendarRights::is_writable` for the
+/// per-kind rule). [`resolve_collection`] does not know either rights type.
+pub struct CollectionCandidate {
+    pub id: Option<Id>,
+    pub is_default: Option<bool>,
+    pub is_writable: bool,
+}
+
+/// A connected collection: its backend-specific sync endpoint, paired with
+/// whether EDS may write to it.
+#[derive(Debug)]
+pub struct OpenCollection<S> {
+    pub sync: S,
+    pub writable: bool,
+}
+
+impl<S> std::ops::Deref for OpenCollection<S> {
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sync
+    }
+}
+
+impl<S> std::ops::DerefMut for OpenCollection<S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sync
+    }
+}
+
+/// The shared half of `open_book`/`open_calendar`, once `client` has
+/// connected: resolves the account, fetches and picks the right collection,
+/// and decides whether EDS may write to it.
+///
+/// `capability` is the JMAP capability URN for the primary-account fallback
+/// (used only when `account_id` is `None`). `list` fetches the account's
+/// collections and classifies each as a [`CollectionCandidate`]; it is the
+/// one part that differs between an address book and a calendar. `new`
+/// builds the backend's own sync type from the connected client and the
+/// resolved account and collection ids.
+pub fn resolve_collection<S>(
+    client: jmap_client::Client,
+    kind: Collection,
+    capability: &str,
+    account_id: Option<&str>,
+    collection_id: Option<&str>,
+    list: impl FnOnce(&jmap_client::Client, &Id) -> Result<Vec<CollectionCandidate>, Error>,
+    new: impl FnOnce(jmap_client::Client, Id, Id) -> S,
+) -> Result<OpenCollection<S>, ConnectError> {
+    let account_id = match account_id {
+        Some(id) => Id::from(id),
+        None => client.primary_account(capability)?,
+    };
+    let candidates = list(&client, &account_id)?;
+
+    let resolved_id = resolve(
+        kind,
+        collection_id,
+        candidates.iter().map(|c| (c.id.as_ref(), c.is_default)),
+    )?;
+
+    let is_account_read_only = client
+        .session()
+        .accounts
+        .get(&account_id)
+        .is_some_and(|a| a.is_read_only);
+    let writable = !is_account_read_only
+        && candidates
+            .iter()
+            .find(|c| c.id.as_ref() == Some(&resolved_id))
+            .is_none_or(|c| c.is_writable);
+
+    Ok(OpenCollection {
+        sync: new(client, account_id, resolved_id),
+        writable,
+    })
+}
+
 /// All of `connect_sync` except the instance and the collection lookup. It
 /// goes from the `ESource` that EDS gives the backend to the result of
 /// `open`. It writes `out_auth_result` and `error` as the vfunc must.
@@ -1167,5 +1250,132 @@ mod tests {
                 glib_sys::g_error_free(gerror);
             }
         }
+    }
+
+    /// `resolve_collection` with no named collection picks the server's
+    /// default, the same rule `resolve` already uses, and passes the right
+    /// account and collection ids to the constructor.
+    #[test]
+    fn resolve_collection_with_no_name_picks_the_server_default() {
+        let server = jmap_mock::MockServer::builder().start();
+        let account_id = server.account_id();
+        let default_book = {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            let default_book = account.seed_address_book("Personal", true);
+            account.seed_address_book("Shared", false);
+            default_book
+        };
+        let client = jmap_client::Client::connect(server.origin(), Credentials::none()).unwrap();
+
+        let opened = resolve_collection(
+            client,
+            Collection::AddressBook,
+            jmap_proto::session::CAPABILITY_CONTACTS,
+            None,
+            None,
+            |client, account_id| {
+                Ok(client
+                    .address_books(account_id)?
+                    .into_iter()
+                    .map(|book| CollectionCandidate {
+                        id: book.id,
+                        is_default: book.is_default,
+                        is_writable: book.my_rights.as_ref().is_none_or(|r| r.is_writable()),
+                    })
+                    .collect())
+            },
+            |_client, account_id, collection_id| (account_id, collection_id),
+        )
+        .unwrap();
+
+        assert_eq!(opened.sync, (account_id, default_book));
+        assert!(opened.writable);
+    }
+
+    /// `resolve_collection` with a named collection picks that one, not the
+    /// default, and still reports it as writable when the server gives no
+    /// rights at all.
+    #[test]
+    fn resolve_collection_with_a_name_picks_the_named_collection() {
+        let server = jmap_mock::MockServer::builder().start();
+        let account_id = server.account_id();
+        let shared_book = {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            account.seed_address_book("Personal", true);
+            account.seed_address_book("Shared", false)
+        };
+        let client = jmap_client::Client::connect(server.origin(), Credentials::none()).unwrap();
+
+        let opened = resolve_collection(
+            client,
+            Collection::AddressBook,
+            jmap_proto::session::CAPABILITY_CONTACTS,
+            None,
+            Some(shared_book.as_str()),
+            |client, account_id| {
+                Ok(client
+                    .address_books(account_id)?
+                    .into_iter()
+                    .map(|book| CollectionCandidate {
+                        id: book.id,
+                        is_default: book.is_default,
+                        is_writable: book.my_rights.as_ref().is_none_or(|r| r.is_writable()),
+                    })
+                    .collect())
+            },
+            |_client, account_id, collection_id| (account_id, collection_id),
+        )
+        .unwrap();
+
+        assert_eq!(opened.sync, (account_id, shared_book));
+        assert!(opened.writable);
+    }
+
+    /// A collection id the server does not have is the same
+    /// `NoSuchCollection` error `resolve` already returns, not a panic or a
+    /// silently wrong collection.
+    #[test]
+    fn resolve_collection_rejects_an_unknown_name() {
+        let server = jmap_mock::MockServer::builder().start();
+        let account_id = server.account_id();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            state
+                .account_mut(&account_id)
+                .unwrap()
+                .seed_address_book("Personal", true);
+        }
+        let client = jmap_client::Client::connect(server.origin(), Credentials::none()).unwrap();
+
+        let error = resolve_collection(
+            client,
+            Collection::AddressBook,
+            jmap_proto::session::CAPABILITY_CONTACTS,
+            None,
+            Some("no-such-book"),
+            |client, account_id| {
+                Ok(client
+                    .address_books(account_id)?
+                    .into_iter()
+                    .map(|book| CollectionCandidate {
+                        id: book.id,
+                        is_default: book.is_default,
+                        is_writable: book.my_rights.as_ref().is_none_or(|r| r.is_writable()),
+                    })
+                    .collect())
+            },
+            |_client, account_id, collection_id| (account_id, collection_id),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConnectError::NoSuchCollection(Collection::AddressBook, ref id) if id == "no-such-book"
+        ));
     }
 }
