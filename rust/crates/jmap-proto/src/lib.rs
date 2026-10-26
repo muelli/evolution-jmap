@@ -97,6 +97,7 @@
 //! # }
 //! ```
 
+#[warn(missing_docs)]
 pub mod blob;
 #[cfg(feature = "calendars")]
 pub mod calendars;
@@ -114,6 +115,7 @@ pub mod mail;
 pub mod metadata;
 pub mod methods;
 #[cfg(feature = "principals")]
+#[warn(missing_docs)]
 pub mod principals;
 #[warn(missing_docs)]
 pub mod push;
