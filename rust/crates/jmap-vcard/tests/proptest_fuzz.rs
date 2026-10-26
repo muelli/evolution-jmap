@@ -343,12 +343,13 @@ prop_compose! {
             "[a-z]+/[a-z]+",
         ]),
     ) -> Media {
-        Media {
-            kind,
-            uri,
-            media_type,
-            extra: BTreeMap::new(),
-            ..Media::default()
+        {
+            let mut media = Media::default();
+            media.kind = kind;
+            media.uri = uri;
+            media.media_type = media_type;
+            media.extra = BTreeMap::new();
+            media
         }
     }
 }
@@ -1435,12 +1436,13 @@ proptest! {
             card.id = Some("C-PROP-PHOTO".into());
             card.media = Some([(
                 "m1".to_owned(),
-                Media {
-                    kind: Some("photo".to_owned()),
-                    uri: uri.clone(),
-                    media_type: media_type.clone(),
-                    extra: BTreeMap::new(),
-                    ..Media::default()
+                {
+                    let mut media = Media::default();
+                    media.kind = Some("photo".to_owned());
+                    media.uri = uri.clone();
+                    media.media_type = media_type.clone();
+                    media.extra = BTreeMap::new();
+                    media
                 },
             )].into());
             card

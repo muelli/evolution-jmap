@@ -578,18 +578,16 @@ fn jscontact_spec_properties_roundtrip() {
         calendar.label = Some("Primary Schedule".to_owned());
         calendar
     })]));
-    card.media = Some(BTreeMap::from([(
-        "m1".to_owned(),
-        Media {
-            uri: "https://example.org/portrait.jpg".to_owned(),
-            kind: Some("photo".to_owned()),
-            media_type: Some("image/jpeg".to_owned()),
-            contexts: Some(serde_json::json!({"work": true})),
-            pref: Some(1),
-            label: Some("1840 Portrait".to_owned()),
-            ..Media::default()
-        },
-    )]));
+    card.media = Some(BTreeMap::from([("m1".to_owned(), {
+        let mut media = Media::default();
+        media.uri = "https://example.org/portrait.jpg".to_owned();
+        media.kind = Some("photo".to_owned());
+        media.media_type = Some("image/jpeg".to_owned());
+        media.contexts = Some(serde_json::json!({"work": true}));
+        media.pref = Some(1);
+        media.label = Some("1840 Portrait".to_owned());
+        media
+    })]));
     card.online_services = Some(BTreeMap::from([(
         "s1".to_owned(),
         OnlineService::new()

@@ -863,10 +863,11 @@ fn arb_media_cards() -> impl Strategy<Value = (ContactCard, ContactCard, Contact
         let mut expected = BTreeMap::new();
         let current_key = "c-photo".to_owned();
         let edited_key = "e-photo".to_owned();
-        let entry = |uri: String| Media {
-            kind: Some("photo".to_owned()),
-            uri,
-            ..Media::default()
+        let entry = |uri: String| {
+            let mut media = Media::default();
+            media.kind = Some("photo".to_owned());
+            media.uri = uri;
+            media
         };
         match slot {
             MediaSlot::Absent => {}
