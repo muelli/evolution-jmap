@@ -18,8 +18,8 @@ use jmap_proto::sieve::{
 };
 
 use crate::client::Client;
-use crate::contacts::set_failure;
 use crate::error::Error;
+use crate::set::{expect_created, expect_destroyed, expect_updated};
 
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_SIEVE];
 
@@ -45,25 +45,16 @@ impl Client {
             SetRequest::<SieveScript>::new(account_id.clone()).create("new", script.clone()),
         );
         let response = self.sieve_script_set(&request)?;
-        if let Some(created) = response
-            .created
-            .as_ref()
-            .and_then(|created| created.get("new"))
-        {
-            let mut merged = created.clone();
-            // Fall back to caller-supplied properties when the server omits
-            // unchanged fields in `created` (RFC 8620 Section 5.3).
-            if merged.name.is_empty() {
-                merged.name = script.name.clone();
-            }
-            if merged.blob_id.is_empty() {
-                merged.blob_id = script.blob_id.clone();
-            }
-            return Ok(merged);
+        let mut merged = expect_created(&response, "new")?;
+        // Fall back to caller-supplied properties when the server omits
+        // unchanged fields in `created` (RFC 8620 Section 5.3).
+        if merged.name.is_empty() {
+            merged.name = script.name.clone();
         }
-        Err(set_failure(
-            response.not_created.as_ref().and_then(|map| map.get("new")),
-        ))
+        if merged.blob_id.is_empty() {
+            merged.blob_id = script.blob_id.clone();
+        }
+        Ok(merged)
     }
 
     /// Patch a Sieve script (raw JSON Patch), e.g. renaming it. `isActive`
@@ -74,16 +65,7 @@ impl Client {
             SetRequest::<SieveScript>::new(account_id.clone()).update(id.clone(), patch),
         );
         let response = self.sieve_script_set(&request)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_updated.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_updated(&response, id)
     }
 
     /// Destroy a Sieve script. Fails with `sieveIsActive` if it is the
@@ -93,16 +75,7 @@ impl Client {
             SetRequest::<SieveScript>::new(account_id.clone()).destroy(id.clone()),
         );
         let response = self.sieve_script_set(&request)?;
-        if response
-            .destroyed
-            .as_ref()
-            .is_some_and(|destroyed| destroyed.contains(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_destroyed(&response, id)
     }
 
     /// Activate a Sieve script, deactivating whichever one was active

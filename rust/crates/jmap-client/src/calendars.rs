@@ -18,8 +18,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::client::Client;
-use crate::contacts::{demote_multi_element_parsed_blobs, set_failure};
+use crate::contacts::demote_multi_element_parsed_blobs;
 use crate::error::Error;
+use crate::set::{expect_created, expect_destroyed, expect_updated};
 
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_CALENDARS];
 
@@ -37,48 +38,21 @@ impl Client {
         let request =
             SetRequest::<Calendar>::new(account_id.clone()).create("new", calendar.clone());
         let response = self.calendar_set(&request)?;
-        if let Some(created) = response
-            .created
-            .as_ref()
-            .and_then(|created| created.get("new"))
-        {
-            return Ok(created.clone());
-        }
-        Err(set_failure(
-            response.not_created.as_ref().and_then(|map| map.get("new")),
-        ))
+        expect_created(&response, "new")
     }
 
     /// Destroy a calendar.
     pub fn calendar_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = SetRequest::<Calendar>::new(account_id.clone()).destroy(id.clone());
         let response = self.calendar_set(&request)?;
-        if response
-            .destroyed
-            .as_ref()
-            .is_some_and(|destroyed| destroyed.contains(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_destroyed(&response, id)
     }
 
     /// Apply a patch to a calendar (RFC 8620 PatchObject).
     pub fn calendar_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request = SetRequest::<Calendar>::new(account_id.clone()).update(id.clone(), patch);
         let response = self.calendar_set(&request)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_updated.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_updated(&response, id)
     }
 
     /// Modify calendars (`Calendar/set`, draft §4.3).
@@ -111,16 +85,7 @@ impl Client {
         let request =
             SetRequest::<CalendarEvent>::new(account_id.clone()).create("new", event.clone());
         let response = self.event_set_scheduling(request, send_scheduling_messages)?;
-        if let Some(created) = response
-            .created
-            .as_ref()
-            .and_then(|created| created.get("new"))
-        {
-            return Ok(created.clone());
-        }
-        Err(set_failure(
-            response.not_created.as_ref().and_then(|map| map.get("new")),
-        ))
+        expect_created(&response, "new")
     }
 
     /// Fetch calendar events by ID (RFC 8620 §2).
@@ -160,16 +125,7 @@ impl Client {
         let request =
             SetRequest::<CalendarEvent>::new(account_id.clone()).update(id.clone(), patch);
         let response = self.event_set_scheduling(request, send_scheduling_messages)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_updated.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_updated(&response, id)
     }
 
     /// Destroy a calendar event.
@@ -188,16 +144,7 @@ impl Client {
     ) -> Result<(), Error> {
         let request = SetRequest::<CalendarEvent>::new(account_id.clone()).destroy(id.clone());
         let response = self.event_set_scheduling(request, send_scheduling_messages)?;
-        if response
-            .destroyed
-            .as_ref()
-            .is_some_and(|destroyed| destroyed.contains(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_destroyed(&response, id)
     }
 
     /// Parse an uploaded iCalendar blob into a [`CalendarEvent`] (draft-ietf-jmap-calendars §5.7).
@@ -362,16 +309,7 @@ impl Client {
                 .create("new", identity.clone()),
         );
         let response = self.participant_identity_set(&request)?;
-        if let Some(created) = response
-            .created
-            .as_ref()
-            .and_then(|created| created.get("new"))
-        {
-            return Ok(created.clone());
-        }
-        Err(set_failure(
-            response.not_created.as_ref().and_then(|map| map.get("new")),
-        ))
+        expect_created(&response, "new")
     }
 
     /// Apply a patch to a participant identity (RFC 8620 PatchObject).
@@ -385,16 +323,7 @@ impl Client {
             SetRequest::<ParticipantIdentity>::new(account_id.clone()).update(id.clone(), patch),
         );
         let response = self.participant_identity_set(&request)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_updated.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_updated(&response, id)
     }
 
     /// Destroy a participant identity.
@@ -405,16 +334,7 @@ impl Client {
             SetRequest::<ParticipantIdentity>::new(account_id.clone()).destroy(id.clone()),
         );
         let response = self.participant_identity_set(&request)?;
-        if response
-            .destroyed
-            .as_ref()
-            .is_some_and(|destroyed| destroyed.contains(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_destroyed(&response, id)
     }
 
     /// Make an identity the default participant identity (draft-ietf-jmap-calendars §3.2).

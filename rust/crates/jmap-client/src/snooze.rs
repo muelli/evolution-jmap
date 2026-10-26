@@ -14,8 +14,8 @@ use jmap_proto::methods::{SetRequest, SetResponse};
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_CYRUS_MAIL, CAPABILITY_MAIL};
 
 use crate::client::Client;
-use crate::contacts::set_failure;
 use crate::error::Error;
+use crate::set::expect_updated;
 
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_CYRUS_MAIL];
 
@@ -41,19 +41,7 @@ impl Client {
             .update(email_id.clone(), serde_json::Value::Object(patch));
         let arguments = self.single_call(USING, "Email/set", &request)?;
         let response: SetResponse<Email> = serde_json::from_value(arguments)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(email_id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response
-                .not_updated
-                .as_ref()
-                .and_then(|map| map.get(email_id)),
-        ))
+        expect_updated(&response, email_id)
     }
 
     /// Return or create the account's snoozed-role mailbox (RFC 9979 Section 8.1).
