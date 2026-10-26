@@ -45,6 +45,10 @@ fn readme_exists_and_contains_required_sections() {
         content.contains("## Documentation gaps") || content.contains("TODO"),
         "README must document missing documentation status"
     );
+    assert!(
+        content.contains("## Stability"),
+        "README must state the semver policy for draft-backed types"
+    );
 }
 
 #[test]
