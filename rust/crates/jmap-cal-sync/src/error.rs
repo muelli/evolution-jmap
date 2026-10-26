@@ -157,11 +157,7 @@ impl SyncError {
     /// full calendar. Thus this predicate exists, so that callers do not
     /// compare strings.
     pub fn is_cannot_calculate_changes(&self) -> bool {
-        matches!(
-            self,
-            Self::Client(error)
-                if error.is_cannot_calculate_changes() || error.is_unrecognized_changes_state()
-        )
+        matches!(self, Self::Client(error) if error.needs_full_resync())
     }
 
     /// Whether the server refused the request with HTTP 401. On a long-lived

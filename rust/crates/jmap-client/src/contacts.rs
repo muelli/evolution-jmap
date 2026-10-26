@@ -18,13 +18,26 @@ use crate::client::Client;
 use crate::error::Error;
 use crate::set::{expect_created, expect_destroyed, expect_updated};
 
-const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_CONTACTS];
+const CAPABILITY_CONTACTS_PARSE: &str = "urn:ietf:params:jmap:contacts:parse";
+const CAPABILITY_CYRUS_CONTACTS: &str = "https://cyrusimap.org/ns/jmap/contacts";
 
 impl Client {
+    fn contacts_using(&self) -> Vec<&str> {
+        let mut using = vec![CAPABILITY_CORE, CAPABILITY_CONTACTS];
+        if self
+            .session()
+            .capabilities
+            .contains_key(CAPABILITY_CYRUS_CONTACTS)
+        {
+            using.push(CAPABILITY_CYRUS_CONTACTS);
+        }
+        using
+    }
+
     /// Fetch all address books (`AddressBook/get` with `ids: null`).
     pub fn address_books(&self, account_id: &Id) -> Result<Vec<AddressBook>, Error> {
         let arguments = self.single_call(
-            USING,
+            &self.contacts_using(),
             "AddressBook/get",
             &GetRequest::all(account_id.clone()),
         )?;
@@ -65,7 +78,7 @@ impl Client {
         &self,
         request: &SetRequest<AddressBook>,
     ) -> Result<SetResponse<AddressBook>, Error> {
-        self.set_chunked(USING, "AddressBook/set", request)
+        self.set_chunked(&self.contacts_using(), "AddressBook/set", request)
     }
 
     /// Create a contact card.
@@ -92,7 +105,7 @@ impl Client {
         ids: &[Id],
     ) -> Result<GetResponse<ContactCard>, Error> {
         self.get_chunked(
-            &[CAPABILITY_CORE, CAPABILITY_CONTACTS],
+            &self.contacts_using(),
             "ContactCard/get",
             account_id,
             ids,
@@ -122,7 +135,7 @@ impl Client {
         filter: ContactCardQueryFilter,
     ) -> Result<QueryResponse, Error> {
         let request = QueryRequest::new(account_id.clone()).filter(filter);
-        let arguments = self.single_call(USING, "ContactCard/query", &request)?;
+        let arguments = self.single_call(&self.contacts_using(), "ContactCard/query", &request)?;
         Ok(serde_json::from_value(arguments)?)
     }
 
@@ -132,7 +145,13 @@ impl Client {
         account_id: &Id,
         filter: ContactCardQueryFilter,
     ) -> Result<Vec<Id>, Error> {
-        self.query_every_id(USING, "ContactCard/query", account_id, filter, None)
+        self.query_every_id(
+            &self.contacts_using(),
+            "ContactCard/query",
+            account_id,
+            filter,
+            None,
+        )
     }
 
     /// Parse an uploaded vCard blob into a `ContactCard` (RFC 9610 Section 3.4).
@@ -144,7 +163,15 @@ impl Client {
         &self,
         request: &ContactCardParseRequest,
     ) -> Result<ContactCardParseResponse, Error> {
-        let mut arguments = self.single_call(USING, "ContactCard/parse", request)?;
+        let mut using = self.contacts_using();
+        if self
+            .session()
+            .capabilities
+            .contains_key(CAPABILITY_CONTACTS_PARSE)
+        {
+            using.push(CAPABILITY_CONTACTS_PARSE);
+        }
+        let mut arguments = self.single_call(&using, "ContactCard/parse", request)?;
         demote_multi_element_parsed_blobs(&mut arguments);
         Ok(serde_json::from_value(arguments)?)
     }
@@ -159,7 +186,7 @@ impl Client {
         &self,
         request: &SetRequest<ContactCard>,
     ) -> Result<SetResponse<ContactCard>, Error> {
-        self.set_chunked(USING, "ContactCard/set", request)
+        self.set_chunked(&self.contacts_using(), "ContactCard/set", request)
     }
 }
 

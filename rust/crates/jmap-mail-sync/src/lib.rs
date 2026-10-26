@@ -159,11 +159,7 @@ impl MailSync {
         match self.client.all_changes(&self.account_id, "Mailbox", since) {
             Ok(changes) if changes.is_empty() => Ok(FolderUpdate::Unchanged(changes.new_state)),
             Ok(_) => self.rebuild(),
-            Err(error)
-                if error.is_cannot_calculate_changes() || error.is_unrecognized_changes_state() =>
-            {
-                self.rebuild()
-            }
+            Err(error) if error.needs_full_resync() => self.rebuild(),
             Err(error) => Err(error.into()),
         }
     }
@@ -257,11 +253,7 @@ impl MailSync {
                 return Ok(MessageUpdate::Unchanged(changes.new_state));
             }
             Ok(changes) => changes,
-            Err(error)
-                if error.is_cannot_calculate_changes() || error.is_unrecognized_changes_state() =>
-            {
-                return self.relist(mailbox);
-            }
+            Err(error) if error.needs_full_resync() => return self.relist(mailbox),
             Err(error) => return Err(error.into()),
         };
 

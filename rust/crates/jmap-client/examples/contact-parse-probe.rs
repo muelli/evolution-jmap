@@ -326,8 +326,12 @@ fn main() {
     let has_contacts_parse = session
         .capabilities
         .contains_key("urn:ietf:params:jmap:contacts:parse");
+    let has_cyrus_contacts = session
+        .capabilities
+        .contains_key("https://cyrusimap.org/ns/jmap/contacts");
     println!("Capability {CAPABILITY_CONTACTS} advertised: {has_contacts}");
     println!("Capability urn:ietf:params:jmap:contacts:parse advertised: {has_contacts_parse}");
+    println!("Capability https://cyrusimap.org/ns/jmap/contacts advertised: {has_cyrus_contacts}");
 
     let account_id = match client.primary_account(CAPABILITY_CONTACTS) {
         Ok(id) => id,
