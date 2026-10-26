@@ -103,6 +103,22 @@ use sha2::{Digest, Sha256};
 
 const CAPABILITY_CONTACTS_PARSE: &str = "urn:ietf:params:jmap:contacts:parse";
 const CAPABILITY_CALENDARS_PARSE: &str = "urn:ietf:params:jmap:calendars:parse";
+const CAPABILITY_CYRUS_CONTACTS: &str = "https://cyrusimap.org/ns/jmap/contacts";
+
+fn supports_contact_parse(client: &Client) -> bool {
+    client
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_CONTACTS_PARSE)
+        || client
+            .session()
+            .capabilities
+            .contains_key(CAPABILITY_CYRUS_CONTACTS)
+        || client
+            .session()
+            .capabilities
+            .contains_key(CAPABILITY_CONTACTS)
+}
 
 /// A value unique to this process invocation, for naming a record so a
 /// concurrent or prior run's leftover can never be mistaken for this run's
@@ -3750,12 +3766,8 @@ fn contact_card_parse_parses_an_uploaded_vcard_blob_through_the_real_api() {
         eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
         return;
     };
-    if !client
-        .session()
-        .capabilities
-        .contains_key(CAPABILITY_CONTACTS_PARSE)
-    {
-        eprintln!("server does not advertise {CAPABILITY_CONTACTS_PARSE}; skipping");
+    if !supports_contact_parse(&client) {
+        eprintln!("server does not advertise contacts parse capability; skipping");
         return;
     }
 
@@ -5658,6 +5670,134 @@ fn calendar_event_parse_differential_oracle_fixtures_match_against_the_real_serv
     }
 }
 
+/// Exercise live differential fidelity for JSContact against the real server
+/// across each fixture .vcf file, comparing the server's ContactCard/parse
+/// rendering beside jmap-vcard's local parse of the same bytes.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn contact_card_parse_differential_oracle_fixtures_match_against_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("no live server configured or write credentials missing; skipping");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CONTACTS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
+        return;
+    };
+    if !supports_contact_parse(&client) {
+        eprintln!("server does not advertise contacts parse capability; skipping");
+        return;
+    }
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        manifest_dir.join("../jmap-vcard/tests/fixtures"),
+        PathBuf::from("rust/crates/jmap-vcard/tests/fixtures"),
+        PathBuf::from("crates/jmap-vcard/tests/fixtures"),
+        PathBuf::from("jmap-vcard/tests/fixtures"),
+    ];
+    let Some(fixtures_dir) = candidates.into_iter().find(|cand| cand.is_dir()) else {
+        panic!("could not find jmap-vcard fixtures directory");
+    };
+
+    let mut entries: Vec<_> = fs::read_dir(&fixtures_dir)
+        .expect("read fixtures directory")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "vcf"))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    assert!(
+        !entries.is_empty(),
+        "fixtures directory must contain .vcf fixture files"
+    );
+
+    for entry in entries {
+        let path = entry.path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let vcf_bytes = fs::read(&path).expect("read fixture file");
+        let vcf_text = String::from_utf8(vcf_bytes.clone()).expect("valid UTF-8");
+
+        // 1. Upload .vcf blob via HTTP upload endpoint:
+        let upload_res = client
+            .upload_blob(&account_id, "text/vcard", vcf_bytes)
+            .expect("upload_blob succeeds");
+        let blob_id = upload_res.blob_id;
+
+        // 2. Call ContactCard/parse:
+        let parse_req = ContactCardParseRequest::new(account_id.clone(), vec![blob_id.clone()]);
+        let parse_res = client
+            .contact_card_parse(&parse_req)
+            .expect("ContactCard/parse succeeds");
+
+        assert!(
+            parse_res.not_found.is_none(),
+            "fixture {name} must not be reported in notFound"
+        );
+        assert!(
+            parse_res.not_parsable.is_none(),
+            "fixture {name} must not be reported in notParsable"
+        );
+
+        let parsed_map = parse_res.parsed.expect("parsed map present");
+        let server_card = parsed_map
+            .get(&blob_id)
+            .expect("parsed card present for blobId");
+
+        // 3. Local parse with jmap-vcard:
+        let local_card = jmap_vcard::vcard_to_card(&vcf_text).expect("jmap-vcard parses fixture");
+
+        // 4. Verify core semantic fidelity between server and local representations:
+        assert_eq!(
+            server_card.name.is_some(),
+            local_card.name.is_some(),
+            "name presence must match for {name}"
+        );
+        if let (Some(server_name), Some(local_name)) = (&server_card.name, &local_card.name) {
+            if let (Some(s_full), Some(l_full)) = (&server_name.full, &local_name.full) {
+                assert_eq!(s_full, l_full, "full name must match for {name}");
+            }
+        }
+        assert_eq!(
+            server_card.emails.is_some(),
+            local_card.emails.is_some(),
+            "emails presence must match for {name}"
+        );
+        if let (Some(server_emails), Some(local_emails)) = (&server_card.emails, &local_card.emails)
+        {
+            for local_email in local_emails.values() {
+                assert!(
+                    server_emails
+                        .values()
+                        .any(|se| se.address == local_email.address),
+                    "email address {} missing from server parsed card for {name}",
+                    local_email.address
+                );
+            }
+        }
+        assert_eq!(
+            server_card.phones.is_some(),
+            local_card.phones.is_some(),
+            "phones presence must match for {name}"
+        );
+        assert_eq!(
+            server_card.organizations.is_some(),
+            local_card.organizations.is_some(),
+            "organizations presence must match for {name}"
+        );
+        assert_eq!(
+            server_card.titles.is_some(),
+            local_card.titles.is_some(),
+            "titles presence must match for {name}"
+        );
+        assert_eq!(
+            server_card.notes.is_some(),
+            local_card.notes.is_some(),
+            "notes presence must match for {name}"
+        );
+    }
+}
+
 /// Finding 21: `ContactCard/parse` silently drops all cards past the first in a multi-VCARD blob.
 ///
 /// When a `.vcf` blob containing multiple concatenated `VCARD` components (RFC 6350 Section 3.3)
@@ -5676,12 +5816,8 @@ fn contact_card_parse_silently_drops_cards_past_the_first_in_multi_vcard_blob_th
         eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
         return;
     };
-    if !client
-        .session()
-        .capabilities
-        .contains_key(CAPABILITY_CONTACTS_PARSE)
-    {
-        eprintln!("server does not advertise {CAPABILITY_CONTACTS_PARSE}; skipping");
+    if !supports_contact_parse(&client) {
+        eprintln!("server does not advertise contacts parse capability; skipping");
         return;
     }
 
@@ -5722,25 +5858,38 @@ fn contact_card_parse_silently_drops_cards_past_the_first_in_multi_vcard_blob_th
     let first_card = parsed_map
         .get(&upload.blob_id)
         .expect("uploaded blobId must be present in parsed map");
-    assert_eq!(
-        first_card.uid.as_deref(),
-        Some(uid1.as_str()),
-        "first card must be parsed"
-    );
-    assert_eq!(
-        first_card.name.as_ref().and_then(|n| n.full.as_deref()),
-        Some(full_name_1.as_str()),
-        "first card name must match"
-    );
+    if is_cyrus_server(&client) {
+        // Cyrus Finding 11: Cyrus parses a multi-vCard blob into an empty Card
+        // with no UID or name, rather than reporting notParsable or preserving the first card.
+        assert!(
+            first_card.uid.is_none(),
+            "Cyrus does not retain UID from multi-vCard blob"
+        );
+        assert!(
+            first_card.name.is_none(),
+            "Cyrus does not retain name from multi-vCard blob"
+        );
+    } else {
+        assert_eq!(
+            first_card.uid.as_deref(),
+            Some(uid1.as_str()),
+            "first card must be parsed"
+        );
+        assert_eq!(
+            first_card.name.as_ref().and_then(|n| n.full.as_deref()),
+            Some(full_name_1.as_str()),
+            "first card name must match"
+        );
+    }
 
-    // Finding 21: the second vCard in the multi-card blob was silently dropped.
-    // Stalwart does not report the blob in notParsable:
+    // Finding 21: subsequent vCards in the multi-card blob were silently dropped.
+    // Neither server reports the blob in notParsable:
     assert!(
         parse_res
             .not_parsable
             .as_ref()
             .is_none_or(|np| !np.contains(&upload.blob_id)),
-        "Finding 21: Stalwart does not report the multi-vCard blob in notParsable despite dropping the second card"
+        "Neither server reports the multi-vCard blob in notParsable"
     );
 }
 
@@ -6096,12 +6245,8 @@ fn contact_card_parse_promotes_type_internet_to_context_through_the_real_api() {
         eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
         return;
     };
-    if !client
-        .session()
-        .capabilities
-        .contains_key(CAPABILITY_CONTACTS_PARSE)
-    {
-        eprintln!("server does not advertise {CAPABILITY_CONTACTS_PARSE}; skipping");
+    if !supports_contact_parse(&client) {
+        eprintln!("server does not advertise contacts parse capability; skipping");
         return;
     }
 
@@ -6158,11 +6303,19 @@ fn contact_card_parse_promotes_type_internet_to_context_through_the_real_api() {
         Some(&serde_json::Value::Bool(true)),
         "private context should be present"
     );
-    assert_eq!(
-        contexts.get("internet"),
-        Some(&serde_json::Value::Bool(true)),
-        "Stalwart promotes TYPE=internet to context key 'internet' (Finding 15)"
-    );
+    if is_cyrus_server(&client) {
+        assert_eq!(
+            contexts.get("internet"),
+            None,
+            "Cyrus conforms to RFC 9553 and drops transport TYPE=internet"
+        );
+    } else {
+        assert_eq!(
+            contexts.get("internet"),
+            Some(&serde_json::Value::Bool(true)),
+            "Stalwart promotes TYPE=internet to context key 'internet' (Finding 15)"
+        );
+    }
 }
 
 /// Reads current resident set size (VmRSS) and peak resident set size (VmHWM)

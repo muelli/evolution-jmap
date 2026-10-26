@@ -149,6 +149,7 @@ and `jmap-mail-sync`) take their sizes from `JMAP_SCALE_TEST_CARDS`,
 | Sending between two accounts | `jmap-client` (`send_email_delivers_to_a_second_account_on_the_real_server`), `jmap-mail-sync/tests/live_server_send.rs` | steps 3 and 3a |
 | Shared address books, calendars and mailboxes | `*/tests/live_server_shared*.rs` | steps 3 and 3a |
 | CalendarEvent/parse differential fidelity across iCalendar fixtures | `jmap-client/tests/live_server.rs` | step 3 |
+| ContactCard/parse differential fidelity across vCard fixtures | `jmap-client/tests/live_server.rs` | step 3 |
 | Meeting invitations | `jmap-cal-sync/tests/live_server_scheduling.rs` | steps 3 and 3a |
 | Undo window of a delete: no destroy before the due time, undo, refused destroy (takes about one minute) | `jmap-backend-collection/tests/live_server_deferred_delete.rs` | steps 3 and 3a |
 | OAuth 2.0 discovery and dynamic client registration | `jmap-config/tests/live_server_discover_and_register.rs` | step 2 (URL only) |

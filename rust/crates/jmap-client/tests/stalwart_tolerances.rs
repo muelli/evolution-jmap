@@ -892,3 +892,70 @@ fn stalwart_max_size_upload_advertised_and_limit_plus_one_refused() {
         other => panic!("expected Error::TooLarge, got {other:?}"),
     }
 }
+
+const CYRUS_AUTHENTICATED_SESSION_WITH_VENDOR_CONTACTS: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:contacts":{},"https://cyrusimap.org/ns/jmap/contacts":{}},"accounts":{"user1":{"name":"user1","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:contacts":{},"https://cyrusimap.org/ns/jmap/contacts":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:contacts":"user1"},"username":"user1","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
+
+const CYRUS_CONTACT_CARD_PARSE_RESPONSE: &str = r#"{"methodResponses":[["ContactCard/parse",{"accountId":"user1","parsed":{"blob1":{"@type":"Card","version":"1.0","kind":"individual","cyrusimap.org:importance":0.0,"emails":{"697575717950d7978b39becacc9f6a5ab763a798":{"address":"vera@example.com","contexts":{"work":true}}},"name":{"full":"Vera Test","components":[{"kind":"surname","value":"Test"},{"kind":"given","value":"Vera"}]}}},"notParsable":null,"notFound":null,"accountId":"user1"},"c0"]],"sessionState":"0"}"#;
+
+struct MockCyrusContactCardParseTransport;
+
+impl Transport for MockCyrusContactCardParseTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => CYRUS_AUTHENTICATED_SESSION_WITH_VENDOR_CONTACTS
+                .as_bytes()
+                .to_vec(),
+            HttpMethod::Post => {
+                let json: serde_json::Value =
+                    serde_json::from_slice(request.body.unwrap_or_default())
+                        .expect("valid JSON request body");
+                let using = json
+                    .get("using")
+                    .and_then(serde_json::Value::as_array)
+                    .expect("using array in request");
+                let has_vendor_contacts = using
+                    .iter()
+                    .any(|u| u.as_str() == Some("https://cyrusimap.org/ns/jmap/contacts"));
+                assert!(
+                    has_vendor_contacts,
+                    "ContactCard/parse on Cyrus must include https://cyrusimap.org/ns/jmap/contacts in using"
+                );
+                CYRUS_CONTACT_CARD_PARSE_RESPONSE.as_bytes().to_vec()
+            }
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn cyrus_contact_card_parse_includes_vendor_contacts_capability_and_parses_card() {
+    let client = Client::builder()
+        .transport(MockCyrusContactCardParseTransport)
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("user1");
+    let request = ContactCardParseRequest::new(account_id.clone(), vec![Id::new("blob1")]);
+    let response = client
+        .contact_card_parse(&request)
+        .expect("contact_card_parse must succeed and parse card");
+
+    let parsed_map = response.parsed.expect("parsed map must be present");
+    let card = parsed_map
+        .get(&Id::new("blob1"))
+        .expect("card for blob1 must be present");
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Vera Test")
+    );
+    let emails = card.emails.as_ref().expect("emails map present");
+    assert!(
+        emails.values().any(|e| e.address == "vera@example.com"),
+        "expected email address in parsed card"
+    );
+}
