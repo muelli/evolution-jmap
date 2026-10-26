@@ -778,4 +778,135 @@ mod tests {
         assert!(not_created.contains_key("d"));
         assert!(not_created.contains_key("c"));
     }
+
+    #[test]
+    fn a_creation_reference_inside_an_array_is_discovered_and_ordered() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "tags": ["#c1"] }))
+            .create("c1", json!({ "name": "tag" }));
+        let (result, sent) = run(&request, 1);
+        result.unwrap();
+        assert_eq!(sent.len(), 2);
+        let order: Vec<&String> = sent
+            .iter()
+            .flat_map(|(chunk, _)| chunk.create.as_ref().unwrap().keys())
+            .collect();
+        assert_eq!(order, ["c1", "c0"]);
+        assert_eq!(sent[1].1[&Id::new("c1")], Id::new("id-c1"));
+    }
+
+    #[test]
+    fn a_dependency_cycle_exceeding_limit_returns_error() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "parentId": "#c1" }))
+            .create("c1", json!({ "parentId": "#c0" }));
+        let (result, _) = run(&request, 1);
+        let Err(Error::ChunkBoundaryReferenceBroken {
+            creation_id,
+            reason,
+        }) = result
+        else {
+            panic!("expected ChunkBoundaryReferenceBroken, got {result:?}");
+        };
+        assert!(
+            reason.contains("dependency cycle of size 2 exceeds maxObjectsInSet limit 1"),
+            "got reason: {reason}"
+        );
+        assert!(creation_id == "c0" || creation_id == "c1");
+    }
+
+    #[test]
+    fn a_dependency_cycle_within_limit_succeeds_in_one_chunk() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "parentId": "#c1" }))
+            .create("c1", json!({ "parentId": "#c0" }));
+        let (result, sent) = run(&request, 2);
+        result.unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0.create.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn mixed_create_update_destroy_counts_all_items_against_limit() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "name": "zero" }))
+            .update("u0", json!({ "name": "one" }))
+            .destroy("d0");
+        let (result, sent) = run(&request, 2);
+        result.unwrap();
+        assert_eq!(sent.len(), 2);
+    }
+
+    #[test]
+    fn limit_of_zero_sends_the_request_unchunked() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "name": "zero" }))
+            .create("c1", json!({ "name": "one" }));
+        let (result, sent) = run(&request, 0);
+        result.unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0.create.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn updates_and_destroys_split_across_chunk_limit() {
+        let request = SetRequest::new("a")
+            .update("u0", json!({ "name": "zero" }))
+            .update("u1", json!({ "name": "one" }))
+            .update("u2", json!({ "name": "two" }));
+        let (result, sent) = run(&request, 2);
+        result.unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].0.update.as_ref().unwrap().len(), 2);
+        assert_eq!(sent[1].0.update.as_ref().unwrap().len(), 1);
+
+        let request = SetRequest::new("a")
+            .destroy("d0")
+            .destroy("d1")
+            .destroy("d2");
+        let (result, sent) = run(&request, 2);
+        result.unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].0.destroy.as_ref().unwrap().len(), 2);
+        assert_eq!(sent[1].0.destroy.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_update_referencing_a_failed_create_fails_with_invalid_properties() {
+        let request = SetRequest::new("a")
+            .create("c0", json!({ "name": "bad" }))
+            .update("u1", json!({ "parentId": "#c0" }));
+        let mut calls = 0;
+        let result = execute_set_chunked(&request, Some(1), |chunk, _| {
+            calls += 1;
+            let mut resp = SetResponse::new(chunk.account_id.clone(), State::new("s"));
+            if calls == 1 {
+                let mut not_created = BTreeMap::new();
+                not_created.insert(
+                    "c0".to_string(),
+                    SetError::new(jmap_proto::error::set::INVALID_PROPERTIES),
+                );
+                resp.not_created = Some(not_created);
+            }
+            Ok(resp)
+        });
+        let response = result.unwrap();
+        assert_eq!(
+            calls, 1,
+            "update chunk should be skipped because all updates failed prerequisites"
+        );
+        let not_updated = response.not_updated.expect("not_updated map");
+        assert!(not_updated.contains_key(&Id::new("u1")));
+    }
+
+    #[test]
+    fn an_empty_set_request_sends_one_empty_chunk() {
+        let request = SetRequest::new("a");
+        let (result, sent) = run(&request, 1);
+        result.unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].0.create.is_none());
+        assert!(sent[0].0.update.is_none());
+        assert!(sent[0].0.destroy.is_none());
+    }
 }
