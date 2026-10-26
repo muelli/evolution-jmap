@@ -17,13 +17,17 @@ use crate::id::Id;
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Request {
+    /// The capability URIs this request uses.
     pub using: Vec<String>,
+    /// The method calls, in call order.
     pub method_calls: Vec<Invocation>,
+    /// Client-provided ids for objects this request creates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_ids: Option<BTreeMap<Id, Id>>,
 }
 
 impl Request {
+    /// Create a `Request` that uses the given capabilities and has no method calls.
     pub fn new(using: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
             using: using.into_iter().map(Into::into).collect(),
@@ -44,6 +48,7 @@ impl Request {
         Ok(self)
     }
 
+    /// Set the created-id map.
     pub fn with_created_ids(mut self, created_ids: BTreeMap<Id, Id>) -> Self {
         self.created_ids = Some(created_ids);
         self
@@ -55,12 +60,16 @@ impl Request {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Invocation {
+    /// The method name.
     pub name: String,
+    /// The method arguments, as sent or received on the wire.
     pub arguments: Value,
+    /// The client-chosen call id linking a call to its responses.
     pub call_id: String,
 }
 
 impl Invocation {
+    /// Create an invocation by serializing typed arguments.
     pub fn new(
         name: impl Into<String>,
         arguments: &impl Serialize,
@@ -73,6 +82,7 @@ impl Invocation {
         })
     }
 
+    /// Create an invocation from arguments already in `Value` form.
     pub fn from_value(
         name: impl Into<String>,
         arguments: Value,
@@ -119,12 +129,16 @@ impl<'de> Deserialize<'de> for Invocation {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ResultReference {
+    /// The call id of the method call that produced the referenced result.
     pub result_of: String,
+    /// The result property to read, for example `ids`.
     pub name: String,
+    /// The path into that property.
     pub path: String,
 }
 
 impl ResultReference {
+    /// Create a result reference.
     pub fn new(
         result_of: impl Into<String>,
         name: impl Into<String>,

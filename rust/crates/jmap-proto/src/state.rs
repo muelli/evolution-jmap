@@ -11,10 +11,12 @@ use serde::{Deserialize, Serialize};
 pub struct State(String);
 
 impl State {
+    /// Create a `State` from a string.
     pub fn new(state: impl Into<String>) -> Self {
         Self(state.into())
     }
 
+    /// Return the state as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -51,10 +53,12 @@ impl AsRef<str> for State {
 pub struct UtcDate(String);
 
 impl UtcDate {
+    /// Create a `UtcDate` from a string.
     pub fn new(date: impl Into<String>) -> Self {
         Self(date.into())
     }
 
+    /// Return the date as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
