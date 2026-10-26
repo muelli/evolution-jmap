@@ -20,6 +20,88 @@ use serde_json::Value;
 
 use crate::Error;
 
+/// Turn an optional [`SetError`] rejection into an [`Error`].
+///
+/// Returns [`Error::Set`] when an error is present.
+/// Returns [`Error::Protocol`] when the response omits both success and failure.
+pub(crate) fn set_failure(set_error: Option<&SetError>) -> Error {
+    match set_error {
+        Some(set_error) => Error::Set(set_error.clone()),
+        None => Error::Protocol("/set response reports neither success nor failure".to_owned()),
+    }
+}
+
+/// Extract the created object for `creation_id` from a `/set` response.
+///
+/// Returns the created item when present in `created`.
+/// Returns [`Error::Set`] when `not_created` rejects the creation id.
+/// Returns [`Error::Protocol`] when the response mentions neither.
+pub fn expect_created<T: Clone>(response: &SetResponse<T>, creation_id: &str) -> Result<T, Error> {
+    if let Some(object) = response
+        .created
+        .as_ref()
+        .and_then(|created| created.get(creation_id))
+    {
+        return Ok(object.clone());
+    }
+    Err(set_failure(
+        response
+            .not_created
+            .as_ref()
+            .and_then(|not_created| not_created.get(creation_id)),
+    ))
+}
+
+/// Verify that `id` was updated in a `/set` response.
+///
+/// Returns `Ok(())` when `id` is present in `updated`.
+/// Returns [`Error::Set`] when `not_updated` rejects the update.
+/// Returns [`Error::Protocol`] when the response mentions neither.
+pub fn expect_updated<T>(response: &SetResponse<T>, id: &Id) -> Result<(), Error> {
+    if response
+        .updated
+        .as_ref()
+        .is_some_and(|updated| updated.contains_key(id))
+    {
+        return Ok(());
+    }
+    if let Some(err) = response
+        .not_updated
+        .as_ref()
+        .and_then(|not_updated| not_updated.get(id))
+    {
+        return Err(Error::Set(err.clone()));
+    }
+    Err(Error::Protocol(format!(
+        "/set response reports neither success nor failure for {id}"
+    )))
+}
+
+/// Verify that `id` was destroyed in a `/set` response.
+///
+/// Returns `Ok(())` when `id` is present in `destroyed`.
+/// Returns [`Error::Set`] when `not_destroyed` rejects the destruction.
+/// Returns [`Error::Protocol`] when the response mentions neither.
+pub fn expect_destroyed<T>(response: &SetResponse<T>, id: &Id) -> Result<(), Error> {
+    if response
+        .destroyed
+        .as_ref()
+        .is_some_and(|destroyed| destroyed.contains(id))
+    {
+        return Ok(());
+    }
+    if let Some(err) = response
+        .not_destroyed
+        .as_ref()
+        .and_then(|not_destroyed| not_destroyed.get(id))
+    {
+        return Err(Error::Set(err.clone()));
+    }
+    Err(Error::Protocol(format!(
+        "/set response reports neither success nor failure for {id}"
+    )))
+}
+
 /// Chunk definition containing partition slices for create, update, and destroy.
 #[derive(Debug)]
 struct SetChunk<T> {

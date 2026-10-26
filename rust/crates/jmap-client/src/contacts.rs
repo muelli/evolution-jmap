@@ -8,7 +8,6 @@ use jmap_proto::contacts::{
     AddressBook, ContactCard, ContactCardParseRequest, ContactCardParseResponse,
     ContactCardQueryFilter,
 };
-use jmap_proto::error::SetError;
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
@@ -17,6 +16,7 @@ use serde_json::Value;
 
 use crate::client::Client;
 use crate::error::Error;
+use crate::set::{expect_created, expect_destroyed, expect_updated};
 
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_CONTACTS];
 
@@ -41,16 +41,7 @@ impl Client {
         let request =
             SetRequest::<AddressBook>::new(account_id.clone()).create("new", book.clone());
         let response = self.address_book_set(&request)?;
-        if let Some(created) = response
-            .created
-            .as_ref()
-            .and_then(|created| created.get("new"))
-        {
-            return Ok(created.clone());
-        }
-        Err(set_failure(
-            response.not_created.as_ref().and_then(|map| map.get("new")),
-        ))
+        expect_created(&response, "new")
     }
 
     /// Update an address book (`AddressBook/set`) with a JSON Patch object.
@@ -59,32 +50,14 @@ impl Client {
     pub fn address_book_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request = SetRequest::<AddressBook>::new(account_id.clone()).update(id.clone(), patch);
         let response = self.address_book_set(&request)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_updated.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_updated(&response, id)
     }
 
     /// Destroy an address book.
     pub fn address_book_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = SetRequest::<AddressBook>::new(account_id.clone()).destroy(id.clone());
         let response = self.address_book_set(&request)?;
-        if response
-            .destroyed
-            .as_ref()
-            .is_some_and(|destroyed| destroyed.contains(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_destroyed(&response, id)
     }
 
     /// Modify address books (`AddressBook/set`, RFC 9610 Section 2.3).
@@ -106,16 +79,7 @@ impl Client {
         let request =
             SetRequest::<ContactCard>::new(account_id.clone()).create("new", card.clone());
         let response = self.contact_set(&request)?;
-        if let Some(created) = response
-            .created
-            .as_ref()
-            .and_then(|created| created.get("new"))
-        {
-            return Ok(created.clone());
-        }
-        Err(set_failure(
-            response.not_created.as_ref().and_then(|map| map.get("new")),
-        ))
+        expect_created(&response, "new")
     }
 
     /// Fetch contact cards by identifier.
@@ -141,32 +105,14 @@ impl Client {
     pub fn contact_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request = SetRequest::<ContactCard>::new(account_id.clone()).update(id.clone(), patch);
         let response = self.contact_set(&request)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_updated.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_updated(&response, id)
     }
 
     /// Destroy a contact card.
     pub fn contact_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = SetRequest::<ContactCard>::new(account_id.clone()).destroy(id.clone());
         let response = self.contact_set(&request)?;
-        if response
-            .destroyed
-            .as_ref()
-            .is_some_and(|destroyed| destroyed.contains(id))
-        {
-            return Ok(());
-        }
-        Err(set_failure(
-            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_destroyed(&response, id)
     }
 
     /// `ContactCard/query`: matching card ids.
@@ -214,13 +160,6 @@ impl Client {
         request: &SetRequest<ContactCard>,
     ) -> Result<SetResponse<ContactCard>, Error> {
         self.set_chunked(USING, "ContactCard/set", request)
-    }
-}
-
-pub(crate) fn set_failure(set_error: Option<&SetError>) -> Error {
-    match set_error {
-        Some(set_error) => Error::Set(set_error.clone()),
-        None => Error::Protocol("/set response reports neither success nor failure".to_owned()),
     }
 }
 

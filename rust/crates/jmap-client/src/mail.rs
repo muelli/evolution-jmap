@@ -25,18 +25,9 @@ use serde_json::Value;
 
 use crate::client::Client;
 use crate::error::Error;
+use crate::set::{expect_created, expect_destroyed, expect_updated};
 use crate::transport::HttpMethod;
 use crate::url::encode_template_value;
-
-/// Pull the object for `creation_id` out of a `/set` response, mapping a
-/// rejection to [`Error::Set`].
-fn expect_created<T: Clone>(response: &SetResponse<T>, creation_id: &str) -> Result<T, Error> {
-    creation_outcome(
-        response.created.as_ref(),
-        response.not_created.as_ref(),
-        creation_id,
-    )
-}
 
 /// Extract created item from maps returned by methods like `Email/import` (RFC 8621 Section 4.8).
 fn creation_outcome<T: Clone>(
@@ -175,16 +166,7 @@ impl Client {
     pub fn mailbox_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request = SetRequest::<Mailbox>::new(account_id.clone()).update(id.clone(), patch);
         let response = self.mailbox_set(&request)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(id))
-        {
-            return Ok(());
-        }
-        Err(crate::contacts::set_failure(
-            response.not_updated.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_updated(&response, id)
     }
 
     /// Destroy a mailbox (`Mailbox/set`).
@@ -194,16 +176,7 @@ impl Client {
     pub fn mailbox_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = SetRequest::<Mailbox>::new(account_id.clone()).destroy(id.clone());
         let response = self.mailbox_set(&request)?;
-        if response
-            .destroyed
-            .as_ref()
-            .is_some_and(|destroyed| destroyed.contains(id))
-        {
-            return Ok(());
-        }
-        Err(crate::contacts::set_failure(
-            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
-        ))
+        expect_destroyed(&response, id)
     }
 
     /// Modify mailboxes (`Mailbox/set`, RFC 8621 Section 2.5).
@@ -242,16 +215,7 @@ impl Client {
             &request,
         )?;
         let response: SetResponse<VacationResponse> = serde_json::from_value(arguments)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(&id))
-        {
-            return Ok(());
-        }
-        Err(crate::contacts::set_failure(
-            response.not_updated.as_ref().and_then(|map| map.get(&id)),
-        ))
+        expect_updated(&response, &id)
     }
 
     /// Query matching email IDs (`Email/query`).
@@ -405,24 +369,7 @@ impl Client {
     pub fn email_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request = SetRequest::<Email>::new(account_id.clone()).update(id.clone(), patch);
         let response = self.email_set(&request)?;
-
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(id))
-        {
-            return Ok(());
-        }
-        if let Some(set_error) = response
-            .not_updated
-            .as_ref()
-            .and_then(|not_updated| not_updated.get(id))
-        {
-            return Err(Error::Set(set_error.clone()));
-        }
-        Err(Error::Protocol(format!(
-            "Email/set answered neither updated nor notUpdated for {id}"
-        )))
+        expect_updated(&response, id)
     }
 
     /// Remove one message from the store entirely (`Email/set` destroy).
@@ -435,24 +382,7 @@ impl Client {
     pub fn email_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = SetRequest::<Email>::new(account_id.clone()).destroy(id.clone());
         let response = self.email_set(&request)?;
-
-        if response
-            .destroyed
-            .as_ref()
-            .is_some_and(|destroyed| destroyed.contains(id))
-        {
-            return Ok(());
-        }
-        if let Some(set_error) = response
-            .not_destroyed
-            .as_ref()
-            .and_then(|not_destroyed| not_destroyed.get(id))
-        {
-            return Err(Error::Set(set_error.clone()));
-        }
-        Err(Error::Protocol(format!(
-            "Email/set answered neither destroyed nor notDestroyed for {id}"
-        )))
+        expect_destroyed(&response, id)
     }
 
     /// Put a message into the store from bytes already uploaded
@@ -752,19 +682,7 @@ impl Client {
             &request,
         )?;
         let response: SetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
-        if response
-            .updated
-            .as_ref()
-            .is_some_and(|updated| updated.contains_key(submission_id))
-        {
-            return Ok(());
-        }
-        Err(crate::contacts::set_failure(
-            response
-                .not_updated
-                .as_ref()
-                .and_then(|map| map.get(submission_id)),
-        ))
+        expect_updated(&response, submission_id)
     }
 
     /// Fetch EmailSubmissions by id (`EmailSubmission/get`, RFC 8621 §7.4).
