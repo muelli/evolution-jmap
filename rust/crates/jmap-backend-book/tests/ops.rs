@@ -21,69 +21,11 @@ use glib_sys::{
 use jmap_backend_book::marshal;
 use jmap_backend_book::ops::{self, Outcome};
 use jmap_book_sync::{BookSync, OnConflict, SyncError, edit_base};
-use jmap_client::{Client, Credentials};
-use jmap_mock::MockServer;
 use jmap_proto::Id;
-use jmap_proto::contacts::ContactCard;
 use serde_json::json;
 
-/// Mock server fixture providing two address books and `BookSync`.
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-    ours: Id,
-    theirs: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let (ours, theirs) = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            let account = state.account_mut(&account_id).unwrap();
-            (
-                account.seed_address_book("Personal", true),
-                account.seed_address_book("Shared", false),
-            )
-        };
-        Self {
-            server,
-            account_id,
-            ours,
-            theirs,
-        }
-    }
-
-    fn client(&self) -> Client {
-        Client::connect(self.server.origin(), Credentials::none()).unwrap()
-    }
-
-    fn sync(&self) -> BookSync {
-        BookSync::new(self.client(), self.account_id.clone(), self.ours.clone())
-    }
-
-    /// Create a card directly, bypassing the code under test.
-    fn seed(&self, book: &Id, full_name: &str, email: &str) -> Id {
-        self.client()
-            .contact_create(
-                &self.account_id,
-                &ContactCard::simple(book.clone(), full_name, email),
-            )
-            .unwrap()
-            .id
-            .expect("server assigned id")
-    }
-
-    /// The uids the book holds, as the server sees them.
-    fn uids(&self) -> Vec<String> {
-        let (_, contacts) = self.sync().list_existing().unwrap();
-        let mut uids: Vec<String> = contacts.into_iter().map(|info| info.uid).collect();
-        uids.sort();
-        uids
-    }
-}
+mod common;
+use common::Fixture;
 
 /// The four out-parameters EDS hands `get_changes_sync`, plus the sync tag.
 struct ChangeOuts {

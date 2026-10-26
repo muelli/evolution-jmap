@@ -26,64 +26,10 @@ use jmap_backend_core::connect::{Collection, ConnectError, credentials};
 use jmap_backend_core::source::{ConnectTarget, OwnedSource, SourceConfig};
 use jmap_client::Credentials;
 use jmap_mock::MockServer;
-use jmap_proto::Id;
 use jmap_proto::contacts::AddressBookRights;
 
-struct Fixture {
-    server: MockServer,
-    default_book: Option<Id>,
-    other_book: Id,
-}
-
-impl Fixture {
-    /// Two address books; `default_book` is the one flagged `isDefault`.
-    fn start(with_default: bool) -> Self {
-        Self::start_with(MockServer::builder(), with_default)
-    }
-
-    /// Seeds the non-default book first so incorrect default resolution fails visibly.
-    fn start_with(builder: jmap_mock::MockServerBuilder, with_default: bool) -> Self {
-        let server = builder.start();
-        let account_id = server.account_id();
-        let (other_book, default_book) = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            let account = state.account_mut(&account_id).unwrap();
-            (
-                account.seed_address_book("Shared", false),
-                with_default.then(|| account.seed_address_book("Personal", true)),
-            )
-        };
-        Self {
-            server,
-            default_book,
-            other_book,
-        }
-    }
-
-    /// Starts a mock server with a primary account and a second account.
-    /// Returns (fixture, second_account_id, second_book_id).
-    fn start_two_accounts() -> (Self, Id, Id) {
-        let fixture = Self::start(true);
-        let second_account_id = Id::from("second-account");
-        let second_book_id = {
-            let state = fixture.server.state();
-            let mut state = state.lock().unwrap();
-            let account = state.add_account(second_account_id.clone(), "Second Account");
-            account.seed_address_book("SecondShared", true)
-        };
-        (fixture, second_account_id, second_book_id)
-    }
-
-    fn config(&self) -> SourceConfig {
-        SourceConfig {
-            target: ConnectTarget::Origin(self.server.origin().to_owned()),
-            user: None,
-            resource_id: None,
-            rebase_urls: false,
-        }
-    }
-}
+mod common;
+use common::Fixture;
 
 /// Helper opening an address book using resolved credentials.
 fn open(config: &SourceConfig, password: Option<&str>) -> Result<connect::OpenBook, ConnectError> {
@@ -100,27 +46,27 @@ fn expect_error(result: Result<connect::OpenBook, ConnectError>) -> ConnectError
 
 #[test]
 fn a_source_that_names_no_address_book_gets_the_default_one() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let sync = open(&fixture.config(), None).expect("connected");
 
-    assert_eq!(sync.address_book_id(), &fixture.default_book.unwrap());
+    assert_eq!(sync.address_book_id(), &fixture.ours);
     assert_eq!(sync.account_id(), &fixture.server.account_id());
 }
 
 #[test]
 fn a_source_that_names_an_address_book_gets_that_one() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let mut config = fixture.config();
-    config.resource_id = Some(fixture.other_book.to_string());
+    config.resource_id = Some(fixture.theirs.to_string());
 
     let sync = open(&config, None).expect("connected");
-    assert_eq!(sync.address_book_id(), &fixture.other_book);
+    assert_eq!(sync.address_book_id(), &fixture.theirs);
 }
 
 /// An unrecognised address book ID is rejected as an error.
 #[test]
 fn an_address_book_the_server_does_not_have_is_refused() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let mut config = fixture.config();
     config.resource_id = Some("AB-nonesuch".to_owned());
 
@@ -134,8 +80,8 @@ fn an_address_book_the_server_does_not_have_is_refused() {
 
 #[test]
 fn an_account_with_no_default_address_book_is_an_error_not_a_guess() {
-    let fixture = Fixture::start(false);
-    match expect_error(open(&fixture.config(), None)) {
+    let (_server, config) = Fixture::start_without_default();
+    match expect_error(open(&config, None)) {
         ConnectError::NoDefaultCollection(Collection::AddressBook) => {}
         other => panic!("expected NoDefaultCollection(AddressBook), got {other:?}"),
     }
@@ -165,7 +111,7 @@ fn an_account_that_offers_no_contacts_is_refused() {
 /// When the server omits primaryAccounts, resolve the single personal contacts account.
 #[test]
 fn a_server_with_no_primary_accounts_resolves_the_sole_personal_contacts_account() {
-    let fixture = Fixture::start_with(MockServer::builder().without_primary_accounts(), true);
+    let fixture = Fixture::start_with(MockServer::builder().without_primary_accounts());
 
     let sync = open(&fixture.config(), None).expect("connected");
     assert_eq!(sync.account_id(), &fixture.server.account_id());
@@ -173,7 +119,7 @@ fn a_server_with_no_primary_accounts_resolves_the_sole_personal_contacts_account
 
 #[test]
 fn a_user_name_with_no_password_asks_evolution_for_credentials() {
-    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"), true);
+    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"));
     let mut config = fixture.config();
     config.user = Some("vera".to_owned());
 
@@ -184,28 +130,28 @@ fn a_user_name_with_no_password_asks_evolution_for_credentials() {
 
 #[test]
 fn the_password_is_sent_as_basic_credentials() {
-    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"), true);
+    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"));
     let mut config = fixture.config();
     config.user = Some("vera".to_owned());
 
     let sync = open(&config, Some("hunter2")).expect("connected");
-    assert_eq!(sync.address_book_id(), &fixture.default_book.unwrap());
+    assert_eq!(sync.address_book_id(), &fixture.ours);
 }
 
 /// A resolved bearer credential is sent as an Authorization header on connect.
 #[test]
 fn an_access_token_is_sent_as_bearer_credentials() {
-    let fixture = Fixture::start_with(MockServer::builder().bearer_token("ya29.a0Af"), true);
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("ya29.a0Af"));
 
     let sync =
         connect::open_book(&fixture.config(), Credentials::bearer("ya29.a0Af")).expect("connected");
-    assert_eq!(sync.address_book_id(), &fixture.default_book.unwrap());
+    assert_eq!(sync.address_book_id(), &fixture.ours);
 }
 
 /// A 401 on a bearer token reclassifies to REQUIRED so EDS prompts for consent.
 #[test]
 fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
-    let fixture = Fixture::start_with(MockServer::builder().bearer_token("good-token"), true);
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("good-token"));
 
     let error = expect_error(connect::open_book(
         &fixture.config(),
@@ -224,7 +170,7 @@ fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
 /// Verifies a wrong password yields REJECTED while network errors yield ERROR.
 #[test]
 fn a_wrong_password_is_reported_as_rejected_so_evolution_re_prompts() {
-    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"), true);
+    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"));
     let mut config = fixture.config();
     config.user = Some("vera".to_owned());
 
@@ -405,7 +351,7 @@ impl ConnectOuts {
 
 #[test]
 fn connecting_from_a_source_opens_the_default_address_book_and_reports_accepted() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let source = TestSource::new().at(fixture.server.origin());
     let mut outs = ConnectOuts::default();
 
@@ -421,10 +367,7 @@ fn connecting_from_a_source_opens_the_default_address_book_and_reports_accepted(
     };
 
     let sync = sync.expect("the connection was refused");
-    assert_eq!(
-        sync.address_book_id(),
-        fixture.default_book.as_ref().expect("seeded")
-    );
+    assert_eq!(sync.address_book_id(), &fixture.ours);
     assert!(outs.error.is_null(), "a successful connect set an error");
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
@@ -455,7 +398,7 @@ fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
 /// An API-token source sends the stored secret as bearer credentials.
 #[test]
 fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
-    let fixture = Fixture::start_with(MockServer::builder().bearer_token("t0k3n"), true);
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("t0k3n"));
     let source = TestSource::new()
         .at(fixture.server.origin())
         .method(API_TOKEN_METHOD.to_str().unwrap());
@@ -487,10 +430,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
     unsafe { e_named_parameters_free(credentials) };
 
     let sync = sync.expect("the connection was refused");
-    assert_eq!(
-        sync.address_book_id(),
-        fixture.default_book.as_ref().expect("seeded")
-    );
+    assert_eq!(sync.address_book_id(), &fixture.ours);
     assert!(outs.error.is_null(), "a successful connect set an error");
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
@@ -592,54 +532,51 @@ fn a_backend_without_a_source_fails_instead_of_dereferencing_null() {
 
 #[test]
 fn an_address_book_with_no_my_rights_opens_writable() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let open = open(&fixture.config(), None).expect("connected");
     assert!(open.writable);
 }
 
 #[test]
 fn an_address_book_with_write_rights_opens_writable() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&fixture.server.account_id()).unwrap();
-        let book = account.address_books.get_mut(&fixture.other_book).unwrap();
+        let book = account.address_books.get_mut(&fixture.theirs).unwrap();
         book.my_rights = Some(AddressBookRights::all());
     }
     let mut config = fixture.config();
-    config.resource_id = Some(fixture.other_book.to_string());
+    config.resource_id = Some(fixture.theirs.to_string());
     let open = open(&config, None).expect("connected");
     assert!(open.writable);
 }
 
 #[test]
 fn an_address_book_without_write_rights_opens_read_only() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&fixture.server.account_id()).unwrap();
-        let book = account.address_books.get_mut(&fixture.other_book).unwrap();
+        let book = account.address_books.get_mut(&fixture.theirs).unwrap();
         book.my_rights = Some(AddressBookRights::read_only());
     }
     let mut config = fixture.config();
-    config.resource_id = Some(fixture.other_book.to_string());
+    config.resource_id = Some(fixture.theirs.to_string());
     let open = open(&config, None).expect("connected");
     assert!(!open.writable);
 }
 
 #[test]
 fn connecting_from_a_source_reports_read_only_when_address_book_lacks_write_rights() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&fixture.server.account_id()).unwrap();
-        let book = account
-            .address_books
-            .get_mut(fixture.default_book.as_ref().unwrap())
-            .unwrap();
+        let book = account.address_books.get_mut(&fixture.ours).unwrap();
         book.my_rights = Some(AddressBookRights::read_only());
     }
     let source = TestSource::new().at(fixture.server.origin());
@@ -684,10 +621,7 @@ fn open_book_with_omitted_account_defaults_to_primary_account() {
 
     assert_eq!(open.sync.account_id(), &fixture.server.account_id());
     assert_ne!(open.sync.account_id(), &second_account_id);
-    assert_eq!(
-        open.sync.address_book_id(),
-        fixture.default_book.as_ref().expect("default book")
-    );
+    assert_eq!(open.sync.address_book_id(), &fixture.ours);
 }
 
 #[test]
@@ -762,7 +696,7 @@ fn a_config_whose_resource_names_an_account_opens_that_accounts_address_book() {
 
 #[test]
 fn connecting_from_a_source_with_unknown_account_id_fails() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let source = TestSource::new()
         .at(fixture.server.origin())
         .account_id("non-existent-account-id");

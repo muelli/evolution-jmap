@@ -23,70 +23,11 @@ use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 use jmap_backend_cal::ops::{self, Outcome};
 use jmap_cal_sync::{CalSync, Itip, OnConflict, SyncError, Unscheduled, Unsendable, edit_base};
-use jmap_client::{Client, Credentials};
-use jmap_mock::MockServer;
 use jmap_proto::Id;
-use jmap_proto::calendars::CalendarEvent;
 use serde_json::json;
 
-/// A mock server with two calendars, so "only this calendar" stays observable,
-/// and the `CalSync` over the one the backend syncs.
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-    ours: Id,
-    theirs: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let (ours, theirs) = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            let account = state.account_mut(&account_id).unwrap();
-            (
-                account.seed_calendar("Personal", true),
-                account.seed_calendar("Team", false),
-            )
-        };
-        Self {
-            server,
-            account_id,
-            ours,
-            theirs,
-        }
-    }
-
-    fn client(&self) -> Client {
-        Client::connect(self.server.origin(), Credentials::none()).unwrap()
-    }
-
-    fn sync(&self) -> CalSync {
-        CalSync::new(self.client(), self.account_id.clone(), self.ours.clone())
-    }
-
-    /// Create an event directly, bypassing the code under test.
-    fn seed(&self, calendar: &Id, title: &str, start: &str) -> Id {
-        self.client()
-            .event_create(
-                &self.account_id,
-                &CalendarEvent::simple(calendar.clone(), title, start, "PT1H"),
-            )
-            .unwrap()
-            .id
-            .expect("server assigned id")
-    }
-
-    /// The uids the calendar holds, as the server sees them.
-    fn uids(&self) -> Vec<String> {
-        let (_, events) = self.sync().list_existing().unwrap();
-        let mut uids: Vec<String> = events.into_iter().map(|info| info.uid).collect();
-        uids.sort();
-        uids
-    }
-}
+mod common;
+use common::Fixture;
 
 /// The four out-parameters EDS hands `get_changes_sync`, plus the sync tag.
 struct ChangeOuts {

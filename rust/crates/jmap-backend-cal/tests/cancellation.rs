@@ -7,7 +7,7 @@ use std::ffi::CString;
 use std::ptr;
 
 use eds_sys::{
-    E_CAL_OPERATION_FLAG_NONE, ECalComponent, ECalMetaBackend, ECalMetaBackendClass, ICalComponent,
+    E_CAL_OPERATION_FLAG_NONE, ECalComponent, ECalMetaBackendClass, ICalComponent,
     e_cal_component_new_from_string,
 };
 use gio_sys::{
@@ -20,11 +20,6 @@ use glib_sys::{
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_backend_cal::backend::{JmapCalBackend, JmapCalBackendClass};
 use jmap_backend_core::subclass::register_static;
-use jmap_cal_sync::CalSync;
-use jmap_client::{Client, Credentials};
-use jmap_mock::MockServer;
-use jmap_proto::Id;
-use jmap_proto::calendars::CalendarEvent;
 
 /// The class EDS dispatches through, kept referenced for the test duration.
 struct Class(*mut JmapCalBackendClass);
@@ -50,79 +45,8 @@ impl Drop for Class {
     }
 }
 
-/// Detached backend instance for tests without GObject initialization.
-struct Detached(Box<JmapCalBackend>);
-
-impl Detached {
-    fn new(sync: CalSync) -> Self {
-        let backend = JmapCalBackend::detached();
-        backend.store_connection(sync);
-        Self(backend)
-    }
-
-    fn as_ptr(&mut self) -> *mut ECalMetaBackend {
-        ptr::from_mut(&mut *self.0).cast()
-    }
-}
-
-/// A mock server with one event in its default calendar.
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-    calendar: Id,
-    seeded: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let calendar = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            state
-                .account_mut(&account_id)
-                .unwrap()
-                .seed_calendar("Personal", true)
-        };
-        let mut fixture = Self {
-            server,
-            account_id,
-            calendar,
-            seeded: Id::new("unseeded"),
-        };
-        fixture.seeded = fixture.seed("Standup", "2026-08-10T07:00:00Z");
-        fixture
-    }
-
-    fn client(&self) -> Client {
-        Client::connect(self.server.origin(), Credentials::none()).unwrap()
-    }
-
-    fn sync(&self) -> CalSync {
-        CalSync::new(
-            self.client(),
-            self.account_id.clone(),
-            self.calendar.clone(),
-        )
-    }
-
-    fn seed(&self, title: &str, start: &str) -> Id {
-        self.client()
-            .event_create(
-                &self.account_id,
-                &CalendarEvent::simple(self.calendar.clone(), title, start, "PT1H"),
-            )
-            .unwrap()
-            .id
-            .expect("server assigned id")
-    }
-
-    /// Checks current server event count over an independent connection.
-    fn events_on_the_server(&self) -> usize {
-        self.sync().list_existing().expect("listed").1.len()
-    }
-}
+mod common;
+use common::{Detached, Fixture};
 
 /// A `GCancellable` the user has already stopped.
 struct Stopped(*mut GCancellable);
@@ -197,7 +121,7 @@ const NEW_EVENT: &str = "BEGIN:VEVENT\r\n\
 fn a_listing_the_user_stopped_does_not_go_to_the_server() {
     let fixture = Fixture::start();
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
     let mut tag: *mut gchar = ptr::null_mut();
@@ -228,7 +152,7 @@ fn a_listing_the_user_stopped_does_not_go_to_the_server() {
 fn a_changes_call_the_user_stopped_does_not_go_to_the_server() {
     let fixture = Fixture::start();
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
     // Valid sync tag to request changes rather than falling back to full list.
@@ -259,11 +183,12 @@ fn a_changes_call_the_user_stopped_does_not_go_to_the_server() {
 #[test]
 fn a_component_the_user_stopped_loading_is_not_fetched() {
     let fixture = Fixture::start();
+    let seeded = fixture.seed_default("Standup", "2026-08-10T07:00:00Z");
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
-    let uid = CString::new(fixture.seeded.to_string()).expect("a uid with no NUL");
+    let uid = CString::new(seeded.to_string()).expect("a uid with no NUL");
     let mut component: *mut ICalComponent = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
 
@@ -293,7 +218,7 @@ fn a_component_the_user_stopped_saving_is_not_written() {
     let before = fixture.events_on_the_server();
 
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
     let component = instance(NEW_EVENT);
@@ -341,13 +266,14 @@ fn a_component_the_user_stopped_saving_is_not_written() {
 #[test]
 fn a_component_the_user_stopped_removing_is_still_there() {
     let fixture = Fixture::start();
+    let seeded = fixture.seed_default("Standup", "2026-08-10T07:00:00Z");
     let before = fixture.events_on_the_server();
 
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
-    let uid = CString::new(fixture.seeded.to_string()).expect("a uid with no NUL");
+    let uid = CString::new(seeded.to_string()).expect("a uid with no NUL");
     let mut error: *mut GError = ptr::null_mut();
 
     // SAFETY: as above; `uid` is NUL-terminated and alive across the call.
@@ -382,7 +308,7 @@ fn a_component_the_user_stopped_removing_is_still_there() {
 fn an_operation_with_no_cancellable_at_all_still_runs() {
     let fixture = Fixture::start();
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
 
     let mut tag: *mut gchar = ptr::null_mut();
     let mut objects: *mut GSList = ptr::null_mut();

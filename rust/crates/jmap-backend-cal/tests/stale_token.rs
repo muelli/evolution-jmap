@@ -5,17 +5,13 @@
 
 use std::ptr;
 
-use eds_sys::{
-    ECalMetaBackend, ECalMetaBackendClass, e_cal_meta_backend_info_free, e_client_error_quark,
-};
+use eds_sys::{ECalMetaBackendClass, e_cal_meta_backend_info_free, e_client_error_quark};
 use glib_sys::{GError, GSList, GTRUE, g_error_free, g_free, g_slist_free_full, gchar};
 use gobject_sys::{g_type_class_ref, g_type_class_unref};
 use jmap_backend_cal::backend::{JmapCalBackend, JmapCalBackendClass};
 use jmap_backend_core::subclass::register_static;
-use jmap_cal_sync::CalSync;
-use jmap_client::{Client, Credentials};
+use jmap_client::Credentials;
 use jmap_mock::MockServer;
-use jmap_proto::Id;
 use jmap_proto::calendars::CalendarEvent;
 
 const GOOD: &str = "token-the-connection-was-built-with";
@@ -46,14 +42,8 @@ impl Drop for Class {
     }
 }
 
-/// Detached backend instance holding a connection without an ESource.
-struct Detached(Box<JmapCalBackend>);
-
-impl Detached {
-    fn as_ptr(&mut self) -> *mut ECalMetaBackend {
-        ptr::from_mut(&mut *self.0).cast()
-    }
-}
+mod common;
+use common::{Detached, Fixture};
 
 /// What `list_existing_sync` answered, with its out-parameters freed the way
 /// EDS frees them.
@@ -132,65 +122,27 @@ fn list_existing(class: &Class, backend: &mut Detached) -> Listed {
     }
 }
 
-/// A mock that accepts exactly one bearer token at a time, with one event in
-/// its default calendar.
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-    calendar: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().bearer_token(GOOD).start();
-        let account_id = server.account_id();
-        let calendar = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            state
-                .account_mut(&account_id)
-                .unwrap()
-                .seed_calendar("Personal", true)
-        };
-        let fixture = Self {
-            server,
-            account_id,
-            calendar,
-        };
-        fixture
-            .client(GOOD)
-            .event_create(
-                &fixture.account_id,
-                &CalendarEvent::simple(
-                    fixture.calendar.clone(),
-                    "Standup",
-                    "2026-08-10T07:00:00Z",
-                    "PT1H",
-                ),
-            )
-            .expect("seeded an event");
-        fixture
-    }
-
-    fn client(&self, token: &str) -> Client {
-        Client::connect(self.server.origin(), Credentials::bearer(token)).expect("connected")
-    }
-
-    fn detached(&self, token: &str) -> Detached {
-        let backend = JmapCalBackend::detached();
-        backend.store_connection(CalSync::new(
-            self.client(token),
-            self.account_id.clone(),
-            self.calendar.clone(),
-        ));
-        Detached(backend)
-    }
+fn start_fixture() -> Fixture {
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token(GOOD));
+    fixture
+        .client_with_token(GOOD)
+        .event_create(
+            &fixture.account_id,
+            &CalendarEvent::simple(
+                fixture.ours.clone(),
+                "Standup",
+                "2026-08-10T07:00:00Z",
+                "PT1H",
+            ),
+        )
+        .expect("seeded an event");
+    fixture
 }
 
 #[test]
 fn a_stale_bearer_token_is_reported_once_when_there_is_nothing_to_refresh_from() {
     let class = Class::get();
-    let fixture = Fixture::start();
+    let fixture = start_fixture();
     let mut backend = fixture.detached(GOOD);
 
     // The connection is good to begin with, so the failure below is the
@@ -219,7 +171,7 @@ fn a_stale_bearer_token_is_reported_once_when_there_is_nothing_to_refresh_from()
 fn fresh_credentials_installed_on_the_live_connection_fix_the_very_next_vfunc_call() {
     // Verifies updating credentials in-place allows subsequent requests to succeed.
     let class = Class::get();
-    let fixture = Fixture::start();
+    let fixture = start_fixture();
     let mut backend = fixture.detached(GOOD);
 
     fixture.server.set_bearer_token(FRESH);
@@ -242,7 +194,7 @@ fn fresh_credentials_installed_on_the_live_connection_fix_the_very_next_vfunc_ca
 fn a_failure_that_is_not_a_401_is_still_reported_unchanged() {
     // Verifies disconnected backend still reports REPOSITORY_OFFLINE.
     let class = Class::get();
-    let fixture = Fixture::start();
+    let fixture = start_fixture();
     let mut backend = fixture.detached(GOOD);
     assert!(backend.0.drop_connection());
 

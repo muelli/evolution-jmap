@@ -25,65 +25,10 @@ use jmap_backend_core::connect::{Collection, ConnectError, credentials};
 use jmap_backend_core::source::{ConnectTarget, OwnedSource, SourceConfig};
 use jmap_client::Credentials;
 use jmap_mock::MockServer;
-use jmap_proto::Id;
 use jmap_proto::calendars::CalendarRights;
 
-struct Fixture {
-    server: MockServer,
-    default_calendar: Option<Id>,
-    other_calendar: Id,
-}
-
-impl Fixture {
-    /// Start mock server; `default_calendar` is the calendar marked `isDefault`.
-    fn start(with_default: bool) -> Self {
-        Self::start_with(MockServer::builder(), with_default)
-    }
-
-    /// Seed non-default calendar first to verify explicit default selection.
-    fn start_with(builder: jmap_mock::MockServerBuilder, with_default: bool) -> Self {
-        let server = builder.start();
-        let account_id = server.account_id();
-        let (other_calendar, default_calendar) = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            let account = state.account_mut(&account_id).unwrap();
-            (
-                account.seed_calendar("Team", false),
-                with_default.then(|| account.seed_calendar("Personal", true)),
-            )
-        };
-        Self {
-            server,
-            default_calendar,
-            other_calendar,
-        }
-    }
-
-    /// Start a mock server with a primary account and a second account.
-    ///
-    /// Return `(fixture, second_account_id, second_calendar_id)`.
-    fn start_two_accounts() -> (Self, Id, Id) {
-        let fixture = Self::start(true);
-        let second_account_id = Id::from("second-account");
-        let second_calendar_id = {
-            let state = fixture.server.state();
-            let mut state = state.lock().unwrap();
-            let account = state.add_account(second_account_id.clone(), "Second Account");
-            account.seed_calendar("SecondTeam", true)
-        };
-        (fixture, second_account_id, second_calendar_id)
-    }
-
-    fn config(&self) -> SourceConfig {
-        SourceConfig {
-            target: ConnectTarget::Origin(self.server.origin().to_owned()),
-            user: None,
-            resource_id: None,
-            rebase_urls: false,
-        }
-    }
-}
+mod common;
+use common::Fixture;
 
 /// Connect to a calendar with resolved credentials.
 ///
@@ -106,27 +51,27 @@ fn expect_error(result: Result<connect::OpenCalendar, ConnectError>) -> ConnectE
 
 #[test]
 fn a_source_that_names_no_calendar_gets_the_default_one() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let sync = open(&fixture.config(), None).expect("connected");
 
-    assert_eq!(sync.calendar_id(), &fixture.default_calendar.unwrap());
+    assert_eq!(sync.calendar_id(), &fixture.ours);
     assert_eq!(sync.account_id(), &fixture.server.account_id());
 }
 
 #[test]
 fn a_source_that_names_a_calendar_gets_that_one() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let mut config = fixture.config();
-    config.resource_id = Some(fixture.other_calendar.to_string());
+    config.resource_id = Some(fixture.theirs.to_string());
 
     let sync = open(&config, None).expect("connected");
-    assert_eq!(sync.calendar_id(), &fixture.other_calendar);
+    assert_eq!(sync.calendar_id(), &fixture.theirs);
 }
 
 /// Verify that connecting to an unlisted calendar ID fails.
 #[test]
 fn a_calendar_the_server_does_not_have_is_refused() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let mut config = fixture.config();
     config.resource_id = Some("Cal-nonesuch".to_owned());
 
@@ -138,8 +83,8 @@ fn a_calendar_the_server_does_not_have_is_refused() {
 
 #[test]
 fn an_account_with_no_default_calendar_is_an_error_not_a_guess() {
-    let fixture = Fixture::start(false);
-    match expect_error(open(&fixture.config(), None)) {
+    let (_server, config) = Fixture::start_without_default();
+    match expect_error(open(&config, None)) {
         ConnectError::NoDefaultCollection(Collection::Calendar) => {}
         other => panic!("expected NoDefaultCollection(Calendar), got {other:?}"),
     }
@@ -169,7 +114,7 @@ fn an_account_that_offers_no_calendars_is_refused() {
 /// RFC 8620 §2: server may omit primaryAccounts if one account offers calendars.
 #[test]
 fn a_server_with_no_primary_accounts_resolves_the_sole_personal_calendars_account() {
-    let fixture = Fixture::start_with(MockServer::builder().without_primary_accounts(), true);
+    let fixture = Fixture::start_with(MockServer::builder().without_primary_accounts());
 
     let sync = open(&fixture.config(), None).expect("connected");
     assert_eq!(sync.account_id(), &fixture.server.account_id());
@@ -177,7 +122,7 @@ fn a_server_with_no_primary_accounts_resolves_the_sole_personal_calendars_accoun
 
 #[test]
 fn a_user_name_with_no_password_asks_evolution_for_credentials() {
-    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"), true);
+    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"));
     let mut config = fixture.config();
     config.user = Some("vera".to_owned());
 
@@ -189,17 +134,17 @@ fn a_user_name_with_no_password_asks_evolution_for_credentials() {
 /// Verify that the client sends the access token as bearer credentials.
 #[test]
 fn an_access_token_is_sent_as_bearer_credentials() {
-    let fixture = Fixture::start_with(MockServer::builder().bearer_token("ya29.a0Af"), true);
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("ya29.a0Af"));
 
     let sync = connect::open_calendar(&fixture.config(), Credentials::bearer("ya29.a0Af"))
         .expect("connected");
-    assert_eq!(sync.calendar_id(), &fixture.default_calendar.unwrap());
+    assert_eq!(sync.calendar_id(), &fixture.ours);
 }
 
 /// Verify that 401 on a bearer token maps to `CredentialsRequired`.
 #[test]
 fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
-    let fixture = Fixture::start_with(MockServer::builder().bearer_token("good-token"), true);
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("good-token"));
 
     let error = expect_error(connect::open_calendar(
         &fixture.config(),
@@ -262,18 +207,18 @@ fn each_failure_carries_the_client_error_code_evolution_routes_on() {
 
 #[test]
 fn the_password_is_sent_as_basic_credentials() {
-    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"), true);
+    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"));
     let mut config = fixture.config();
     config.user = Some("vera".to_owned());
 
     let sync = open(&config, Some("hunter2")).expect("connected");
-    assert_eq!(sync.calendar_id(), &fixture.default_calendar.unwrap());
+    assert_eq!(sync.calendar_id(), &fixture.ours);
 }
 
 /// Distinguish between wrong credentials (`REJECTED`) and server errors (`ERROR`).
 #[test]
 fn a_wrong_password_is_reported_as_rejected_so_evolution_re_prompts() {
-    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"), true);
+    let fixture = Fixture::start_with(MockServer::builder().basic_auth("vera", "hunter2"));
     let mut config = fixture.config();
     config.user = Some("vera".to_owned());
 
@@ -414,15 +359,12 @@ fn connect_from(source: &TestSource, outs: &mut ConnectOuts) -> Option<connect::
 
 #[test]
 fn connecting_from_a_source_opens_the_default_calendar_and_reports_accepted() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let source = TestSource::new().at(fixture.server.origin());
     let mut outs = ConnectOuts::default();
 
     let sync = connect_from(&source, &mut outs).expect("the connection was refused");
-    assert_eq!(
-        sync.calendar_id(),
-        fixture.default_calendar.as_ref().expect("seeded")
-    );
+    assert_eq!(sync.calendar_id(), &fixture.ours);
     assert!(outs.error.is_null(), "a successful connect set an error");
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
@@ -430,14 +372,14 @@ fn connecting_from_a_source_opens_the_default_calendar_and_reports_accepted() {
 /// Verify that Resource identity extension selects the target calendar.
 #[test]
 fn the_resource_identity_selects_the_calendar() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let source = TestSource::new()
         .at(fixture.server.origin())
-        .identity(fixture.other_calendar.as_ref());
+        .identity(fixture.theirs.as_ref());
     let mut outs = ConnectOuts::default();
 
     let sync = connect_from(&source, &mut outs).expect("the connection was refused");
-    assert_eq!(sync.calendar_id(), &fixture.other_calendar);
+    assert_eq!(sync.calendar_id(), &fixture.theirs);
 }
 
 /// Verify that user without password prompts before network request.
@@ -455,7 +397,7 @@ fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
 /// Verify that API token source sends bearer credentials.
 #[test]
 fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
-    let fixture = Fixture::start_with(MockServer::builder().bearer_token("t0k3n"), true);
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("t0k3n"));
     let source = TestSource::new()
         .at(fixture.server.origin())
         .method(API_TOKEN_METHOD.to_str().unwrap());
@@ -487,10 +429,7 @@ fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
     unsafe { e_named_parameters_free(credentials) };
 
     let sync = sync.expect("the connection was refused");
-    assert_eq!(
-        sync.calendar_id(),
-        fixture.default_calendar.as_ref().expect("seeded")
-    );
+    assert_eq!(sync.calendar_id(), &fixture.ours);
     assert!(outs.error.is_null(), "a successful connect set an error");
     assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
 }
@@ -579,54 +518,51 @@ fn a_backend_without_a_source_fails_instead_of_dereferencing_null() {
 
 #[test]
 fn a_calendar_with_no_my_rights_opens_writable() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let open = open(&fixture.config(), None).expect("connected");
     assert!(open.writable);
 }
 
 #[test]
 fn a_calendar_with_write_rights_opens_writable() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&fixture.server.account_id()).unwrap();
-        let cal = account.calendars.get_mut(&fixture.other_calendar).unwrap();
+        let cal = account.calendars.get_mut(&fixture.theirs).unwrap();
         cal.my_rights = Some(CalendarRights::all());
     }
     let mut config = fixture.config();
-    config.resource_id = Some(fixture.other_calendar.to_string());
+    config.resource_id = Some(fixture.theirs.to_string());
     let open = open(&config, None).expect("connected");
     assert!(open.writable);
 }
 
 #[test]
 fn a_calendar_without_write_rights_opens_read_only() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&fixture.server.account_id()).unwrap();
-        let cal = account.calendars.get_mut(&fixture.other_calendar).unwrap();
+        let cal = account.calendars.get_mut(&fixture.theirs).unwrap();
         cal.my_rights = Some(CalendarRights::read_only());
     }
     let mut config = fixture.config();
-    config.resource_id = Some(fixture.other_calendar.to_string());
+    config.resource_id = Some(fixture.theirs.to_string());
     let open = open(&config, None).expect("connected");
     assert!(!open.writable);
 }
 
 #[test]
 fn connecting_from_a_source_reports_read_only_when_calendar_lacks_write_rights() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     {
         let state = fixture.server.state();
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&fixture.server.account_id()).unwrap();
-        let cal = account
-            .calendars
-            .get_mut(fixture.default_calendar.as_ref().unwrap())
-            .unwrap();
+        let cal = account.calendars.get_mut(&fixture.ours).unwrap();
         cal.my_rights = Some(CalendarRights::read_only());
     }
     let source = TestSource::new().at(fixture.server.origin());
@@ -661,10 +597,7 @@ fn open_calendar_with_omitted_account_defaults_to_primary_account() {
 
     assert_eq!(open.sync.account_id(), &fixture.server.account_id());
     assert_ne!(open.sync.account_id(), &second_account_id);
-    assert_eq!(
-        open.sync.calendar_id(),
-        fixture.default_calendar.as_ref().expect("default calendar")
-    );
+    assert_eq!(open.sync.calendar_id(), &fixture.ours);
 }
 
 #[test]
@@ -720,7 +653,7 @@ fn a_config_whose_resource_names_an_account_opens_that_accounts_calendar() {
 
 #[test]
 fn connecting_from_a_source_with_unknown_account_id_fails() {
-    let fixture = Fixture::start(true);
+    let fixture = Fixture::start();
     let source = TestSource::new()
         .at(fixture.server.origin())
         .account_id("non-existent-account-id");

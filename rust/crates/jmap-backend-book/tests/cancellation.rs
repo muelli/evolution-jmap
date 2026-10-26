@@ -9,7 +9,7 @@
 use std::ffi::CString;
 use std::ptr;
 
-use eds_sys::{EBookMetaBackend, EBookMetaBackendClass, EContact};
+use eds_sys::{EBookMetaBackendClass, EContact};
 use gio_sys::{
     G_IO_ERROR_CANCELLED, GCancellable, g_cancellable_cancel, g_cancellable_new, g_io_error_quark,
 };
@@ -18,11 +18,6 @@ use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_backend_book::backend::{JmapBookBackend, JmapBookBackendClass};
 use jmap_backend_book::marshal;
 use jmap_backend_core::subclass::register_static;
-use jmap_book_sync::BookSync;
-use jmap_client::{Client, Credentials};
-use jmap_mock::MockServer;
-use jmap_proto::Id;
-use jmap_proto::contacts::ContactCard;
 
 /// The class EDS would dispatch through, kept referenced for the test's
 /// duration so the vfunc pointers stay valid.
@@ -49,73 +44,8 @@ impl Drop for Class {
     }
 }
 
-/// Detached backend instance for test isolation.
-struct Detached(Box<JmapBookBackend>);
-
-impl Detached {
-    fn new(sync: BookSync) -> Self {
-        let backend = JmapBookBackend::detached();
-        backend.store_connection(sync);
-        Self(backend)
-    }
-
-    fn as_ptr(&mut self) -> *mut EBookMetaBackend {
-        ptr::from_mut(&mut *self.0).cast()
-    }
-}
-
-/// A mock server with one contact in its default address book.
-struct Fixture {
-    server: MockServer,
-    account_id: Id,
-    book: Id,
-    seeded: Id,
-}
-
-impl Fixture {
-    fn start() -> Self {
-        let server = MockServer::builder().start();
-        let account_id = server.account_id();
-        let book = {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            state
-                .account_mut(&account_id)
-                .unwrap()
-                .seed_address_book("Personal", true)
-        };
-        let mut fixture = Self {
-            server,
-            account_id,
-            book,
-            seeded: Id::new("unseeded"),
-        };
-        fixture.seeded = fixture.seed("Vera Oldenburg", "vera@example.com");
-        fixture
-    }
-
-    fn sync(&self) -> BookSync {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        BookSync::new(client, self.account_id.clone(), self.book.clone())
-    }
-
-    fn seed(&self, full_name: &str, email: &str) -> Id {
-        let client = Client::connect(self.server.origin(), Credentials::none()).unwrap();
-        client
-            .contact_create(
-                &self.account_id,
-                &ContactCard::simple(self.book.clone(), full_name, email),
-            )
-            .unwrap()
-            .id
-            .expect("server assigned id")
-    }
-
-    /// Returns the number of contacts currently held on the server.
-    fn contacts_on_the_server(&self) -> usize {
-        self.sync().list_existing().expect("listed").1.len()
-    }
-}
+mod common;
+use common::{Detached, Fixture};
 
 /// A `GCancellable` the user has already stopped.
 struct Stopped(*mut GCancellable);
@@ -174,7 +104,7 @@ impl Drop for Refusal {
 fn a_listing_the_user_stopped_does_not_go_to_the_server() {
     let fixture = Fixture::start();
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
     let mut tag: *mut gchar = ptr::null_mut();
@@ -206,7 +136,7 @@ fn a_listing_the_user_stopped_does_not_go_to_the_server() {
 fn a_changes_call_the_user_stopped_does_not_go_to_the_server() {
     let fixture = Fixture::start();
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
     // A tag, so the vfunc asks the server for a diff rather than answering
@@ -238,11 +168,12 @@ fn a_changes_call_the_user_stopped_does_not_go_to_the_server() {
 #[test]
 fn a_contact_the_user_stopped_loading_is_not_fetched() {
     let fixture = Fixture::start();
+    let seeded = fixture.seed_default("Vera Oldenburg", "vera@example.com");
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
-    let uid = CString::new(fixture.seeded.to_string()).expect("a uid with no NUL");
+    let uid = CString::new(seeded.to_string()).expect("a uid with no NUL");
     let mut contact: *mut EContact = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
 
@@ -272,7 +203,7 @@ fn a_contact_the_user_stopped_saving_is_not_written() {
     let before = fixture.contacts_on_the_server();
 
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
     let contact = marshal::contact_from_vcard(
@@ -317,13 +248,14 @@ fn a_contact_the_user_stopped_saving_is_not_written() {
 #[test]
 fn a_contact_the_user_stopped_removing_is_still_there() {
     let fixture = Fixture::start();
+    let seeded = fixture.seed_default("Vera Oldenburg", "vera@example.com");
     let before = fixture.contacts_on_the_server();
 
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
     let stopped = Stopped::new();
 
-    let uid = CString::new(fixture.seeded.to_string()).expect("a uid with no NUL");
+    let uid = CString::new(seeded.to_string()).expect("a uid with no NUL");
     let mut error: *mut GError = ptr::null_mut();
 
     // SAFETY: as above; `uid` is NUL-terminated and alive across the call.
@@ -355,7 +287,7 @@ fn a_contact_the_user_stopped_removing_is_still_there() {
 fn an_operation_with_no_cancellable_at_all_still_runs() {
     let fixture = Fixture::start();
     let class = Class::get();
-    let mut backend = Detached::new(fixture.sync());
+    let mut backend = Detached::with_sync(fixture.sync());
 
     let mut tag: *mut gchar = ptr::null_mut();
     let mut objects: *mut glib_sys::GSList = ptr::null_mut();
