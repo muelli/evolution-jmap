@@ -79,6 +79,14 @@ if [ "$unsafe_meter_fail" -ne 0 ]; then
 fi
 echo "-- unsafe-count meter: no crate exceeds its baseline --"
 
+echo "== rustdoc (-D warnings) =="
+# Catches a public doc comment that links to a private item or a method gone
+# behind a feature the caller did not enable: both resolve to nothing in the
+# published docs. `--all-features` on its own run because a link that is only
+# reachable from a testing-only method needs that feature to even compile.
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked --all-features
+
 echo "== tests =="
 cargo test --locked
 
@@ -136,6 +144,11 @@ if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution
     if ! have python3; then
         echo "!! CI_CHECKS_ALLOW_MISSING_PYTHON3 set: debian-copyright-in-sync will NOT run here !!" >&2
     fi
+    echo "== rustdoc, full workspace (-D warnings) =="
+    # The default-members run above skips the EDS-gated crates. Here, with
+    # EDS headers confirmed present, check those too.
+    RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path rust/Cargo.toml --workspace --no-deps --locked
+    RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path rust/Cargo.toml --workspace --no-deps --locked --all-features
     ctest --test-dir build -E '^rust-test$' --output-on-failure
 else
     echo "-- cmake, ninja, or the EDS dev headers are not available; skipping the .deb packaging check (expected on a bare Rust-only machine) --" >&2
