@@ -120,6 +120,7 @@ pub mod sieve;
 pub mod state;
 #[cfg(feature = "calendars")]
 pub mod tasks;
+pub mod text;
 pub mod websocket;
 
 pub use id::Id;

@@ -96,75 +96,7 @@ impl Component {
     }
 }
 
-/// The RFC 5545 §3.1 folding width `to_ics`'s output holds to, in
-/// octets, excluding the line break.
-pub const MAX_LINE_OCTETS: usize = 75;
-
-/// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
-/// character boundaries.
-///
-/// Folding is calcard's job, and its writer does it. Before calcard 0.3.13, a
-/// structured value's `;` separators were written *after* its fold check, and
-/// that check was skipped when the component coming next was empty text, so a
-/// value whose text folded to exactly 75 octets kept every empty trailing
-/// slot on the same physical line (fixed upstream in 0.3.13). Before 0.3.14,
-/// calcard also emitted recurrence rules (`ICalendarValue::RecurrenceRule`)
-/// without line folding (fixed upstream in 0.3.14). This pass is now
-/// insurance rather than an active workaround, kept because it is a single
-/// scan and it is the guarantee
-/// `prop_emitted_ical_lines_target_75_octets_and_are_valid_utf8` rests on.
-/// Folding is defined on the octet layer: unfolding restores the same stream
-/// wherever a cut lands, so any cut is *correct*; cutting at character
-/// boundaries, and never between a `\` and the octet it escapes, additionally
-/// keeps every physical line valid UTF-8 and every escape pair whole for
-/// line-oriented readers (reported upstream as
-/// <https://github.com/stalwartlabs/calcard/issues/25>).
-pub fn fold_overlong_lines(ics: String) -> String {
-    if ics.split("\r\n").all(|line| line.len() <= MAX_LINE_OCTETS) {
-        return ics;
-    }
-    let mut out = String::with_capacity(ics.len() + 16);
-    for (index, line) in ics.split("\r\n").enumerate() {
-        if index > 0 {
-            out.push_str("\r\n");
-        }
-        let mut rest = line;
-        // A continuation line's leading space spends one of its 75 octets.
-        let mut budget = MAX_LINE_OCTETS;
-        while rest.len() > budget {
-            let mut cut = budget;
-            while cut > 0 && !rest.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            // An odd run of backslashes ending at the cut means the last one
-            // escapes the octet on the far side: step inside the run so the
-            // pair stays on one line.
-            if rest[..cut]
-                .bytes()
-                .rev()
-                .take_while(|&byte| byte == b'\\')
-                .count()
-                % 2
-                == 1
-            {
-                cut -= 1;
-            }
-            if cut == 0 {
-                // Unreachable for anything calcard emits, but never loop: take
-                // the first boundary: unfolding restores the octets either way.
-                cut = (1..=rest.len())
-                    .find(|&i| rest.is_char_boundary(i))
-                    .unwrap_or(rest.len());
-            }
-            out.push_str(&rest[..cut]);
-            out.push_str("\r\n ");
-            rest = &rest[cut..];
-            budget = MAX_LINE_OCTETS - 1;
-        }
-        out.push_str(rest);
-    }
-    out
-}
+pub use jmap_proto::text::{MAX_LINE_OCTETS, caret_decoded, caret_encoded, fold_overlong_lines};
 
 pub fn make_entry(name: &str, value: &str) -> ICalendarEntry {
     let prop = ICalendarProperty::parse(name.as_bytes())
@@ -200,51 +132,6 @@ impl EntryExt for ICalendarEntry {
         }
         self
     }
-}
-
-/// A parameter value with RFC 6868 §3's caret escapes applied, so that a `"`
-/// or a line break survives in it.
-///
-/// RFC 5545 §3.1 has no escape inside a quoted value, and calcard writes a
-/// `\"` there, which libical keeps as a backslash. A lone CR counts as a line
-/// break.
-pub fn caret_encoded(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '^' => out.push_str("^^"),
-            '"' => out.push_str("^'"),
-            '\n' => out.push_str("^n"),
-            '\r' => {
-                chars.next_if_eq(&'\n');
-                out.push_str("^n");
-            }
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-/// A parameter value with RFC 6868 §3's caret escapes resolved. A caret before
-/// any other character stays as it is.
-pub fn caret_decoded(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        let decoded = match (ch, chars.peek()) {
-            ('^', Some('^')) => '^',
-            ('^', Some('\'')) => '"',
-            ('^', Some('n' | 'N')) => '\n',
-            _ => {
-                out.push(ch);
-                continue;
-            }
-        };
-        chars.next();
-        out.push(decoded);
-    }
-    out
 }
 
 pub fn rrule_entry(rrule_str: &str) -> Option<ICalendarEntry> {
@@ -987,15 +874,10 @@ pub fn calendar_address(participant: &Value) -> Option<&str> {
 /// is belt and braces: `syntax::fold_into` drops both on the way out, for
 /// exactly this reason.
 pub fn names_a_uri(value: &str) -> bool {
-    let Some((scheme, rest)) = value.split_once(':') else {
+    let Some((_, rest)) = jmap_proto::text::split_uri(value) else {
         return false;
     };
-    !rest.is_empty()
-        && !value.chars().any(char::is_whitespace)
-        && scheme.starts_with(|first: char| first.is_ascii_alphabetic())
-        && scheme
-            .chars()
-            .all(|part| part.is_ascii_alphanumeric() || matches!(part, '+' | '-' | '.'))
+    !rest.is_empty() && !value.chars().any(char::is_whitespace)
 }
 
 /// The `name` an object states, or `None` where it has none to put in a `CN` or
