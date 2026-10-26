@@ -14,11 +14,12 @@ use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
-    CamelAddress, CamelInternetAddress, E_SOURCE_CREDENTIAL_PASSWORD,
-    E_SOURCE_EXTENSION_AUTHENTICATION, ESourceAuthentication, camel_address_new,
-    camel_internet_address_get_type, camel_internet_address_new, e_named_parameters_free,
-    e_named_parameters_new, e_named_parameters_set, e_source_get_extension, e_source_has_extension,
-    e_source_new,
+    CamelAddress, CamelInternetAddress, E_CONFLICT_RESOLUTION_FAIL,
+    E_CONFLICT_RESOLUTION_KEEP_LOCAL, E_CONFLICT_RESOLUTION_KEEP_SERVER,
+    E_SOURCE_CREDENTIAL_PASSWORD, E_SOURCE_EXTENSION_AUTHENTICATION, ESourceAuthentication,
+    camel_address_new, camel_internet_address_get_type, camel_internet_address_new,
+    e_named_parameters_free, e_named_parameters_new, e_named_parameters_set,
+    e_source_get_extension, e_source_has_extension, e_source_new,
 };
 use glib_sys::{
     G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, GLogLevelFlags, GSList, g_free,
@@ -27,6 +28,7 @@ use glib_sys::{
 };
 use gobject_sys::g_object_unref;
 use jmap_backend_core::marshal;
+use jmap_object_sync::OnConflict;
 
 /// A live `CamelInternetAddress`, upcast to `*mut CamelAddress` as the
 /// declared argument type of a vfunc, for the borrow-helper tests below. The
@@ -444,4 +446,31 @@ fn extension_if_present_returns_the_extension_once_it_exists() {
     assert_eq!(found, Some(created));
     // SAFETY: nothing above still borrows `source`.
     unsafe { g_object_unref(source.cast()) };
+}
+
+// ---------------------------------------------------------------------------
+// on_conflict
+
+#[test]
+fn on_conflict_maps_keep_server() {
+    assert_eq!(
+        marshal::on_conflict(E_CONFLICT_RESOLUTION_KEEP_SERVER),
+        OnConflict::KeepServer
+    );
+}
+
+#[test]
+fn on_conflict_maps_fail() {
+    assert_eq!(
+        marshal::on_conflict(E_CONFLICT_RESOLUTION_FAIL),
+        OnConflict::Fail
+    );
+}
+
+#[test]
+fn on_conflict_maps_keep_local_and_any_other_value() {
+    assert_eq!(
+        marshal::on_conflict(E_CONFLICT_RESOLUTION_KEEP_LOCAL),
+        OnConflict::KeepLocal
+    );
 }
