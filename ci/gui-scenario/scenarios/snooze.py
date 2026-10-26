@@ -155,7 +155,11 @@ def run():
     local = time.localtime(wake)
     if local.tm_wday != MONDAY or (local.tm_hour, local.tm_min) != (WORKDAY_HOUR, 0):
         raise ScenarioFailure(f"the wake time {time.asctime(local)} is not a Monday at 09:00")
-    if not 0 < wake - time.time() <= 7 * 24 * ONE_HOUR:
+    # jmap-ui's next_monday() always skips a full week on a Monday, even
+    # before WORKDAY_HOUR. See schedule.rs's next_monday and its
+    # the_next_monday_from_a_fixed_clock test. A run on a Monday before
+    # 09:00 local time can land just over 7 days ahead.
+    if not 0 < wake - time.time() <= (7 * 24 + WORKDAY_HOUR) * ONE_HOUR:
         raise ScenarioFailure(f"the wake time {time.asctime(local)} is not in the next 7 days")
     say(f"server: wakes {time.asctime(local)} local time")
     gone_from_inbox(SECOND)
