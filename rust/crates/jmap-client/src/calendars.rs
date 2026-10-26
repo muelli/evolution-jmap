@@ -22,6 +22,7 @@ use crate::contacts::demote_multi_element_parsed_blobs;
 use crate::error::Error;
 use crate::set::{expect_created, expect_destroyed, expect_updated};
 
+const CAPABILITY_CALENDARS_PARSE: &str = "urn:ietf:params:jmap:calendars:parse";
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_CALENDARS];
 
 impl Client {
@@ -155,7 +156,15 @@ impl Client {
         &self,
         request: &CalendarEventParseRequest,
     ) -> Result<CalendarEventParseResponse, Error> {
-        let mut arguments = self.single_call(USING, "CalendarEvent/parse", request)?;
+        let mut using = vec![CAPABILITY_CORE, CAPABILITY_CALENDARS];
+        if self
+            .session()
+            .capabilities
+            .contains_key(CAPABILITY_CALENDARS_PARSE)
+        {
+            using.push(CAPABILITY_CALENDARS_PARSE);
+        }
+        let mut arguments = self.single_call(&using, "CalendarEvent/parse", request)?;
         demote_multi_element_parsed_blobs(&mut arguments);
         Ok(serde_json::from_value(arguments)?)
     }

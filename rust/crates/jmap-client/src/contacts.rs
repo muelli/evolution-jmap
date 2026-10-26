@@ -183,17 +183,33 @@ pub(crate) fn demote_multi_element_parsed_blobs(arguments: &mut Value) {
             } else {
                 unrepresentable_ids.push(id.clone());
             }
+        } else if let Value::Object(item_obj) = val
+            && item_obj.get("@type").and_then(Value::as_str) == Some("Group")
+        {
+            if let Some(Value::Array(entries)) = item_obj.get_mut("entries") {
+                if entries.len() == 1 {
+                    *val = entries.pop().expect("len checked above");
+                } else {
+                    unrepresentable_ids.push(id.clone());
+                }
+            } else {
+                unrepresentable_ids.push(id.clone());
+            }
         }
     }
     for id in &unrepresentable_ids {
         parsed.remove(id);
     }
     if !unrepresentable_ids.is_empty() {
-        let not_parsable = obj
-            .entry("notParsable")
-            .or_insert_with(|| Value::Array(Vec::new()));
-        if let Value::Array(not_parsable) = not_parsable {
-            not_parsable.extend(unrepresentable_ids.into_iter().map(Value::String));
-        }
+        let not_parsable = match obj.get_mut("notParsable") {
+            Some(Value::Array(arr)) => arr,
+            _ => {
+                obj.insert("notParsable".to_string(), Value::Array(Vec::new()));
+                obj.get_mut("notParsable")
+                    .and_then(Value::as_array_mut)
+                    .expect("inserted array")
+            }
+        };
+        not_parsable.extend(unrepresentable_ids.into_iter().map(Value::String));
     }
 }

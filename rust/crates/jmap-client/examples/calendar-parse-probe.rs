@@ -20,11 +20,6 @@ use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CORE};
 use serde_json::{Map, Value, json};
 
 pub const CAPABILITY_CALENDARS_PARSE: &str = "urn:ietf:params:jmap:calendars:parse";
-const USING: &[&str] = &[
-    CAPABILITY_CORE,
-    CAPABILITY_CALENDARS,
-    CAPABILITY_CALENDARS_PARSE,
-];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldDiff {
@@ -220,7 +215,15 @@ fn probe_fixtures(client: &Client, account_id: &Id, fixtures_dir: &Path) -> (usi
             "accountId": account_id,
             "blobIds": [blob_id.clone()],
         });
-        let parse_res = client.single_call(USING, "CalendarEvent/parse", &parse_req);
+        let mut using = vec![CAPABILITY_CORE, CAPABILITY_CALENDARS];
+        if client
+            .session()
+            .capabilities
+            .contains_key(CAPABILITY_CALENDARS_PARSE)
+        {
+            using.push(CAPABILITY_CALENDARS_PARSE);
+        }
+        let parse_res = client.single_call(&using, "CalendarEvent/parse", &parse_req);
         let parsed_val = match parse_res {
             Ok(val) => {
                 println!("PASS CalendarEvent/parse accepted");

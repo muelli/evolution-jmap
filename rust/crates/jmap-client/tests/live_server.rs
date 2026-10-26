@@ -60,6 +60,8 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use jmap_client::eventsource::{SharedHeaders, expand_url};
@@ -685,10 +687,7 @@ fn calendar_create_then_destroy_round_trips_through_the_real_api() {
         .expect("the write-test account needs the calendars capability");
 
     let name = format!("agent-livewrite-{}", unique_suffix());
-    let calendar = Calendar {
-        name: name.clone(),
-        ..Calendar::default()
-    };
+    let calendar = Calendar::new(name.clone());
 
     let created = client
         .calendar_create(&account_id, &calendar)
@@ -3457,10 +3456,7 @@ fn calendar_share_grant_and_revoke_deliver_a_real_share_notification() {
     };
 
     let name = format!("agent-livewrite-sharenotif-{}", unique_suffix());
-    let calendar = Calendar {
-        name: name.clone(),
-        ..Calendar::default()
-    };
+    let calendar = Calendar::new(name.clone());
     let calendar = owner
         .calendar_create(&owner_account_id, &calendar)
         .expect("Calendar/set create failed against the real server");
@@ -5478,12 +5474,16 @@ fn calendar_event_parse_reports_multi_event_blob_as_not_parsable_through_the_rea
         eprintln!("server names no primary account for {CAPABILITY_CALENDARS}; skipping");
         return;
     };
-    if !client
+    let supports_cal_parse = client
         .session()
         .capabilities
         .contains_key(CAPABILITY_CALENDARS_PARSE)
-    {
-        eprintln!("server does not advertise {CAPABILITY_CALENDARS_PARSE}; skipping");
+        || client
+            .session()
+            .capabilities
+            .contains_key(CAPABILITY_CALENDARS);
+    if !supports_cal_parse {
+        eprintln!("server does not advertise {CAPABILITY_CALENDARS}; skipping");
         return;
     }
 
@@ -5531,6 +5531,131 @@ END:VCALENDAR\r\n";
         Some([blob_id].as_slice()),
         "a multi-event blob must be reported as notParsable"
     );
+}
+
+/// Exercise live differential fidelity for JSCalendar against the real server
+/// across each fixture .ics file, comparing the server's CalendarEvent/parse
+/// rendering beside jmap-ical's local parse of the same bytes.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn calendar_event_parse_differential_oracle_fixtures_match_against_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("no live server configured or write credentials missing; skipping");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CALENDARS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CALENDARS}; skipping");
+        return;
+    };
+    let supports_cal_parse = client
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_CALENDARS_PARSE)
+        || client
+            .session()
+            .capabilities
+            .contains_key(CAPABILITY_CALENDARS);
+    if !supports_cal_parse {
+        eprintln!("server does not advertise calendars capability; skipping");
+        return;
+    }
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        manifest_dir.join("../jmap-ical/tests/fixtures"),
+        PathBuf::from("rust/crates/jmap-ical/tests/fixtures"),
+        PathBuf::from("crates/jmap-ical/tests/fixtures"),
+        PathBuf::from("jmap-ical/tests/fixtures"),
+    ];
+    let Some(fixtures_dir) = candidates.into_iter().find(|cand| cand.is_dir()) else {
+        panic!("could not find jmap-ical fixtures directory");
+    };
+
+    let mut entries: Vec<_> = fs::read_dir(&fixtures_dir)
+        .expect("read fixtures directory")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "ics"))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    assert!(
+        !entries.is_empty(),
+        "fixtures directory must contain .ics fixture files"
+    );
+
+    for entry in entries {
+        let path = entry.path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let ics_bytes = fs::read(&path).expect("read fixture file");
+        let ics_text = String::from_utf8(ics_bytes.clone()).expect("valid UTF-8");
+
+        // 1. Upload .ics blob via HTTP upload endpoint:
+        let upload_res = client
+            .upload_blob(&account_id, "text/calendar", ics_bytes)
+            .expect("upload_blob succeeds");
+        let blob_id = upload_res.blob_id;
+
+        // 2. Call CalendarEvent/parse:
+        let parse_req = CalendarEventParseRequest::new(account_id.clone(), vec![blob_id.clone()]);
+        let parse_res = client
+            .event_parse(&parse_req)
+            .expect("CalendarEvent/parse succeeds");
+
+        assert!(
+            parse_res.not_found.is_none(),
+            "fixture {name} must not be reported in notFound"
+        );
+        assert!(
+            parse_res.not_parsable.is_none(),
+            "fixture {name} must not be reported in notParsable"
+        );
+
+        let parsed_map = parse_res.parsed.expect("parsed map present");
+        let server_event = parsed_map
+            .get(&blob_id)
+            .expect("parsed event present for blobId");
+
+        // 3. Local parse with jmap-ical:
+        let local_event = jmap_ical::ical_to_event(&ics_text).expect("jmap-ical parses fixture");
+
+        // 4. Verify core semantic fidelity between server and local representations:
+        assert_eq!(
+            server_event.title, local_event.title,
+            "title must match for {name}"
+        );
+        assert_eq!(
+            server_event.start, local_event.start,
+            "start must match for {name}"
+        );
+        assert_eq!(
+            server_event.status, local_event.status,
+            "status must match for {name}"
+        );
+        assert_eq!(
+            server_event.free_busy_status, local_event.free_busy_status,
+            "freeBusyStatus must match for {name}"
+        );
+        assert_eq!(
+            server_event.recurrence_rule.is_some(),
+            local_event.recurrence_rule.is_some(),
+            "recurrence rule presence must match for {name}"
+        );
+        assert_eq!(
+            server_event.locations.is_some(),
+            local_event.locations.is_some(),
+            "locations presence must match for {name}"
+        );
+        assert_eq!(
+            server_event.participants.is_some(),
+            local_event.participants.is_some(),
+            "participants presence must match for {name}"
+        );
+        assert_eq!(
+            server_event.alerts.is_some(),
+            local_event.alerts.is_some(),
+            "alerts presence must match for {name}"
+        );
+    }
 }
 
 /// Finding 21: `ContactCard/parse` silently drops all cards past the first in a multi-VCARD blob.
@@ -5653,12 +5778,9 @@ fn contact_card_online_service_without_uri_through_the_real_api() {
     let mut online_services = BTreeMap::new();
     online_services.insert(
         "s1".to_string(),
-        OnlineService {
-            service: Some("Jabber".to_string()),
-            user: Some(format!("alice-{}@example.org", suffix)),
-            uri: None,
-            ..Default::default()
-        },
+        OnlineService::new()
+            .with_service("Jabber")
+            .with_user(format!("alice-{}@example.org", suffix)),
     );
     card.online_services = Some(online_services);
 
