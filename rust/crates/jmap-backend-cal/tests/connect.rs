@@ -519,6 +519,16 @@ fn a_calendar_with_no_my_rights_opens_writable() {
 }
 
 #[test]
+fn open_calendar_returns_open_collection() {
+    let fixture = Fixture::start();
+    let open: jmap_backend_core::connect::OpenCollection<jmap_cal_sync::CalSync> =
+        connect::open_calendar(&fixture.config(), Credentials::none()).expect("connected");
+    assert!(open.writable);
+    assert_eq!(open.account_id(), &fixture.server.account_id());
+    assert_eq!(open.calendar_id(), &fixture.ours);
+}
+
+#[test]
 fn a_calendar_with_write_rights_opens_writable() {
     let fixture = Fixture::start();
     {
