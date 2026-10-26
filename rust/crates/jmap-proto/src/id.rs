@@ -47,3 +47,28 @@ impl AsRef<str> for Id {
         &self.0
     }
 }
+
+/// Splits a shared child's identity (`<accountId>/<collectionId>`) into its two halves.
+///
+/// `None` means `identity` is not shared: a primary child's bare id, or a
+/// value this lane does not recognise as a split. The split needs exactly
+/// one `/`, with non-empty text on each side, because an `Id` (RFC 8620
+/// §1.2) cannot itself contain a `/`.
+pub fn split_shared_identity(identity: &str) -> Option<(&str, &str)> {
+    let (account, collection) = identity.split_once('/')?;
+    (!account.is_empty() && !collection.is_empty() && !collection.contains('/'))
+        .then_some((account, collection))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_identity_is_split_only_when_both_halves_are_there() {
+        assert_eq!(split_shared_identity("A2/C1"), Some(("A2", "C1")));
+        for whole in ["C1", "/C1", "A2/", "A/B/C", ""] {
+            assert_eq!(split_shared_identity(whole), None, "{whole:?}");
+        }
+    }
+}

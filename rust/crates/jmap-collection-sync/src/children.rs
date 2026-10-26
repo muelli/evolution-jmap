@@ -78,12 +78,10 @@ impl ChildKind {
 /// The account and collection of a shared child's identity
 /// (`<accountId>/<collectionId>`), or `None` for a primary child's bare id.
 ///
-/// This is the rule that `SourceConfig` in the backends uses: exactly one `/`,
-/// with text on each side. All other values stay whole, as a primary id.
+/// This is the rule that `SourceConfig` in the backends uses too: exactly one
+/// `/`, with text on each side. All other values stay whole, as a primary id.
 pub fn split_shared_identity(identity: &str) -> Option<(&str, &str)> {
-    let (account, collection) = identity.split_once('/')?;
-    (!account.is_empty() && !collection.is_empty() && !collection.contains('/'))
-        .then_some((account, collection))
+    jmap_proto::id::split_shared_identity(identity)
 }
 
 /// One `ESource` that a populate creates, with all that its keyfile needs.
