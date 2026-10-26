@@ -90,6 +90,19 @@ Core protocol facilities (RFC 8620 session, requests, responses, errors, IDs,
 states, blob management, quotas, sieve, and websocket structures) are always
 enabled.
 
+## Stability
+
+Types tied to a published RFC follow normal semantic versioning: a breaking
+change to their wire shape is a major version bump.
+
+Types tied to an active IETF draft instead of a published RFC do not get that
+guarantee, even after this crate reaches 1.0: the `filenode` and `metadata`
+modules, `RefPlusCapability` in `session`, the mail-sharing capability types
+in `mail`, and every type behind the `calendars` feature. Their wire format
+tracks a draft that has not stopped moving, so a future draft revision can
+force a breaking change in a minor version bump. A Cargo feature flag only
+ever turns a type on or off; it does not promise its wire shape is frozen.
+
 ## Minimum Supported Rust Version (MSRV)
 
 This crate requires **Rust 1.97** or newer and uses the Rust 2024 edition.

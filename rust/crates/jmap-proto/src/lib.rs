@@ -46,6 +46,22 @@
 //! [draft-ietf-jmap-metadata]: https://datatracker.ietf.org/doc/draft-ietf-jmap-metadata/
 //! [draft-ietf-jmap-mail-sharing]: https://datatracker.ietf.org/doc/draft-ietf-jmap-mail-sharing/
 //!
+//! # Stability
+//!
+//! Types tied to a published RFC follow normal semantic versioning: a
+//! breaking change to their wire shape is a major version bump (or, before
+//! 1.0, a minor one, per Cargo's pre-1.0 convention).
+//!
+//! Types tied to an active IETF draft instead of a published RFC do not get
+//! that guarantee, even after this crate reaches 1.0: the [`filenode`] and
+//! [`metadata`] modules, `RefPlusCapability` in [`session`], the
+//! mail-sharing capability types in [`mail`], and every type behind the
+//! `calendars` feature. Their wire format tracks a draft that has not
+//! stopped moving, so a future draft revision can force a breaking change
+//! in a minor version bump. A Cargo feature flag only ever turns a type on
+//! or off; it does not promise its wire shape is frozen. See each module's
+//! doc comment for its draft name and revision.
+//!
 //! # Examples
 //!
 //! ```rust
