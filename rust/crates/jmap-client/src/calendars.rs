@@ -177,7 +177,7 @@ impl Client {
         account_id: &Id,
         filter: CalendarEventQueryFilter,
     ) -> Result<Vec<Id>, Error> {
-        self.query_every_id(USING, "CalendarEvent/query", account_id, filter)
+        self.query_every_id(USING, "CalendarEvent/query", account_id, filter, None)
     }
 
     /// Modify calendar events (`CalendarEvent/set`, draft-ietf-jmap-calendars §5.9).

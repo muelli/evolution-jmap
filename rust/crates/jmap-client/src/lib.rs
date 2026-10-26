@@ -111,6 +111,7 @@ pub use eventsource::{
 };
 pub use jmap_proto as proto;
 pub use jmap_proto;
+pub use jmap_proto::methods::Comparator;
 pub use jmap_proto::{Id, State};
 pub use set::{expect_created, expect_destroyed, expect_updated};
 pub use transport::CancelFlag;
