@@ -77,12 +77,15 @@ fn creating_then_deleting_a_folder_round_trips_through_the_real_server() {
 /// When `Mailbox/set` returns no name, `created_folder_name` uses the
 /// requested name: RFC 8620 section 5.3 reads this as "accepted as asked".
 ///
-/// For a padded name, the Stalwart `created` response has no `name`, but
-/// `Mailbox/get` shows a trimmed name. Thus the create result and the next
-/// listing disagree. This test holds that known, uncorrected gap.
+/// For a padded name, the Stalwart `created` response has no `name`. This
+/// alone would make the create result and the next listing disagree, since
+/// `Mailbox/get` shows a trimmed name. `jmap_client::Client::mailbox_create`
+/// closes this gap at its own layer: it trims the requested name itself
+/// before using it as the fallback, so `create_folder`'s result already
+/// matches the trimmed name the next listing will show.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
-fn a_server_trimmed_name_the_create_response_omits_is_not_reflected_until_the_next_listing() {
+fn a_padded_name_is_trimmed_consistently_between_create_and_the_next_listing() {
     let Some(client) = connect_for_write() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
@@ -99,9 +102,9 @@ fn a_server_trimmed_name_the_create_response_omits_is_not_reflected_until_the_ne
         .create_folder(None, &requested)
         .expect("Mailbox/set create failed against the real server");
     assert_eq!(
-        created.display_name, requested,
-        "the server reported no name, so the client falls back to the padded \
-         name it asked for"
+        created.display_name, trimmed,
+        "the server reported no name, so the client falls back to its own \
+         trimmed copy of the requested name"
     );
 
     let (_, tree) = sync.folder_tree().expect("listing the folder tree failed");
