@@ -191,10 +191,21 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // The reader interface both surfaces hand the snooze action. This crate
     // reads the selection, its folder, and the action/UI group:
     // per-surface on 3.52, or one shared accessor on 3.55 and later.
+    //
+    // The interface is also the extensible type of the snooze extension, so
+    // its accessor must be here too. `e_mail_reader_get_window` names the
+    // window that owns a reader. One window can hold more than one reader,
+    // so the extension keys its menu merge on the window.
+    "e_mail_reader_get_type",
+    "e_mail_reader_get_window",
     "e_mail_reader_get_selected_uids",
     "e_mail_reader_ref_folder",
     "e_mail_reader_get_action_group",
     "e_mail_reader_get_ui_manager",
+    // Tells the window of a shell reader from the window of a detached
+    // message window. Only Evolution before 3.55 needs this: there the
+    // `GtkUIManager` comes from the window, not from the reader.
+    "e_shell_window_get_type",
     // The EUIManager-era call that registers a batch of actions and merges
     // `.eui` XML in one step. It needs no pre-existing action group and no
     // separate merge step. This crate then looks up the submenu's own

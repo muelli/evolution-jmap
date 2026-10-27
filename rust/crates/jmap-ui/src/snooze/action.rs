@@ -36,9 +36,9 @@ use eds_sys::{
     camel_service_get_uid, e_source_dup_parent, e_source_registry_ref_source,
 };
 use evo_sys::{
-    EMailReader, EShellContent, GTK_BUTTONS_CLOSE, GTK_MESSAGE_ERROR,
-    e_mail_reader_get_selected_uids, e_mail_reader_ref_folder, e_shell_get_default,
-    e_shell_get_registry, gtk_dialog_run, gtk_message_dialog_new, gtk_widget_destroy,
+    EMailReader, GTK_BUTTONS_CLOSE, GTK_MESSAGE_ERROR, e_mail_reader_get_selected_uids,
+    e_mail_reader_ref_folder, e_shell_get_default, e_shell_get_registry, gtk_dialog_run,
+    gtk_message_dialog_new, gtk_widget_destroy,
 };
 #[cfg(evolution_eui_manager)]
 use evo_sys::{
@@ -54,7 +54,7 @@ use evo_sys::{
 #[cfg(not(evolution_eui_manager))]
 use glib_sys::{GError, g_error_free};
 use glib_sys::{GFALSE, GTRUE, gpointer};
-use gobject_sys::{GObject, g_object_get, g_object_unref};
+use gobject_sys::{GObject, g_object_unref};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::{g_object_set, g_signal_connect_data};
 use jmap_backend_core::BACKEND_NAME;
@@ -740,36 +740,6 @@ fn warn_dialog(text: String) {
         );
         gtk_dialog_run(dialog.cast());
         gtk_widget_destroy(dialog);
-    }
-}
-
-/// The reader of the content of a mail shell view: its `mail-view` property.
-/// The property implements `EMailReader` (an interface pointer is the instance
-/// pointer). The getter gives a full reference, which this function releases.
-/// The content keeps the view alive while the owner is alive.
-///
-/// # Safety
-///
-/// `content` must be NULL or a live mail `EShellContent`.
-pub(crate) unsafe fn reader_of_content(content: *mut EShellContent) -> *mut EMailReader {
-    if content.is_null() {
-        return ptr::null_mut();
-    }
-    let mut view: *mut GObject = ptr::null_mut();
-    // SAFETY: the content is live per the contract. The property gives a
-    // reference that this call owns and releases (the content keeps its own).
-    unsafe {
-        g_object_get(
-            content.cast(),
-            c"mail-view".as_ptr(),
-            &mut view as *mut *mut GObject,
-            ptr::null::<std::ffi::c_char>(),
-        );
-        if view.is_null() {
-            return ptr::null_mut();
-        }
-        g_object_unref(view);
-        view.cast()
     }
 }
 

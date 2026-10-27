@@ -18,12 +18,14 @@ import time
 from scenario import (
     Jmap,
     ScenarioFailure,
+    descendants,
     do_action,
     evolution,
     expect_log,
     expect_no_errors,
     find,
     folder_cell,
+    is_showing,
     main,
     message_list,
     popup_menu,
@@ -69,6 +71,21 @@ def utc_seconds(stamp):
     return time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
 
 
+def snooze_submenus():
+    """Every Snooze submenu that Evolution shows, in tree order.
+
+    One mail window can hold more than one EMailReader. Each reader loads
+    the extensions of the EMailReader interface, but all readers of a window
+    share one menu layer. A merge for each reader puts the submenu in the
+    context menu twice. This function counts them.
+    """
+    return [
+        node
+        for node in descendants(evolution(), "menu")
+        if node.name == "Snooze" and is_showing(node)
+    ]
+
+
 def snooze(subject, item):
     """Choose Snooze > `item` in the context menu of `subject`."""
     popup_menu(subject)
@@ -78,6 +95,11 @@ def snooze(subject, item):
         "the Snooze submenu sensitive (the gate found the extension)",
     )
     screenshot(f"context-menu-{subject.split()[0].lower()}")
+    found = snooze_submenus()
+    if len(found) != 1:
+        screenshot("snooze-submenu-count")
+        raise ScenarioFailure(f"the context menu has {len(found)} Snooze submenus, not one")
+    say("Evolution: the context menu has exactly one Snooze submenu")
     entry = wait_for(lambda: find(submenu, "menu item", item), f"the item {item!r}")
     # The action starts a worker and returns, so no child process is needed.
     do_action(entry)
