@@ -111,6 +111,7 @@ pub mod filenode;
 #[warn(missing_docs)]
 pub mod id;
 #[cfg(feature = "mail")]
+#[warn(missing_docs)]
 pub mod mail;
 #[warn(missing_docs)]
 pub mod metadata;
