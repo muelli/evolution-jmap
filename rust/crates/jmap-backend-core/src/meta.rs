@@ -16,7 +16,32 @@
 use crate::instance::Slot;
 use crate::poison::{lock, read, write};
 use crate::push::PushRefresh;
+use jmap_object_sync::Changes;
+use jmap_proto::{Id, State};
 use std::sync::{Mutex, RwLock};
+
+/// A backend's ability to list every item and report changes since a state.
+///
+/// `jmap-backend-book` and `jmap-backend-cal` each already have a type with
+/// these four operations (`BookSync`, `CalSync`); this trait names the
+/// shape they share so a vfunc body can be written once, generic over
+/// `Self::Item` (`ContactInfo` or `ComponentInfo`). Marshalling an `Item`
+/// into EDS out-parameters stays format-specific and out of this trait.
+pub trait MetaSync {
+    /// The error `list_existing` and `get_changes` report.
+    type Error: std::error::Error;
+    /// The listed and changed item: `ContactInfo` or `ComponentInfo`.
+    type Item;
+
+    /// The account this sync object was opened for.
+    fn account_id(&self) -> &Id;
+    /// The collection (address book or calendar) this sync object was opened for.
+    fn collection_id(&self) -> &Id;
+    /// Every item currently in the collection, with the state to resume from.
+    fn list_existing(&self) -> Result<(State, Vec<Self::Item>), Self::Error>;
+    /// Items changed or removed since `since`.
+    fn get_changes(&self, since: &State) -> Result<Changes<Self::Item>, Self::Error>;
+}
 
 /// A connection slot and a push slot, generic over the backend's sync type.
 ///
@@ -235,5 +260,80 @@ mod tests {
         assert!(!state.is_pushing());
         assert!(state.drop_connection());
         assert!(!state.is_connected());
+    }
+}
+
+#[cfg(test)]
+mod meta_sync_tests {
+    use super::MetaSync;
+    use jmap_object_sync::Changes;
+    use jmap_proto::{Id, State};
+    use std::convert::Infallible;
+
+    /// A stand-in item: enough to tell listed and changed items apart.
+    #[derive(Debug, PartialEq, Eq, Clone)]
+    struct StubItem(u32);
+
+    /// A stand-in sync type with canned answers, enough to prove `MetaSync`
+    /// is usable generically, without naming `BookSync` or `CalSync`.
+    struct StubSync {
+        account_id: Id,
+        collection_id: Id,
+        existing: Vec<StubItem>,
+    }
+
+    impl MetaSync for StubSync {
+        type Error = Infallible;
+        type Item = StubItem;
+
+        fn account_id(&self) -> &Id {
+            &self.account_id
+        }
+
+        fn collection_id(&self) -> &Id {
+            &self.collection_id
+        }
+
+        fn list_existing(&self) -> Result<(State, Vec<StubItem>), Infallible> {
+            Ok((State::from("s1".to_owned()), self.existing.clone()))
+        }
+
+        fn get_changes(&self, since: &State) -> Result<Changes<StubItem>, Infallible> {
+            assert_eq!(since.as_str(), "s1");
+            Ok(Changes {
+                new_state: State::from("s2".to_owned()),
+                changed: vec![StubItem(2)],
+                removed: vec!["1".to_owned()],
+            })
+        }
+    }
+
+    /// Exercises `MetaSync` only through the trait, the way a shared vfunc
+    /// body would: this is the point of the trait, not just its stub impl.
+    fn ids<T: MetaSync>(sync: &T) -> (String, String) {
+        (
+            sync.account_id().as_str().to_owned(),
+            sync.collection_id().as_str().to_owned(),
+        )
+    }
+
+    #[test]
+    fn list_existing_and_get_changes_work_through_the_trait() {
+        let sync = StubSync {
+            account_id: Id::from("acct".to_owned()),
+            collection_id: Id::from("coll".to_owned()),
+            existing: vec![StubItem(1)],
+        };
+
+        assert_eq!(ids(&sync), ("acct".to_owned(), "coll".to_owned()));
+
+        let (state, existing) = sync.list_existing().unwrap();
+        assert_eq!(state.as_str(), "s1");
+        assert_eq!(existing, vec![StubItem(1)]);
+
+        let changes = sync.get_changes(&state).unwrap();
+        assert_eq!(changes.new_state.as_str(), "s2");
+        assert_eq!(changes.changed, vec![StubItem(2)]);
+        assert_eq!(changes.removed, vec!["1".to_owned()]);
     }
 }
