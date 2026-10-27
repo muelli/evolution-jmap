@@ -132,6 +132,7 @@ pub mod sieve;
 #[warn(missing_docs)]
 pub mod state;
 #[cfg(feature = "calendars")]
+#[warn(missing_docs)]
 pub mod tasks;
 pub mod text;
 #[warn(missing_docs)]
