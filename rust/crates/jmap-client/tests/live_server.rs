@@ -77,8 +77,8 @@ use jmap_proto::calendars::{
 };
 use jmap_proto::contacts::{
     Address, AddressBook, AddressComponent, Anniversary, Author, ContactCard,
-    ContactCardParseRequest, ContactCardQueryFilter, ContactEmail, ContactPhone, Directory, Name,
-    NameComponent, Note, OnlineService, PersonalInfo, SchedulingAddress,
+    ContactCardParseRequest, ContactCardQueryFilter, ContactEmail, ContactPhone, Directory, Media,
+    Name, NameComponent, Note, OnlineService, PersonalInfo, SchedulingAddress,
 };
 use jmap_proto::error::method;
 use jmap_proto::mail::{
@@ -671,6 +671,70 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
         }
         Err(err) => panic!("ContactCard/query failed against the real server: {err:?}"),
     }
+}
+
+/// Checks how the real server answers a photo. RFC 9610 Section 2 lets a
+/// server return a `data:` photo as `blobId` plus `mediaType` instead of
+/// `uri`. `jmap_proto::contacts::Media` has no `blob_id` field today, so a
+/// server that answers this way would have its photo dropped into `extra`
+/// and lost. This test pins what Stalwart actually sends back, so the next
+/// change to `Media` can target that shape.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn contact_card_photo_reports_its_actual_shape_on_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let book_id = client
+        .address_books(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default address book")
+        .id
+        .expect("the server named the address book");
+
+    let full_name = format!("agent-photoprobe-{}", unique_suffix());
+    let mut card = ContactCard::simple(book_id, &full_name, "agent-photoprobe@example.invalid");
+    let data_uri = "data:image/png;base64,aGVsbG8tcGhvdG8=";
+    let mut media = Media::new(data_uri);
+    media.kind = Some("photo".to_owned());
+    media.media_type = Some("image/png".to_owned());
+    card.media = Some(std::collections::BTreeMap::from([("p1".to_owned(), media)]));
+
+    let created = client
+        .contact_create(&account_id, &card)
+        .expect("ContactCard/set create failed against the real server");
+    let id = created.id.clone().expect("the server named the new card");
+
+    let round_tripped = client
+        .contact_get(&account_id, std::slice::from_ref(&id))
+        .unwrap()
+        .list
+        .into_iter()
+        .next()
+        .expect("the created card should be fetchable right after creation");
+    let photo = round_tripped
+        .media
+        .as_ref()
+        .and_then(|media| media.values().next())
+        .expect("the server should keep the media entry we sent");
+    eprintln!(
+        "RFC-9610-PROBE: uri={:?} media_type={:?} extra={:?}",
+        photo.uri, photo.media_type, photo.extra
+    );
+    assert!(
+        !photo.uri.is_empty() || photo.extra.contains_key("blobId"),
+        "the server returned a photo with neither a uri nor a blobId: {photo:?}"
+    );
+
+    client
+        .contact_destroy(&account_id, &id)
+        .expect("ContactCard/set destroy failed against the real server");
 }
 
 /// `Calendar/set` create, update, then destroy: the calendar counterpart of
