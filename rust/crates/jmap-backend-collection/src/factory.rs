@@ -123,13 +123,20 @@ unsafe impl ObjectSubclass for JmapCollectionFactory {
 
 #[cfg(test)]
 mod tests {
-    use super::{BACKEND_TYPE, remember_backend_type};
+    use super::{BACKEND_TYPE, JmapCollectionFactory, ObjectSubclass, remember_backend_type};
 
     /// `register_static::<JmapCollectionBackend>()` cannot give this value. Thus
     /// a pass shows the recorded value, not a fallback with the same number.
+    ///
+    /// `class_init_types` must report the same type through the same shared
+    /// `BACKEND_TYPE` cell, not an empty list or a zero placeholder. Both
+    /// checks share one test so they share one `remember_backend_type` call:
+    /// the cell is a single `static`, and a second test calling it in
+    /// parallel would race.
     #[test]
-    fn remember_backend_type_is_what_backend_type_then_reports() {
+    fn remember_backend_type_is_what_backend_type_and_class_init_types_then_report() {
         remember_backend_type(0xdead_beef);
         assert_eq!(BACKEND_TYPE.get(), 0xdead_beef);
+        assert_eq!(JmapCollectionFactory::class_init_types(), vec![0xdead_beef]);
     }
 }
