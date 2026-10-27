@@ -102,6 +102,7 @@ pub mod blob;
 #[cfg(feature = "calendars")]
 pub mod calendars;
 #[cfg(feature = "contacts")]
+#[warn(missing_docs)]
 pub mod contacts;
 #[warn(missing_docs)]
 pub mod error;
