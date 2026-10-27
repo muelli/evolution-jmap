@@ -18,3 +18,5 @@
 /build-gui-smoke-fedora/
 # ci/gui-scenario-fedora.sh build tree
 /build-gui-scenario-fedora/
+# a local ENABLE_FUNCTIONAL_TESTS=ON build tree
+/build-func/
