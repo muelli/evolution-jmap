@@ -1102,6 +1102,13 @@ fn each_conflict_resolution_maps_to_its_on_conflict() {
     }
 }
 
+#[test]
+fn on_conflict_shares_core_mapping() {
+    let core_fn = jmap_backend_core::marshal::on_conflict as *const () as usize;
+    let ops_fn = ops::on_conflict as *const () as usize;
+    assert_eq!(ops_fn, core_fn);
+}
+
 // ---------------------------------------------------------------------------
 // the error mapping itself
 
