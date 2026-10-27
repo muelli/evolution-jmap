@@ -115,3 +115,35 @@ extension type (checked with EDS 3.52.3). Both functions get a live
   `e_source_mail_transport_get_type` removed (lines 163 and 164).
 - In `follow_server`, the calls to `e_source_authentication_get_type` and
   `e_source_security_get_type` removed (lines 202 and 203).
+
+## `src/deferred_delete.rs`
+
+- `start`'s wait loop, line 235: `if now < end` replaced with `if now <= end`.
+  `end` is a monotonic `Instant` fixed at the first wait of a window; the two
+  forms differ only at the exact instant `now == end`. There, the real code
+  proceeds to destroy and the mutant sleeps for `end - now` (zero), then
+  loops back and proceeds on the next check anyway. The only effect is one
+  extra loop iteration with a zero-length sleep: no missed destroy, no extra
+  delay a user or test could observe. Hitting the exact tie between two
+  `Instant::now()` reads is not reproducible without a mock clock, which this
+  crate does not have.
+
+Three mutants of this file time out (20s) rather than resolve, because the
+`watch` thread they land in starts sleeping against the real wall clock
+inside a scenario that normally finishes at once:
+- Line 102, `check`'s leading `!` deleted (`if child.present()`): a thread
+  watching a child whose source later disappears normally sees `present()`
+  false and returns `Settled::Gone` at once; under the mutant it instead
+  falls into `decide`'s wait branch and sleeps out the whole undo window.
+- Line 208, `start`'s body replaced with `None`: no thread is ever spawned,
+  so a test that joins the handle it expects back waits forever.
+- Line 226, `!=` replaced with `==` in the restart check: `restarts` starts
+  at 0 and so does the value the map holds, so the condition is true on
+  every very first loop iteration regardless of the real intent (a restart
+  happening). The thread resets `end` to `None` every pass, pins a fresh
+  `now + left` on each loop, and so the wait condition never turns due: a
+  genuine infinite loop while the test's 20s timeout runs out.
+No test is weakened or skipped for these three: a 20s hang under a known
+bad mutation is itself evidence the real code's behaviour differs, cargo-
+mutants simply has no way to turn that into a pass/fail inside its test
+timeout.
