@@ -18,27 +18,27 @@ tests need the `cmake`/`ctest` harness (`JMAP_FUNCTIONAL_COLLECTION_CLIENT`),
 not a plain `cargo mutants` run, so these are out of scope for this crate's
 mutation-testing session:
 
-- `Live::export` replaced with `()` (line 1007).
+- `Live::export` replaced with `()` (line 1079).
 - `Populating::freeze` replaced with `true`/`false`, and its `!=` to `==`
-  (line 1062).
-- `Populating::thaw` replaced with `()` (line 1067).
-- `Populating::chain_up` replaced with `()` (line 1071).
+  (line 1135).
+- `Populating::thaw` replaced with `()` (line 1140).
+- `Populating::chain_up` replaced with `()` (line 1144).
 - `Populating::claim_all_resources` replaced with `vec![]` or
-  `vec![Default::default()]` (line 1084).
-- `Populating::publish` replaced with `()` (line 1088).
-- `Populating::request_credentials` replaced with `()` (line 1099).
-- `Populating::authenticate_anonymously` replaced with `()` (line 1115).
-- `Populating::offer_creation` replaced with `()` (line 1136).
-- `Populating::allow_rename` replaced with `()` (line 1154).
-- `Collection::new_child` replaced with `Default::default()` (line 1178).
+  `vec![Default::default()]` (line 1157).
+- `Populating::publish` replaced with `()` (line 1161).
+- `Populating::request_credentials` replaced with `()` (line 1170).
+- `Populating::authenticate_anonymously` replaced with `()` (line 1186).
+- `Populating::offer_creation` replaced with `()` (line 1206).
+- `Populating::allow_rename` replaced with `()` (line 1224).
+- `Collection::new_child` replaced with `Default::default()` (line 1248).
 - `Collection::is_new_child` replaced with `true`/`false`, and its `!=` to
-  `==` (line 1189).
-- `Collection::publish` replaced with `()` (line 1193).
+  `==` (line 1259).
+- `Collection::publish` replaced with `()` (line 1263).
 - `Collection::existing_children` replaced with `vec![]` or
-  `vec![Default::default()]` (line 1203).
-- `Collection::set_remote_deletable` replaced with `()` (line 1215).
+  `vec![Default::default()]` (line 1273).
+- `Collection::set_remote_deletable` replaced with `()` (line 1285).
 
-`debug_print_eds` replaced with `()` (line 1257): the shared helper that
+`debug_print_eds` replaced with `()` (line 1327): the shared helper that
 hands a message to `e_source_registry_debug_print`. Every caller
 (`debug_print`, `debug_print_for_resource`, `debug_print_for_account`) also
 emits a `tracing` event of its own, already checked by
@@ -46,6 +46,34 @@ emits a `tracing` event of its own, already checked by
 debug-channel write is skipped. Observing the skip needs
 `SOURCE_REGISTRY_DEBUG` and a live EDS debug log, the same live-EDS-only
 territory as `Live`.
+
+`LiveChild` (the handle a [`deferred_delete`](deferred_delete.rs) `watch`
+thread holds for a child pending delete) and its `Drop` and `PendingChild`
+impls are the same live-EDS-only territory, found on a 2026-10-27 re-sweep
+(line numbers shifted the rest of this section above; these methods are new
+since the file's 2026-10-18 sweep, added together with the deferred-delete
+feature):
+
+- `Drop::drop` replaced with `()` (line 893): the two `g_object_unref` calls
+  it makes have no observable effect without a live GObject to check the
+  refcount of.
+- `PendingChild::uid` replaced with `String::new()` or `"xyzzy".into()`
+  (line 905): a single call to `e_source_get_uid` on a live `ESource`.
+- `PendingChild::present` replaced with `true`/`false`, and its `!=` to `==`
+  (line 910): a single call to `e_server_side_source_get_exported`.
+- `PendingChild::enabled` replaced with `true`/`false`, and its `!=` to `==`
+  (line 915): a single call to `e_source_get_enabled`.
+- `PendingChild::due` replaced with `None` (line 920): a single call to
+  `jmap_config::pending_delete::read` on a live source.
+- `PendingChild::clear_due` replaced with `()` (line 925): a single call to
+  `jmap_config::pending_delete::write`.
+- `PendingChild::enable` replaced with `()` (line 930): a single call to
+  `e_source_set_enabled`.
+- `PendingChild::destroy_on_server` replaced with `Ok(())` (line 935): needs
+  a live `self.child` and `self.account` to resolve `doomed_of` and
+  `login_for` before any server call.
+- `PendingChild::remove` replaced with `Ok(())` (line 955): a single call to
+  `remove_source` on a live child source.
 
 ## `src/child_added.rs`
 
