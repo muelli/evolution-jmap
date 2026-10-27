@@ -5,16 +5,17 @@
 //! Out-parameters are written and transferred to EDS on success; errors are set on failure.
 
 use eds_sys::{
-    E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, E_CONFLICT_RESOLUTION_FAIL,
-    E_CONFLICT_RESOLUTION_KEEP_SERVER, EConflictResolution, EContact, e_book_client_error_create,
+    E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND, EConflictResolution, EContact,
+    e_book_client_error_create,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
 use jmap_backend_core::error::{
     cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, out_of_sync_gerror, set_raw_gerror,
 };
 use jmap_backend_core::i18n::translate_with;
+pub use jmap_backend_core::marshal::on_conflict;
 use jmap_backend_core::marshal::{dup_string, read_string, set_out_string};
-use jmap_book_sync::{Base, BookSync, OnConflict, SyncError, edit_base};
+use jmap_book_sync::{Base, BookSync, SyncError, edit_base};
 use jmap_proto::State;
 
 use crate::marshal;
@@ -405,16 +406,6 @@ pub unsafe fn save_contact(
         );
     }
     GTRUE
-}
-
-/// The [`OnConflict`] for an `EConflictResolution`. The local save is the newer
-/// edit, so `USE_NEWER`, `WRITE_COPY` and an unknown value keep the local value.
-pub fn on_conflict(resolution: EConflictResolution) -> OnConflict {
-    match resolution {
-        E_CONFLICT_RESOLUTION_KEEP_SERVER => OnConflict::KeepServer,
-        E_CONFLICT_RESOLUTION_FAIL => OnConflict::Fail,
-        _ => OnConflict::KeepLocal,
-    }
 }
 
 /// Destroys a contact for `remove_contact_sync`.
