@@ -53,6 +53,23 @@ These variables change the defaults:
 | `GUI_SCENARIO_DISPLAY` | `:96` | The display of `Xvfb` |
 | `GUI_SCENARIO_MOCKD` | `build/cargo-target/release/jmap-mockd` | The `jmap-mockd` binary |
 
+### On a newer Evolution
+
+Ubuntu 24.04 has Evolution 3.52. To run a scenario against a newer Evolution,
+use this command:
+
+```console
+$ ci/gui-scenario-fedora.sh snooze
+```
+
+If `podman` is installed, the script runs in the pinned Fedora image that
+`ci/rpm.sh` and `ci/gui-smoke-fedora.sh` also use (Evolution and EDS 3.60). It
+builds the tree into `build-gui-scenario-fedora/`, installs the five
+components and runs `ci/gui-scenario/run.sh --host`. You do not need root.
+Use `ci/gui-scenario-fedora.sh --host SCENARIO...` in a job that already runs
+in that image. The artifacts go to `build-gui-scenario-fedora/gui-scenario`,
+or to `GUI_SCENARIO_ARTIFACTS` if you set it.
+
 ## The output
 
 Each scenario writes to `build/gui-scenario/<scenario>/`:

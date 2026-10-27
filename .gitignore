@@ -16,3 +16,5 @@
 /build-flatpak/
 # ci/gui-smoke-fedora.sh build tree
 /build-gui-smoke-fedora/
+# ci/gui-scenario-fedora.sh build tree
+/build-gui-scenario-fedora/
