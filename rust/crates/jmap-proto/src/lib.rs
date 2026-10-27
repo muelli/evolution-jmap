@@ -113,6 +113,7 @@ pub mod id;
 pub mod mail;
 #[warn(missing_docs)]
 pub mod metadata;
+#[warn(missing_docs)]
 pub mod methods;
 #[cfg(feature = "principals")]
 #[warn(missing_docs)]
