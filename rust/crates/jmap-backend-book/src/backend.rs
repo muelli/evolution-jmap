@@ -6,6 +6,7 @@
 //! Bridges instance and class structs to [`ops`], managing connection and push lifecycles.
 
 use std::ffi::CStr;
+use std::ops::Deref;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
@@ -65,13 +66,13 @@ use glib_sys::{
 use gobject_sys::g_object_unref;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
-use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::invoke::wait_for_queued;
 use jmap_backend_core::marshal::{dup_string, read_string};
+pub use jmap_backend_core::meta::MetaState;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
-use jmap_backend_core::poison::{lock, read, write};
+use jmap_backend_core::poison::read;
 use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_on_authentication_failure;
 use jmap_backend_core::source::{backend_source, destination_address};
@@ -89,10 +90,8 @@ use crate::ops::{self, Outcome};
 pub struct JmapBookBackend {
     /// Parent GObject instance.
     parent: EBookMetaBackend,
-    /// Live connection; read-locked across concurrent vfuncs, write-locked on connect/disconnect.
-    session: Slot<RwLock<Option<BookSync>>>,
-    /// Active push subscription for server-driven change notifications.
-    push: Slot<Mutex<Option<PushRefresh>>>,
+    /// Connection and push lifecycle state.
+    pub state: MetaState<BookSync>,
     /// Whether a push refresh is in the queue and has not started.
     refresh_queued: AtomicBool,
 }
@@ -103,86 +102,23 @@ pub struct JmapBookBackendClass {
     pub parent_class: EBookMetaBackendClass,
 }
 
+impl Deref for JmapBookBackend {
+    type Target = MetaState<BookSync>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
 impl JmapBookBackend {
-    /// Installs `sync` as the live connection, replacing any existing connection.
-    pub fn store_connection(&self, sync: BookSync) {
-        if let Some(session) = self.session() {
-            *write(session) = Some(sync);
-        }
-    }
-
-    /// Installs `sync` as the live connection and starts the push subscription.
-    pub fn install_connection(
-        &self,
-        sync: BookSync,
-        start_push: impl FnOnce(&BookSync) -> Option<PushRefresh>,
-    ) {
-        self.store_connection(sync);
-        let push = self.session().and_then(|session| {
-            let guard = read(session);
-            guard.as_ref().and_then(start_push)
-        });
-        if let Some(push) = push {
-            self.store_push(push);
-        }
-    }
-
-    /// Drops the connection, reporting whether there was one.
-    pub fn drop_connection(&self) -> bool {
-        match self.session() {
-            Some(session) => write(session).take().is_some(),
-            None => false,
-        }
-    }
-
-    /// Installs `push` as the live push subscription, stopping and dropping
-    /// any prior subscription.
-    pub fn store_push(&self, push: PushRefresh) {
-        if let Some(slot) = self.push.get() {
-            *lock(slot) = Some(push);
-        }
-    }
-
-    /// Stops the push subscription and waits for its thread, reporting
-    /// whether there was one. Once this returns, no refresh can still be
-    /// scheduled from it.
-    pub fn stop_push(&self) -> bool {
-        match self.push.get() {
-            Some(slot) => lock(slot).take().is_some(),
-            None => false,
-        }
-    }
-
-    /// Whether a push subscription is live.
-    #[cfg(feature = "testing")]
-    pub fn is_pushing(&self) -> bool {
-        self.push.get().is_some_and(|slot| lock(slot).is_some())
-    }
-
-    /// Replaces the authorization headers the live push subscription sends
-    /// on future reconnect attempts, if a subscription is active.
-    pub fn refresh_push_headers(&self, headers: Vec<(String, String)>) {
-        if let Some(slot) = self.push.get()
-            && let Some(push) = lock(slot).as_ref()
-        {
-            push.set_headers(headers);
-        }
-    }
-
-    /// Whether an operation would find a connection.
-    pub fn is_connected(&self) -> bool {
-        self.session()
-            .is_some_and(|session| read(session).is_some())
-    }
-
     /// Detached instance for tests without requiring a running D-Bus registry daemon.
     #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: Parent fields are pointers or integers with valid all-zero states.
         // An all-zero `Slot` represents the documented empty state.
         let backend: Box<Self> = unsafe { zeroed_box() };
-        backend.session.init(RwLock::new(None));
-        backend.push.init(Mutex::new(None));
+        backend.state.session.init(RwLock::new(None));
+        backend.state.push.init(Mutex::new(None));
         backend
     }
 
@@ -197,7 +133,7 @@ impl JmapBookBackend {
     /// The connection slot, or `None` on an instance whose `instance_init` has
     /// not run or whose `finalize` already has.
     fn session(&self) -> Option<&RwLock<Option<BookSync>>> {
-        self.session.get()
+        self.state.session.get()
     }
 }
 
@@ -234,17 +170,17 @@ unsafe impl ObjectSubclass for JmapBookBackend {
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
         // SAFETY: `instance` points to a zeroed instance struct, and a zeroed Slot is empty.
-        unsafe { (*instance).session.init(RwLock::new(None)) };
+        unsafe { (*instance).state.session.init(RwLock::new(None)) };
         // SAFETY: as above.
-        unsafe { (*instance).push.init(Mutex::new(None)) };
+        unsafe { (*instance).state.push.init(Mutex::new(None)) };
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
         // Stop push thread first before clearing the session to avoid callbacks during finalize.
         // SAFETY: Instance is finalizing; no borrows handed out by get remain alive.
-        unsafe { (*instance).push.clear() };
+        unsafe { (*instance).state.push.clear() };
         // SAFETY: Drops the connection and closes the socket during finalization.
-        unsafe { (*instance).session.clear() };
+        unsafe { (*instance).state.session.clear() };
     }
 }
 

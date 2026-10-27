@@ -5,6 +5,7 @@
 //! Bridges EDS calendar factory requests to [`ops`] and [`connect`] operations.
 
 use std::ffi::CStr;
+use std::ops::Deref;
 use std::ptr;
 use std::sync::{Mutex, RwLock};
 
@@ -32,8 +33,9 @@ use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::{dup_string, read_string};
+pub use jmap_backend_core::meta::MetaState;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
-use jmap_backend_core::poison::{lock, read, write};
+use jmap_backend_core::poison::{read, write};
 use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_on_authentication_failure;
 use jmap_backend_core::source::{backend_source, destination_address};
@@ -52,12 +54,10 @@ use crate::scheduling::{self, CAPABILITIES_PROPERTY};
 pub struct JmapCalBackend {
     /// GObject parent instance.
     parent: ECalMetaBackend,
-    /// Active CalSync connection, guarded by an RwLock for concurrent reads.
-    session: Slot<RwLock<Option<CalSync>>>,
+    /// Connection and push lifecycle state.
+    pub state: MetaState<CalSync>,
     /// Baseline color tracked for detecting local changes in `source_changed`.
     last_known_color: Slot<RwLock<Option<String>>>,
-    /// Live JMAP Push subscription, guarded by a Mutex.
-    push: Slot<Mutex<Option<PushRefresh>>>,
 }
 
 /// Class struct holding vfunc pointers.
@@ -66,82 +66,23 @@ pub struct JmapCalBackendClass {
     pub parent_class: ECalMetaBackendClass,
 }
 
+impl Deref for JmapCalBackend {
+    type Target = MetaState<CalSync>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
 impl JmapCalBackend {
-    /// Installs `sync` as the live connection, replacing any existing connection.
-    pub fn store_connection(&self, sync: CalSync) {
-        if let Some(session) = self.session() {
-            *write(session) = Some(sync);
-        }
-    }
-
-    /// Installs `sync` and starts the push subscription via `start_push`.
-    pub fn install_connection(
-        &self,
-        sync: CalSync,
-        start_push: impl FnOnce(&CalSync) -> Option<PushRefresh>,
-    ) {
-        self.store_connection(sync);
-        let push = self.session().and_then(|session| {
-            let guard = read(session);
-            guard.as_ref().and_then(start_push)
-        });
-        if let Some(push) = push {
-            self.store_push(push);
-        }
-    }
-
-    /// Drops the connection, reporting whether there was one.
-    pub fn drop_connection(&self) -> bool {
-        match self.session() {
-            Some(session) => write(session).take().is_some(),
-            None => false,
-        }
-    }
-
-    /// Whether an operation would find a connection.
-    pub fn is_connected(&self) -> bool {
-        self.session()
-            .is_some_and(|session| read(session).is_some())
-    }
-
-    /// Installs `push` as the live push subscription, replacing any existing one.
-    pub fn store_push(&self, push: PushRefresh) {
-        if let Some(slot) = self.push.get() {
-            *lock(slot) = Some(push);
-        }
-    }
-
-    /// Stops the push subscription, returning whether one was active.
-    pub fn stop_push(&self) -> bool {
-        match self.push.get() {
-            Some(slot) => lock(slot).take().is_some(),
-            None => false,
-        }
-    }
-
-    /// Whether a push subscription is live.
-    #[cfg(feature = "testing")]
-    pub fn is_pushing(&self) -> bool {
-        self.push.get().is_some_and(|slot| lock(slot).is_some())
-    }
-
-    /// Replaces the Authorization header on reconnect attempts for live push subscriptions.
-    pub fn refresh_push_headers(&self, headers: Vec<(String, String)>) {
-        if let Some(slot) = self.push.get()
-            && let Some(push) = lock(slot).as_ref()
-        {
-            push.set_headers(headers);
-        }
-    }
-
     /// Creates a detached test instance without GObject initialization.
     #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: Parent fields are zeroable integers or pointers. Zeroed Slot is empty.
         let backend: Box<Self> = unsafe { zeroed_box() };
-        backend.session.init(RwLock::new(None));
+        backend.state.session.init(RwLock::new(None));
         backend.last_known_color.init(RwLock::new(None));
-        backend.push.init(Mutex::new(None));
+        backend.state.push.init(Mutex::new(None));
         backend
     }
 
@@ -155,7 +96,7 @@ impl JmapCalBackend {
 
     /// Accesses the session slot if initialized.
     fn session(&self) -> Option<&RwLock<Option<CalSync>>> {
-        self.session.get()
+        self.state.session.get()
     }
 
     /// Accesses the last known color slot if initialized.
@@ -211,19 +152,19 @@ unsafe impl ObjectSubclass for JmapCalBackend {
     unsafe fn instance_init(instance: *mut Self::Instance) {
         // SAFETY: `instance` points to an allocated instance struct with empty slots.
         unsafe {
-            (*instance).session.init(RwLock::new(None));
+            (*instance).state.session.init(RwLock::new(None));
             (*instance).last_known_color.init(RwLock::new(None));
-            (*instance).push.init(Mutex::new(None));
+            (*instance).state.push.init(Mutex::new(None));
         }
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
         // Stop push worker thread before dropping connection resources.
         // SAFETY: Instance is finalizing and no active references remain.
-        unsafe { (*instance).push.clear() };
+        unsafe { (*instance).state.push.clear() };
         // SAFETY: Instance is finalizing and no active references remain.
         unsafe {
-            (*instance).session.clear();
+            (*instance).state.session.clear();
             (*instance).last_known_color.clear();
         }
     }
