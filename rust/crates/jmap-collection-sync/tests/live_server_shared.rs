@@ -179,11 +179,11 @@ fn a_shared_collection_is_a_child_of_the_recipients_collection_until_unshared() 
     eprintln!("owner account name as the server states it: {owner_name:?} ({owner_address})");
     assert_eq!(
         book_source.display_name,
-        format!("{book_name} ({owner_name})")
+        format!("{owner_name}: {book_name}")
     );
     assert_eq!(
         calendar_source.display_name,
-        format!("{calendar_name} ({owner_name})")
+        format!("{owner_name}: {calendar_name}")
     );
     assert_eq!(
         calendar_source.identity(),
