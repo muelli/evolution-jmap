@@ -42,7 +42,7 @@ const USER_DATA: usize = 0xDEAD_BEEF;
 const STATE: u32 = 0x2A;
 
 /// The signature that the marshaller calls. The handler of
-/// `snooze::browser_ext` must have this signature. It must not have the
+/// `snooze::reader_ext` must have this signature. It must not have the
 /// two-argument signature of the `EShellView` signal, which has no parameters.
 unsafe extern "C" fn three_args(_instance: *mut GObject, state: u32, data: gpointer) {
     SECOND_ARG.store(state as usize, Ordering::SeqCst);

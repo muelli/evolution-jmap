@@ -37,8 +37,7 @@ pub unsafe fn load(type_module: *mut GTypeModule) {
             register_dynamic::<vacation::page::VacationPage>(type_module);
             register_dynamic::<vacation::extension::JmapVacationExtension>(type_module);
             register_dynamic::<send_later::extension::JmapSendLaterExtension>(type_module);
-            register_dynamic::<snooze::shell_ext::JmapSnoozeShellExtension>(type_module);
-            register_dynamic::<snooze::browser_ext::JmapSnoozeBrowserExtension>(type_module);
+            register_dynamic::<snooze::reader_ext::JmapSnoozeReaderExtension>(type_module);
             register_dynamic::<undo_delete::shell_ext::JmapUndoDeleteShellExtension>(type_module);
         }
         tracing::trace!(

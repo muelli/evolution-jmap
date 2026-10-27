@@ -19,14 +19,14 @@
 //! leave messages in a folder that nothing empties. GNOME/evolution#374 is the
 //! upstream issue for a client-side snooze.
 //!
-//! Two `EExtension`s use one implementation ([`action`]): the mail shell view
-//! and the detached message window (`EMailBrowser`). Each merges the same
-//! submenu into `/mail-message-popup` of its own UI manager. The submenu is a
-//! direct child of the popup and does not use the placeholder of the popup
-//! (see [`action`]). Each extension gives the actions its own `EMailReader`
-//! for the selection and the folder. The menu has presets and no time picker,
-//! for the same reasons as scheduled send ([`crate::send_later::schedule`]).
+//! One `EExtension` on the `EMailReader` interface ([`reader_ext`]) covers
+//! both reader windows: the mail window and the detached message window
+//! (`EMailBrowser`). It merges the submenu into `/mail-message-popup` of the
+//! UI manager of each window. The submenu is a direct child of the popup and
+//! does not use the placeholder of the popup (see [`action`]). The reader of
+//! the window gives the selection and the folder. The menu has presets and no
+//! time picker, for the same reasons as scheduled send
+//! ([`crate::send_later::schedule`]).
 
 pub mod action;
-pub mod browser_ext;
-pub mod shell_ext;
+pub mod reader_ext;
