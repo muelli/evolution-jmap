@@ -1335,6 +1335,131 @@ mod tests {
         assert!(opened.writable);
     }
 
+    /// A transport that answers every request with a canned session naming
+    /// one account, `acc1`, with the given read-only flag. `resolve_collection`
+    /// reads only `client.session()`, never the API, so one static session is
+    /// enough for its tests.
+    struct CannedSessionTransport {
+        account_is_read_only: bool,
+    }
+
+    impl jmap_client::transport::Transport for CannedSessionTransport {
+        fn execute(
+            &self,
+            request: jmap_client::transport::HttpRequest<'_>,
+        ) -> Result<jmap_client::transport::HttpResponse, jmap_client::transport::TransportError>
+        {
+            let body = format!(
+                r#"{{
+                    "capabilities": {{
+                        "urn:ietf:params:jmap:core": {{
+                            "maxSizeUpload": 50000000,
+                            "maxConcurrentUpload": 4,
+                            "maxConcurrentRequests": 4,
+                            "maxObjectsInGet": 500,
+                            "maxObjectsInSet": 500,
+                            "collationAlgorithms": ["i;ascii-casemap"]
+                        }}
+                    }},
+                    "accounts": {{
+                        "acc1": {{
+                            "name": "acc1",
+                            "isPersonal": true,
+                            "isReadOnly": {},
+                            "accountCapabilities": {{}}
+                        }}
+                    }},
+                    "primaryAccounts": {{}},
+                    "username": "u",
+                    "apiUrl": "http://127.0.0.1:1/api",
+                    "downloadUrl": "http://127.0.0.1:1/download",
+                    "uploadUrl": "http://127.0.0.1:1/upload",
+                    "eventSourceUrl": "http://127.0.0.1:1/events",
+                    "state": "s1"
+                }}"#,
+                self.account_is_read_only
+            );
+            Ok(jmap_client::transport::HttpResponse {
+                status: 200,
+                content_type: Some("application/json".to_owned()),
+                body: body.into_bytes(),
+                final_url: request.url.to_string(),
+            })
+        }
+    }
+
+    /// `resolve_collection`'s `writable` check has two parts: the account
+    /// must not be read-only, and the matched candidate must allow writes.
+    /// A read-only account always loses, even when the candidate itself says
+    /// it is writable.
+    #[test]
+    fn resolve_collection_is_never_writable_on_a_read_only_account() {
+        let client = jmap_client::Client::builder()
+            .transport(CannedSessionTransport {
+                account_is_read_only: true,
+            })
+            .connect("http://127.0.0.1:1", Credentials::none())
+            .unwrap();
+
+        let opened = resolve_collection(
+            client,
+            Collection::AddressBook,
+            jmap_proto::session::CAPABILITY_CONTACTS,
+            Some("acc1"),
+            None,
+            |_client, _account_id| {
+                Ok(vec![CollectionCandidate {
+                    id: Some(id("book-1")),
+                    is_default: Some(true),
+                    is_writable: true,
+                }])
+            },
+            |_client, account_id, collection_id| (account_id, collection_id),
+        )
+        .unwrap();
+
+        assert!(!opened.writable);
+    }
+
+    /// The other half of the same check: on a writable account, only the
+    /// resolved candidate's own rights count. A different candidate's rights
+    /// must never leak into the result.
+    #[test]
+    fn resolve_collection_writable_uses_only_the_matched_candidates_rights() {
+        let client = jmap_client::Client::builder()
+            .transport(CannedSessionTransport {
+                account_is_read_only: false,
+            })
+            .connect("http://127.0.0.1:1", Credentials::none())
+            .unwrap();
+
+        let opened = resolve_collection(
+            client,
+            Collection::Calendar,
+            jmap_proto::session::CAPABILITY_CALENDARS,
+            Some("acc1"),
+            Some("cal-b"),
+            |_client, _account_id| {
+                Ok(vec![
+                    CollectionCandidate {
+                        id: Some(id("cal-a")),
+                        is_default: Some(false),
+                        is_writable: true,
+                    },
+                    CollectionCandidate {
+                        id: Some(id("cal-b")),
+                        is_default: Some(true),
+                        is_writable: false,
+                    },
+                ])
+            },
+            |_client, account_id, collection_id| (account_id, collection_id),
+        )
+        .unwrap();
+
+        assert!(!opened.writable);
+    }
+
     /// A collection id the server does not have is the same
     /// `NoSuchCollection` error `resolve` already returns, not a panic or a
     /// silently wrong collection.
