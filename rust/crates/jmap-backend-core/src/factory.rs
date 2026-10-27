@@ -22,7 +22,7 @@ use crate::subclass::{ObjectSubclass, register_static};
 /// remembered yet, so a factory still works before `e_module_load` runs.
 pub struct BackendTypeCell<T> {
     gtype: AtomicUsize,
-    _marker: PhantomData<T>,
+    _marker: PhantomData<fn() -> T>,
 }
 
 impl<T> BackendTypeCell<T> {
@@ -93,5 +93,16 @@ mod tests {
 
         cell.remember(0xdead_beef);
         assert_eq!(cell.get(), 0xdead_beef, "remember wins over the fallback");
+    }
+
+    /// A GObject subclass instance struct holds a raw pointer to its C
+    /// struct, so it is not `Sync`. `BackendTypeCell<T>` must still be
+    /// `Sync` for book, cal and collection to put it in a `static`.
+    #[allow(dead_code)]
+    struct HoldsRawPointer(*const ());
+
+    #[test]
+    fn cell_is_sync_even_when_t_is_not() {
+        static _CELL: BackendTypeCell<HoldsRawPointer> = BackendTypeCell::new();
     }
 }
