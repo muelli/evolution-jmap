@@ -106,6 +106,8 @@ pub mod calendars;
 #[warn(missing_docs)]
 pub mod contacts;
 #[warn(missing_docs)]
+pub mod date;
+#[warn(missing_docs)]
 pub mod error;
 #[warn(missing_docs)]
 pub mod filenode;
