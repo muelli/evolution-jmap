@@ -238,4 +238,211 @@ mod tests {
         assert_eq!(revision_of("a"), "af63dc4c8601ec8c");
         assert_eq!(revision_of("foobar"), "85944171f73967e8");
     }
+
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    struct TestObject {
+        id: Option<Id>,
+        membership: Option<BTreeMap<Id, bool>>,
+        value: u32,
+    }
+
+    struct TestKind;
+
+    impl ObjectKind for TestKind {
+        type Object = TestObject;
+        const TYPE: &'static str = "TestObject";
+        const NOUN: &'static str = "thing";
+        const A_NOUN: &'static str = "a thing";
+        const MEMBERSHIP: &'static str = "thingIds";
+
+        fn id(object: &TestObject) -> Option<&Id> {
+            object.id.as_ref()
+        }
+
+        fn membership(object: &TestObject) -> Option<&BTreeMap<Id, bool>> {
+            object.membership.as_ref()
+        }
+
+        fn diff(_current: &TestObject, _edited: &TestObject) -> Map<String, Value> {
+            Map::from_iter([("diff".to_owned(), Value::Bool(true))])
+        }
+
+        fn diff_since_except(
+            _base: &TestObject,
+            _current: &TestObject,
+            _edited: &TestObject,
+            kept: &BTreeSet<String>,
+        ) -> Map<String, Value> {
+            Map::from_iter([("since".to_owned(), Value::from(kept.len()))])
+        }
+
+        fn conflicts(
+            base: &TestObject,
+            current: &TestObject,
+            edited: &TestObject,
+        ) -> BTreeSet<String> {
+            if base.value != current.value && base.value != edited.value {
+                BTreeSet::from(["value".to_owned()])
+            } else {
+                BTreeSet::new()
+            }
+        }
+    }
+
+    #[test]
+    fn id_of_fails_without_an_id() {
+        let object = TestObject::default();
+        assert!(id_of::<TestKind>(&object).is_err());
+    }
+
+    #[test]
+    fn id_of_returns_the_id() {
+        let object = TestObject {
+            id: Some(Id::new("1")),
+            ..Default::default()
+        };
+        assert_eq!(id_of::<TestKind>(&object).unwrap(), &Id::new("1"));
+    }
+
+    #[test]
+    fn holds_is_true_only_for_a_true_entry() {
+        let own = Id::new("own");
+        let in_own = TestObject {
+            membership: Some(BTreeMap::from([(own.clone(), true)])),
+            ..Default::default()
+        };
+        let elsewhere = TestObject {
+            membership: Some(BTreeMap::from([(Id::new("other"), true)])),
+            ..Default::default()
+        };
+        assert!(holds::<TestKind>(&in_own, &own).unwrap());
+        assert!(!holds::<TestKind>(&elsewhere, &own).unwrap());
+    }
+
+    #[test]
+    fn holds_refuses_a_false_entry() {
+        let own = Id::new("own");
+        let object = TestObject {
+            membership: Some(BTreeMap::from([(own.clone(), false)])),
+            ..Default::default()
+        };
+        assert!(holds::<TestKind>(&object, &own).is_err());
+    }
+
+    #[test]
+    fn classify_loads_and_renders_a_created_candidate() {
+        let own = Id::new("own");
+        let created = Id::new("created");
+        let delta = ChangeSet {
+            new_state: State::new("2"),
+            created: BTreeSet::from([created.clone()]),
+            updated: BTreeSet::new(),
+            destroyed: BTreeSet::new(),
+        };
+        let object = TestObject {
+            id: Some(created),
+            membership: Some(BTreeMap::from([(own.clone(), true)])),
+            ..Default::default()
+        };
+        let response = GetResponse::new(own.clone(), "2", [object]);
+        let changes = classify::<TestKind, _, jmap_client::Error>(
+            delta,
+            &own,
+            move |_ids| Ok(response),
+            |_object| Ok("rendered".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(changes.changed, ["rendered"]);
+        assert!(changes.removed.is_empty());
+    }
+
+    #[test]
+    fn patch_since_falls_back_to_diff_when_the_base_does_not_parse() {
+        let current = TestObject {
+            value: 1,
+            ..Default::default()
+        };
+        let edited = TestObject {
+            value: 2,
+            ..Default::default()
+        };
+        let patch = patch_since::<TestKind>(
+            Err::<TestObject, _>("bad base"),
+            OnConflict::KeepLocal,
+            &current,
+            &edited,
+            "uid",
+        )
+        .unwrap();
+        assert_eq!(patch.get("diff"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn patch_since_without_conflicts_ignores_on_conflict() {
+        let base = TestObject {
+            value: 1,
+            ..Default::default()
+        };
+        let current = base.clone();
+        let edited = TestObject {
+            value: 2,
+            ..Default::default()
+        };
+        let patch = patch_since::<TestKind>(
+            Ok::<_, &str>(base),
+            OnConflict::Fail,
+            &current,
+            &edited,
+            "uid",
+        )
+        .unwrap();
+        assert_eq!(patch.get("since"), Some(&Value::from(0)));
+    }
+
+    #[test]
+    fn patch_since_resolves_conflicts_per_on_conflict() {
+        let base = TestObject {
+            value: 1,
+            ..Default::default()
+        };
+        let current = TestObject {
+            value: 2,
+            ..Default::default()
+        };
+        let edited = TestObject {
+            value: 3,
+            ..Default::default()
+        };
+
+        let keep_local = patch_since::<TestKind>(
+            Ok::<_, &str>(base.clone()),
+            OnConflict::KeepLocal,
+            &current,
+            &edited,
+            "uid",
+        )
+        .unwrap();
+        assert_eq!(keep_local.get("since"), Some(&Value::from(0)));
+
+        let keep_server = patch_since::<TestKind>(
+            Ok::<_, &str>(base.clone()),
+            OnConflict::KeepServer,
+            &current,
+            &edited,
+            "uid",
+        )
+        .unwrap();
+        assert_eq!(keep_server.get("since"), Some(&Value::from(1)));
+
+        assert_eq!(
+            patch_since::<TestKind>(
+                Ok::<_, &str>(base),
+                OnConflict::Fail,
+                &current,
+                &edited,
+                "uid"
+            ),
+            Err(OutOfSync)
+        );
+    }
 }
