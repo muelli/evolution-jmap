@@ -23,14 +23,14 @@
 //! `tests/factory.rs` compares both fields against those defaults.
 
 use std::ffi::CStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
     ECollectionBackendFactory, ECollectionBackendFactoryClass,
     e_collection_backend_factory_get_type,
 };
 use glib_sys::GType;
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::factory::BackendTypeCell;
+use jmap_backend_core::subclass::ObjectSubclass;
 
 use crate::backend::JmapCollectionBackend;
 use crate::prepare_mail::prepare_mail_trampoline;
@@ -60,10 +60,13 @@ pub struct JmapCollectionFactoryClass {
 
 /// The backend `GType` from the last [`register_dynamic`] of the backend.
 ///
-/// `GType` is `gsize`, so an `AtomicUsize` holds it exactly.
+/// The fallback registration this cell falls back to matters here: the
+/// alternative, the inherited `E_TYPE_COLLECTION_BACKEND`, is worse than the
+/// address book factory's zero-`GType` case. With it, `g_object_new` succeeds
+/// and the account shows, but the collection never fans out.
 ///
 /// [`register_dynamic`]: jmap_backend_core::subclass::register_dynamic
-static BACKEND_TYPE: AtomicUsize = AtomicUsize::new(0);
+static BACKEND_TYPE: BackendTypeCell<JmapCollectionBackend> = BackendTypeCell::new();
 
 /// Records the backend type this factory should build.
 ///
@@ -74,23 +77,7 @@ static BACKEND_TYPE: AtomicUsize = AtomicUsize::new(0);
 /// the registration would be static. A static type stays after the module that
 /// contains the code of its vfuncs is unloaded.
 pub fn remember_backend_type(gtype: GType) {
-    BACKEND_TYPE.store(gtype, Ordering::Release);
-}
-
-/// The type that [`class_init`](ObjectSubclass::class_init) sets as the type to
-/// build.
-///
-/// The fallback is for a test, which uses the factory class without a module
-/// load. The registry cannot cause this. A static registration is correct
-/// there, because there is no module. It also prevents the alternative. For the
-/// address book factory the alternative is a zero `GType`. Here it is the
-/// inherited `E_TYPE_COLLECTION_BACKEND`, which is worse: `g_object_new`
-/// succeeds and the account shows, but the collection never fans out.
-fn backend_type() -> GType {
-    match BACKEND_TYPE.load(Ordering::Acquire) {
-        0 => register_static::<JmapCollectionBackend>(),
-        gtype => gtype,
-    }
+    BACKEND_TYPE.remember(gtype);
 }
 
 // SAFETY: both structs are #[repr(C)]. They start with the instance struct and
@@ -112,8 +99,8 @@ unsafe impl ObjectSubclass for JmapCollectionFactory {
         // `class_init`. `class_init` runs under the class-initialisation lock of
         // GLib, and the registration lock there would invert the lock order.
         // Under EDS, the module already registered the type, and this only
-        // reads the atomic.
-        vec![backend_type()]
+        // reads the cell.
+        vec![BACKEND_TYPE.get()]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
@@ -121,7 +108,7 @@ unsafe impl ObjectSubclass for JmapCollectionFactory {
         // starts with the struct of the parent. Both fields are in that part.
         let factory = unsafe { &mut (*class).parent_class };
         factory.factory_name = FACTORY_NAME.as_ptr();
-        factory.backend_type = backend_type();
+        factory.backend_type = BACKEND_TYPE.get();
 
         // The third field is not about this backend. The mail account,
         // identity and transport sources are not children of this collection
@@ -136,13 +123,13 @@ unsafe impl ObjectSubclass for JmapCollectionFactory {
 
 #[cfg(test)]
 mod tests {
-    use super::{backend_type, remember_backend_type};
+    use super::{BACKEND_TYPE, remember_backend_type};
 
     /// `register_static::<JmapCollectionBackend>()` cannot give this value. Thus
     /// a pass shows the recorded value, not a fallback with the same number.
     #[test]
     fn remember_backend_type_is_what_backend_type_then_reports() {
         remember_backend_type(0xdead_beef);
-        assert_eq!(backend_type(), 0xdead_beef);
+        assert_eq!(BACKEND_TYPE.get(), 0xdead_beef);
     }
 }
