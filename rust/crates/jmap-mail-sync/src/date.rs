@@ -12,14 +12,17 @@
 //! The code does not use an external crate, because it is small: two fixed
 //! grammars and the proleptic Gregorian calendar, all covered by the tests.
 //! `jmap-proto` keeps `UtcDate` as a string because it is a wire type, so
-//! this layer interprets it.
+//! this layer interprets it. The calendar arithmetic itself is
+//! [`jmap_proto::date`]; this module adds the RFC 8620 four-digit-year range
+//! and the `UTCDate`/`Date` text grammars around it.
 
 /// The years that this module accepts and writes.
 ///
 /// RFC 8620 §1.4 makes a `UTCDate` an RFC 3339 `date-time`, with a four-digit
 /// `date-fullyear`. A `Date` has the same grammar with an offset. The range
-/// limits the year before [`days_from_civil`] uses it, so the arithmetic stays
-/// inside `i64`. The range excludes `0000`, although the grammar allows it.
+/// limits the year before [`jmap_proto::date::days_from_civil`] uses it, so
+/// the arithmetic stays inside `i64`. The range excludes `0000`, although the
+/// grammar allows it.
 const YEARS: std::ops::RangeInclusive<i64> = 1..=9_999;
 
 /// Seconds since 1970-01-01T00:00:00Z, or `None` if `text` is not a date.
@@ -36,11 +39,11 @@ pub(crate) fn epoch_seconds(text: &str) -> Option<i64> {
     // The server supplies this text, and `i64` parses 19 digits. Check the
     // year before the arithmetic: `days_from_civil` multiplies the era by
     // 146 097, and the caller multiplies the days by 86 400, so a large year
-    // overflows. [`YEARS`] is also the range that [`civil_from_days`] writes.
+    // overflows. [`YEARS`] is also the range that [`civil_from_days`] accepts.
     if !YEARS.contains(&year)
         || !(1..=12).contains(&month)
         || day < 1
-        || day > days_in_month(year, month)
+        || day > jmap_proto::date::days_in_month(year, month)
     {
         return None;
     }
@@ -66,7 +69,7 @@ pub(crate) fn epoch_seconds(text: &str) -> Option<i64> {
 
     let seconds_of_day =
         i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second.min(59));
-    Some(days_from_civil(year, month, day) * 86_400 + seconds_of_day - offset)
+    Some(jmap_proto::date::days_from_civil(year, month, day) * 86_400 + seconds_of_day - offset)
 }
 
 /// The `UTCDate` for the instant `seconds`, or `None` if no `UTCDate` can
@@ -101,34 +104,11 @@ pub(crate) fn utc_date(seconds: i64) -> Option<String> {
 /// The civil date `days` after 1970-01-01, or `None` for a year outside
 /// [`YEARS`].
 ///
-/// The `civil_from_days` algorithm of Howard Hinnant, the inverse of
-/// [`days_from_civil`]. It starts the year in March, so the leap day is the
-/// last day of the year. The result is exact.
+/// The arithmetic is [`jmap_proto::date::civil_from_days`]; this wrapper adds
+/// the four-digit-year range that `epoch_seconds` reads back.
 fn civil_from_days(days: i64) -> Option<(i64, u32, u32)> {
-    let shifted = days.checked_add(719_468)?;
-    let era = if shifted >= 0 {
-        shifted
-    } else {
-        shifted - 146_096
-    } / 146_097;
-    let day_of_era = shifted - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
-    let month = if shifted_month < 10 {
-        shifted_month + 3
-    } else {
-        shifted_month - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-
-    // [`epoch_seconds`] accepts the same range, so it reads back each value
-    // that this function writes.
-    YEARS
-        .contains(&year)
-        .then_some((year, u32::try_from(month).ok()?, u32::try_from(day).ok()?))
+    let (year, month, day) = jmap_proto::date::civil_from_days(days)?;
+    YEARS.contains(&year).then_some((year, month, day))
 }
 
 /// Splits `text` into exactly three fields on `separator`.
@@ -164,39 +144,6 @@ fn split_offset(text: &str) -> Option<(&str, i64)> {
         time,
         sign * (i64::from(hours) * 3_600 + i64::from(minutes) * 60),
     ))
-}
-
-/// Whether a year has a 29th of February, by the proleptic Gregorian rule.
-fn is_leap_year(year: i64) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
-}
-
-fn days_in_month(year: i64, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
-    }
-}
-
-/// Days from 1970-01-01 to `year-month-day`, negative before it.
-///
-/// The `days_from_civil` algorithm of Howard Hinnant. It starts the year in
-/// March, so the leap day is the last day of the year and the month lengths
-/// repeat: `(153 * m + 2) / 5` gives that pattern. The result is exact for
-/// each year in [`YEARS`].
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let month = i64::from(month);
-    let day = i64::from(day);
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let shifted_month = if month > 2 { month - 3 } else { month + 9 };
-    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
 }
 
 #[cfg(test)]
