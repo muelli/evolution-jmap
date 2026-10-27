@@ -49,9 +49,8 @@ use std::env;
 use jmap_client::transport::{
     HttpMethod, HttpRequest, HttpResponse, Transport, TransportError, UreqTransport,
 };
+use jmap_config::config_lookup::REDIRECT_URI;
 use jmap_config::oauth2_setup::discover_and_register;
-
-const REDIRECT_URI: &str = "https://client.example.org/callback";
 
 /// Forwards each request to a real transport. In a request that names
 /// `from_origin`, it changes only the origin to `to_origin` (the address that
