@@ -3,50 +3,21 @@
 
 //! Calendar connection resolution for `connect_sync`.
 
-use std::fmt;
-use std::ops::{Deref, DerefMut};
-
 use eds_sys::{ENamedParameters, ESource, ESourceAuthenticationResult};
 use gio_sys::GCancellable;
 use glib_sys::GError;
-use jmap_backend_core::connect::{Collection, ConnectError, connect_with, resolve};
+use jmap_backend_core::connect::{
+    Collection, CollectionCandidate, ConnectError, OpenCollection, connect_with, resolve_collection,
+};
 use jmap_backend_core::source::{self, SourceConfig};
 use jmap_cal_sync::CalSync;
 use jmap_client::Credentials;
-use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_CALENDARS;
 
 pub use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, write_auth_result};
 
 /// An opened calendar connection paired with whether it is writable in EDS.
-pub struct OpenCalendar {
-    pub sync: CalSync,
-    pub writable: bool,
-}
-
-impl fmt::Debug for OpenCalendar {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OpenCalendar")
-            .field("account_id", self.sync.account_id())
-            .field("calendar_id", self.sync.calendar_id())
-            .field("writable", &self.writable)
-            .finish()
-    }
-}
-
-impl Deref for OpenCalendar {
-    type Target = CalSync;
-
-    fn deref(&self) -> &Self::Target {
-        &self.sync
-    }
-}
-
-impl DerefMut for OpenCalendar {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.sync
-    }
-}
+pub type OpenCalendar = OpenCollection<CalSync>;
 
 /// Connects to the configured JMAP account and resolves the target calendar.
 pub fn open_calendar(
@@ -66,45 +37,34 @@ pub fn open_calendar_with_account(
     account_id: Option<&str>,
 ) -> Result<OpenCalendar, ConnectError> {
     let client = source::connect(&config.target, config.rebase_urls, credentials)?;
-    let account_id = match account_id.or(config.account_id()) {
-        Some(id) => Id::from(id),
-        None => client.primary_account(CAPABILITY_CALENDARS)?,
-    };
-    let calendars = client.calendars(&account_id)?;
-
-    let calendar_id = resolve(
+    let open = resolve_collection(
+        client,
         Collection::Calendar,
+        CAPABILITY_CALENDARS,
+        account_id.or(config.account_id()),
         config.collection_id(),
-        calendars
-            .iter()
-            .map(|calendar| (calendar.id.as_ref(), calendar.is_default)),
+        |client, account_id| {
+            Ok(client
+                .calendars(account_id)?
+                .into_iter()
+                .map(|calendar| CollectionCandidate {
+                    id: calendar.id,
+                    is_default: calendar.is_default,
+                    is_writable: calendar.my_rights.as_ref().is_none_or(|r| r.is_writable()),
+                })
+                .collect())
+        },
+        CalSync::new,
     )?;
 
-    let calendar = calendars
-        .iter()
-        .find(|c| c.id.as_ref() == Some(&calendar_id));
-    let is_account_read_only = client
-        .session()
-        .accounts
-        .get(&account_id)
-        .is_some_and(|a| a.is_read_only);
-
-    let writable = !is_account_read_only
-        && calendar
-            .and_then(|c| c.my_rights.as_ref())
-            .is_none_or(|r| r.is_writable());
-
     tracing::debug!(
-        account_id = account_id.as_str(),
-        calendar_id = calendar_id.as_str(),
-        writable,
+        account_id = open.sync.account_id().as_str(),
+        calendar_id = open.sync.calendar_id().as_str(),
+        writable = open.writable,
         "opened JMAP calendar"
     );
 
-    Ok(OpenCalendar {
-        sync: CalSync::new(client, account_id, calendar_id),
-        writable,
-    })
+    Ok(open)
 }
 
 /// Connects to the JMAP server for `source` and returns an active [`OpenCalendar`].
