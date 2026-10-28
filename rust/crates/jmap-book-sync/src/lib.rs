@@ -208,16 +208,22 @@ impl BookSync {
         };
 
         let current = self.fetch(uid)?;
+        // Diff against the resolved form (its `blobId` photos inlined into a
+        // `uri`, as EDS was shown them), not the raw server copy: the edited
+        // card's photo never carries a `blobId` (a vCard has no such
+        // property), so diffing against the raw copy would read every
+        // untouched `blobId` photo as edited.
+        let resolved = resolve_inline_photos(&self.client, &self.account_id, &current);
         let patch = match base {
             Some(base) => jmap_object_sync::patch_since::<Cards>(
                 vcard_to_card(base.vcard),
                 base.on_conflict,
-                &current,
+                &resolved,
                 &card,
                 uid,
             )
             .map_err(|_| SyncError::OutOfSync(uid.to_owned()))?,
-            None => patch::diff(&current, &card),
+            None => patch::diff(&resolved, &card),
         };
         if patch.is_empty() {
             return ContactInfo::render(&self.client, &self.account_id, &current);

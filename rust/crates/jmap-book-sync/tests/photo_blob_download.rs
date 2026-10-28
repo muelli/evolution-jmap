@@ -134,3 +134,28 @@ fn a_photo_that_already_has_a_uri_is_never_re_downloaded() {
         info.vcard
     );
 }
+
+#[test]
+fn a_blob_id_photo_nobody_touched_keeps_its_blob_id_on_save() {
+    let fixture = Fixture::start();
+    let bytes = b"hello-photo-bytes".to_vec();
+    let id = seed_blob_photo(&fixture, &bytes, "image/png");
+
+    let info = fixture.sync().load_contact(id.as_str()).unwrap();
+    fixture
+        .sync()
+        .save_contact(&info.vcard, Some(id.as_str()))
+        .unwrap();
+
+    let media = fixture.card(&id).media.expect("media");
+    assert_eq!(
+        media.len(),
+        1,
+        "the unedited photo must not be duplicated under a new key: {media:?}"
+    );
+    assert!(
+        media["m"].blob_id.is_some(),
+        "an unedited blobId photo must keep its blobId, not be rewritten as a plain uri: {:?}",
+        media["m"]
+    );
+}

@@ -794,6 +794,13 @@ fn diff_calendars(
 /// stated media type becomes `mediaType`. A member comparison would rewrite an
 /// untouched picture on each save. When the line changed, the save patches
 /// each of `uri` and `mediaType` that differs.
+///
+/// A server-stated `blobId` photo (RFC 9610 section 2) is resolved locally
+/// into an inline `uri` so EDS can show it (`resolve_inline_photos` in
+/// `lib.rs`). A vCard has no `blobId` property, so a read-back entry never
+/// carries one. [`same_photo`] treats a `blobId` on either side as the whole
+/// comparison, so it reads every such photo as edited even when the line is
+/// unchanged. Compare the rendered forms instead in that case.
 fn diff_media(
     patch: &mut Map<String, Value>,
     current: Option<&BTreeMap<String, Media>>,
@@ -808,6 +815,9 @@ fn diff_media(
         states_media,
         |patch, path, old, new| {
             // A `PHOTO` line always states a photo, so `kind` cannot change.
+            if old.blob_id.is_some() && new.blob_id.is_none() && same_resolved_photo(old, new) {
+                return;
+            }
             if same_photo(old, new) {
                 return;
             }
@@ -830,6 +840,20 @@ fn diff_media(
             }
         },
     );
+}
+
+/// Whether two media entries render to the same `PHOTO` line, ignoring `blobId`.
+///
+/// [`same_photo`] takes a `blobId` on either side as the whole answer, so it
+/// cannot tell a resolved `blobId` photo apart from an edited one once the
+/// read-back drops the `blobId`. Clearing it on both sides first falls
+/// through to [`same_photo`]'s own rendered-form comparison.
+fn same_resolved_photo(one: &Media, other: &Media) -> bool {
+    let mut one = one.clone();
+    one.blob_id = None;
+    let mut other = other.clone();
+    other.blob_id = None;
+    same_photo(&one, &other)
 }
 
 fn diff_online_services(
@@ -1457,6 +1481,37 @@ mod tests {
         assert!(!states_media(&card.media.as_ref().expect("media")["p1"]));
 
         assert_eq!(diff(&card, &card), Map::new());
+    }
+
+    /// A photo the server states as `blobId` (RFC 9610 section 2) is resolved
+    /// locally into an inline `uri` so EDS can show it (`resolve_inline_photos`
+    /// in `lib.rs`). The vCard read back from EDS states the same bytes, but a
+    /// vCard has no `blobId` property to state. A save must not read the
+    /// missing `blobId` as an edit and re-send the photo as a plain `uri`,
+    /// which would also drop the `blobId` link the untouched photo still has.
+    #[test]
+    fn an_unchanged_blob_id_photo_resolved_to_the_same_bytes_patches_nothing() {
+        let uri = "data:image/jpeg;base64,aGVsbG8=".to_owned();
+        let mut current = BTreeMap::new();
+        current.insert(
+            "p1".to_owned(),
+            Media::from_blob_id("B1")
+                .with_kind("photo")
+                .with_uri(uri.clone())
+                .with_media_type("image/jpeg"),
+        );
+        let mut edited = BTreeMap::new();
+        edited.insert(
+            "p1".to_owned(),
+            Media::new(uri)
+                .with_kind("photo")
+                .with_media_type("image/jpeg"),
+        );
+
+        let mut patch = Map::new();
+        diff_media(&mut patch, Some(&current), Some(&edited));
+
+        assert_eq!(patch, Map::new());
     }
 
     fn relations(entries: &[(&str, &[&str])]) -> BTreeMap<String, Relation> {
