@@ -5862,6 +5862,54 @@ fn contact_card_parse_differential_oracle_fixtures_match_against_the_real_server
     }
 }
 
+/// Exercise outbound CalDAV PUT differential fidelity against the real server
+/// across each fixture .ics file, verifying that jmap-ical serialized .ics
+/// data is accepted by the CalDAV server and retrievable via GET with
+/// semantic fidelity.
+#[test]
+#[ignore = "needs a running JMAP and CalDAV server (see docs/manual-test-live-server.md)"]
+fn caldav_put_differential_oracle_fixtures_match_against_the_real_server() {
+    let Some(user) = env::var("JMAP_LIVE_SERVER_WRITE_USER").ok() else {
+        eprintln!("no live server configured or write credentials missing; skipping");
+        return;
+    };
+    let password = env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD")
+        .expect("JMAP_LIVE_SERVER_WRITE_USER is set but JMAP_LIVE_SERVER_WRITE_PASSWORD is not");
+    let origin = env::var("JMAP_LIVE_SERVER_URL")
+        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_WRITE_USER");
+
+    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cargo_toml = manifest_dir.join("Cargo.toml");
+
+    let output = std::process::Command::new(cargo)
+        .arg("run")
+        .arg("--manifest-path")
+        .arg(cargo_toml)
+        .arg("-p")
+        .arg("evolution-jmap-client")
+        .arg("--example")
+        .arg("caldav-put-probe")
+        .arg("--")
+        .arg(&origin)
+        .arg(&user)
+        .arg(&password)
+        .output()
+        .expect("execute caldav-put-probe example");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "caldav-put-probe failed (status: {}):\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("ALL CHECKS PASSED"),
+        "caldav-put-probe must report ALL CHECKS PASSED, got:\n{stdout}"
+    );
+}
+
 /// Finding 21: `ContactCard/parse` silently drops all cards past the first in a multi-VCARD blob.
 ///
 /// When a `.vcf` blob containing multiple concatenated `VCARD` components (RFC 6350 Section 3.3)

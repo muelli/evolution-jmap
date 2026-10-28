@@ -218,8 +218,30 @@ pub fn flatten_component(
         *prop_counts.entry(prop.name.clone()).or_insert(0) += 1;
     }
 
+    let mut all_categories: Vec<String> = Vec::new();
+    for prop in &comp.properties {
+        if prop.name == "CATEGORIES" {
+            for cat in prop.value.split(',') {
+                let trimmed = cat.trim();
+                if !trimmed.is_empty() {
+                    all_categories.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+    all_categories.sort();
+    all_categories.dedup();
+
+    let mut emitted_categories = false;
     let mut prop_indices: BTreeMap<String, usize> = BTreeMap::new();
     for prop in &comp.properties {
+        if prop.name == "CATEGORIES" {
+            if !emitted_categories {
+                out.insert(format!("{path}/CATEGORIES"), all_categories.join(","));
+                emitted_categories = true;
+            }
+            continue;
+        }
         let count = prop_counts.get(&prop.name).copied().unwrap_or(0);
         let prop_key = match prop.name.as_str() {
             "ATTENDEE" => {
@@ -470,30 +492,137 @@ pub fn resolve_well_known_caldav(origin: &str, auth_header: &str) -> String {
     format!("{origin}/dav/cal")
 }
 
+trait ReadWrite: std::io::Read + std::io::Write {}
+impl<T: std::io::Read + std::io::Write> ReadWrite for T {}
+
+fn propfind_xml(uri: &str, depth: &str, body: &str, auth_header: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::sync::Arc;
+
+    let (tls, rest) = if let Some(stripped) = uri.strip_prefix("https://") {
+        (true, stripped)
+    } else {
+        (false, uri.strip_prefix("http://")?)
+    };
+
+    let slash = rest.find('/').unwrap_or(rest.len());
+    let authority = &rest[..slash];
+    let path = if slash < rest.len() {
+        &rest[slash..]
+    } else {
+        "/"
+    };
+
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(bracketed) => {
+            let (literal, after) = bracketed.split_once(']')?;
+            let port = match after.strip_prefix(':') {
+                Some(p) => p.parse::<u16>().ok()?,
+                None => {
+                    if tls {
+                        443
+                    } else {
+                        80
+                    }
+                }
+            };
+            (literal, port)
+        }
+        None => match authority.split_once(':') {
+            Some((h, p)) => (h, p.parse::<u16>().ok()?),
+            None => {
+                if tls {
+                    (authority, 443)
+                } else {
+                    (authority, 80)
+                }
+            }
+        },
+    };
+
+    let addr = (host, port).to_socket_addrs().ok()?.next()?;
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .ok()?;
+
+    let mut stream: Box<dyn ReadWrite> = if tls {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let server_name = rustls::pki_types::ServerName::try_from(host.to_string()).ok()?;
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let client_config = Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        );
+        let client = rustls::ClientConnection::new(client_config, server_name).ok()?;
+        Box::new(rustls::StreamOwned::new(client, stream))
+    } else {
+        Box::new(stream)
+    };
+
+    let mut req_str = format!(
+        "PROPFIND {path} HTTP/1.1\r\n\
+         Host: {authority}\r\n\
+         Depth: {depth}\r\n\
+         Content-Type: application/xml; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n",
+        body.len()
+    );
+    if !auth_header.is_empty() {
+        req_str.push_str(&format!("Authorization: {auth_header}\r\n"));
+    }
+    req_str.push_str("\r\n");
+    req_str.push_str(body);
+
+    stream.write_all(req_str.as_bytes()).ok()?;
+    stream.flush().ok()?;
+
+    let mut resp_bytes = Vec::new();
+    stream.read_to_end(&mut resp_bytes).ok()?;
+    String::from_utf8(resp_bytes).ok()
+}
+
 fn find_calendar_home(
-    agent: &ureq::Agent,
+    _agent: &ureq::Agent,
     origin: &str,
     cal_endpoint: &str,
     user: &str,
     auth_header: &str,
 ) -> Option<String> {
-    let req = ureq::http::Request::builder()
-        .method("PROPFIND")
-        .uri(cal_endpoint)
-        .header("Authorization", auth_header)
-        .header("Depth", "0")
-        .header("Content-Type", "application/xml; charset=utf-8")
-        .body(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
-             <D:propfind xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
-             <D:prop><C:calendar-home-set/><D:current-user-principal/></D:prop>\
-             </D:propfind>",
-        )
-        .ok()?;
+    let propfind_body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+         <D:propfind xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
+         <D:prop><C:calendar-home-set/><D:current-user-principal/></D:prop>\
+         </D:propfind>";
 
-    let mut resp = agent.run(req).ok()?;
-    let body = resp.body_mut().read_to_string().ok()?;
-    let home = extract_xml_tag(&body, "calendar-home-set")?;
+    let body = propfind_xml(cal_endpoint, "0", propfind_body, auth_header)?;
+    let home = match extract_xml_tag(&body, "calendar-home-set") {
+        Some(h) => h,
+        None => {
+            let principal = extract_xml_tag(&body, "current-user-principal")?;
+            let princ_href = extract_xml_tag(&principal, "href")?;
+            let princ_url = if princ_href.starts_with("http") {
+                princ_href
+            } else {
+                format!(
+                    "{origin}{}",
+                    if princ_href.starts_with('/') {
+                        &princ_href
+                    } else {
+                        "/"
+                    }
+                )
+            };
+            let princ_body = propfind_xml(&princ_url, "0", propfind_body, auth_header)?;
+            extract_xml_tag(&princ_body, "calendar-home-set")?
+        }
+    };
     let href = extract_xml_tag(&home, "href")?;
     let mut resolved_home = if href.starts_with("http") {
         href
@@ -504,55 +633,59 @@ fn find_calendar_home(
         )
     };
 
-    let head_req = ureq::http::Request::builder()
-        .method("PROPFIND")
-        .uri(&resolved_home)
-        .header("Authorization", auth_header)
-        .header("Depth", "0")
-        .header("Content-Type", "application/xml; charset=utf-8")
-        .body("")
-        .ok();
-    if let Some(hreq) = head_req
-        && let Ok(hresp) = agent.run(hreq)
-        && hresp.status().as_u16() == 404
-        && !user.contains('@')
-    {
-        let qualified = resolved_home.replace(
-            &format!("/{user}/"),
-            &format!("/{user}%40example.internal/"),
-        );
-        resolved_home = qualified;
+    if !user.contains('@') {
+        let test_resp = propfind_xml(&resolved_home, "0", "", auth_header);
+        let is_http_404 = test_resp.as_ref().is_some_and(|r| {
+            let first_line = r.lines().next().unwrap_or("");
+            first_line.contains(" 404 ")
+        });
+        if is_http_404 {
+            let qualified = resolved_home.replace(
+                &format!("/{user}/"),
+                &format!("/{user}%40example.internal/"),
+            );
+            resolved_home = qualified;
+        }
     }
 
     Some(resolved_home)
 }
 
 fn find_collection_in_home(
-    agent: &ureq::Agent,
+    _agent: &ureq::Agent,
     origin: &str,
     home_url: &str,
     auth_header: &str,
 ) -> Option<String> {
-    let req = ureq::http::Request::builder()
-        .method("PROPFIND")
-        .uri(home_url)
-        .header("Authorization", auth_header)
-        .header("Depth", "1")
-        .header("Content-Type", "application/xml; charset=utf-8")
-        .body("")
-        .ok()?;
+    let body = propfind_xml(home_url, "1", "", auth_header)?;
 
-    let mut resp = agent.run(req).ok()?;
-    let body = resp.body_mut().read_to_string().ok()?;
+    let split_tag = if body.contains("<D:response") {
+        "<D:response"
+    } else if body.contains("<d:response") {
+        "<d:response"
+    } else {
+        "<response"
+    };
 
-    for response_chunk in body.split("<D:response>") {
-        if !response_chunk.contains("calendar") {
+    let home_path = home_url
+        .strip_prefix("http://")
+        .or_else(|| home_url.strip_prefix("https://"))
+        .and_then(|rest| rest.find('/').map(|idx| &rest[idx..]))
+        .unwrap_or(home_url);
+
+    for response_chunk in body.split(split_tag) {
+        if !response_chunk.contains(":calendar")
+            && !response_chunk.contains("<calendar")
+            && !response_chunk.contains(":CALENDAR")
+        {
             continue;
         }
         let Some(col_href) = extract_xml_tag(response_chunk, "href") else {
             continue;
         };
-        if col_href.trim_end_matches('/') == home_url.trim_end_matches('/') {
+        if col_href.trim_end_matches('/') == home_url.trim_end_matches('/')
+            || col_href.trim_end_matches('/') == home_path.trim_end_matches('/')
+        {
             continue;
         }
         let mut col_url = if col_href.starts_with("http") {
@@ -976,6 +1109,20 @@ mod tests {
     }
 
     #[test]
+    fn test_compare_ics_normalizes_split_and_comma_categories() {
+        let server = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:123\r\nCATEGORIES:Engineering\r\nCATEGORIES:Rust\r\nEND:VEVENT\r\nEND:VCALENDAR";
+        let local = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:123\r\nCATEGORIES:Rust,Engineering\r\nEND:VEVENT\r\nEND:VCALENDAR";
+        let diff = compare_ics(server, local);
+        assert!(
+            diff.matches
+                .contains(&"VCALENDAR/VEVENT[master]/CATEGORIES".to_string())
+        );
+        assert!(diff.differences.is_empty());
+        assert!(diff.server_only.is_empty());
+        assert!(diff.local_only.is_empty());
+    }
+
+    #[test]
     fn test_compare_ics_differences_and_exclusive_fields() {
         let server = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:server-prod\r\nBEGIN:VEVENT\r\nUID:123\r\nSUMMARY:Meeting\r\nSTATUS:CONFIRMED\r\nEND:VEVENT\r\nEND:VCALENDAR";
         let local = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:local-prod\r\nBEGIN:VEVENT\r\nUID:123\r\nSUMMARY:Meeting\r\nPRIORITY:1\r\nEND:VEVENT\r\nEND:VCALENDAR";
@@ -1052,5 +1199,94 @@ mod tests {
     fn test_resolve_well_known_caldav_fallback() {
         let endpoint = resolve_well_known_caldav("http://127.0.0.1:1", "Basic Og==");
         assert_eq!(endpoint, "http://127.0.0.1:1/dav/cal");
+    }
+
+    #[test]
+    fn test_discover_collection_url_resolves_via_current_user_principal() {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("start mock server");
+        let port = server.server_addr().to_ip().map(|a| a.port()).unwrap();
+        let origin = format!("http://127.0.0.1:{port}");
+        let handle = std::thread::spawn(move || {
+            while let Ok(req) = server.recv() {
+                let url = req.url().to_string();
+                let method = req.method().as_str().to_string();
+                if method == "GET" && url == "/.well-known/caldav" {
+                    let resp = tiny_http::Response::from_string("")
+                        .with_status_code(301)
+                        .with_header(
+                            tiny_http::Header::from_bytes(&b"Location"[..], &b"/dav/calendars"[..])
+                                .unwrap(),
+                        );
+                    let _ = req.respond(resp);
+                    continue;
+                }
+                if method == "PROPFIND" && url == "/dav/calendars" {
+                    let xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                               <D:multistatus xmlns:D=\"DAV:\">\
+                               <D:response>\
+                               <D:href>/dav/calendars</D:href>\
+                               <D:propstat>\
+                               <D:prop>\
+                               <D:current-user-principal>\
+                               <D:href>/dav/principals/user/writer/</D:href>\
+                               </D:current-user-principal>\
+                               </D:prop>\
+                               <D:status>HTTP/1.1 200 OK</D:status>\
+                               </D:propstat>\
+                               </D:response>\
+                               </D:multistatus>";
+                    let resp = tiny_http::Response::from_string(xml).with_status_code(207);
+                    let _ = req.respond(resp);
+                    continue;
+                }
+                if method == "PROPFIND" && url == "/dav/principals/user/writer/" {
+                    let xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                               <D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
+                               <D:response>\
+                               <D:href>/dav/principals/user/writer/</D:href>\
+                               <D:propstat>\
+                               <D:prop>\
+                               <C:calendar-home-set>\
+                               <D:href>/dav/calendars/user/writer/</D:href>\
+                               </C:calendar-home-set>\
+                               </D:prop>\
+                               <D:status>HTTP/1.1 200 OK</D:status>\
+                               </D:propstat>\
+                               </D:response>\
+                               </D:multistatus>";
+                    let resp = tiny_http::Response::from_string(xml).with_status_code(207);
+                    let _ = req.respond(resp);
+                    continue;
+                }
+                if method == "PROPFIND" && url == "/dav/calendars/user/writer/" {
+                    let xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                               <D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
+                               <D:response>\
+                               <D:href>/dav/calendars/user/writer/</D:href>\
+                               <D:propstat>\
+                               <D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop>\
+                               <D:status>HTTP/1.1 200 OK</D:status>\
+                               </D:propstat>\
+                               </D:response>\
+                               <D:response>\
+                               <D:href>/dav/calendars/user/writer/Default/</D:href>\
+                               <D:propstat>\
+                               <D:prop><D:resourcetype><D:collection/><C:calendar/></D:resourcetype></D:prop>\
+                               <D:status>HTTP/1.1 200 OK</D:status>\
+                               </D:propstat>\
+                               </D:response>\
+                               </D:multistatus>";
+                    let resp = tiny_http::Response::from_string(xml).with_status_code(207);
+                    let _ = req.respond(resp);
+                    continue;
+                }
+                let resp = tiny_http::Response::from_string("").with_status_code(404);
+                let _ = req.respond(resp);
+            }
+        });
+        let agent = make_agent(Duration::from_secs(5));
+        let col = discover_collection_url(&agent, &origin, "writer", "Basic Og==");
+        assert_eq!(col, format!("{origin}/dav/calendars/user/writer/Default/"));
+        drop(handle);
     }
 }
