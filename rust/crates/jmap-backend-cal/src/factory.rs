@@ -4,16 +4,17 @@
 //! `ECalBackendFactory` subclass mapping `BackendName=jmap` to [`JmapCalBackend`].
 
 use std::ffi::CStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
     ECalBackendFactory, ECalBackendFactoryClass, I_CAL_VEVENT_COMPONENT, ICalComponentKind,
     e_cal_backend_factory_get_type,
 };
 use glib_sys::GType;
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::subclass::ObjectSubclass;
 
 use crate::backend::JmapCalBackend;
+
+pub use jmap_backend_core::factory::BackendTypeCell;
 
 /// Backend name matched against `BackendName` in calendar source files.
 pub const FACTORY_NAME: &CStr = c"jmap";
@@ -34,19 +35,11 @@ pub struct JmapCalFactoryClass {
 }
 
 /// Dynamically registered GType for `JmapCalBackend`.
-static BACKEND_TYPE: AtomicUsize = AtomicUsize::new(0);
+pub static BACKEND_TYPE: BackendTypeCell<JmapCalBackend> = BackendTypeCell::new();
 
 /// Records the dynamically registered backend `GType` for factory instantiation.
 pub fn remember_backend_type(gtype: GType) {
-    BACKEND_TYPE.store(gtype, Ordering::Release);
-}
-
-/// Returns the backend GType, registering statically as fallback if unloaded.
-fn backend_type() -> GType {
-    match BACKEND_TYPE.load(Ordering::Acquire) {
-        0 => register_static::<JmapCalBackend>(),
-        gtype => gtype,
-    }
+    BACKEND_TYPE.remember(gtype);
 }
 
 // SAFETY: Both structs are #[repr(C)] and begin with ECalBackendFactory instance
@@ -63,7 +56,7 @@ unsafe impl ObjectSubclass for JmapCalFactory {
 
     fn class_init_types() -> Vec<GType> {
         // Register backend type before class init to avoid lock inversion.
-        vec![backend_type()]
+        vec![BACKEND_TYPE.get()]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
@@ -71,6 +64,6 @@ unsafe impl ObjectSubclass for JmapCalFactory {
         let factory = unsafe { &mut (*class).parent_class };
         factory.factory_name = FACTORY_NAME.as_ptr();
         factory.component_kind = COMPONENT_KIND;
-        factory.backend_type = backend_type();
+        factory.backend_type = BACKEND_TYPE.get();
     }
 }

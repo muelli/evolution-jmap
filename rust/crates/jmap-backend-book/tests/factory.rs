@@ -185,3 +185,15 @@ fn a_module_that_is_unloaded_and_loaded_again_hands_its_types_back() {
         "the second e_module_load did not re-register the module's types"
     );
 }
+
+/// `JmapBookFactory` uses `BackendTypeCell` from `jmap-backend-core::factory`
+/// to manage dynamic backend registration.
+#[test]
+fn jmap_book_factory_shares_core_backend_type_cell() {
+    loaded();
+    let cell: &jmap_backend_book::factory::BackendTypeCell<JmapBookBackend> =
+        &jmap_backend_book::factory::BACKEND_TYPE;
+    let registered = cell.get();
+    assert_ne!(registered, 0);
+    assert_eq!(registered, backend_type());
+}

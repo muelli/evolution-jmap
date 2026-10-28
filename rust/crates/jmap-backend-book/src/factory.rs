@@ -4,13 +4,14 @@
 //! `EBookBackendFactory` subclass mapping `BackendName=jmap` to [`JmapBookBackend`].
 
 use std::ffi::CStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{EBookBackendFactory, EBookBackendFactoryClass, e_book_backend_factory_get_type};
 use glib_sys::GType;
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::subclass::ObjectSubclass;
 
 use crate::backend::JmapBookBackend;
+
+pub use jmap_backend_core::factory::BackendTypeCell;
 
 /// Backend name matched against `BackendName` in address book source files.
 pub const FACTORY_NAME: &CStr = c"jmap";
@@ -29,19 +30,11 @@ pub struct JmapBookFactoryClass {
 }
 
 /// Dynamically registered GType for `JmapBookBackend`.
-static BACKEND_TYPE: AtomicUsize = AtomicUsize::new(0);
+pub static BACKEND_TYPE: BackendTypeCell<JmapBookBackend> = BackendTypeCell::new();
 
 /// Records the dynamically registered backend `GType` for factory instantiation.
 pub fn remember_backend_type(gtype: GType) {
-    BACKEND_TYPE.store(gtype, Ordering::Release);
-}
-
-/// Returns the backend GType, registering statically as fallback if unloaded.
-fn backend_type() -> GType {
-    match BACKEND_TYPE.load(Ordering::Acquire) {
-        0 => register_static::<JmapBookBackend>(),
-        gtype => gtype,
-    }
+    BACKEND_TYPE.remember(gtype);
 }
 
 // SAFETY: Structs are #[repr(C)] and lead with EBookBackendFactory structs. EBookBackendFactory derives from GObject.
@@ -57,13 +50,13 @@ unsafe impl ObjectSubclass for JmapBookFactory {
 
     fn class_init_types() -> Vec<GType> {
         // Pre-register backend type before class init to avoid lock inversion.
-        vec![backend_type()]
+        vec![BACKEND_TYPE.get()]
     }
 
     unsafe fn class_init(class: *mut Self::Class) {
         // SAFETY: `class` points to a freshly allocated class struct; both fields are in the parent struct.
         let factory = unsafe { &mut (*class).parent_class };
         factory.factory_name = FACTORY_NAME.as_ptr();
-        factory.backend_type = backend_type();
+        factory.backend_type = BACKEND_TYPE.get();
     }
 }
