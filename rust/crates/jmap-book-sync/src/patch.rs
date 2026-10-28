@@ -1514,6 +1514,69 @@ mod tests {
         assert_eq!(patch, Map::new());
     }
 
+    /// `diff_media`'s guard at the top of its callback must hold all three
+    /// conditions (the old side has a `blobId`, the new side has none, and
+    /// the resolved bytes match) before it skips the patch. A card where the
+    /// new side also states a `blobId` must still patch the new one, even
+    /// when the resolved bytes happen to match.
+    #[test]
+    fn a_changed_blob_id_against_another_blob_id_patches_the_new_one() {
+        let uri = "data:image/jpeg;base64,aGVsbG8=".to_owned();
+        let mut current = BTreeMap::new();
+        current.insert(
+            "p1".to_owned(),
+            Media::from_blob_id("B1")
+                .with_kind("photo")
+                .with_uri(uri.clone())
+                .with_media_type("image/jpeg"),
+        );
+        let mut edited = BTreeMap::new();
+        edited.insert(
+            "p1".to_owned(),
+            Media::from_blob_id("B2")
+                .with_kind("photo")
+                .with_uri(uri)
+                .with_media_type("image/jpeg"),
+        );
+
+        let mut patch = Map::new();
+        diff_media(&mut patch, Some(&current), Some(&edited));
+
+        assert_eq!(patch.get("media/p1/blobId"), Some(&json!("B2")));
+        assert_eq!(patch.get("media/p1/uri"), None, "the resolved bytes match");
+    }
+
+    /// A `blobId` photo the user actually replaced must patch, even though
+    /// `same_resolved_photo` is the only check standing between a skip and a
+    /// real edit.
+    #[test]
+    fn a_blob_id_photo_with_different_bytes_patches_the_new_uri() {
+        let mut current = BTreeMap::new();
+        current.insert(
+            "p1".to_owned(),
+            Media::from_blob_id("B1")
+                .with_kind("photo")
+                .with_uri("data:image/jpeg;base64,aGVsbG8=")
+                .with_media_type("image/jpeg"),
+        );
+        let mut edited = BTreeMap::new();
+        edited.insert(
+            "p1".to_owned(),
+            Media::new("data:image/jpeg;base64,Z29vZGJ5ZQ==")
+                .with_kind("photo")
+                .with_media_type("image/jpeg"),
+        );
+
+        let mut patch = Map::new();
+        diff_media(&mut patch, Some(&current), Some(&edited));
+
+        assert_eq!(
+            patch.get("media/p1/uri"),
+            Some(&json!("data:image/jpeg;base64,Z29vZGJ5ZQ=="))
+        );
+        assert_eq!(patch.get("media/p1/blobId"), Some(&Value::Null));
+    }
+
     fn relations(entries: &[(&str, &[&str])]) -> BTreeMap<String, Relation> {
         entries
             .iter()
