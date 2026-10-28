@@ -1659,7 +1659,7 @@ impl SchedulingAddress {
     }
 }
 
-/// JSContact Media (RFC 9553 §2.6.4): one media resource the card carries.
+/// JSContact Media (RFC 9553 §2.6.4, RFC 9610 §2): one media resource the card carries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -1667,10 +1667,14 @@ pub struct Media {
     /// What the resource is: `photo`, `sound` or `logo` per RFC 9553 §2.6.4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// Where the resource is. Mandatory per RFC 9553 §2.6.4, and for a picture
-    /// the card carries rather than points at, a `data:` URI (RFC 2397).
-    #[serde(default)]
-    pub uri: String,
+    /// Where the resource is located (RFC 9553 §2.6.4). Exactly one of `uri`
+    /// or `blob_id` must be present (RFC 9610 §2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    /// The blob id of the media resource (RFC 9610 §2). Exactly one of `uri`
+    /// or `blob_id` must be present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_id: Option<Id>,
     /// The media type of the resource, which RFC 9553 §2.6.4 asks for when the
     /// URI does not state one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1693,9 +1697,29 @@ impl Media {
     /// Create a media resource with the given URI and no other properties set.
     pub fn new(uri: impl Into<String>) -> Self {
         Self {
-            uri: uri.into(),
+            uri: Some(uri.into()),
             ..Self::default()
         }
+    }
+
+    /// Create a media resource referencing a blob id (RFC 9610 §2) with no other properties set.
+    pub fn from_blob_id(blob_id: impl Into<Id>) -> Self {
+        Self {
+            blob_id: Some(blob_id.into()),
+            ..Self::default()
+        }
+    }
+
+    /// Set the URI of the media resource.
+    pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
+        self.uri = Some(uri.into());
+        self
+    }
+
+    /// Set the blob id of the media resource.
+    pub fn with_blob_id(mut self, blob_id: impl Into<Id>) -> Self {
+        self.blob_id = Some(blob_id.into());
+        self
     }
 
     /// Set what the resource is.
@@ -1726,6 +1750,11 @@ impl Media {
     pub fn with_contexts(mut self, contexts: Value) -> Self {
         self.contexts = Some(contexts);
         self
+    }
+
+    /// Returns true if exactly one of `uri` or `blob_id` is present per RFC 9610 §2.
+    pub fn is_valid(&self) -> bool {
+        self.uri.is_some() ^ self.blob_id.is_some()
     }
 }
 

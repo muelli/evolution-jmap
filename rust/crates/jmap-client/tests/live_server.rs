@@ -724,11 +724,11 @@ fn contact_card_photo_reports_its_actual_shape_on_the_real_server() {
         .and_then(|media| media.values().next())
         .expect("the server should keep the media entry we sent");
     eprintln!(
-        "RFC-9610-PROBE: uri={:?} media_type={:?} extra={:?}",
-        photo.uri, photo.media_type, photo.extra
+        "RFC-9610-PROBE: uri={:?} blob_id={:?} media_type={:?} extra={:?}",
+        photo.uri, photo.blob_id, photo.media_type, photo.extra
     );
     assert!(
-        !photo.uri.is_empty() || photo.extra.contains_key("blobId"),
+        photo.uri.as_ref().is_some_and(|u| !u.is_empty()) || photo.blob_id.is_some(),
         "the server returned a photo with neither a uri nor a blobId: {photo:?}"
     );
 

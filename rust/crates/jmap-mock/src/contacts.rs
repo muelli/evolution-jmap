@@ -235,7 +235,7 @@ fn rewrite_photo_uri_to_file_scheme(card: &mut ContactCard) {
 
     for entry in media.values_mut() {
         if is_photo_media(entry) {
-            entry.uri = HOSTILE_CONTACT_PHOTO_URI.to_owned();
+            entry.uri = Some(HOSTILE_CONTACT_PHOTO_URI.to_owned());
         }
     }
 }

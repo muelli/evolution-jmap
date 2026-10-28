@@ -346,7 +346,7 @@ prop_compose! {
         {
             let mut media = Media::default();
             media.kind = kind;
-            media.uri = uri;
+            media.uri = Some(uri);
             media.media_type = media_type;
             media.extra = BTreeMap::new();
             media
@@ -1439,7 +1439,7 @@ proptest! {
                 {
                     let mut media = Media::default();
                     media.kind = Some("photo".to_owned());
-                    media.uri = uri.clone();
+                    media.uri = Some(uri.clone());
                     media.media_type = media_type.clone();
                     media.extra = BTreeMap::new();
                     media
@@ -1479,12 +1479,17 @@ proptest! {
         prop_assert_eq!(entry1.kind.as_deref(), Some("photo"));
 
         if is_uri {
-            prop_assert_eq!(&entry1.uri, &uri);
+            prop_assert_eq!(entry1.uri.as_deref(), Some(uri.as_str()));
             prop_assert_eq!(entry1.media_type.as_ref(), None);
         } else {
             prop_assert_eq!(entry1.media_type.as_deref(), media_type.as_deref());
             let prefix = format!("data:image/{subtype};base64,");
-            let payload = entry1.uri.strip_prefix(&prefix).expect("data prefix");
+            let payload = entry1
+                .uri
+                .as_deref()
+                .expect("data uri")
+                .strip_prefix(&prefix)
+                .expect("data prefix");
             let decoded_bytes = base64::engine::general_purpose::STANDARD.decode(payload).expect("decode base64");
             prop_assert_eq!(decoded_bytes, raw_bytes);
         }

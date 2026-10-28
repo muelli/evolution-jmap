@@ -631,8 +631,8 @@ fn evolution_opens_the_book_and_a_write_reaches_the_server() {
         "{card:?}"
     );
     assert_eq!(
-        picture.uri,
-        format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"),
+        picture.uri.as_deref(),
+        Some(format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}").as_str()),
         "{card:?}"
     );
     // The BDAY line on the server: one `anniversaries` entry of kind `birth`
@@ -876,14 +876,14 @@ fn seed_card(server: &jmap_mock::MockServer, seeded_notes: SeededNotes) -> Id {
             (SEEDED_PHOTO_KEY.to_owned(), {
                 let mut media = Media::default();
                 media.kind = Some("photo".to_owned());
-                media.uri = format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}");
+                media.uri = Some(format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"));
                 media.media_type = Some(PHOTO_MEDIA_TYPE.to_owned());
                 media
             }),
             (SEEDED_LOGO_KEY.to_owned(), {
                 let mut media = Media::default();
                 media.kind = Some("logo".to_owned());
-                media.uri = SEEDED_LOGO_URI.to_owned();
+                media.uri = Some(SEEDED_LOGO_URI.to_owned());
                 media
             }),
         ]
@@ -1269,13 +1269,13 @@ fn assert_the_seeded_picture_survived(card: &ContactCard) {
         "{card:?}"
     );
     assert_eq!(
-        picture.uri,
-        format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}"),
+        picture.uri.as_deref(),
+        Some(format!("data:{PHOTO_MEDIA_TYPE};base64,{PHOTO_BASE64}").as_str()),
         "the save rewrote the picture nobody touched: {card:?}"
     );
     let logo = &media[SEEDED_LOGO_KEY];
     assert_eq!(logo.kind.as_deref(), Some("logo"), "{card:?}");
-    assert_eq!(logo.uri, SEEDED_LOGO_URI, "{card:?}");
+    assert_eq!(logo.uri.as_deref(), Some(SEEDED_LOGO_URI), "{card:?}");
 }
 
 /// Check that the card on the server still has the three seeded online
@@ -1970,13 +1970,13 @@ fn replacing_the_picture_through_eds_patches_the_entry_it_replaces() {
         "{card:?}"
     );
     assert_eq!(
-        picture.uri,
-        format!("data:{PHOTO_MEDIA_TYPE};base64,{REPLACEMENT_PHOTO_BASE64}"),
+        picture.uri.as_deref(),
+        Some(format!("data:{PHOTO_MEDIA_TYPE};base64,{REPLACEMENT_PHOTO_BASE64}").as_str()),
         "the picture the user chose did not reach the server: {card:?}"
     );
     let logo = &media[SEEDED_LOGO_KEY];
     assert_eq!(logo.kind.as_deref(), Some("logo"), "{card:?}");
-    assert_eq!(logo.uri, SEEDED_LOGO_URI, "{card:?}");
+    assert_eq!(logo.uri.as_deref(), Some(SEEDED_LOGO_URI), "{card:?}");
     // The properties that nobody changed: the given-name components that the
     // `N` line joined.
     let components = card

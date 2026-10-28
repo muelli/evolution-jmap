@@ -319,7 +319,7 @@ fn refused(card: &ContactCard, error: jmap_client::Error) -> SyncError {
         .iter()
         .flat_map(|media| media.values())
         .filter(|media| media.kind.as_deref() == Some("photo"))
-        .map(|media| media.uri.as_str())
+        .filter_map(|media| media.uri.as_deref())
         .filter(|uri| is_data_uri(uri))
         .collect();
     let inline_octets: usize = photos.iter().map(|uri| uri.len()).sum();
@@ -451,10 +451,10 @@ mod tests {
         );
         let mut card = vcard_to_card(&vcard).unwrap();
         for media in card.media.iter_mut().flat_map(BTreeMap::values_mut) {
-            media.uri = media
-                .uri
-                .replacen("data:", "DATA:", 1)
-                .replacen(";base64", ";BASE64", 1);
+            media.uri = media.uri.as_ref().map(|u| {
+                u.replacen("data:", "DATA:", 1)
+                    .replacen(";base64", ";BASE64", 1)
+            });
         }
         let error = jmap_client::Error::Set(SetError::new(set::TOO_LARGE));
         assert!(matches!(

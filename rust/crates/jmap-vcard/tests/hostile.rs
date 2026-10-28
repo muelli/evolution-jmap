@@ -30,7 +30,7 @@ fn card_with_photo_uri(uri: &str) -> ContactCard {
     media.insert("m1".to_owned(), {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = uri.to_owned();
+        media.uri = Some(uri.to_owned());
         media
     });
     {
@@ -98,7 +98,7 @@ fn inbound_photo_value_uri_data_payload_stays_mapped() {
     let media = parsed.media.expect("media map");
     let photo = media.values().next().expect("photo entry");
     assert_eq!(photo.kind.as_deref(), Some("photo"));
-    assert_eq!(photo.uri, "data:image/png;base64,aGVsbG8=");
+    assert_eq!(photo.uri.as_deref(), Some("data:image/png;base64,aGVsbG8="));
     assert_eq!(photo.media_type.as_deref(), Some("image/png"));
 }
 
