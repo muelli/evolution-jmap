@@ -94,6 +94,33 @@ fn example(name: &str) -> PathBuf {
     repository().join("docs/examples").join(name)
 }
 
+/// Whether `repository()` found the real checkout, not a partial copy.
+///
+/// A tool may copy only `rust/` into a scratch directory and build there
+/// (`cargo mutants` does this for its baseline run). `repository()` then
+/// still returns a path, but a wrong one: the fixtures in `docs/` do not
+/// exist at it. Every real checkout has `.git` at its root and no such copy
+/// does, so that is the check this function makes.
+fn in_full_checkout() -> bool {
+    repository().join(".git").exists()
+}
+
+/// Skips the calling test unless `in_full_checkout()` is true. Call first,
+/// not after reading a fixture: a missing fixture inside a real checkout
+/// must still fail the test, not skip it.
+macro_rules! require_full_checkout {
+    () => {
+        if !in_full_checkout() {
+            eprintln!(
+                "skipping {}: not a full checkout, docs/ fixtures are unavailable \
+                 (for example, a cargo-mutants scratch copy)",
+                module_path!()
+            );
+            return;
+        }
+    };
+}
+
 /// The name `[JMAP Backend]`, the extension name that a `jmap` service's
 /// Camel settings live under. This function first generates the
 /// `ESourceCamel` subtype that carries the extension.
@@ -222,6 +249,7 @@ impl Example {
 
 #[test]
 fn the_recipe_quotes_every_keyfile_verbatim() {
+    require_full_checkout!();
     // The reader copies the files but reads the document. If the two drift
     // apart, the reader trusts the wrong one. So an `ini` block in this
     // document must quote a whole keyfile verbatim, and nothing else.
@@ -245,6 +273,7 @@ fn the_recipe_quotes_every_keyfile_verbatim() {
 
 #[test]
 fn the_documented_services_name_the_protocol_the_provider_registers() {
+    require_full_checkout!();
     // Camel keys its provider table by this string. It reads the string
     // from the `.urls` file beside each installed module to decide what to
     // dlopen, and it reads the same string from a `.source` file's
@@ -286,6 +315,7 @@ fn the_documented_services_name_the_protocol_the_provider_registers() {
 
 #[test]
 fn the_documented_sources_stand_on_their_own() {
+    require_full_checkout!();
     // This differs from the collection recipe in substance, not only style.
     // EDS does not export a source whose `Parent=` names a collection that
     // does not exist. A leftover parent line copied from another file would
@@ -303,6 +333,7 @@ fn the_documented_sources_stand_on_their_own() {
 
 #[test]
 fn the_documented_sources_point_at_each_other() {
+    require_full_checkout!();
     // This is the chain that Evolution walks when the user sends mail. The
     // receiving account names the identity, and the identity names the
     // transport it sends through. Both uids are written by hand, so both
@@ -337,6 +368,7 @@ fn the_documented_sources_point_at_each_other() {
 
 #[test]
 fn the_documented_services_both_reach_the_mock_server() {
+    require_full_checkout!();
     // This test checks the end goal of this recipe: reading through the
     // provider's own reader, the one that `connect_sync` calls, from the
     // `CamelSettings` that `e_source_camel_configure_service` would hand

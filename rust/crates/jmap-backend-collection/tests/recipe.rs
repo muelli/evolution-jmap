@@ -93,6 +93,33 @@ fn keyfile() -> PathBuf {
     example(KEYFILES[0])
 }
 
+/// Whether `repository()` found the real checkout, not a partial copy.
+///
+/// A tool may copy only `rust/` into a scratch directory and build there
+/// (`cargo mutants` does this for its baseline run). `repository()` then
+/// still returns a path, but a wrong one: the fixtures in `docs/` do not
+/// exist at it. Every real checkout has `.git` at its root and no such copy
+/// does, so that is the check this function makes.
+fn in_full_checkout() -> bool {
+    repository().join(".git").exists()
+}
+
+/// Skips the calling test unless `in_full_checkout()` is true. Call first,
+/// not after reading a fixture: a missing fixture inside a real checkout
+/// must still fail the test, not skip it.
+macro_rules! require_full_checkout {
+    () => {
+        if !in_full_checkout() {
+            eprintln!(
+                "skipping {}: not a full checkout, docs/ fixtures are unavailable \
+                 (for example, a cargo-mutants scratch copy)",
+                module_path!()
+            );
+            return;
+        }
+    };
+}
+
 /// Generates the `ESourceCamel` subtype for `jmap` and returns its extension
 /// name, `[JMAP Backend]`.
 ///
@@ -211,6 +238,7 @@ impl Example {
 
 #[test]
 fn the_recipes_keyfile_describes_the_mock_server() {
+    require_full_checkout!();
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
         let source = Example::load(&keyfile());
@@ -241,6 +269,7 @@ fn the_recipes_keyfile_describes_the_mock_server() {
 /// parts is on.
 #[test]
 fn the_recipes_keyfile_switches_on_the_parts_the_backend_fans_out_to() {
+    require_full_checkout!();
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
         let source = Example::load(&keyfile());
@@ -265,6 +294,7 @@ fn the_recipes_keyfile_switches_on_the_parts_the_backend_fans_out_to() {
 
 #[test]
 fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
+    require_full_checkout!();
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
         // The registry files each collection factory under
@@ -280,6 +310,7 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
 
 #[test]
 fn the_recipe_quotes_every_keyfile_verbatim() {
+    require_full_checkout!();
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
         // The reader copies the files but reads the document, so the two must
@@ -307,6 +338,7 @@ fn the_recipe_quotes_every_keyfile_verbatim() {
 
 #[test]
 fn the_mail_runs_account_switches_on_every_part() {
+    require_full_checkout!();
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
         // The important difference of the second account is `MailEnabled=true`.
@@ -344,6 +376,7 @@ fn the_mail_runs_account_switches_on_every_part() {
 
 #[test]
 fn the_documented_mail_sources_hang_off_the_documented_account() {
+    require_full_checkout!();
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
         // `child_added` sees these files only because of `Parent=`. EDS emits
@@ -367,6 +400,7 @@ fn the_documented_mail_sources_hang_off_the_documented_account() {
 
 #[test]
 fn the_documented_mail_sources_point_at_each_other() {
+    require_full_checkout!();
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
         // When the user sends, Evolution follows the chain that `prepare_mail`
@@ -404,6 +438,7 @@ fn the_documented_mail_sources_point_at_each_other() {
 
 #[test]
 fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
+    require_full_checkout!();
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
         // `mail_service_of`, which the registry callback calls, decides which of
@@ -430,6 +465,7 @@ fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
 
 #[test]
 fn the_documented_transport_reaches_the_mock_server() {
+    require_full_checkout!();
     let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_timeout(|| {
         // The transport that the reader writes has a provider and no server. After
