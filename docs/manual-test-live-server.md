@@ -150,6 +150,7 @@ and `jmap-mail-sync`) take their sizes from `JMAP_SCALE_TEST_CARDS`,
 | Shared address books, calendars and mailboxes | `*/tests/live_server_shared*.rs` | steps 3 and 3a |
 | CalendarEvent/parse differential fidelity across iCalendar fixtures | `jmap-client/tests/live_server.rs` | step 3 |
 | ContactCard/parse differential fidelity across vCard fixtures | `jmap-client/tests/live_server.rs` | step 3 |
+| Outbound CalDAV PUT differential fidelity across iCalendar fixtures | `jmap-client/tests/live_server.rs` | step 3 |
 | Meeting invitations | `jmap-cal-sync/tests/live_server_scheduling.rs` | steps 3 and 3a |
 | Undo window of a delete: no destroy before the due time, undo, refused destroy (takes about one minute) | `jmap-backend-collection/tests/live_server_deferred_delete.rs` | steps 3 and 3a |
 | OAuth 2.0 discovery and dynamic client registration | `jmap-config/tests/live_server_discover_and_register.rs` | step 2 (URL only) |
@@ -186,6 +187,22 @@ write-test account three times:
 2. After a `shareWith` grant with only `mayReadFreeBusy`: the window of the
    event appears.
 3. After the grant is revoked: no line again.
+
+### The CalDAV outbound differential probe
+
+`caldav_put_differential_oracle_fixtures_match_against_the_real_server` in
+`jmap-client/tests/live_server.rs` runs `caldav-put-probe` across all 12
+iCalendar fixtures in `rust/crates/jmap-ical/tests/fixtures`. Each fixture is
+parsed into a JSCalendar `Event`, serialized to outbound iCalendar, PUT to the
+CalDAV collection on the real server, retrieved with GET, and compared field by
+field against what was sent.
+
+You can also run the probe directly against Cyrus or Stalwart:
+
+```console
+$ cargo run -p evolution-jmap-client --example caldav-put-probe -- \
+    http://127.0.0.1:8080 writer password
+```
 
 ## What "it worked" means
 
