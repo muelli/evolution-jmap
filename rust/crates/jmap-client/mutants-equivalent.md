@@ -65,8 +65,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 ## `src/client.rs`
 
-- `crates/jmap-client/src/client.rs:258:9: replace Client::builder -> ClientBuilder with Default::default()`: `ClientBuilder` implements `Default`, so calling `ClientBuilder::default()` invokes `<ClientBuilder as Default>::default()`. Replacing `ClientBuilder::default()` with `Default::default()` calls the exact same trait method on the same type, resulting in semantically and binary-identical machine code.
-- 47 of 47 viable mutants caught by test suites, 15 unviable due to lack of `Default` implementations on `Credentials`, `Client`, `HttpResponse`, and `EventSourceSubscription`, 1 genuinely equivalent.
+- `crates/jmap-client/src/client.rs:304:9: replace Client::builder -> ClientBuilder with Default::default()` (previously line 258): `ClientBuilder` implements `Default`, so calling `ClientBuilder::default()` invokes `<ClientBuilder as Default>::default()`. Replacing `ClientBuilder::default()` with `Default::default()` calls the exact same trait method on the same type, resulting in semantically and binary-identical machine code.
+- `crates/jmap-client/src/client.rs:466:31: replace < with <= in Client::sleep_with_cancel`: in `sleep_with_cancel`, `start.elapsed()` is evaluated against `duration`. In each loop iteration, the thread sleeps for `chunk = remaining.min(Duration::from_millis(20))`. After sleeping for at least 1ms to 20ms, the monotonic clock `Instant::now()` has advanced, so on subsequent loop evaluations `start.elapsed() > duration`, which evaluates identically under `<` and `<=`. Even in the theoretical case of evaluation at the exact nanosecond where `start.elapsed() == duration`, the subsequent iteration immediately observes `start.elapsed() > duration`, producing zero observable difference in timing, behavior, or return value.
+- 124 of 124 viable mutants caught by test suites, 27 unviable due to absence of `Default` and parameterless constructors on `Credentials`, `Client`, `Session`, `Response`, `HttpResponse`, `SetResponse`, `GetResponse`, `GetRequest`, and `EventSourceSubscription`, 2 genuinely equivalent.
 
 ## `src/oauth.rs`
 
