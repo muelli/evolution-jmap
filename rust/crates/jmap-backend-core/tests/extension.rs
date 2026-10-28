@@ -16,7 +16,7 @@ use eds_sys::{
 use glib_sys::{GType, g_list_free};
 use gobject_sys::{
     G_TYPE_OBJECT, GObject, GObjectClass, g_object_new_with_properties, g_object_unref,
-    g_type_class_ref, g_type_class_unref, g_type_is_a,
+    g_type_class_ref, g_type_class_unref, g_type_is_a, g_type_plugin_get_type,
 };
 use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
@@ -51,8 +51,10 @@ unsafe impl ObjectSubclass for Extensible {
 jmap_backend_core::initialise_parents_before_main!(
     Extensible,
     PanickerHost,
+    InterfaceHost,
     ExtensionObject<Recorder>,
-    ExtensionObject<Panicker>
+    ExtensionObject<Panicker>,
+    ExtensionObject<InterfacedExtension>
 );
 
 /// The last extensible that the hook saw, and the number of hook calls.
@@ -167,6 +169,63 @@ unsafe impl ObjectSubclass for PanickerHost {
         // SAFETY: no arguments. The type initialises itself.
         vec![InterfaceDecl::defaults(unsafe { e_extensible_get_type() })]
     }
+}
+
+/// A second extensible host, kept apart from `Extensible` so
+/// `InterfacedExtension` does not change the extension count the other
+/// tests in this file assert on.
+#[repr(C)]
+struct InterfaceHost {
+    parent: GObject,
+}
+
+#[repr(C)]
+struct InterfaceHostClass {
+    parent_class: GObjectClass,
+}
+
+// SAFETY: both structs are #[repr(C)] and start with the GObject structs.
+unsafe impl ObjectSubclass for InterfaceHost {
+    const NAME: &'static CStr = c"JmapTestInterfaceHost";
+    type Instance = InterfaceHost;
+    type Class = InterfaceHostClass;
+
+    fn parent_type() -> GType {
+        G_TYPE_OBJECT
+    }
+
+    fn interfaces() -> Vec<InterfaceDecl> {
+        // SAFETY: no arguments. The type initialises itself.
+        vec![InterfaceDecl::defaults(unsafe { e_extensible_get_type() })]
+    }
+}
+
+/// An extension that declares an extra interface, to prove `ExtensionObject`
+/// carries it through: the class must implement every interface the
+/// `Extension` impl declares, not just the ones `Extensible` does.
+struct InterfacedExtension;
+
+impl Extension for InterfacedExtension {
+    const TYPE_NAME: &'static CStr = c"JmapTestInterfacedExtension";
+    const EXTENSIBLE_NAME: &'static CStr = c"JmapTestInterfaceHost";
+
+    fn extensible_type() -> GType {
+        register_static::<InterfaceHost>()
+    }
+
+    fn interfaces() -> Vec<InterfaceDecl> {
+        // SAFETY: no arguments. The type initialises itself.
+        vec![InterfaceDecl::defaults(unsafe { g_type_plugin_get_type() })]
+    }
+
+    unsafe fn constructed(_extension: *mut EExtension) {}
+}
+
+#[test]
+fn the_class_implements_the_interfaces_the_extension_declares() {
+    let gtype = register_static::<ExtensionObject<InterfacedExtension>>();
+    // SAFETY: both are registered types.
+    assert_ne!(unsafe { g_type_is_a(gtype, g_type_plugin_get_type()) }, 0);
 }
 
 #[test]
