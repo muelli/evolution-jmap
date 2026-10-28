@@ -17,6 +17,7 @@ workspace = true
 name = "jmap_book_sync"
 
 [dependencies]
+base64 = { workspace = true }
 evolution-jmap-client = { workspace = true }
 evolution-jmap-object-sync = { workspace = true }
 evolution-jmap-proto = { workspace = true }
@@ -26,7 +27,6 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-base64 = { workspace = true }
 evolution-jmap-mock = { workspace = true }
 evolution-jmap-test-support = { workspace = true }
 evolution-jmap-tracing-capture = { workspace = true }
