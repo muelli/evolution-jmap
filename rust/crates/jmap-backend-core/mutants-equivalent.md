@@ -85,6 +85,13 @@ dependency registered overrides this method to call the dependency's own
 the default is only reached by a type with no such dependency, for which
 one dummy `GType` in an otherwise-unread vec changes nothing observable.
 
+## `src/extension.rs`
+
+`Extension::interfaces`'s default body survives replaced with `vec![]`. The
+default already is `Vec::new()`, which `vec![]` builds too: the two
+expressions construct the same empty `Vec`. Same equivalence as
+`ObjectSubclass::interfaces` in `src/subclass.rs`, above.
+
 ## `src/i18n.rs`
 
 Three mutants in `placeholder` time out rather than fail cleanly: the whole
