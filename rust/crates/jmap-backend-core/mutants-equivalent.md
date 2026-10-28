@@ -153,3 +153,13 @@ its NULL check gives `Ok(None)`, not the error, and a test pins that.
 `take_string` survives with its `g_free` removed. The mutant only leaks the
 string. As for `src/mime.rs`, no test can see a leak without memory
 instrumentation, and this project has none.
+
+## `src/setting_extension.rs`
+
+`<impl SettingValue for bool>::new_cell` and `<impl SettingValue for
+i64>::new_cell` both survive replaced with `Default::default()`. The bodies
+build `AtomicBool::new(false)` and `AtomicI64::new(0)`; the standard
+library's `Default` impls for both types are defined as exactly those same
+calls (`AtomicBool::default` returns `Self::new(false)`, `AtomicI64::default`
+returns `Self::new(0)`). The two expressions construct the identical value,
+so no test can tell them apart.
