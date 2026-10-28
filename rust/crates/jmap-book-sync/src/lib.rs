@@ -21,6 +21,8 @@ pub mod patch;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use jmap_client::{ChangeSet, Client};
 use jmap_object_sync::{ObjectKind, revision_of};
 use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
@@ -136,7 +138,7 @@ impl BookSync {
         let contacts = response
             .list
             .iter()
-            .map(ContactInfo::render)
+            .map(|card| ContactInfo::render(&self.client, &self.account_id, card))
             .collect::<Result<Vec<_>, _>>()?;
         Ok((response.state, contacts))
     }
@@ -146,7 +148,8 @@ impl BookSync {
     /// This does not check membership of this address book. EDS asks by the
     /// identifier it has, and [`BookSync::get_changes`] reports a moved card as removed.
     pub fn load_contact(&self, uid: &str) -> Result<ContactInfo, SyncError> {
-        ContactInfo::render(&self.fetch(uid)?)
+        let card = self.fetch(uid)?;
+        ContactInfo::render(&self.client, &self.account_id, &card)
     }
 
     /// Store a vCard (`save_contact_sync`).
@@ -217,7 +220,7 @@ impl BookSync {
             None => patch::diff(&current, &card),
         };
         if patch.is_empty() {
-            return ContactInfo::render(&current);
+            return ContactInfo::render(&self.client, &self.account_id, &current);
         }
         let account_id = self.account_id().to_string();
         let address_book_id = self.address_book_id().to_string();
@@ -277,7 +280,7 @@ impl BookSync {
             delta,
             &self.address_book_id,
             |ids| self.client.contact_get(&self.account_id, ids),
-            ContactInfo::render,
+            |card| ContactInfo::render(&self.client, &self.account_id, card),
         )
     }
 
@@ -296,15 +299,58 @@ impl BookSync {
 
 impl ContactInfo {
     /// Render a card, deriving its revision from the result.
-    fn render(card: &ContactCard) -> Result<Self, SyncError> {
+    ///
+    /// `client` and `account_id` resolve a photo that names a `blob_id` (RFC
+    /// 9610 section 2) into an inline `data:` URI; see [`resolve_inline_photos`].
+    fn render(client: &Client, account_id: &Id, card: &ContactCard) -> Result<Self, SyncError> {
         let uid = jmap_object_sync::id_of::<Cards>(card)?.to_string();
-        let vcard = card_to_vcard(card);
+        let card = resolve_inline_photos(client, account_id, card);
+        let vcard = card_to_vcard(&card);
         Ok(Self {
             revision: revision_of(&vcard),
             uid,
             vcard,
         })
     }
+}
+
+/// The largest photo this crate downloads for display, in decoded octets.
+///
+/// Real Stalwart refuses a whole card over 512 KiB (see the comment on
+/// [`is_refused_for_size`]'s own test), so a photo past this size could never
+/// round-trip as inline base64 in a card anyway.
+const MAX_INLINE_PHOTO_BYTES: u64 = 512 * 1024;
+
+/// Give EDS an inline photo for each `photo` media entry that names a `blob_id`
+/// (RFC 9610 section 2), downloading its bytes through `client`.
+///
+/// A photo over [`MAX_INLINE_PHOTO_BYTES`], with no stated `image/*` media
+/// type, or whose download fails, keeps its `blob_id` and gets no `uri`:
+/// [`card_to_vcard`] already renders such an entry as a hidden entry with no
+/// `PHOTO` line, the same fallback it gives a kind or URI scheme it does not
+/// understand. A later sync retries the download; nothing here is final.
+fn resolve_inline_photos(client: &Client, account_id: &Id, card: &ContactCard) -> ContactCard {
+    let mut card = card.clone();
+    for (_, entry) in card.media.iter_mut().flatten() {
+        if entry.kind.as_deref() != Some("photo") || entry.uri.is_some() {
+            continue;
+        }
+        let Some(blob_id) = entry.blob_id.clone() else {
+            continue;
+        };
+        let Some(media_type) = entry.media_type.clone() else {
+            continue;
+        };
+        if !media_type.starts_with("image/") {
+            continue;
+        }
+        if let Ok(bytes) =
+            client.download_blob(account_id, &blob_id, "photo", MAX_INLINE_PHOTO_BYTES)
+        {
+            entry.uri = Some(format!("data:{media_type};base64,{}", BASE64.encode(bytes)));
+        }
+    }
+    card
 }
 
 /// What to report for a save of `card` that the server refused with `error`.
