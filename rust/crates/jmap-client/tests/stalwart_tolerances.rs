@@ -959,3 +959,60 @@ fn cyrus_contact_card_parse_includes_vendor_contacts_capability_and_parses_card(
         "expected email address in parsed card"
     );
 }
+
+struct MockAvailabilityTransport;
+
+impl Transport for MockAvailabilityTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => STALWART_UNAUTHENTICATED_SESSION.as_bytes().to_vec(),
+            HttpMethod::Post => {
+                let json: serde_json::Value =
+                    serde_json::from_slice(request.body.unwrap_or_default())
+                        .expect("valid JSON request body");
+                let using = json
+                    .get("using")
+                    .and_then(serde_json::Value::as_array)
+                    .expect("using array in request");
+                let has_availability = using
+                    .iter()
+                    .any(|u| u.as_str() == Some(session::CAPABILITY_PRINCIPALS_AVAILABILITY));
+                assert!(
+                    has_availability,
+                    "Principal/getAvailability must declare urn:ietf:params:jmap:principals:availability in using"
+                );
+                r#"{"methodResponses":[["Principal/getAvailability",{"list":[]},"c0"]],"sessionState":"0"}"#
+                    .as_bytes()
+                    .to_vec()
+            }
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn get_availability_declares_principals_availability_capability_in_using() {
+    let client = Client::builder()
+        .transport(MockAvailabilityTransport)
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("user1");
+    let principal_id = Id::new("p1");
+    let periods = client
+        .get_availability(
+            &account_id,
+            &principal_id,
+            "2026-10-28T00:00:00Z",
+            "2026-10-29T00:00:00Z",
+            false,
+        )
+        .expect("get_availability succeeds");
+
+    assert!(periods.is_empty());
+}

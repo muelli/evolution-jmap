@@ -11,7 +11,10 @@ use jmap_proto::principals::{
     BusyPeriod, GetAvailabilityRequest, GetAvailabilityResponse, Principal, PrincipalQueryFilter,
     ShareNotification, ShareNotificationQueryFilter,
 };
-use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CORE, CAPABILITY_PRINCIPALS};
+use jmap_proto::session::{
+    CAPABILITY_CALENDARS, CAPABILITY_CORE, CAPABILITY_PRINCIPALS,
+    CAPABILITY_PRINCIPALS_AVAILABILITY,
+};
 use jmap_proto::state::UtcDate;
 
 use crate::client::Client;
@@ -19,8 +22,13 @@ use crate::error::Error;
 
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS];
 
-/// Availability queries require both principals and calendars capabilities.
-const AVAILABILITY_USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS, CAPABILITY_CALENDARS];
+/// Availability queries require principals, calendars, and principals availability capabilities.
+const AVAILABILITY_USING: &[&str] = &[
+    CAPABILITY_CORE,
+    CAPABILITY_PRINCIPALS,
+    CAPABILITY_CALENDARS,
+    CAPABILITY_PRINCIPALS_AVAILABILITY,
+];
 
 impl Client {
     /// Fetch all principals (`Principal/get` with `ids: null`).
