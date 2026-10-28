@@ -940,6 +940,12 @@ mod tests {
             "http://example.com:/es",
             "http://example.com:http/es",
             "http://example.com:65536/es",
+            "http://example.com:+80/es",
+            "http://example.com:-80/es",
+            "http://example.com: 80/es",
+            "http://example.com:80 /es",
+            "http://[::1]:/es",
+            "http://[::1]:+80/es",
         ] {
             assert!(parse_url(url).is_none(), "{url:?} must be refused");
         }
@@ -1007,6 +1013,9 @@ mod tests {
         assert!(safe_header_value("Bearer abc.def-ghi_jkl~"));
         assert!(safe_header_value("Basic dXNlcjpwYXNz"));
         assert!(safe_header_value("token with a space and a \ttab"));
+        assert!(safe_header_value(
+            "token with latin \u{e9} and emoji \u{1f600}"
+        ));
         for value in [
             "Bearer t\r\nSET key value",
             "Bearer t\nX-Evil: 1",
@@ -1022,7 +1031,18 @@ mod tests {
     fn safe_header_name_refuses_anything_that_is_not_a_token() {
         assert!(safe_header_name("Authorization"));
         assert!(safe_header_name("Last-Event-ID"));
-        for name in ["Auth orization", "Auth:orization", "Auth\r\nX-Evil", ""] {
+        assert!(safe_header_name("!#$%&'*+-.^_`|~"));
+        for name in [
+            "Auth orization",
+            "Auth:orization",
+            "Auth\r\nX-Evil",
+            "",
+            "Header@Name",
+            "Header[Name]",
+            "Header/Name",
+            "Header=Name",
+            "Header?Name",
+        ] {
             assert!(!safe_header_name(name), "{name:?} must be refused");
         }
     }
@@ -1614,5 +1634,41 @@ mod tests {
             .recv_timeout(Duration::from_secs(10))
             .expect("the reader drops the endless line and reconnects");
         assert_eq!(received, changed("a1", "Mailbox", "1"));
+    }
+
+    #[test]
+    fn stream_events_drops_event_id_with_control_character_and_accepts_empty_id() {
+        let raw = b"id: 100\nevent: other\ndata: {}\n\n\
+                    id: bad\0id\nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\n\n\
+                    id:   \nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"2\"}}}\n\n\
+                    id\nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"3\"}}}\n\n";
+        let mut reader = BufReader::new(Cursor::new(&raw[..]));
+        let (sender, receiver) = mpsc::channel();
+        let last_id_slot = Arc::new(Mutex::new(None));
+        stream_events(&mut reader, &CancelFlag::new(), &sender, &last_id_slot)
+            .expect("stream events parses without error");
+
+        let first = receiver.recv().expect("first event");
+        assert_eq!(first, EventSourceItem::State(changed("a1", "Mailbox", "1")));
+        let second = receiver.recv().expect("second event");
+        assert_eq!(
+            second,
+            EventSourceItem::State(changed("a1", "Mailbox", "2"))
+        );
+        let third = receiver.recv().expect("third event");
+        assert_eq!(third, EventSourceItem::State(changed("a1", "Mailbox", "3")));
+        assert_eq!(*last_id_slot.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn read_bounded_line_handles_eof_and_lines_without_newline() {
+        let mut empty = Cursor::new(b"");
+        let mut line = String::new();
+        assert_eq!(read_bounded_line(&mut empty, &mut line).unwrap(), 0);
+        assert!(line.is_empty());
+
+        let mut no_newline = Cursor::new(b"hello world");
+        assert_eq!(read_bounded_line(&mut no_newline, &mut line).unwrap(), 11);
+        assert_eq!(line, "hello world");
     }
 }
