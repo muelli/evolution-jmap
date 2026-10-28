@@ -249,6 +249,8 @@ pub(crate) fn resolve_redirect(current_url: &str, location: &str) -> Result<Stri
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use proptest::prelude::*;
 
     use super::{
@@ -537,6 +539,44 @@ mod tests {
         );
         assert_eq!(origin("http://[::1]:8080/jmap"), "http://[::1]:8080");
         assert_eq!(origin("https://[::1]:443/jmap"), "https://[::1]");
+    }
+
+    #[test]
+    fn origin_lowercases_scheme_alone_and_host_alone() {
+        assert_eq!(origin("HTTPS://mail.example/jmap"), "https://mail.example");
+        assert_eq!(origin("HTTP://mail.example/jmap"), "http://mail.example");
+        assert_eq!(origin("https://Mail.Example/jmap"), "https://mail.example");
+        assert_eq!(origin("http://Mail.Example/jmap"), "http://mail.example");
+    }
+
+    #[test]
+    fn origin_borrows_when_unchanged_and_allocates_when_modified() {
+        assert!(matches!(
+            origin("https://mail.example/jmap"),
+            Cow::Borrowed("https://mail.example")
+        ));
+        assert!(matches!(
+            origin("http://mail.example/jmap"),
+            Cow::Borrowed("http://mail.example")
+        ));
+        assert!(matches!(
+            origin("https://mail.example:8080/jmap"),
+            Cow::Borrowed("https://mail.example:8080")
+        ));
+        assert!(matches!(origin("HTTPS://mail.example/jmap"), Cow::Owned(_)));
+        assert!(matches!(origin("https://Mail.Example/jmap"), Cow::Owned(_)));
+        assert!(matches!(
+            origin("https://mail.example:443/jmap"),
+            Cow::Owned(_)
+        ));
+        assert!(matches!(
+            origin("https://mail.example./jmap"),
+            Cow::Owned(_)
+        ));
+        assert!(matches!(
+            origin("https://user:pass@mail.example/jmap"),
+            Cow::Owned(_)
+        ));
     }
 
     #[test]

@@ -52,8 +52,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 ## `src/url.rs`
 
-- `crates/jmap-client/src/url.rs:98:51: replace + with - in origin_of` and `crates/jmap-client/src/url.rs:98:51: replace + with * in origin_of`: in `origin_of`, when `host_port.starts_with('[')`, `host` is extracted as the bracketed IPv6 literal `&host_port[..=end]`. Bracketed IPv6 hosts cannot end with a trailing dot per RFC 3986, so `normalized_host == host` is guaranteed to be true. Under `if normalized_host == host`, `origin_of` returns `Cow::Borrowed(&url[..authority_end])` directly without referencing `port`. Replacing `+` with `-` or `*` in the IPv6 port slice calculation produces no observable difference.
-- 42 of 42 viable mutants caught by test suites, 2 genuinely equivalent.
+- Zero missed mutants (77 of 77 mutants caught by test suites: 72 caught directly, 5 caught via connection timeout).
 
 ## `src/transport.rs`
 
