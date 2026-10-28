@@ -968,6 +968,61 @@ mod tests {
         }
     }
 
+    /// A hostile server picks the bearer token and the `eventSourceUrl`. With
+    /// the loopback exception, a token with CR LF would add request lines for
+    /// a service on this machine. The subscription must never dial.
+    #[test]
+    fn a_header_value_with_an_injected_request_line_is_never_dialed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let url = format!(
+            "http://{}/eventsource",
+            listener.local_addr().expect("addr")
+        );
+        let _subscription = EventSourceSubscription::start(
+            url,
+            SharedHeaders::new(vec![(
+                "Authorization".into(),
+                "Bearer t\r\nSET key value\r\n".into(),
+            )]),
+            CancelFlag::default(),
+        );
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok(_) => panic!("the subscription dialed with a CR LF header value"),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        }
+    }
+
+    /// The `id` of a frame goes back to the server in `Last-Event-ID`. A line
+    /// ends at LF, so a value can still hold a CR. Such an id is dropped, and
+    /// the stream continues.
+    #[test]
+    fn stream_events_ignores_an_event_id_with_a_carriage_return() {
+        let raw = b"id: 42\rX-Evil: 1\nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\n\n";
+        let mut reader = BufReader::new(Cursor::new(&raw[..]));
+        let (sender, receiver) = mpsc::channel();
+        let last_id_slot = Arc::new(Mutex::new(None));
+        stream_events(&mut reader, &CancelFlag::new(), &sender, &last_id_slot)
+            .expect("no I/O error");
+
+        let received = receiver.try_recv().expect("the state event still arrives");
+        assert_eq!(
+            received,
+            EventSourceItem::State(changed("a1", "Mailbox", "1"))
+        );
+        assert_eq!(
+            *last_id_slot.lock().unwrap(),
+            None,
+            "an id with a control character must not be remembered"
+        );
+    }
+
     #[test]
     fn expand_url_substitutes_the_three_required_template_variables() {
         let expanded = expand_url(
