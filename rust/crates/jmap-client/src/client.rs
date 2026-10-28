@@ -1211,4 +1211,269 @@ mod tests {
         Client::keep_requested(&mut list, &requested, Option::as_ref);
         assert_eq!(list, [Some(JmapId::new("a")), None, Some(JmapId::new("b"))]);
     }
+
+    struct TestResolver;
+    impl crate::resolver::Resolver for TestResolver {
+        fn lookup_srv(&self, _domain: &str) -> Option<crate::resolver::SrvTarget> {
+            Some(crate::resolver::SrvTarget {
+                host: "srv.test.internal".to_string(),
+                port: 9999,
+            })
+        }
+    }
+
+    struct TestTransport;
+    impl crate::transport::Transport for TestTransport {
+        fn execute(
+            &self,
+            _request: crate::transport::HttpRequest<'_>,
+        ) -> Result<crate::transport::HttpResponse, crate::transport::TransportError> {
+            Err(crate::transport::TransportError::Failed("test".into()))
+        }
+    }
+
+    #[test]
+    fn client_builder_methods_and_debug_representation() {
+        let flag = CancelFlag::new();
+        let builder = ClientBuilder::default()
+            .timeout(Duration::from_secs(42))
+            .connect_timeout(Duration::from_secs(11))
+            .read_timeout(Duration::from_secs(22))
+            .transport(TestTransport)
+            .cancel_flag(flag.clone())
+            .rebase_urls_to_origin(true)
+            .resolver(TestResolver)
+            .max_rate_limit_retries(7)
+            .max_retry_after(Duration::from_secs(55))
+            .id_budget(IdBudget::new(1234, 5678));
+
+        assert_eq!(builder.timeout, Duration::from_secs(42));
+        assert_eq!(builder.connect_timeout, Some(Duration::from_secs(11)));
+        assert_eq!(builder.read_timeout, Some(Duration::from_secs(22)));
+        assert!(builder.transport.is_some());
+        assert!(builder.cancel.is_some());
+        assert!(builder.rebase_urls_to_origin);
+        assert_eq!(
+            builder.resolver.lookup_srv("anything"),
+            Some(crate::resolver::SrvTarget {
+                host: "srv.test.internal".to_string(),
+                port: 9999,
+            })
+        );
+        assert_eq!(builder.max_rate_limit_retries, 7);
+        assert_eq!(builder.max_retry_after, Duration::from_secs(55));
+        assert_eq!(builder.id_budget, IdBudget::new(1234, 5678));
+
+        let debug = format!("{builder:?}");
+        assert!(debug.contains("timeout: 42s"));
+        assert!(debug.contains("connect_timeout: Some(11s)"));
+        assert!(debug.contains("read_timeout: Some(22s)"));
+        assert!(debug.contains("rebase_urls_to_origin: true"));
+        assert!(debug.contains("max_rate_limit_retries: 7"));
+        assert!(debug.contains("max_retry_after: 55s"));
+    }
+
+    #[test]
+    fn client_id_budget_accessor_returns_configured_budget() {
+        let server = jmap_mock::MockServer::builder().start();
+        let client = Client::builder()
+            .id_budget(IdBudget::new(999, 8888))
+            .connect(server.origin(), Credentials::none())
+            .expect("mock server connection succeeds");
+        assert_eq!(client.id_budget(), IdBudget::new(999, 8888));
+    }
+
+    #[test]
+    fn idempotent_method_and_request_classification() {
+        assert!(Client::is_method_idempotent("get"));
+        assert!(Client::is_method_idempotent("query"));
+        assert!(Client::is_method_idempotent("changes"));
+        assert!(Client::is_method_idempotent("queryChanges"));
+        assert!(Client::is_method_idempotent("echo"));
+        assert!(Client::is_method_idempotent("getAvailability"));
+        assert!(Client::is_method_idempotent("Email/get"));
+        assert!(Client::is_method_idempotent("CalendarEvent/query"));
+        assert!(Client::is_method_idempotent("ContactCard/changes"));
+
+        assert!(!Client::is_method_idempotent("set"));
+        assert!(!Client::is_method_idempotent("copy"));
+        assert!(!Client::is_method_idempotent("import"));
+        assert!(!Client::is_method_idempotent("Email/set"));
+        assert!(!Client::is_method_idempotent("CalendarEvent/copy"));
+        assert!(!Client::is_method_idempotent("Email/import"));
+
+        let empty_request = Request::new([session::CAPABILITY_CORE]);
+        assert!(!Client::is_request_idempotent(&empty_request));
+
+        let idempotent_request = Request::new([session::CAPABILITY_CORE])
+            .call("Core/echo", &Value::Null, "c0")
+            .unwrap();
+        assert!(Client::is_request_idempotent(&idempotent_request));
+
+        let mixed_request = Request::new([session::CAPABILITY_CORE])
+            .call("Core/echo", &Value::Null, "c0")
+            .unwrap()
+            .call("Email/set", &Value::Null, "c1")
+            .unwrap();
+        assert!(!Client::is_request_idempotent(&mixed_request));
+    }
+
+    #[test]
+    fn compute_backoff_exponential_factor_and_cap() {
+        let server = jmap_mock::MockServer::builder().start();
+        let client = Client::builder()
+            .max_retry_after(Duration::from_secs(10))
+            .connect(server.origin(), Credentials::none())
+            .expect("mock connection succeeds");
+
+        assert_eq!(
+            client.compute_backoff(Some(Duration::from_secs(4)), 1),
+            Duration::from_secs(4)
+        );
+        assert_eq!(
+            client.compute_backoff(Some(Duration::from_secs(25)), 1),
+            Duration::from_secs(10)
+        );
+
+        assert_eq!(client.compute_backoff(None, 1), Duration::from_millis(500));
+        assert_eq!(client.compute_backoff(None, 2), Duration::from_millis(1000));
+        assert_eq!(client.compute_backoff(None, 3), Duration::from_millis(2000));
+        assert_eq!(client.compute_backoff(None, 4), Duration::from_millis(4000));
+        assert_eq!(client.compute_backoff(None, 5), Duration::from_millis(8000));
+        assert_eq!(client.compute_backoff(None, 6), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn sleep_with_cancel_zero_duration_and_cancellation() {
+        let server = jmap_mock::MockServer::builder().start();
+        let client_flag = CancelFlag::new();
+        let client = Client::builder()
+            .cancel_flag(client_flag.clone())
+            .connect(server.origin(), Credentials::none())
+            .expect("mock connection succeeds");
+
+        assert!(client.sleep_with_cancel(Duration::ZERO).is_ok());
+
+        let t0 = std::time::Instant::now();
+        assert!(client.sleep_with_cancel(Duration::from_millis(30)).is_ok());
+        assert!(t0.elapsed() >= Duration::from_millis(25));
+
+        client_flag.cancel();
+        let err = client.sleep_with_cancel(Duration::from_millis(50));
+        assert!(matches!(err, Err(Error::Cancelled)));
+
+        let cancel_mid = CancelFlag::new();
+        let cancel_clone = cancel_mid.clone();
+        let client_mid = Client::builder()
+            .cancel_flag(cancel_mid)
+            .connect(server.origin(), Credentials::none())
+            .expect("mock connection succeeds");
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(5));
+            cancel_clone.cancel();
+        });
+        let err = client_mid.sleep_with_cancel(Duration::from_secs(5));
+        assert!(matches!(err, Err(Error::Cancelled)));
+    }
+
+    #[test]
+    fn extract_retry_after_from_problem_method_and_set_error() {
+        use jmap_proto::error::{MethodError, RequestError, SetError};
+
+        let mut prob = RequestError::new("urn:ietf:params:jmap:error:limit");
+        prob.extra
+            .insert("retryAfter".into(), serde_json::json!(18));
+        assert_eq!(
+            extract_problem_retry_after(&prob),
+            Some(Duration::from_secs(18))
+        );
+
+        let mut prob_str = RequestError::new("urn:ietf:params:jmap:error:limit");
+        prob_str
+            .extra
+            .insert("retryAfter".into(), serde_json::json!("24"));
+        assert_eq!(
+            extract_problem_retry_after(&prob_str),
+            Some(Duration::from_secs(24))
+        );
+
+        let mut prob_snake = RequestError::new("urn:ietf:params:jmap:error:limit");
+        prob_snake
+            .extra
+            .insert("retry_after".into(), serde_json::json!(32));
+        assert_eq!(
+            extract_problem_retry_after(&prob_snake),
+            Some(Duration::from_secs(32))
+        );
+
+        let empty_prob = RequestError::new("urn:ietf:params:jmap:error:limit");
+        assert_eq!(extract_problem_retry_after(&empty_prob), None);
+
+        let mut meth = MethodError::new("limit");
+        meth.extra
+            .insert("retryAfter".into(), serde_json::json!(42));
+        assert_eq!(
+            extract_method_retry_after(&meth),
+            Some(Duration::from_secs(42))
+        );
+
+        let mut meth_str = MethodError::new("limit");
+        meth_str
+            .extra
+            .insert("retryAfter".into(), serde_json::json!("55"));
+        assert_eq!(
+            extract_method_retry_after(&meth_str),
+            Some(Duration::from_secs(55))
+        );
+
+        let empty_meth = MethodError::new("limit");
+        assert_eq!(extract_method_retry_after(&empty_meth), None);
+
+        let mut set_err = SetError::new("limit");
+        set_err
+            .extra
+            .insert("retryAfter".into(), serde_json::json!(64));
+        assert_eq!(
+            extract_set_error_retry_after(&set_err),
+            Some(Duration::from_secs(64))
+        );
+
+        let mut set_err_snake = SetError::new("limit");
+        set_err_snake
+            .extra
+            .insert("retry_after".into(), serde_json::json!("77"));
+        assert_eq!(
+            extract_set_error_retry_after(&set_err_snake),
+            Some(Duration::from_secs(77))
+        );
+
+        let empty_set = SetError::new("limit");
+        assert_eq!(extract_set_error_retry_after(&empty_set), None);
+    }
+
+    #[test]
+    fn credentials_constructors_and_debug_representation() {
+        let none = Credentials::none();
+        assert_eq!(none.authorization_header(), None);
+        assert_eq!(format!("{none:?}"), "None");
+
+        let basic = Credentials::basic("admin", "secret_pass");
+        assert_eq!(
+            basic.authorization_header(),
+            Some("Basic YWRtaW46c2VjcmV0X3Bhc3M=".to_string())
+        );
+        let basic_debug = format!("{basic:?}");
+        assert!(basic_debug.contains("admin"));
+        assert!(!basic_debug.contains("secret_pass"));
+        assert!(basic_debug.contains("<redacted>"));
+
+        let bearer = Credentials::bearer("token_xyz");
+        assert_eq!(
+            bearer.authorization_header(),
+            Some("Bearer token_xyz".to_string())
+        );
+        let bearer_debug = format!("{bearer:?}");
+        assert!(!bearer_debug.contains("token_xyz"));
+        assert!(bearer_debug.contains("<redacted>"));
+    }
 }
