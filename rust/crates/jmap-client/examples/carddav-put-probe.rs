@@ -103,6 +103,13 @@ pub fn parse_property_line(line: &str) -> Option<VCardProperty> {
             let mut val_items: Vec<String> = split_outside_quotes(raw_val, ',')
                 .into_iter()
                 .map(strip_quotes)
+                .map(|v| {
+                    if p_name == "ENCODING" {
+                        v.to_ascii_lowercase()
+                    } else {
+                        v
+                    }
+                })
                 .collect();
             val_items.sort();
             params.insert(p_name, val_items);
@@ -117,6 +124,14 @@ pub fn parse_property_line(line: &str) -> Option<VCardProperty> {
             .collect();
         cats.sort();
         cats.join(",")
+    } else if (name == "BDAY" || name == "ANNIVERSARY" || name.ends_with("-ANNIVERSARY"))
+        && value.len() == 8
+        && value.chars().all(|c| c.is_ascii_digit())
+    {
+        // Canonicalize basic ISO 8601 date YYYYMMDD to extended YYYY-MM-DD
+        format!("{}-{}-{}", &value[0..4], &value[4..6], &value[6..8])
+    } else if value.contains(r"\r\n") {
+        value.replace(r"\r\n", r"\n")
     } else {
         value
     };
@@ -632,7 +647,7 @@ pub fn probe_fixtures(
         };
 
         // 1. Inbound parse with jmap-vcard
-        let card = match jmap_vcard::vcard_to_card(&vcf_text) {
+        let mut card = match jmap_vcard::vcard_to_card(&vcf_text) {
             Ok(c) => {
                 println!("PASS jmap-vcard parsed inbound fixture");
                 c
@@ -643,6 +658,13 @@ pub fn probe_fixtures(
                 continue;
             }
         };
+
+        // RFC 6352 Section 6.3.2.1 mandates that every address book object on a
+        // CardDAV server MUST contain a UID property. If an imported fixture
+        // lacks a UID, assign a deterministic synthetic UID for CardDAV PUT.
+        if card.id.is_none() && card.uid.is_none() {
+            card.id = Some(format!("urn:uuid:probe-{stem}").into());
+        }
 
         // 2. Outbound serialize with jmap-vcard
         let local_sent_vcf = jmap_vcard::card_to_vcard(&card);
@@ -922,6 +944,53 @@ mod tests {
         let prop = parse_property_line(line).expect("parse categories");
         assert_eq!(prop.name, "CATEGORIES");
         assert_eq!(prop.value, "Apple,Mango,Zebra");
+    }
+
+    #[test]
+    fn test_parse_property_line_bday_date_normalization() {
+        let line = "BDAY:19820715";
+        let prop = parse_property_line(line).expect("parse bday");
+        assert_eq!(prop.name, "BDAY");
+        assert_eq!(prop.value, "1982-07-15");
+    }
+
+    #[test]
+    fn test_parse_property_line_anniversary_date_normalization() {
+        let line = "ANNIVERSARY:20100918";
+        let prop = parse_property_line(line).expect("parse anniversary");
+        assert_eq!(prop.name, "ANNIVERSARY");
+        assert_eq!(prop.value, "2010-09-18");
+
+        let x_line = "X-EVOLUTION-ANNIVERSARY:20100918";
+        let x_prop = parse_property_line(x_line).expect("parse x-evolution-anniversary");
+        assert_eq!(x_prop.name, "X-EVOLUTION-ANNIVERSARY");
+        assert_eq!(x_prop.value, "2010-09-18");
+    }
+
+    #[test]
+    fn test_parse_property_line_encoding_case_normalization() {
+        let line = "PHOTO;ENCODING=B;TYPE=PNG:abc";
+        let prop = parse_property_line(line).expect("parse photo");
+        assert_eq!(prop.name, "PHOTO");
+        assert_eq!(prop.params.get("ENCODING").unwrap(), &vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_property_line_escaped_crlf_normalization() {
+        let line = r"NOTE:Line 1\r\nLine 2";
+        let prop = parse_property_line(line).expect("parse note");
+        assert_eq!(prop.name, "NOTE");
+        assert_eq!(prop.value, r"Line 1\nLine 2");
+    }
+
+    #[test]
+    fn test_compare_vcard_normalizes_bday_and_encoding() {
+        let server = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:123\r\nBDAY:19740428\r\nPHOTO;ENCODING=B;TYPE=PNG:abc\r\nEND:VCARD";
+        let local = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:123\r\nBDAY:1974-04-28\r\nPHOTO;ENCODING=b;TYPE=PNG:abc\r\nEND:VCARD";
+        let diff = compare_vcard(server, local);
+        assert!(diff.matches.contains(&"BDAY".to_string()));
+        assert!(diff.matches.contains(&"PHOTO".to_string()));
+        assert!(diff.differences.is_empty());
     }
 
     #[test]

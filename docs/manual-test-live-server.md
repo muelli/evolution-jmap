@@ -204,6 +204,22 @@ $ cargo run -p evolution-jmap-client --example caldav-put-probe -- \
     http://127.0.0.1:8080 writer password
 ```
 
+### The CardDAV outbound differential probe
+
+`carddav_put_differential_oracle_fixtures_match_against_the_real_server` in
+`jmap-client/tests/live_server.rs` runs `carddav-put-probe` across all 10
+vCard fixtures in `rust/crates/jmap-vcard/tests/fixtures`. Each fixture is
+parsed into a JSContact `Card`, serialized to outbound vCard 3.0, PUT to the
+CardDAV collection on the real server, retrieved with GET, and compared field by
+field against what was sent.
+
+You can also run the probe directly against Cyrus or Stalwart:
+
+```console
+$ cargo run -p evolution-jmap-client --example carddav-put-probe -- \
+    http://127.0.0.1:8080 writer password
+```
+
 ## What "it worked" means
 
 All tests pass, or they report that they were skipped because an optional
