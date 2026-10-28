@@ -1210,6 +1210,31 @@ mod tests {
         ];
         Client::keep_requested(&mut list, &requested, Option::as_ref);
         assert_eq!(list, [Some(JmapId::new("a")), None, Some(JmapId::new("b"))]);
+
+        #[derive(Debug, PartialEq, Eq)]
+        struct Item {
+            id: Option<JmapId>,
+            tag: u32,
+        }
+        let mut items = vec![
+            Item { id: None, tag: 1 },
+            Item { id: None, tag: 2 },
+            Item {
+                id: Some(JmapId::new("a")),
+                tag: 3,
+            },
+        ];
+        Client::keep_requested(&mut items, &[JmapId::new("a")], |i| i.id.as_ref());
+        assert_eq!(
+            items,
+            [
+                Item { id: None, tag: 1 },
+                Item {
+                    id: Some(JmapId::new("a")),
+                    tag: 3,
+                }
+            ]
+        );
     }
 
     struct TestResolver;
@@ -1475,5 +1500,428 @@ mod tests {
         let bearer_debug = format!("{bearer:?}");
         assert!(!bearer_debug.contains("token_xyz"));
         assert!(bearer_debug.contains("<redacted>"));
+    }
+
+    struct MockFnTransport<F>(F);
+    impl<F> crate::transport::Transport for MockFnTransport<F>
+    where
+        F: Fn(
+                crate::transport::HttpRequest<'_>,
+            )
+                -> Result<crate::transport::HttpResponse, crate::transport::TransportError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        fn execute(
+            &self,
+            request: crate::transport::HttpRequest<'_>,
+        ) -> Result<crate::transport::HttpResponse, crate::transport::TransportError> {
+            (self.0)(request)
+        }
+    }
+
+    fn make_test_session_json(max_objects: Option<u64>, max_size: Option<u64>) -> Vec<u8> {
+        let mut core = serde_json::json!({
+            "maxSizeUpload": 50000000,
+            "maxConcurrentUpload": 4,
+            "maxConcurrentRequests": 4,
+            "maxObjectsInSet": 500,
+            "collationAlgorithms": ["i;ascii-casemap", "i;octet"]
+        });
+        if let Some(objs) = max_objects {
+            core.as_object_mut()
+                .unwrap()
+                .insert("maxObjectsInGet".into(), serde_json::json!(objs));
+        }
+        if let Some(size) = max_size {
+            core.as_object_mut()
+                .unwrap()
+                .insert("maxSizeRequest".into(), serde_json::json!(size));
+        }
+        serde_json::to_vec(&serde_json::json!({
+            "username": "user",
+            "apiUrl": "http://127.0.0.1:8080/api",
+            "downloadUrl": "http://127.0.0.1:8080/download",
+            "uploadUrl": "http://127.0.0.1:8080/upload",
+            "eventSourceUrl": "http://127.0.0.1:8080/events",
+            "state": "0",
+            "accounts": {
+                "acc1": {
+                    "name": "acc1",
+                    "isPersonal": true,
+                    "isReadOnly": false,
+                    "accountCapabilities": {}
+                }
+            },
+            "primaryAccounts": {
+                "urn:ietf:params:jmap:core": "acc1"
+            },
+            "capabilities": {
+                "urn:ietf:params:jmap:core": core
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn ids_that_fit_boundaries_and_error_reporting() {
+        use jmap_proto::Id as JmapId;
+
+        let server = jmap_mock::MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none())
+            .expect("mock connection succeeds");
+
+        let empty_req = serde_json::json!({ "accountId": "acc1" });
+        let ids = [
+            JmapId::new("id_one"),
+            JmapId::new("id_two"),
+            JmapId::new("id_three"),
+        ];
+
+        let empty = Request::new([session::CAPABILITY_CORE])
+            .call("Foo/get", &empty_req, "c0")
+            .unwrap();
+        let base_size = serde_json::to_vec(&empty).unwrap().len() as u64;
+
+        let err = client
+            .ids_that_fit(
+                &[session::CAPABILITY_CORE],
+                "Foo/get",
+                &empty_req,
+                &ids,
+                "c0",
+                base_size - 1,
+            )
+            .unwrap_err();
+        match err {
+            Error::RequestTooLarge { size, limit } => {
+                assert_eq!(size, base_size);
+                assert_eq!(limit, base_size - 1);
+            }
+            other => panic!("expected RequestTooLarge, got {other:?}"),
+        }
+
+        let fit_empty = client
+            .ids_that_fit(
+                &[session::CAPABILITY_CORE],
+                "Foo/get",
+                &empty_req,
+                &[],
+                "c0",
+                base_size,
+            )
+            .unwrap();
+        assert_eq!(fit_empty, 0);
+
+        let cost0 = serde_json::to_string(&ids[0]).unwrap().len() as u64;
+        let cost1 = serde_json::to_string(&ids[1]).unwrap().len() as u64 + 1;
+        let cost2 = serde_json::to_string(&ids[2]).unwrap().len() as u64 + 1;
+
+        let err0 = client
+            .ids_that_fit(
+                &[session::CAPABILITY_CORE],
+                "Foo/get",
+                &empty_req,
+                &ids,
+                "c0",
+                base_size + cost0 - 1,
+            )
+            .unwrap_err();
+        match err0 {
+            Error::RequestTooLarge { size, limit } => {
+                assert_eq!(size, base_size + cost0);
+                assert_eq!(limit, base_size + cost0 - 1);
+            }
+            other => panic!("expected RequestTooLarge, got {other:?}"),
+        }
+
+        let fit1 = client
+            .ids_that_fit(
+                &[session::CAPABILITY_CORE],
+                "Foo/get",
+                &empty_req,
+                &ids,
+                "c0",
+                base_size + cost0,
+            )
+            .unwrap();
+        assert_eq!(fit1, 1);
+
+        let fit1_again = client
+            .ids_that_fit(
+                &[session::CAPABILITY_CORE],
+                "Foo/get",
+                &empty_req,
+                &ids,
+                "c0",
+                base_size + cost0 + cost1 - 1,
+            )
+            .unwrap();
+        assert_eq!(fit1_again, 1);
+
+        let fit2 = client
+            .ids_that_fit(
+                &[session::CAPABILITY_CORE],
+                "Foo/get",
+                &empty_req,
+                &ids,
+                "c0",
+                base_size + cost0 + cost1,
+            )
+            .unwrap();
+        assert_eq!(fit2, 2);
+
+        let fit3 = client
+            .ids_that_fit(
+                &[session::CAPABILITY_CORE],
+                "Foo/get",
+                &empty_req,
+                &ids,
+                "c0",
+                base_size + cost0 + cost1 + cost2,
+            )
+            .unwrap();
+        assert_eq!(fit3, 3);
+    }
+
+    #[test]
+    fn get_request_builds_request_with_account_id_ids_and_properties() {
+        use jmap_proto::Id as JmapId;
+        let account_id = JmapId::new("acc_test");
+        let ids = [JmapId::new("id1"), JmapId::new("id2")];
+        let properties = ["propA", "propB"];
+
+        let req = Client::get_request(&account_id, &ids, Some(&properties));
+        assert_eq!(req.account_id, account_id);
+        assert_eq!(req.ids, Some(vec![JmapId::new("id1"), JmapId::new("id2")]));
+        assert_eq!(
+            req.properties,
+            Some(vec!["propA".to_string(), "propB".to_string()])
+        );
+
+        let req_no_props = Client::get_request(&account_id, &ids, None);
+        assert_eq!(req_no_props.properties, None);
+    }
+
+    #[test]
+    fn get_chunked_combines_chunks_updates_state_and_filters_unrequested() {
+        use jmap_proto::Id as JmapId;
+        use jmap_proto::State as JmapState;
+        use std::sync::atomic::AtomicUsize;
+
+        #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+        struct TestItem {
+            id: Option<JmapId>,
+            name: String,
+        }
+
+        let requests_count = Arc::new(AtomicUsize::new(0));
+        let requests_count_clone = requests_count.clone();
+
+        let transport = MockFnTransport(move |req: crate::transport::HttpRequest<'_>| {
+            if req.url.ends_with("/.well-known/jmap") {
+                return Ok(crate::transport::HttpResponse {
+                    status: 200,
+                    content_type: Some("application/json".into()),
+                    body: make_test_session_json(Some(2), None),
+                    final_url: req.url.to_string(),
+                });
+            }
+
+            let call_idx = requests_count_clone.fetch_add(1, Ordering::SeqCst);
+            let parsed_req: Request =
+                serde_json::from_slice(req.body.expect("request body present")).unwrap();
+            let inv = &parsed_req.method_calls[0];
+            let call_id = &inv.call_id;
+            let get_args: GetRequest = serde_json::from_value(inv.arguments.clone()).unwrap();
+
+            let (list, not_found, state) = match call_idx {
+                0 => {
+                    assert_eq!(
+                        get_args.ids,
+                        Some(vec![JmapId::new("id1"), JmapId::new("id2")])
+                    );
+                    (
+                        vec![
+                            TestItem {
+                                id: Some(JmapId::new("id1")),
+                                name: "first".into(),
+                            },
+                            TestItem {
+                                id: Some(JmapId::new("unrequested_extra")),
+                                name: "intruder".into(),
+                            },
+                        ],
+                        vec![JmapId::new("id2"), JmapId::new("unrequested_nf")],
+                        "state_chunk1",
+                    )
+                }
+                1 => {
+                    assert_eq!(get_args.ids, Some(vec![JmapId::new("id3")]));
+                    (
+                        vec![TestItem {
+                            id: Some(JmapId::new("id3")),
+                            name: "third".into(),
+                        }],
+                        vec![],
+                        "state_chunk2",
+                    )
+                }
+                _ => panic!("unexpected call index {call_idx}"),
+            };
+
+            let response_body = serde_json::json!({
+                "sessionState": "s0",
+                "methodResponses": [
+                    [
+                        "TestItem/get",
+                        {
+                            "accountId": "acc1",
+                            "state": state,
+                            "list": list,
+                            "notFound": not_found
+                        },
+                        call_id
+                    ]
+                ]
+            });
+
+            Ok(crate::transport::HttpResponse {
+                status: 200,
+                content_type: Some("application/json".into()),
+                body: serde_json::to_vec(&response_body).unwrap(),
+                final_url: req.url.to_string(),
+            })
+        });
+
+        let client = Client::builder()
+            .transport(transport)
+            .connect("http://127.0.0.1:8080", Credentials::none())
+            .unwrap();
+
+        let ids = [JmapId::new("id1"), JmapId::new("id2"), JmapId::new("id3")];
+        let resp = client
+            .get_chunked(
+                &[session::CAPABILITY_CORE],
+                "TestItem/get",
+                &JmapId::new("acc1"),
+                &ids,
+                Some(&["name"]),
+                |item: &TestItem| item.id.as_ref(),
+            )
+            .unwrap();
+
+        assert_eq!(requests_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            resp.list,
+            [
+                TestItem {
+                    id: Some(JmapId::new("id1")),
+                    name: "first".into(),
+                },
+                TestItem {
+                    id: Some(JmapId::new("id3")),
+                    name: "third".into(),
+                }
+            ]
+        );
+        assert_eq!(resp.not_found, [JmapId::new("id2")]);
+        assert_eq!(resp.state, JmapState::new("state_chunk2"));
+        assert_eq!(resp.account_id, JmapId::new("acc1"));
+    }
+
+    #[test]
+    fn get_chunked_ignores_zero_max_objects_in_get_and_handles_empty_ids() {
+        use jmap_proto::Id as JmapId;
+        use jmap_proto::State as JmapState;
+        use std::sync::atomic::AtomicUsize;
+
+        #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+        struct TestItem {
+            id: Option<JmapId>,
+            name: String,
+        }
+
+        let requests_count = Arc::new(AtomicUsize::new(0));
+        let requests_count_clone = requests_count.clone();
+
+        let transport = MockFnTransport(move |req: crate::transport::HttpRequest<'_>| {
+            if req.url.ends_with("/.well-known/jmap") {
+                return Ok(crate::transport::HttpResponse {
+                    status: 200,
+                    content_type: Some("application/json".into()),
+                    body: make_test_session_json(Some(0), None),
+                    final_url: req.url.to_string(),
+                });
+            }
+
+            requests_count_clone.fetch_add(1, Ordering::SeqCst);
+            let parsed_req: Request =
+                serde_json::from_slice(req.body.expect("request body present")).unwrap();
+            let inv = &parsed_req.method_calls[0];
+            let call_id = &inv.call_id;
+            let get_args: GetRequest = serde_json::from_value(inv.arguments.clone()).unwrap();
+
+            let response_body = serde_json::json!({
+                "sessionState": "s0",
+                "methodResponses": [
+                    [
+                        "TestItem/get",
+                        {
+                            "accountId": "acc1",
+                            "state": "state_active",
+                            "list": get_args.ids.clone().unwrap_or_default().into_iter().map(|id| {
+                                TestItem { id: Some(id), name: "item".into() }
+                            }).collect::<Vec<_>>(),
+                            "notFound": []
+                        },
+                        call_id
+                    ]
+                ]
+            });
+
+            Ok(crate::transport::HttpResponse {
+                status: 200,
+                content_type: Some("application/json".into()),
+                body: serde_json::to_vec(&response_body).unwrap(),
+                final_url: req.url.to_string(),
+            })
+        });
+
+        let client = Client::builder()
+            .transport(transport)
+            .connect("http://127.0.0.1:8080", Credentials::none())
+            .unwrap();
+
+        let ids = [JmapId::new("id1"), JmapId::new("id2"), JmapId::new("id3")];
+        let resp = client
+            .get_chunked(
+                &[session::CAPABILITY_CORE],
+                "TestItem/get",
+                &JmapId::new("acc1"),
+                &ids,
+                None,
+                |item: &TestItem| item.id.as_ref(),
+            )
+            .unwrap();
+        assert_eq!(requests_count.load(Ordering::SeqCst), 1);
+        assert_eq!(resp.list.len(), 3);
+        assert_eq!(resp.state, JmapState::new("state_active"));
+
+        requests_count.store(0, Ordering::SeqCst);
+        let resp_empty = client
+            .get_chunked(
+                &[session::CAPABILITY_CORE],
+                "TestItem/get",
+                &JmapId::new("acc1"),
+                &[],
+                None,
+                |item: &TestItem| item.id.as_ref(),
+            )
+            .unwrap();
+        assert_eq!(requests_count.load(Ordering::SeqCst), 1);
+        assert!(resp_empty.list.is_empty());
+        assert_eq!(resp_empty.state, JmapState::new("state_active"));
     }
 }
