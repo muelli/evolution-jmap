@@ -437,6 +437,7 @@ fn decoded_octets(uri: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jmap_proto::contacts::Media;
     use jmap_proto::error::{RequestError, SetError, set};
     use serde_json::json;
 
@@ -515,5 +516,53 @@ mod tests {
     fn a_data_uri_in_upper_case_measures_its_decoded_content() {
         assert_eq!(decoded_octets("DATA:image/jpeg;BASE64,aGVsbG8="), 5);
         assert_eq!(decoded_octets("Data:image/jpeg;Base64,aGVsbG8="), 5);
+    }
+
+    #[test]
+    fn a_data_uri_is_recognised_and_others_are_not() {
+        assert!(is_data_uri("data:image/png;base64,aGVsbG8="));
+        assert!(is_data_uri("DATA:,hello"));
+        assert!(!is_data_uri("http://example.test/vera.jpg"));
+        assert!(!is_data_uri("urn:uuid:1"));
+    }
+
+    #[test]
+    fn a_forbidden_error_with_a_size_sounding_description_is_not_one_for_size() {
+        // Only `tooLarge` and a size-shaped `invalidProperties` are about size.
+        // A `forbidden` refusal that happens to mention a size in its text is not.
+        let error = jmap_client::Error::Set(SetError::new(set::FORBIDDEN).with_description(
+            "Contact size 844872 exceeds the maximum allowed size of 524288 bytes.",
+        ));
+        assert!(!is_refused_for_size(&error));
+    }
+
+    #[test]
+    fn exactly_half_the_card_in_photos_is_blamed_on_the_photo() {
+        // `refused` blames the photo once inline photos are "at least half" the
+        // card (see its doc comment); the boundary must round in that direction.
+        const PREFIX: &str = "data:image/png;base64,";
+        let mut media = BTreeMap::new();
+        media.insert("m".to_owned(), Media::new(PREFIX).with_kind("photo"));
+        let mut card = ContactCard::simple("b", "Vera", "vera@example.test");
+        card.media = Some(media.clone());
+        let card_octets_at_zero_payload = serde_json::to_vec(&card).unwrap().len();
+        // Solve for a payload length N so that `uri.len() * 2 == card_octets`
+        // exactly, given how N feeds back into the card's own serialized size.
+        let payload_len = card_octets_at_zero_payload - 2 * PREFIX.len();
+        let uri = format!("{PREFIX}{}", "A".repeat(payload_len));
+        media.insert("m".to_owned(), Media::new(uri.clone()).with_kind("photo"));
+        card.media = Some(media);
+        let card_octets = serde_json::to_vec(&card).unwrap().len();
+        assert_eq!(
+            uri.len() * 2,
+            card_octets,
+            "test setup must hit the boundary exactly"
+        );
+
+        let error = jmap_client::Error::Set(SetError::new(set::TOO_LARGE));
+        assert!(matches!(
+            refused(&card, error),
+            SyncError::PhotoTooLarge { .. }
+        ));
     }
 }
