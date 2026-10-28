@@ -2427,7 +2427,7 @@ fn photo_of_kind(kind: Option<&str>, uri: &str, media_type: Option<&str>) -> Con
             [("m1".to_owned(), {
                 let mut media = Media::default();
                 media.kind = kind.map(str::to_owned);
-                media.uri = uri.to_owned();
+                media.uri = Some(uri.to_owned());
                 media.media_type = media_type.map(str::to_owned);
                 media
             })]
@@ -2592,19 +2592,28 @@ fn reads_the_inline_photo_line_eds_writes_back_as_a_data_uri() {
     // Inline `PHOTO` bytes with `TYPE` read back as a JSContact `data:` URI plus media type.
     let media = photo_line(&format!("PHOTO;TYPE=jpeg;ENCODING=b:{PAYLOAD}"));
     assert_eq!(media.kind.as_deref(), Some("photo"));
-    assert_eq!(media.uri, format!("data:image/jpeg;base64,{PAYLOAD}"));
+    assert_eq!(
+        media.uri.as_deref(),
+        Some(format!("data:image/jpeg;base64,{PAYLOAD}").as_str())
+    );
     assert_eq!(media.media_type.as_deref(), Some("image/jpeg"));
 
     // Accept legacy `ENCODING=BASE64` too.
     let media = photo_line(&format!("PHOTO;ENCODING=BASE64;TYPE=PNG:{PAYLOAD}"));
-    assert_eq!(media.uri, format!("data:image/PNG;base64,{PAYLOAD}"));
+    assert_eq!(
+        media.uri.as_deref(),
+        Some(format!("data:image/PNG;base64,{PAYLOAD}").as_str())
+    );
     assert_eq!(media.media_type.as_deref(), Some("image/PNG"));
 }
 
 #[test]
 fn a_data_uri_photo_line_without_type_keeps_its_stated_media_type() {
     let media = photo_line(&format!("PHOTO:data:image/heic;base64,{PAYLOAD}"));
-    assert_eq!(media.uri, format!("data:image/heic;base64,{PAYLOAD}"));
+    assert_eq!(
+        media.uri.as_deref(),
+        Some(format!("data:image/heic;base64,{PAYLOAD}").as_str())
+    );
     assert_eq!(media.media_type.as_deref(), Some("image/heic"));
 }
 
@@ -2615,19 +2624,25 @@ fn a_photo_eds_holds_no_media_type_for_reads_back_without_one() {
         "PHOTO;TYPE=\"X-EVOLUTION-UNKNOWN\";ENCODING=b:{PAYLOAD}"
     ));
     assert_eq!(media.media_type, None);
-    assert_eq!(media.uri, format!("data:;base64,{PAYLOAD}"));
+    assert_eq!(
+        media.uri.as_deref(),
+        Some(format!("data:;base64,{PAYLOAD}").as_str())
+    );
 
     // `PHOTO` lines without `TYPE` also read back as no media type.
     let media = photo_line(&format!("PHOTO;ENCODING=b:{PAYLOAD}"));
     assert_eq!(media.media_type, None);
-    assert_eq!(media.uri, format!("data:;base64,{PAYLOAD}"));
+    assert_eq!(
+        media.uri.as_deref(),
+        Some(format!("data:;base64,{PAYLOAD}").as_str())
+    );
 }
 
 #[test]
 fn reads_a_reference_photo_line_back_as_the_uri_it_names() {
     let media = photo_line("PHOTO;VALUE=uri:https://vera.example/me.png");
     assert_eq!(media.kind.as_deref(), Some("photo"));
-    assert_eq!(media.uri, "https://vera.example/me.png");
+    assert_eq!(media.uri.as_deref(), Some("https://vera.example/me.png"));
     // URI `PHOTO` lines carry no usable media type in EDS.
     assert_eq!(media.media_type, None);
 }
@@ -2644,7 +2659,10 @@ fn photo_mediatype_parameter_on_value_uri_is_parse_only_in_this_profile() {
 
     let parsed = vcard_to_card(input).expect("parse MEDIATYPE VALUE=uri photo");
     let parsed_media = parsed.media.as_ref().expect("media");
-    assert_eq!(parsed_media["m1"].uri, "https://vera.example/me.jpg");
+    assert_eq!(
+        parsed_media["m1"].uri.as_deref(),
+        Some("https://vera.example/me.jpg")
+    );
     assert_eq!(parsed_media["m1"].media_type.as_deref(), Some("image/jpeg"));
 
     // EDS stores URI photos without media type metadata, so normalized emit drops MEDIATYPE.
@@ -2672,24 +2690,27 @@ fn photo_mediatype_parameter_on_value_uri_is_parse_only_in_this_profile() {
 fn a_photo_whose_bytes_are_not_text_reads_back_byte_for_byte() {
     // Non-UTF-8 payload bytes must roundtrip via bytes, not text coercion.
     let media = photo_line("PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgr//g==");
-    assert_eq!(media.uri, "data:image/png;base64,iVBORw0KGgr//g==");
+    assert_eq!(
+        media.uri.as_deref(),
+        Some("data:image/png;base64,iVBORw0KGgr//g==")
+    );
 
     // Full roundtrip guards against fixture bias.
     let uri = "data:image/png;base64,iVBORw0KGgr//g==";
     let vcard = card_to_vcard(&one_photo(uri, None));
-    assert_eq!(read_photo(&vcard).uri, uri, "{vcard}");
+    assert_eq!(read_photo(&vcard).uri.as_deref(), Some(uri), "{vcard}");
 }
 
 #[test]
 fn a_photo_whose_bytes_are_text_that_also_looks_like_base64_is_not_decoded_twice() {
     // Regression from fuzzer case `raw_bytes = [97, 65, 56]`: do not decode text-like base64 twice.
     let media = photo_line("PHOTO;TYPE=jpeg;ENCODING=b:YUE4");
-    assert_eq!(media.uri, "data:image/jpeg;base64,YUE4");
+    assert_eq!(media.uri.as_deref(), Some("data:image/jpeg;base64,YUE4"));
 
     // Validate with a full roundtrip, matching the property test path.
     let uri = "data:image/jpeg;base64,YUE4";
     let vcard = card_to_vcard(&one_photo(uri, Some("image/jpeg")));
-    assert_eq!(read_photo(&vcard).uri, uri, "{vcard}");
+    assert_eq!(read_photo(&vcard).uri.as_deref(), Some(uri), "{vcard}");
 }
 
 #[test]
@@ -2705,10 +2726,13 @@ fn a_photo_line_states_the_key_its_entry_is_filed_under() {
 
     let media = card.media.expect("media");
     assert_eq!(media.len(), 2, "{media:?}");
-    assert_eq!(media["m9"].uri, "https://vera.example/other.png");
     assert_eq!(
-        media["m1"].uri,
-        format!("data:image/jpeg;base64,{PAYLOAD}"),
+        media["m9"].uri.as_deref(),
+        Some("https://vera.example/other.png")
+    );
+    assert_eq!(
+        media["m1"].uri.as_deref(),
+        Some(format!("data:image/jpeg;base64,{PAYLOAD}").as_str()),
         "a keyless line is filed under an invented key: {media:?}"
     );
 }
@@ -3524,19 +3548,19 @@ fn photo_with_value_uri_and_multiple_media_kinds_emits_only_photo_and_roundtrips
             ("m1".to_owned(), {
                 let mut media = Media::default();
                 media.kind = Some("photo".to_owned());
-                media.uri = "https://example.com/avatar.png".to_owned();
+                media.uri = Some("https://example.com/avatar.png".to_owned());
                 media
             }),
             ("m2".to_owned(), {
                 let mut media = Media::default();
                 media.kind = Some("logo".to_owned());
-                media.uri = "https://example.com/logo.png".to_owned();
+                media.uri = Some("https://example.com/logo.png".to_owned());
                 media
             }),
             ("m3".to_owned(), {
                 let mut media = Media::default();
                 media.kind = Some("sound".to_owned());
-                media.uri = "https://example.com/pronunciation.ogg".to_owned();
+                media.uri = Some("https://example.com/pronunciation.ogg".to_owned());
                 media
             }),
         ]
@@ -3563,7 +3587,10 @@ fn photo_with_value_uri_and_multiple_media_kinds_emits_only_photo_and_roundtrips
     let media = read_back.media.expect("media");
     assert_eq!(media.len(), 1, "only photo media is in vCard: {media:?}");
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
-    assert_eq!(media["m1"].uri, "https://example.com/avatar.png");
+    assert_eq!(
+        media["m1"].uri.as_deref(),
+        Some("https://example.com/avatar.png")
+    );
 }
 
 #[test]
@@ -3584,9 +3611,15 @@ END:VCARD\r\n";
         "only the two photos should be in media: {media:?}"
     );
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
-    assert_eq!(media["m1"].uri, "https://example.com/photo1.png");
+    assert_eq!(
+        media["m1"].uri.as_deref(),
+        Some("https://example.com/photo1.png")
+    );
     assert_eq!(media["m2"].kind.as_deref(), Some("photo"));
-    assert_eq!(media["m2"].uri, "data:image/jpeg;base64,aGVsbG8tcGhvdG8=");
+    assert_eq!(
+        media["m2"].uri.as_deref(),
+        Some("data:image/jpeg;base64,aGVsbG8tcGhvdG8=")
+    );
 }
 
 #[test]
@@ -5136,79 +5169,79 @@ fn media_photo_and_online_service_predicates_and_comparisons() {
     let m_uri1 = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "https://example.com/photo1.jpg".into();
+        media.uri = Some("https://example.com/photo1.jpg".into());
         media
     };
     let m_uri2 = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "https://example.com/photo1.jpg".into();
+        media.uri = Some("https://example.com/photo1.jpg".into());
         media
     };
     let m_uri3 = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "https://example.com/photo2.jpg".into();
+        media.uri = Some("https://example.com/photo2.jpg".into());
         media
     };
     let m_logo = {
         let mut media = Media::default();
         media.kind = Some("logo".into());
-        media.uri = "https://example.com/logo.png".into();
+        media.uri = Some("https://example.com/logo.png".into());
         media
     };
     let m_sound = {
         let mut media = Media::default();
         media.kind = Some("sound".into());
-        media.uri = "https://example.com/audio.mp3".into();
+        media.uri = Some("https://example.com/audio.mp3".into());
         media
     };
     let m_empty_uri = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "".into();
+        media.uri = Some("".into());
         media
     };
     let m_none_kind = {
         let mut media = Media::default();
         media.kind = None;
-        media.uri = "https://example.com/photo.jpg".into();
+        media.uri = Some("https://example.com/photo.jpg".into());
         media
     };
     let m_data1 = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "data:image/jpeg;base64,aGVsbG8=".into();
+        media.uri = Some("data:image/jpeg;base64,aGVsbG8=".into());
         media
     };
     let m_data2 = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "data:image/jpeg;base64,aGVsbG8=".into();
+        media.uri = Some("data:image/jpeg;base64,aGVsbG8=".into());
         media
     };
     let m_data_case = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "data:image/JPEG;base64,aGVsbG8=".into();
+        media.uri = Some("data:image/JPEG;base64,aGVsbG8=".into());
         media
     };
     let m_data_diff_bytes = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "data:image/jpeg;base64,d29ybGQ=".into();
+        media.uri = Some("data:image/jpeg;base64,d29ybGQ=".into());
         media
     };
     let m_data_diff_type = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "data:image/png;base64,aGVsbG8=".into();
+        media.uri = Some("data:image/png;base64,aGVsbG8=".into());
         media
     };
     let m_data_invalid = {
         let mut media = Media::default();
         media.kind = Some("photo".into());
-        media.uri = "data:image/jpeg;base64,!!!invalid!!!".into();
+        media.uri = Some("data:image/jpeg;base64,!!!invalid!!!".into());
         media
     };
 
@@ -7884,7 +7917,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
     media.insert("m1".to_owned(), {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = photo_uri.clone();
+        media.uri = Some(photo_uri.clone());
         media.media_type = Some("image/jpeg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -7937,7 +7970,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
     let read_media = read_card.media.as_ref().expect("media present");
     assert_eq!(read_media["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(read_media["m1"].media_type.as_deref(), Some("image/jpeg"));
-    assert_eq!(read_media["m1"].uri, photo_uri);
+    assert_eq!(read_media["m1"].uri.as_deref(), Some(photo_uri.as_str()));
 
     // Re-emit the parsed card and verify a fixed point.
     let vcard2 = card_to_vcard(&read_card);
@@ -8049,7 +8082,13 @@ fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
     // Check PHOTO.
     let photo = &card.media.as_ref().unwrap()["m1"];
     assert_eq!(photo.media_type.as_deref(), Some("image/PNG"));
-    assert!(photo.uri.starts_with("data:image/PNG;base64,"));
+    assert!(
+        photo
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/PNG;base64,")
+    );
 
     // Re-emission keeps valid line lengths and reaches a fixed point.
     let re_emitted = card_to_vcard(&card);
@@ -10654,7 +10693,10 @@ fn inbound_vcard_encoding_parameter_8bit_7bit_and_base64_fidelity() {
     let media = parsed.media.as_ref().expect("media present");
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/JPEG"));
-    assert_eq!(media["m1"].uri, "data:image/JPEG;base64,AQIDBA==");
+    assert_eq!(
+        media["m1"].uri.as_deref(),
+        Some("data:image/JPEG;base64,AQIDBA==")
+    );
 
     // Export strips ENCODING=8BIT and 7BIT on text, and keeps ENCODING=b on PHOTO.
     let vcard_out = card_to_vcard(&parsed);
@@ -10726,8 +10768,8 @@ fn photo_inline_base64_media_type_variants_and_roundtrip() {
             "media_type must roundtrip intact for {media_type}"
         );
         assert_eq!(
-            entry.uri,
-            format!("data:{media_type};base64,{PAYLOAD}"),
+            entry.uri.as_deref(),
+            Some(format!("data:{media_type};base64,{PAYLOAD}").as_str()),
             "URI must be reconstructed with exact media_type for {media_type}"
         );
 
@@ -10793,7 +10835,7 @@ fn photo_uri_variant_and_lossy_media_type_characterization() {
         let media = parsed.media.as_ref().expect("media present");
         let entry = &media["m1"];
         assert_eq!(entry.kind.as_deref(), Some("photo"));
-        assert_eq!(entry.uri, uri);
+        assert_eq!(entry.uri.as_deref(), Some(uri));
         assert_eq!(entry.media_type, None);
 
         // Fixed-point convergence
@@ -10822,7 +10864,10 @@ fn photo_uri_variant_and_lossy_media_type_characterization() {
         let parsed = vcard_to_card(&vcard_in).expect("parse uri photo variation");
         let media = parsed.media.as_ref().expect("media present");
         assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
-        assert_eq!(media["m1"].uri, "https://cdn.example.com/avatar.webp");
+        assert_eq!(
+            media["m1"].uri.as_deref(),
+            Some("https://cdn.example.com/avatar.webp")
+        );
         assert_eq!(media["m1"].media_type, None);
 
         let vcard_out = card_to_vcard(&parsed);
@@ -10853,7 +10898,10 @@ fn photo_uri_variant_and_lossy_media_type_characterization() {
         entry_lossy.media_type, None,
         "media_type on remote URI is unstated across vCard 3.0"
     );
-    assert_eq!(entry_lossy.uri, "https://example.org/photo.jpg");
+    assert_eq!(
+        entry_lossy.uri.as_deref(),
+        Some("https://example.org/photo.jpg")
+    );
 
     // Subsequent roundtrips reach fixed point
     let vcard_lossy2 = card_to_vcard(&parsed_lossy);
@@ -10866,7 +10914,7 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
     let inline_jpeg = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = format!("data:image/jpeg;base64,{PAYLOAD}");
+        media.uri = Some(format!("data:image/jpeg;base64,{PAYLOAD}"));
         media.media_type = Some("image/jpeg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -10874,7 +10922,7 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
     let inline_jpeg_caps = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = format!("data:image/JPEG;base64,{PAYLOAD}");
+        media.uri = Some(format!("data:image/JPEG;base64,{PAYLOAD}"));
         media.media_type = Some("image/JPEG".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -10882,7 +10930,10 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
     let inline_jpeg_unpadded = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('='));
+        media.uri = Some(format!(
+            "data:image/jpeg;base64,{}",
+            PAYLOAD.trim_end_matches('=')
+        ));
         media.media_type = Some("image/jpeg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -10890,7 +10941,7 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
     let inline_png = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = format!("data:image/png;base64,{PAYLOAD}");
+        media.uri = Some(format!("data:image/png;base64,{PAYLOAD}"));
         media.media_type = Some("image/png".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -10898,7 +10949,7 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
     let inline_diff_payload = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "data:image/jpeg;base64,AQIDBA==".to_owned();
+        media.uri = Some("data:image/jpeg;base64,AQIDBA==".to_owned());
         media.media_type = Some("image/jpeg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -10906,7 +10957,7 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
     let uri_photo1 = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "https://example.com/alice.jpg".to_owned();
+        media.uri = Some("https://example.com/alice.jpg".to_owned());
         media.media_type = None;
         media.extra = BTreeMap::new();
         media
@@ -10914,7 +10965,7 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
     let uri_photo2 = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "https://example.com/bob.jpg".to_owned();
+        media.uri = Some("https://example.com/bob.jpg".to_owned());
         media.media_type = None;
         media.extra = BTreeMap::new();
         media
@@ -10922,7 +10973,7 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
     let non_photo = {
         let mut media = Media::default();
         media.kind = Some("logo".to_owned());
-        media.uri = "https://example.com/logo.png".to_owned();
+        media.uri = Some("https://example.com/logo.png".to_owned());
         media.media_type = None;
         media.extra = BTreeMap::new();
         media
@@ -10993,7 +11044,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     media_map.insert("m1".to_owned(), {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = format!("data:image/jpeg;base64,{PAYLOAD}");
+        media.uri = Some(format!("data:image/jpeg;base64,{PAYLOAD}"));
         media.media_type = Some("image/jpeg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -11001,7 +11052,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     media_map.insert("m2".to_owned(), {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "https://example.com/profile-large.jpg".to_owned();
+        media.uri = Some("https://example.com/profile-large.jpg".to_owned());
         media.media_type = None;
         media.extra = BTreeMap::new();
         media
@@ -11009,7 +11060,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     media_map.insert("m3".to_owned(), {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "data:image/png;base64,AQIDBA==".to_owned();
+        media.uri = Some("data:image/png;base64,AQIDBA==".to_owned());
         media.media_type = Some("image/png".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -11054,8 +11105,8 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     assert_eq!(parsed_media.len(), 3);
     assert_eq!(parsed_media["m1"].media_type.as_deref(), Some("image/jpeg"));
     assert_eq!(
-        parsed_media["m2"].uri,
-        "https://example.com/profile-large.jpg"
+        parsed_media["m2"].uri.as_deref(),
+        Some("https://example.com/profile-large.jpg")
     );
     assert_eq!(parsed_media["m3"].media_type.as_deref(), Some("image/png"));
 
@@ -11064,7 +11115,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     mixed_media.insert("m1".to_owned(), {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = format!("data:image/jpeg;base64,{PAYLOAD}");
+        media.uri = Some(format!("data:image/jpeg;base64,{PAYLOAD}"));
         media.media_type = Some("image/jpeg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -11072,7 +11123,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     mixed_media.insert("m2".to_owned(), {
         let mut media = Media::default();
         media.kind = Some("logo".to_owned());
-        media.uri = "https://example.com/corp-logo.png".to_owned();
+        media.uri = Some("https://example.com/corp-logo.png".to_owned());
         media.media_type = Some("image/png".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -11080,7 +11131,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     mixed_media.insert("m3".to_owned(), {
         let mut media = Media::default();
         media.kind = Some("sound".to_owned());
-        media.uri = "https://example.com/pronunciation.ogg".to_owned();
+        media.uri = Some("https://example.com/pronunciation.ogg".to_owned());
         media.media_type = Some("audio/ogg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -11088,7 +11139,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     mixed_media.insert("m4".to_owned(), {
         let mut media = Media::default();
         media.kind = Some("document".to_owned());
-        media.uri = "https://example.com/resume.pdf".to_owned();
+        media.uri = Some("https://example.com/resume.pdf".to_owned());
         media.media_type = Some("application/pdf".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -11096,7 +11147,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
     mixed_media.insert("m5".to_owned(), {
         let mut media = Media::default();
         media.kind = None;
-        media.uri = "https://example.com/unknown.dat".to_owned();
+        media.uri = Some("https://example.com/unknown.dat".to_owned());
         media.media_type = None;
         media.extra = BTreeMap::new();
         media
@@ -11155,7 +11206,10 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
     let parsed_pdf = vcard_to_card(&pdf_vcard).expect("parse non-image photo");
     let pdf_entry = &parsed_pdf.media.as_ref().unwrap()["m1"];
     assert_eq!(pdf_entry.media_type, None);
-    assert_eq!(pdf_entry.uri, format!("data:;base64,{PAYLOAD}"));
+    assert_eq!(
+        pdf_entry.uri.as_deref(),
+        Some(format!("data:;base64,{PAYLOAD}").as_str())
+    );
 
     // 2. EDS TYPE="X-EVOLUTION-UNKNOWN" parsing
     let eds_unknown_vcard = concat!(
@@ -11166,7 +11220,7 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
     let parsed_unknown = vcard_to_card(eds_unknown_vcard).expect("parse X-EVOLUTION-UNKNOWN");
     let unk_entry = &parsed_unknown.media.as_ref().unwrap()["m1"];
     assert_eq!(unk_entry.media_type, None);
-    assert_eq!(unk_entry.uri, "data:;base64,AQIDBA==");
+    assert_eq!(unk_entry.uri.as_deref(), Some("data:;base64,AQIDBA=="));
 
     // 3. Inbound empty / degenerate PHOTO lines produce no media entries
     for empty_line in [
@@ -11234,6 +11288,8 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
         .decode(
             large_entry
                 .uri
+                .as_deref()
+                .unwrap()
                 .strip_prefix("data:image/png;base64,")
                 .unwrap(),
         )
@@ -11406,8 +11462,8 @@ fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() 
     assert_eq!(photo.kind.as_deref(), Some("photo"));
     assert_eq!(photo.media_type.as_deref(), Some("image/JPEG"));
     assert_eq!(
-        photo.uri.as_str(),
-        "data:image/JPEG;base64,/9j/4AAQSkZJRg=="
+        photo.uri.as_deref(),
+        Some("data:image/JPEG;base64,/9j/4AAQSkZJRg==")
     );
 
     // Outbound vCard keeps mapped lines and omits unsupported ones.
@@ -12102,7 +12158,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
         media.media_type = Some("image/jpeg".to_owned());
-        media.uri = "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned();
+        media.uri = Some("data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned());
         media.extra = BTreeMap::new();
         media
     });
@@ -12110,7 +12166,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
         let mut media = Media::default();
         media.kind = Some("logo".to_owned());
         media.media_type = Some("image/png".to_owned());
-        media.uri = "https://example.com/company_logo.png".to_owned();
+        media.uri = Some("https://example.com/company_logo.png".to_owned());
         media.extra = BTreeMap::new();
         media
     });
@@ -12118,7 +12174,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
         let mut media = Media::default();
         media.kind = Some("sound".to_owned());
         media.media_type = Some("audio/wav".to_owned());
-        media.uri = "data:audio/wav;base64,UklGRg==".to_owned();
+        media.uri = Some("data:audio/wav;base64,UklGRg==".to_owned());
         media.extra = BTreeMap::new();
         media
     });
@@ -12126,7 +12182,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
         let mut media = Media::default();
         media.kind = Some("document".to_owned());
         media.media_type = Some("application/pdf".to_owned());
-        media.uri = "https://example.com/resume.pdf".to_owned();
+        media.uri = Some("https://example.com/resume.pdf".to_owned());
         media.extra = BTreeMap::new();
         media
     });
@@ -12178,8 +12234,8 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
     assert_eq!(parsed_media.len(), 1);
     assert_eq!(parsed_media["m_photo"].kind.as_deref(), Some("photo"));
     assert_eq!(
-        parsed_media["m_photo"].uri.as_str(),
-        "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+        parsed_media["m_photo"].uri.as_deref(),
+        Some("data:image/jpeg;base64,/9j/4AAQSkZJRg==")
     );
 }
 
@@ -13945,7 +14001,13 @@ fn vcard_21_outlook_representative_fixture_import_and_normalization() {
     let photo = &media["m1"];
     assert_eq!(photo.kind.as_deref(), Some("photo"));
     assert_eq!(photo.media_type.as_deref(), Some("image/JPEG"));
-    assert!(photo.uri.starts_with("data:image/JPEG;base64,"));
+    assert!(
+        photo
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/JPEG;base64,")
+    );
 
     let emitted = card_to_vcard(&card);
     assert!(emitted.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
@@ -14234,7 +14296,13 @@ fn vcard_21_photo_formats_and_encoding_permutations() {
     let card_jpeg = vcard_to_card(&vcard_jpeg).expect("parse photo jpeg");
     let photo_jpeg = &card_jpeg.media.as_ref().expect("media")["m1"];
     assert_eq!(photo_jpeg.media_type.as_deref(), Some("image/JPEG"));
-    assert!(photo_jpeg.uri.starts_with("data:image/JPEG;base64,"));
+    assert!(
+        photo_jpeg
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/JPEG;base64,")
+    );
     let emitted_jpeg = card_to_vcard(&card_jpeg);
     assert!(emitted_jpeg.contains("TYPE=JPEG") && emitted_jpeg.contains("ENCODING=b"));
 
@@ -14245,7 +14313,13 @@ fn vcard_21_photo_formats_and_encoding_permutations() {
     let card_gif = vcard_to_card(&vcard_gif).expect("parse photo gif");
     let photo_gif = &card_gif.media.as_ref().expect("media")["m1"];
     assert_eq!(photo_gif.media_type.as_deref(), Some("image/GIF"));
-    assert!(photo_gif.uri.starts_with("data:image/GIF;base64,"));
+    assert!(
+        photo_gif
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/GIF;base64,")
+    );
     let emitted_gif = card_to_vcard(&card_gif);
     assert!(emitted_gif.contains("TYPE=GIF") && emitted_gif.contains("ENCODING=b"));
 
@@ -14256,7 +14330,13 @@ fn vcard_21_photo_formats_and_encoding_permutations() {
     let card_png = vcard_to_card(&vcard_png).expect("parse photo png");
     let photo_png = &card_png.media.as_ref().expect("media")["m1"];
     assert_eq!(photo_png.media_type.as_deref(), Some("image/PNG"));
-    assert!(photo_png.uri.starts_with("data:image/PNG;base64,"));
+    assert!(
+        photo_png
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/PNG;base64,")
+    );
     let emitted_png = card_to_vcard(&card_png);
     assert!(emitted_png.contains("TYPE=PNG") && emitted_png.contains("ENCODING=b"));
 
@@ -16039,7 +16119,13 @@ fn logo_and_key_vcard_lines_and_server_preservation_characterization() {
     assert_eq!(media.len(), 1);
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/JPEG"));
-    assert!(media["m1"].uri.starts_with("data:image/JPEG;base64,"));
+    assert!(
+        media["m1"]
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/JPEG;base64,")
+    );
 
     // Parsing does not leak unmodeled lines into `extra`.
     assert!(card.extra.is_empty());
@@ -16111,7 +16197,7 @@ fn crypto_keys_and_logo_server_state_untouched_characterization() {
     let photo = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned();
+        media.uri = Some("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned());
         media.media_type = Some("image/png".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -16119,7 +16205,7 @@ fn crypto_keys_and_logo_server_state_untouched_characterization() {
     let logo = {
         let mut media = Media::default();
         media.kind = Some("logo".to_owned());
-        media.uri = "https://example.com/corp_logo.svg".to_owned();
+        media.uri = Some("https://example.com/corp_logo.svg".to_owned());
         media.media_type = Some("image/svg+xml".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -16127,7 +16213,7 @@ fn crypto_keys_and_logo_server_state_untouched_characterization() {
     let sound = {
         let mut media = Media::default();
         media.kind = Some("sound".to_owned());
-        media.uri = "https://example.com/pronunciation.ogg".to_owned();
+        media.uri = Some("https://example.com/pronunciation.ogg".to_owned());
         media.media_type = Some("audio/ogg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -16448,7 +16534,13 @@ fn vcard_40_google_contacts_representative_fixture_import_and_roundtrip() {
     assert_eq!(media.len(), 1);
     let photo = &media["m1"];
     assert_eq!(photo.kind.as_deref(), Some("photo"));
-    assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
+    assert!(
+        photo
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,")
+    );
     assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
 
     // Anniversaries (one birth date and one wedding date)
@@ -16709,7 +16801,10 @@ fn vcard_40_nextcloud_and_carddav_fixture_import_and_roundtrip() {
     let media = parsed.media.as_ref().expect("media");
     assert_eq!(media.len(), 1);
     let photo = &media["m1"];
-    assert_eq!(photo.uri, "https://wonderland.org/photos/alice.jpg");
+    assert_eq!(
+        photo.uri.as_deref(),
+        Some("https://wonderland.org/photos/alice.jpg")
+    );
 
     // Online services (IMPP across Jabber, Matrix, Skype)
     let services = parsed.online_services.as_ref().expect("online_services");
@@ -16774,7 +16869,12 @@ fn vcard_40_photo_data_uris_and_mediatype_parameters() {
     let card1 = vcard_to_card(vcard_data_jpeg).expect("parse data jpeg");
     let media1 = card1.media.as_ref().expect("media");
     let p1 = &media1["m1"];
-    assert!(p1.uri.starts_with("data:image/jpeg;base64,"));
+    assert!(
+        p1.uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,")
+    );
     assert_eq!(p1.media_type.as_deref(), Some("image/jpeg"));
 
     // 2. Direct data: URI with explicit MEDIATYPE parameter
@@ -16787,7 +16887,12 @@ fn vcard_40_photo_data_uris_and_mediatype_parameters() {
     let card2 = vcard_to_card(vcard_mediatype).expect("parse mediatype png");
     let media2 = card2.media.as_ref().expect("media");
     let p2 = &media2["m1"];
-    assert!(p2.uri.starts_with("data:image/png;base64,"));
+    assert!(
+        p2.uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/png;base64,")
+    );
     assert_eq!(p2.media_type.as_deref(), Some("image/png"));
 
     // 3. Direct HTTP URI without VALUE=uri
@@ -16800,7 +16905,10 @@ fn vcard_40_photo_data_uris_and_mediatype_parameters() {
     let card3 = vcard_to_card(vcard_http).expect("parse direct http photo");
     let media3 = card3.media.as_ref().expect("media");
     let p3 = &media3["m1"];
-    assert_eq!(p3.uri, "https://example.com/direct_photo.webp");
+    assert_eq!(
+        p3.uri.as_deref(),
+        Some("https://example.com/direct_photo.webp")
+    );
 
     // 4. HTTP URI with MEDIATYPE parameter
     let vcard_http_mediatype = concat!(
@@ -16812,7 +16920,10 @@ fn vcard_40_photo_data_uris_and_mediatype_parameters() {
     let card4 = vcard_to_card(vcard_http_mediatype).expect("parse http mediatype photo");
     let media4 = card4.media.as_ref().expect("media");
     let p4 = &media4["m1"];
-    assert_eq!(p4.uri, "https://example.com/direct_photo.jpg");
+    assert_eq!(
+        p4.uri.as_deref(),
+        Some("https://example.com/direct_photo.jpg")
+    );
     assert_eq!(p4.media_type.as_deref(), Some("image/jpeg"));
 
     // All roundtrip cleanly to fixed points
@@ -17211,8 +17322,9 @@ fn sound_property_variations_audio_encodings_uris_and_fixpoint() {
             "[Case {idx}] media kind must be photo"
         );
         assert!(
-            photo_entry.uri.contains(photo_payload)
-                || photo_entry.uri.starts_with("data:image/png;base64,"),
+            photo_entry.uri.as_deref().is_some_and(
+                |u| u.contains(photo_payload) || u.starts_with("data:image/png;base64,")
+            ),
             "[Case {idx}] photo uri must retain PNG image payload"
         );
 
@@ -17300,7 +17412,7 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
     let photo = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned();
+        media.uri = Some("data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned());
         media.media_type = Some("image/jpeg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -17308,7 +17420,7 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
     let sound = {
         let mut media = Media::default();
         media.kind = Some("sound".to_owned());
-        media.uri = "https://example.com/pronounce.mp3".to_owned();
+        media.uri = Some("https://example.com/pronounce.mp3".to_owned());
         media.media_type = Some("audio/mpeg".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -17316,7 +17428,7 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
     let logo = {
         let mut media = Media::default();
         media.kind = Some("logo".to_owned());
-        media.uri = "https://example.com/corp_logo.png".to_owned();
+        media.uri = Some("https://example.com/corp_logo.png".to_owned());
         media.media_type = Some("image/png".to_owned());
         media.extra = BTreeMap::new();
         media
@@ -18199,7 +18311,13 @@ fn real_exporter_fixture_google_contacts_vcard40_detailed_roundtrip() {
         .find(|m| m.kind.as_deref() == Some("photo"))
         .expect("photo");
     assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
-    assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
+    assert!(
+        photo
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,")
+    );
 
     // 9. Export to canonical vCard 3.0 and verify field normalizations
     let export1 = card_to_vcard(&card);
@@ -18385,7 +18503,13 @@ fn real_exporter_fixture_nextcloud_carddav_vcard40_detailed_roundtrip() {
         .find(|m| m.kind.as_deref() == Some("photo"))
         .unwrap();
     assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
-    assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
+    assert!(
+        photo
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,")
+    );
 
     // 2. Confirm IMPP online service mapping.
     let services = card.online_services.as_ref().unwrap();
@@ -18587,7 +18711,13 @@ fn real_exporter_fixture_thunderbird_vcard40_detailed_roundtrip() {
         .values()
         .find(|m| m.kind.as_deref() == Some("photo"))
         .expect("photo");
-    assert!(photo.uri.starts_with("data:image/png;base64,"));
+    assert!(
+        photo
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("data:image/png;base64,")
+    );
 
     // 9. Export to canonical vCard 3.0 and verify vendor property isolation
     let export1 = card_to_vcard(&card);
@@ -18909,7 +19039,7 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
             ("m1".to_string(), {
                 let mut media = Media::default();
                 media.kind = Some("photo".into());
-                media.uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into();
+                media.uri = Some("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into());
                 media.media_type = Some("image/png".into());
                 media.extra = BTreeMap::new();
                 media
@@ -19315,7 +19445,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                 ("m1".to_string(), {
                     let mut media = Media::default();
                     media.kind = Some("photo".to_string());
-                    media.uri = "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string();
+                    media.uri = Some("data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string());
                     media.media_type = Some("image/jpeg".to_string());
                     media.extra = BTreeMap::new();
                     media
@@ -19323,7 +19453,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                 ("m2".to_string(), {
                     let mut media = Media::default();
                     media.kind = Some("sound".to_string());
-                    media.uri = "https://example.com/audio.ogg".to_string();
+                    media.uri = Some("https://example.com/audio.ogg".to_string());
                     media.media_type = Some("audio/ogg".to_string());
                     media.extra = BTreeMap::new();
                     media
@@ -19331,7 +19461,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                 ("m3".to_string(), {
                     let mut media = Media::default();
                     media.kind = Some("logo".to_string());
-                    media.uri = "https://example.com/logo.png".to_string();
+                    media.uri = Some("https://example.com/logo.png".to_string());
                     media.media_type = Some("image/png".to_string());
                     media.extra = BTreeMap::new();
                     media
@@ -20741,7 +20871,7 @@ fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
         let parsed = vcard_to_card(&vcard).expect("parse emitted URI photo");
         let media = parsed.media.expect("media");
         assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
-        assert_eq!(media["m1"].uri, uri);
+        assert_eq!(media["m1"].uri.as_deref(), Some(uri));
         assert_eq!(media["m1"].media_type, None);
     }
 
@@ -20874,7 +21004,10 @@ fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
     let edited_card = vcard_to_card(&edited_uri_vcard).expect("parse edited URI vcard");
     let media = edited_card.media.expect("media");
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
-    assert_eq!(media["m1"].uri, "https://example.com/new_avatar.png");
+    assert_eq!(
+        media["m1"].uri.as_deref(),
+        Some("https://example.com/new_avatar.png")
+    );
     assert_eq!(media["m1"].media_type, None);
     assert!(!same_photo(
         &orig_card.media.as_ref().unwrap()["m1"],
@@ -20890,8 +21023,8 @@ fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
     let media_png = edited_png_card.media.expect("media");
     assert_eq!(media_png["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(
-        media_png["m1"].uri,
-        "data:image/png;base64,iVBORw0KGgr//g=="
+        media_png["m1"].uri.as_deref(),
+        Some("data:image/png;base64,iVBORw0KGgr//g==")
     );
     assert_eq!(media_png["m1"].media_type.as_deref(), Some("image/png"));
 
@@ -20923,7 +21056,7 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
     for (line_str, expected_uri) in bare_uri_lines {
         let media = photo_line(line_str);
         assert_eq!(media.kind.as_deref(), Some("photo"));
-        assert_eq!(media.uri, expected_uri);
+        assert_eq!(media.uri.as_deref(), Some(expected_uri));
         assert_eq!(media.media_type, None);
     }
 
@@ -20961,7 +21094,7 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
     for (line_str, expected_uri, expected_media_type) in direct_data_uris {
         let media = photo_line(line_str);
         assert_eq!(media.kind.as_deref(), Some("photo"));
-        assert_eq!(media.uri, expected_uri);
+        assert_eq!(media.uri.as_deref(), Some(expected_uri));
         assert_eq!(media.media_type.as_deref(), expected_media_type);
     }
 
@@ -20987,7 +21120,7 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
     for (line_str, expected_uri, expected_media_type) in mediatype_photos {
         let media = photo_line(line_str);
         assert_eq!(media.kind.as_deref(), Some("photo"));
-        assert_eq!(media.uri, expected_uri);
+        assert_eq!(media.uri.as_deref(), Some(expected_uri));
         assert_eq!(media.media_type.as_deref(), expected_media_type);
     }
 
@@ -21006,7 +21139,7 @@ fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
         let media = photo_line(line_str);
         assert_eq!(media.kind.as_deref(), Some("photo"));
         assert_eq!(media.media_type.as_deref(), Some(expected_media_type));
-        assert!(media.uri.starts_with("data:image/"));
+        assert!(media.uri.as_deref().unwrap().starts_with("data:image/"));
     }
 }
 
@@ -21015,21 +21148,21 @@ fn same_photo_and_states_media_comprehensive_decision_matrix() {
     let p_uri1 = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "https://example.com/avatar.jpg".to_owned();
+        media.uri = Some("https://example.com/avatar.jpg".to_owned());
         media.media_type = None;
         media
     };
     let p_uri1_same = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "https://example.com/avatar.jpg".to_owned();
+        media.uri = Some("https://example.com/avatar.jpg".to_owned());
         media.media_type = Some("image/jpeg".to_owned()); // media_type ignored for URI photos
         media
     };
     let p_uri2 = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "https://example.com/other.png".to_owned();
+        media.uri = Some("https://example.com/other.png".to_owned());
         media.media_type = None;
         media
     };
@@ -21038,28 +21171,31 @@ fn same_photo_and_states_media_comprehensive_decision_matrix() {
     let p_inline_padded = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = format!("data:image/jpeg;base64,{PAYLOAD}");
+        media.uri = Some(format!("data:image/jpeg;base64,{PAYLOAD}"));
         media.media_type = Some("image/jpeg".to_owned());
         media
     };
     let p_inline_unpadded = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = format!("data:image/JPEG;base64,{}", PAYLOAD.trim_end_matches('='));
+        media.uri = Some(format!(
+            "data:image/JPEG;base64,{}",
+            PAYLOAD.trim_end_matches('=')
+        ));
         media.media_type = Some("image/JPEG".to_owned());
         media
     };
     let p_inline_different_bytes = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = "data:image/jpeg;base64,ZGlmZmVyZW50".to_owned();
+        media.uri = Some("data:image/jpeg;base64,ZGlmZmVyZW50".to_owned());
         media.media_type = Some("image/jpeg".to_owned());
         media
     };
     let p_inline_different_type = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = format!("data:image/png;base64,{PAYLOAD}");
+        media.uri = Some(format!("data:image/png;base64,{PAYLOAD}"));
         media.media_type = Some("image/png".to_owned());
         media
     };
@@ -21068,21 +21204,21 @@ fn same_photo_and_states_media_comprehensive_decision_matrix() {
     let logo_media = {
         let mut media = Media::default();
         media.kind = Some("logo".to_owned());
-        media.uri = "https://example.com/logo.png".to_owned();
+        media.uri = Some("https://example.com/logo.png".to_owned());
         media.media_type = None;
         media
     };
     let sound_media = {
         let mut media = Media::default();
         media.kind = Some("sound".to_owned());
-        media.uri = "https://example.com/audio.ogg".to_owned();
+        media.uri = Some("https://example.com/audio.ogg".to_owned());
         media.media_type = None;
         media
     };
     let empty_uri_media = {
         let mut media = Media::default();
         media.kind = Some("photo".to_owned());
-        media.uri = String::new();
+        media.uri = Some(String::new());
         media.media_type = None;
         media
     };
@@ -23393,7 +23529,10 @@ fn value_parameter_metadata_is_not_retained_in_eds_profile() {
     assert_eq!(media.len(), 1, "PHOTO line must remain mapped");
 
     let photo = media.get("m1").expect("first media entry");
-    assert_eq!(photo.uri, "https://cdn.example.test/value-probe.png");
+    assert_eq!(
+        photo.uri.as_deref(),
+        Some("https://cdn.example.test/value-probe.png")
+    );
     assert_eq!(photo.media_type, None);
 
     let emitted = card_to_vcard(&parsed);

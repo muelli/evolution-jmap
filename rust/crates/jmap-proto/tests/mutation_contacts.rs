@@ -751,7 +751,10 @@ fn media_and_online_service_builders_and_properties() {
         .with_pref(1)
         .with_label("High-res profile photo");
 
-    assert_eq!(media.uri, "https://media.example.com/avatar.jpg");
+    assert_eq!(
+        media.uri.as_deref(),
+        Some("https://media.example.com/avatar.jpg")
+    );
     assert_eq!(media.kind.as_deref(), Some("photo"));
     assert_eq!(media.media_type.as_deref(), Some("image/jpeg"));
     assert_eq!(media.pref, Some(1));

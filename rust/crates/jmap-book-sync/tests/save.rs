@@ -2862,7 +2862,10 @@ fn the_photo_the_user_chose_reaches_the_server() {
 
     let media = fixture.card(&id).media.expect("media");
     assert_eq!(media.len(), 1, "patched in place, not re-added: {media:?}");
-    assert_eq!(media["m1"].uri, "data:image/png;base64,bmV3LXBob3RvISE=");
+    assert_eq!(
+        media["m1"].uri.as_deref(),
+        Some("data:image/png;base64,bmV3LXBob3RvISE=")
+    );
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/png"));
     assert_eq!(
         media["m1"].pref.or_else(|| media["m1"]
@@ -2892,7 +2895,11 @@ fn a_photo_nobody_touched_is_not_written_back() {
     sync.save_contact(&vcard, Some(id.as_str())).unwrap();
 
     let media = fixture.card(&id).media.expect("media");
-    assert_eq!(media["m1"].uri, loose, "the save rewrote it: {media:?}");
+    assert_eq!(
+        media["m1"].uri.as_deref(),
+        Some(loose.as_str()),
+        "the save rewrote it: {media:?}"
+    );
     assert_eq!(media["m1"].media_type, None, "{media:?}");
 }
 
@@ -2931,7 +2938,10 @@ fn a_picture_chosen_for_a_contact_that_had_none_is_added() {
     assert_eq!(media.len(), 1, "{media:?}");
     let photo = media.values().next().expect("one entry");
     assert_eq!(photo.kind.as_deref(), Some("photo"));
-    assert_eq!(photo.uri, "data:image/png;base64,bmV3LXBob3RvISE=");
+    assert_eq!(
+        photo.uri.as_deref(),
+        Some("data:image/png;base64,bmV3LXBob3RvISE=")
+    );
     assert_eq!(photo.media_type.as_deref(), Some("image/png"));
 }
 
@@ -2966,9 +2976,13 @@ fn only_the_first_of_several_pictures_is_the_one_the_user_edits() {
 
     let media = fixture.card(&id).media.expect("media");
     assert_eq!(media.len(), 2, "{media:?}");
-    assert_eq!(media["m1"].uri, "data:image/png;base64,bmV3LXBob3RvISE=");
     assert_eq!(
-        media["m9"].uri, "https://vera.example/other.png",
+        media["m1"].uri.as_deref(),
+        Some("data:image/png;base64,bmV3LXBob3RvISE=")
+    );
+    assert_eq!(
+        media["m9"].uri.as_deref(),
+        Some("https://vera.example/other.png"),
         "the picture the user never saw was rewritten: {media:?}"
     );
 }
@@ -3001,11 +3015,13 @@ fn a_logo_survives_a_save_it_was_never_part_of() {
 
     let media = fixture.card(&id).media.expect("media");
     assert_eq!(
-        media["m1"].uri, "https://vera.example/logo.png",
+        media["m1"].uri.as_deref(),
+        Some("https://vera.example/logo.png"),
         "the logo was overwritten by the photo the user chose: {media:?}"
     );
     assert_eq!(
-        media["m2"].uri, "data:image/png;base64,bmV3LXBob3RvISE=",
+        media["m2"].uri.as_deref(),
+        Some("data:image/png;base64,bmV3LXBob3RvISE="),
         "the picture was re-added rather than patched: {media:?}"
     );
     assert_eq!(media.len(), 2, "{media:?}");
@@ -4115,10 +4131,16 @@ fn replacing_inlined_photo_with_uri_photo_and_preserving_unmodeled_logo() {
     let media = card.media.expect("media");
     assert_eq!(media.len(), 2, "{media:?}");
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
-    assert_eq!(media["m1"].uri, "https://example.com/new_avatar.png");
+    assert_eq!(
+        media["m1"].uri.as_deref(),
+        Some("https://example.com/new_avatar.png")
+    );
     assert_eq!(media["m1"].media_type, None);
     assert_eq!(media["l1"].kind.as_deref(), Some("logo"));
-    assert_eq!(media["l1"].uri, "https://example.com/corporate-logo.png");
+    assert_eq!(
+        media["l1"].uri.as_deref(),
+        Some("https://example.com/corporate-logo.png")
+    );
 }
 
 #[test]
@@ -4156,9 +4178,15 @@ fn clearing_photo_preserves_unmodeled_logo_and_sound_media() {
         "photo m1 should be deleted: {media:?}"
     );
     assert_eq!(media["l1"].kind.as_deref(), Some("logo"));
-    assert_eq!(media["l1"].uri, "https://example.com/logo.png");
+    assert_eq!(
+        media["l1"].uri.as_deref(),
+        Some("https://example.com/logo.png")
+    );
     assert_eq!(media["s1"].kind.as_deref(), Some("sound"));
-    assert_eq!(media["s1"].uri, "https://example.com/name-audio.ogg");
+    assert_eq!(
+        media["s1"].uri.as_deref(),
+        Some("https://example.com/name-audio.ogg")
+    );
 }
 
 #[test]
@@ -5642,7 +5670,10 @@ fn a_photo_served_as_a_local_file_is_neither_shown_nor_sent_back() {
     seed_photo(&fixture, &id);
     let served = fixture.card(&id).media.expect("media");
     assert!(
-        served["m1"].uri.starts_with("file:"),
+        served["m1"]
+            .uri
+            .as_deref()
+            .is_some_and(|u| u.starts_with("file:")),
         "the mock must serve a local-file photo: {served:?}"
     );
     let sync = fixture.sync();
@@ -5668,8 +5699,8 @@ fn a_photo_served_as_a_local_file_is_neither_shown_nor_sent_back() {
     let media = stored.media.expect("the save removed the photo");
     assert_eq!(media.len(), 1, "{media:?}");
     assert_eq!(
-        media["m1"].uri,
-        format!("data:image/jpeg;base64,{PHOTO}"),
+        media["m1"].uri.as_deref(),
+        Some(format!("data:image/jpeg;base64,{PHOTO}").as_str()),
         "the save wrote the local-file URI back: {media:?}"
     );
 }

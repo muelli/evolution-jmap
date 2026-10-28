@@ -866,7 +866,7 @@ fn arb_media_cards() -> impl Strategy<Value = (ContactCard, ContactCard, Contact
         let entry = |uri: String| {
             let mut media = Media::default();
             media.kind = Some("photo".to_owned());
-            media.uri = uri;
+            media.uri = Some(uri);
             media
         };
         match slot {

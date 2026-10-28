@@ -812,7 +812,15 @@ fn diff_media(
                 return;
             }
             if old.uri != new.uri {
-                patch.insert(format!("{path}/uri"), Value::String(new.uri.clone()));
+                patch.insert(format!("{path}/uri"), value_or_null(new.uri.as_ref()));
+            }
+            if old.blob_id != new.blob_id {
+                patch.insert(
+                    format!("{path}/blobId"),
+                    new.blob_id
+                        .as_ref()
+                        .map_or(Value::Null, |id| Value::String(id.to_string())),
+                );
             }
             if old.media_type != new.media_type {
                 patch.insert(

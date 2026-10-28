@@ -133,7 +133,10 @@ fn contact_card_roundtrip() {
     assert!(calendars["c1"].pref.is_some() || calendars["c1"].extra.contains_key("pref"));
     let media = card.media.as_ref().expect("media");
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
-    assert_eq!(media["m1"].uri, "data:image/jpeg;base64,aGVsbG8tcGhvdG8=");
+    assert_eq!(
+        media["m1"].uri.as_deref(),
+        Some("data:image/jpeg;base64,aGVsbG8tcGhvdG8=")
+    );
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/jpeg"));
     assert_eq!(
         media["m2"].kind.as_deref(),
@@ -580,7 +583,7 @@ fn jscontact_spec_properties_roundtrip() {
     })]));
     card.media = Some(BTreeMap::from([("m1".to_owned(), {
         let mut media = Media::default();
-        media.uri = "https://example.org/portrait.jpg".to_owned();
+        media.uri = Some("https://example.org/portrait.jpg".to_owned());
         media.kind = Some("photo".to_owned());
         media.media_type = Some("image/jpeg".to_owned());
         media.contexts = Some(serde_json::json!({"work": true}));
@@ -822,7 +825,10 @@ fn contact_card_parse_response_and_domain_builders() {
         .with_media_type("image/jpeg")
         .with_pref(1)
         .with_label("Avatar");
-    assert_eq!(media.uri, "https://img.example.com/avatar.jpg");
+    assert_eq!(
+        media.uri.as_deref(),
+        Some("https://img.example.com/avatar.jpg")
+    );
 
     let online = OnlineService::new()
         .with_service("matrix")
@@ -1216,4 +1222,140 @@ fn an_out_of_range_unsigned_int_is_rejected_not_wrapped() {
         serde_json::from_value(serde_json::json!({"kind": "birth", "pref": too_big}))
             .expect("pref is an extra property, kept as-is");
     assert_eq!(anniversary.pref(), None);
+}
+
+/// RFC 9610 Section 2: Media object supports blobId alongside uri.
+/// When uri is set, blobId is omitted on serialization.
+#[test]
+fn media_with_uri_roundtrips_cleanly_without_blob_id() {
+    use jmap_proto::contacts::Media;
+
+    let media = Media::new("https://example.com/avatar.jpg")
+        .with_kind("photo")
+        .with_media_type("image/jpeg")
+        .with_pref(1)
+        .with_label("Profile photo");
+
+    assert_eq!(media.uri.as_deref(), Some("https://example.com/avatar.jpg"));
+    assert_eq!(media.blob_id, None);
+    assert!(media.is_valid());
+
+    let json_val = serde_json::to_value(&media).expect("serialize media");
+    assert_eq!(json_val["uri"], "https://example.com/avatar.jpg");
+    assert!(json_val.get("blobId").is_none());
+    assert_eq!(json_val["kind"], "photo");
+    assert_eq!(json_val["mediaType"], "image/jpeg");
+
+    let deserialized: Media = serde_json::from_value(json_val).expect("deserialize media");
+    assert_eq!(deserialized, media);
+    assert_eq!(
+        deserialized.uri.as_deref(),
+        Some("https://example.com/avatar.jpg")
+    );
+    assert_eq!(deserialized.blob_id, None);
+    assert!(deserialized.extra.is_empty());
+}
+
+/// RFC 9610 Section 2: Media object referencing a blobId.
+/// When blobId is set, uri is omitted on serialization.
+#[test]
+fn media_with_blob_id_roundtrips_cleanly_without_uri() {
+    use jmap_proto::contacts::Media;
+
+    let media = Media::from_blob_id("Bdeadbeef123")
+        .with_kind("photo")
+        .with_media_type("image/png");
+
+    assert_eq!(media.uri, None);
+    assert_eq!(media.blob_id, Some(Id::from("Bdeadbeef123")));
+    assert!(media.is_valid());
+
+    let json_val = serde_json::to_value(&media).expect("serialize media");
+    assert_eq!(json_val["blobId"], "Bdeadbeef123");
+    assert!(json_val.get("uri").is_none());
+    assert_eq!(json_val["kind"], "photo");
+    assert_eq!(json_val["mediaType"], "image/png");
+
+    let deserialized: Media = serde_json::from_value(json_val).expect("deserialize media");
+    assert_eq!(deserialized, media);
+    assert_eq!(deserialized.blob_id, Some(Id::from("Bdeadbeef123")));
+    assert_eq!(deserialized.uri, None);
+    assert!(deserialized.extra.is_empty());
+}
+
+/// RFC 9610 Section 2: Stalwart 1.0 wire shape returns contact photos
+/// as blobId plus mediaType with no uri.
+#[test]
+fn media_stalwart_1_photo_wire_shape_deserializes_blob_id_and_omits_uri() {
+    use jmap_proto::contacts::Media;
+
+    let wire = serde_json::json!({
+        "@type": "Media",
+        "kind": "photo",
+        "blobId": "Gb0a1c2d3e4f5",
+        "mediaType": "image/jpeg"
+    });
+
+    let media: Media = serde_json::from_value(wire).expect("deserialize Stalwart 1.0 photo");
+    assert_eq!(media.blob_id, Some(Id::from("Gb0a1c2d3e4f5")));
+    assert_eq!(media.uri, None);
+    assert_eq!(media.kind.as_deref(), Some("photo"));
+    assert_eq!(media.media_type.as_deref(), Some("image/jpeg"));
+    assert!(
+        !media.extra.contains_key("blobId"),
+        "blobId must not be dumped into extra"
+    );
+    assert!(media.is_valid());
+
+    let serialized = serde_json::to_value(&media).expect("reserialize");
+    assert_eq!(serialized["blobId"], "Gb0a1c2d3e4f5");
+    assert!(serialized.get("uri").is_none());
+    assert_eq!(serialized["@type"], "Media");
+}
+
+/// RFC 9610 Section 2: exactly one of uri or blobId must be present.
+#[test]
+fn media_is_valid_requires_exactly_one_of_uri_or_blob_id() {
+    use jmap_proto::contacts::Media;
+
+    let uri_only = Media::new("https://example.com/photo.jpg");
+    assert!(uri_only.is_valid());
+
+    let blob_only = Media::from_blob_id("b1");
+    assert!(blob_only.is_valid());
+
+    let neither = Media::default();
+    assert!(!neither.is_valid());
+
+    let both = Media::new("https://example.com/photo.jpg").with_blob_id("b1");
+    assert!(!both.is_valid());
+}
+
+/// ContactCard carrying a photo as blobId roundtrips through JSON without losing blobId.
+#[test]
+fn contact_card_with_photo_blob_id_roundtrips() {
+    use jmap_proto::contacts::{ContactCard, Media};
+    use std::collections::BTreeMap;
+
+    let mut card = ContactCard::new();
+    card.uid = Some("urn:uuid:test-photo-blob-1".to_string());
+    card.media = Some(BTreeMap::from([(
+        "p1".to_string(),
+        Media::from_blob_id("blob-photo-id-99")
+            .with_kind("photo")
+            .with_media_type("image/png"),
+    )]));
+
+    let json_val = serde_json::to_value(&card).expect("serialize ContactCard");
+    let deserialized: ContactCard =
+        serde_json::from_value(json_val.clone()).expect("deserialize ContactCard");
+
+    let media_entry = deserialized
+        .media
+        .as_ref()
+        .and_then(|m| m.get("p1"))
+        .expect("media p1 present");
+    assert_eq!(media_entry.blob_id, Some(Id::from("blob-photo-id-99")));
+    assert_eq!(media_entry.uri, None);
+    assert_eq!(media_entry.media_type.as_deref(), Some("image/png"));
 }

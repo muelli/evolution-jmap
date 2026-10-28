@@ -441,11 +441,15 @@ pub fn states_media(media: &Media) -> bool {
 ///
 /// Return `None` for non-photo kinds, empty URIs, or invalid `data:` base64.
 fn photo(media: &Media) -> Option<Photo<'_>> {
-    if media.kind.as_deref() != Some(PHOTO_KIND) || media.uri.is_empty() {
+    if media.kind.as_deref() != Some(PHOTO_KIND) {
         return None;
     }
-    let Some(parsed) = data_uri(&media.uri) else {
-        return states_remote_photo_uri(&media.uri).then_some(Photo::Uri(&media.uri));
+    let uri = media.uri.as_deref()?;
+    if uri.is_empty() {
+        return None;
+    }
+    let Some(parsed) = data_uri(uri) else {
+        return states_remote_photo_uri(uri).then_some(Photo::Uri(uri));
     };
     if !parsed.base64 {
         return None;
@@ -461,6 +465,9 @@ fn photo(media: &Media) -> Option<Photo<'_>> {
 ///
 /// Compare rendered forms so base64 padding and media-type case do not create false edits.
 pub fn same_photo(one: &Media, other: &Media) -> bool {
+    if one.blob_id.is_some() || other.blob_id.is_some() {
+        return one.blob_id == other.blob_id;
+    }
     match (photo(one), photo(other)) {
         (None, None) => true,
         (Some(Photo::Uri(one)), Some(Photo::Uri(other))) => one == other,
@@ -2133,7 +2140,7 @@ fn photo_entry(uri: String, media_type: Option<String>) -> Media {
     {
         let mut media = Media::default();
         media.kind = Some(PHOTO_KIND.to_owned());
-        media.uri = uri;
+        media.uri = Some(uri);
         media.media_type = media_type;
         media.extra = BTreeMap::new();
         media
