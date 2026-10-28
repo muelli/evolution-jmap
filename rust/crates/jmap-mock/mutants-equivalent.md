@@ -230,3 +230,72 @@ This lane is comment-only in `rust/crates/jmap-mock`, so this file records reaso
 - `crates/jmap-mock/src/server.rs:1066:20: delete ! in session_document`: not equivalent, because submission account capabilities are added only when explicitly omitted and are dropped when they should be advertised.
 - `crates/jmap-mock/src/server.rs:1079:16: delete ! in session_document`: not equivalent, because principals account capabilities are removed when enabled and inserted when explicitly omitted.
 - `crates/jmap-mock/src/server.rs:1120:42: delete ! in session_document`: not equivalent, because primary-account capability mapping keeps omitted capabilities and excludes enabled ones.
+- `crates/jmap-mock/src/calendars.rs:45:79: replace == with != in calendar_get`: not equivalent, because it inverts owner detection and can expose owner-only calendars to non-owners while hiding owner access.
+- `crates/jmap-mock/src/calendars.rs:52:12: delete ! in calendar_get`: not equivalent, because it inverts the shared-calendar visibility check and can return `forbidden` for valid shared viewers.
+- `crates/jmap-mock/src/calendars.rs:89:5: replace calendar_rights_for -> Option<CalendarRights> with None`: not equivalent, because every share lookup fails and shared callers lose visibility and rights.
+- `crates/jmap-mock/src/calendars.rs:89:5: replace calendar_rights_for -> Option<CalendarRights> with Some(Default::default())`: not equivalent, because callers can get fabricated rights they were not granted.
+- `crates/jmap-mock/src/calendars.rs:106:5: replace calendar_set -> Result<Value, MethodError> with Ok(Default::default())`: not equivalent, because it drops all `Calendar/set` create and update semantics and returns a fabricated empty response.
+- `crates/jmap-mock/src/calendars.rs:141:33: replace && with || in calendar_set`: not equivalent, because it can force `isSubscribed=false` outside the intended `default_unsubscribed` and not-already-true combination.
+- `crates/jmap-mock/src/calendars.rs:141:59: replace != with == in calendar_set`: not equivalent, because it flips when `isSubscribed` is rewritten and mutates calendars that should stay explicitly subscribed.
+- `crates/jmap-mock/src/calendars.rs:199:45: replace > with == in calendar_event_get`: not equivalent, because `maxObjectsInGet` enforcement no longer rejects oversized `ids` lists except one exact boundary case.
+- `crates/jmap-mock/src/calendars.rs:199:45: replace > with >= in calendar_event_get`: not equivalent, because requests at exactly the configured `maxObjectsInGet` limit are rejected even though they should pass.
+- `crates/jmap-mock/src/calendars.rs:263:5: replace version_is_2_0 -> Result<(), SetError> with Ok(())`: not equivalent, because non-`2.0` JSCalendar events are accepted instead of rejected as `invalidProperties`.
+- `crates/jmap-mock/src/calendars.rs:275:5: replace schedulable -> Result<(), SetError> with Ok(())`: not equivalent, because scheduling reachability failures stop producing `noSupportedScheduleMethods`.
+- `crates/jmap-mock/src/calendars.rs:277:9: replace && with || in schedulable`: not equivalent, because `schedulable` can fail when any one guard matches instead of only when all required conditions match.
+- `crates/jmap-mock/src/calendars.rs:276:9: replace && with || in schedulable`: not equivalent, because it breaks the conjunction between scheduling-enabled, non-draft, and reachability checks.
+- `crates/jmap-mock/src/calendars.rs:276:27: replace != with == in schedulable`: not equivalent, because it inverts draft handling and can enforce recipient reachability for drafts.
+- `crates/jmap-mock/src/calendars.rs:277:12: delete ! in schedulable`: not equivalent, because it treats reachable recipients as failure cases and rejects valid scheduling operations.
+- `crates/jmap-mock/src/calendars.rs:292:33: replace && with || in calendar_event_set`: not equivalent, because `unknown argument: sendSchedulingMessages` can be raised when scheduling support exists or when the argument is absent.
+- `crates/jmap-mock/src/calendars.rs:491:5: replace calendar_event_parse -> Result<Value, MethodError> with Ok(Default::default())`: not equivalent, because parse output and `notParsable` or `notFound` reporting disappear.
+- `crates/jmap-mock/src/calendars.rs:571:5: replace event_matches -> bool with true`: not equivalent, because every event passes `CalendarEvent/query` filtering.
+- `crates/jmap-mock/src/calendars.rs:572:12: delete ! in event_matches`: not equivalent, because the `inCalendar` predicate is inverted and matching calendar events are filtered out.
+- `crates/jmap-mock/src/calendars.rs:580:31: replace != with == in event_matches`: not equivalent, because the `uid` predicate is inverted and only non-matching events survive.
+- `crates/jmap-mock/src/calendars.rs:586:18: replace < with == in event_matches`: not equivalent, because the `after` boundary check changes from strict ordering to equality-only rejection.
+- `crates/jmap-mock/src/calendars.rs:586:18: replace < with > in event_matches`: not equivalent, because `after` filtering direction is reversed and newer events can be dropped while older ones pass.
+- `crates/jmap-mock/src/calendars.rs:586:18: replace < with <= in event_matches`: not equivalent, because `after` filtering becomes inclusive and drops boundary-equal starts that should pass.
+- `crates/jmap-mock/src/calendars.rs:591:18: replace >= with < in event_matches`: not equivalent, because `before` filtering direction is inverted and can keep late events while dropping early ones.
+- `crates/jmap-mock/src/calendars.rs:596:12: delete ! in event_matches`: not equivalent, because title substring filtering is inverted and returns non-matching titles.
+- `crates/jmap-mock/src/calendars.rs:606:12: delete ! in event_matches`: not equivalent, because free-text matching is inverted and rejects entries whose title or description actually contains the query text.
+- `crates/jmap-mock/src/calendars.rs:606:44: replace || with && in event_matches`: not equivalent, because text search now requires matches in both title and description instead of either field.
+- `crates/jmap-mock/src/calendars.rs:622:5: replace record_event_change_notifications with ()`: not equivalent, because event change notifications are no longer recorded for sharing principals.
+- `crates/jmap-mock/src/calendars.rs:669:5: replace calendar_event_notification_get -> Result<Value, MethodError> with Ok(Default::default())`: not equivalent, because notification list and `notFound` results are replaced with an empty fabricated payload.
+- `crates/jmap-mock/src/calendars.rs:678:36: replace == with != in calendar_event_notification_get`: not equivalent, because recipient visibility is inverted and users can see others' notifications while losing their own.
+- `crates/jmap-mock/src/calendars.rs:686:56: replace match guard Some(recipient) == viewer with true in calendar_event_notification_get`: not equivalent, because id-based fetch ignores recipient visibility and returns notifications for any principal.
+- `crates/jmap-mock/src/calendars.rs:686:56: replace match guard Some(recipient) == viewer with false in calendar_event_notification_get`: not equivalent, because id-based fetch can never return visible notifications.
+- `crates/jmap-mock/src/calendars.rs:686:72: replace == with != in calendar_event_notification_get`: not equivalent, because recipient matching is inverted and visible notifications are treated as `notFound`.
+- `crates/jmap-mock/src/calendars.rs:711:5: replace calendar_event_notification_query -> Result<Value, MethodError> with Ok(Default::default())`: not equivalent, because query ids and state output are replaced with a fabricated default result.
+- `crates/jmap-mock/src/calendars.rs:717:35: replace && with || in calendar_event_notification_query`: not equivalent, because query selection can include notifications that are visible-only or filter-only instead of requiring both.
+- `crates/jmap-mock/src/calendars.rs:717:25: replace == with != in calendar_event_notification_query`: not equivalent, because visibility for query results is inverted across principals.
+- `crates/jmap-mock/src/calendars.rs:751:5: replace notification_matches -> bool with true`: not equivalent, because all notifications match filters regardless of `after`, `before`, or `types`.
+- `crates/jmap-mock/src/calendars.rs:751:5: replace notification_matches -> bool with false`: not equivalent, because query filtering always returns an empty result set.
+- `crates/jmap-mock/src/calendars.rs:752:42: replace <= with > in notification_matches`: not equivalent, because the `after` timestamp predicate is reversed.
+- `crates/jmap-mock/src/calendars.rs:757:42: replace >= with < in notification_matches`: not equivalent, because the `before` timestamp predicate is reversed.
+- `crates/jmap-mock/src/calendars.rs:762:12: delete ! in notification_matches`: not equivalent, because the notification-type membership test is inverted.
+- `crates/jmap-mock/src/calendars.rs:778:5: replace calendar_event_notification_set -> Result<Value, MethodError> with Ok(Default::default())`: not equivalent, because create, update, and destroy validation is bypassed and returns a fabricated empty response.
+- `crates/jmap-mock/src/calendars.rs:786:21: replace != with == in calendar_event_notification_set`: not equivalent, because state-mismatch handling is inverted and exact-state requests fail while stale-state requests can pass.
+- `crates/jmap-mock/src/calendars.rs:814:63: replace == with != in calendar_event_notification_set`: not equivalent, because delete visibility is inverted and users can target notifications owned by others.
+- `crates/jmap-mock/src/calendars.rs:815:24: replace && with || in calendar_event_notification_set`: not equivalent, because destruction can succeed when either visibility or destroyability alone is true instead of requiring both.
+- `crates/jmap-mock/src/calendars.rs:828:8: delete ! in calendar_event_notification_set`: not equivalent, because `destroyed` is omitted when non-empty and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:831:8: delete ! in calendar_event_notification_set`: not equivalent, because `notCreated` is omitted when non-empty and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:834:8: delete ! in calendar_event_notification_set`: not equivalent, because `notUpdated` is omitted when non-empty and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:837:8: delete ! in calendar_event_notification_set`: not equivalent, because `notDestroyed` is omitted when non-empty and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:851:9: replace AccountState::seed_participant_identity -> Id with Default::default()`: not equivalent, because fixture seeding returns an unrelated id that does not map to the inserted identity.
+- `crates/jmap-mock/src/calendars.rs:878:5: replace participant_identity_get -> Result<Value, MethodError> with Ok(Default::default())`: not equivalent, because identity listings and `notFound` reporting are dropped.
+- `crates/jmap-mock/src/calendars.rs:915:5: replace participant_identity_set -> Result<Value, MethodError> with Ok(Default::default())`: not equivalent, because server-side validation and create or update semantics are skipped.
+- `crates/jmap-mock/src/calendars.rs:926:21: replace != with == in participant_identity_set`: not equivalent, because state-mismatch checks are inverted and matching states fail.
+- `crates/jmap-mock/src/calendars.rs:934:50: replace == with != in participant_identity_set`: not equivalent, because default-identity detection is inverted and first-create default assignment can be wrong.
+- `crates/jmap-mock/src/calendars.rs:961:36: delete ! in participant_identity_set`: not equivalent, because first created identities stop receiving automatic `isDefault=true` when no default exists.
+- `crates/jmap-mock/src/calendars.rs:996:32: replace != with == in participant_identity_set`: not equivalent, because immutable-id validation flips and can reject valid unchanged ids while admitting changed ids.
+- `crates/jmap-mock/src/calendars.rs:1003:31: replace != with == in participant_identity_set`: not equivalent, because `isDefault` immutability checks are inverted and valid updates are rejected.
+- `crates/jmap-mock/src/calendars.rs:1018:51: replace == with != in participant_identity_set`: not equivalent, because default-id discovery can select a non-default identity and break destroy checks.
+- `crates/jmap-mock/src/calendars.rs:1024:12: delete ! in participant_identity_set`: not equivalent, because missing-id handling in destroy requests is inverted.
+- `crates/jmap-mock/src/calendars.rs:1026:39: replace == with != in participant_identity_set`: not equivalent, because destroying the current default identity can become allowed while non-default identities can be blocked.
+- `crates/jmap-mock/src/calendars.rs:1064:8: delete ! in participant_identity_set`: not equivalent, because `created` can be omitted when entries exist and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:1067:8: delete ! in participant_identity_set`: not equivalent, because `updated` can be omitted when entries exist and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:1070:8: delete ! in participant_identity_set`: not equivalent, because `destroyed` can be omitted when entries exist and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:1073:8: delete ! in participant_identity_set`: not equivalent, because `notCreated` can be omitted when entries exist and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:1076:8: delete ! in participant_identity_set`: not equivalent, because `notUpdated` can be omitted when entries exist and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:1079:8: delete ! in participant_identity_set`: not equivalent, because `notDestroyed` can be omitted when entries exist and emitted when empty.
+- `crates/jmap-mock/src/calendars.rs:1087:5: replace set_default with ()`: not equivalent, because `onSuccessSetIsDefault` no longer changes the default identity.
+- `crates/jmap-mock/src/calendars.rs:1097:40: replace == with != in set_default`: not equivalent, because it selects the wrong identity as default target.
+- `crates/jmap-mock/src/calendars.rs:1098:36: replace != with == in set_default`: not equivalent, because default toggles are skipped when needed and applied when already correct.
