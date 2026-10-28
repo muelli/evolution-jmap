@@ -325,6 +325,17 @@ fn connect_and_stream(
             "eventsource url is not a usable http(s) URL: {url:?}"
         ))
     })?;
+    // Refuse before the dial, as a bad URL is refused: a header that adds
+    // request lines must not reach the socket, and a loopback endpoint makes
+    // those lines a request to a service on this machine.
+    if let Some((name, _)) = headers
+        .iter()
+        .find(|(name, value)| !safe_header_name(name) || !safe_header_value(value))
+    {
+        return Err(io::Error::other(format!(
+            "eventsource header {name:?} holds a character that is not allowed in a header"
+        )));
+    }
     let mut connected_stream = None;
     let mut last_error = None;
     for addr in parts.dial.to_socket_addrs()? {
@@ -488,6 +499,25 @@ struct UrlParts {
     dial: String,
     host: String,
     path_and_query: String,
+}
+
+/// Whether `value` can go into a request header without adding a line.
+///
+/// RFC 9110 Section 5.5 allows a visible character, a space or a horizontal
+/// tab. A control character could end the header and add request lines that
+/// carry the credentials, as a control character in the URL could.
+fn safe_header_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte == b'\t' || (0x20..0x7f).contains(&byte) || byte >= 0x80)
+}
+
+/// Whether `name` is a header name, that is a token of RFC 9110 Section 5.6.2.
+fn safe_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
 /// Split an `http(s)://host[:port]/path?query` URL into its parts.
@@ -710,8 +740,12 @@ fn stream_events(
             let val = value.trim();
             if val.is_empty() {
                 frame_id = Some(None);
-            } else {
+            } else if safe_header_value(val) {
                 frame_id = Some(Some(val.to_owned()));
+            } else {
+                // The id goes back in `Last-Event-ID`. A line ends at LF, so
+                // a value can still hold a CR. Drop such an id and continue.
+                tracing::debug!("eventsource: an event id with a control character is dropped");
             }
         } else if trimmed == "id" {
             frame_id = Some(None);
@@ -965,6 +999,31 @@ mod tests {
                 }
                 Err(error) => panic!("accept failed: {error}"),
             }
+        }
+    }
+
+    #[test]
+    fn safe_header_value_refuses_a_control_character() {
+        assert!(safe_header_value("Bearer abc.def-ghi_jkl~"));
+        assert!(safe_header_value("Basic dXNlcjpwYXNz"));
+        assert!(safe_header_value("token with a space and a \ttab"));
+        for value in [
+            "Bearer t\r\nSET key value",
+            "Bearer t\nX-Evil: 1",
+            "Bearer t\rX-Evil: 1",
+            "Bearer t\0",
+            "Bearer t\u{7f}",
+        ] {
+            assert!(!safe_header_value(value), "{value:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn safe_header_name_refuses_anything_that_is_not_a_token() {
+        assert!(safe_header_name("Authorization"));
+        assert!(safe_header_name("Last-Event-ID"));
+        for name in ["Auth orization", "Auth:orization", "Auth\r\nX-Evil", ""] {
+            assert!(!safe_header_name(name), "{name:?} must be refused");
         }
     }
 

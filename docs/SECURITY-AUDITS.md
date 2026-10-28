@@ -51,6 +51,7 @@ re-audit also runs the regression test of every earlier finding again.
 | 2026-10-21 | Changes since 2026-10-20, with the deferred delete of a collection. | F40 to F46 |
 | 2026-10-22 | Security and logic review: server data, logic, threads and data loss. | M1 to M6 |
 | 2026-10-22 | Review of unsafe code, FFI ownership and secrets. | N1 to N8 |
+| 2026-10-28 | Changes since 2026-10-21, with the shared extension and backend machinery of `jmap-backend-core`. | F47 |
 
 ## Findings
 
@@ -105,6 +106,7 @@ paths are relative to `rust/crates/`.
 | F44 | No caller uses the results that a partly applied `/set` returns. The error also hides a 401 or 429 of a later part from the retry logic. No caller sends more than one object today. | Partly fixed. The error of the failed part now decides if the error is a 401 or a rate limit, and gives its retry time. `jmap-client/src/error.rs`, `a_partial_set_reports_the_401_of_its_failed_part` and `a_partial_set_reports_the_rate_limit_of_its_failed_part`. Open: no caller uses the results of the applied parts, so a retry sends those objects again. |
 | F45 | A received cancellation and an imported file can make the server send the user's answer to the organizer. The guests get no message. | Open. This needs a product decision. |
 | F46 | When the calendar backend goes offline during a received change, EDS can keep the change and upload it later as a change that the user made. | Fixed. The backend marks a received change in its operation flags, not on the thread. EDS keeps these flags with a change that it queues offline and uploads the change with them. `jmap-backend-cal/tests/scheduling.rs`, `a_received_change_stays_received_on_a_thread_with_no_mark` and `the_received_mark_is_one_bit_outside_the_eds_flags`. |
+| F47 | The push (EventSource) request writes each header as it is. A control character in the bearer token, or in an event id that the server sent, adds request lines that carry the credentials. The fix of F41 covered the URL only. | Fixed. The client refuses a header name that is not a token and a header value with a control character before it connects, and it drops an event id that cannot go into `Last-Event-ID`. `jmap-client/src/eventsource.rs`, `a_header_value_with_an_injected_request_line_is_never_dialed` and `stream_events_ignores_an_event_id_with_a_carriage_return`. |
 
 ### Logic review, 2026-10-21
 
