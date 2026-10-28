@@ -325,6 +325,17 @@ fn connect_and_stream(
             "eventsource url is not a usable http(s) URL: {url:?}"
         ))
     })?;
+    // Refuse before the dial, as a bad URL is refused: a header that adds
+    // request lines must not reach the socket, and a loopback endpoint makes
+    // those lines a request to a service on this machine.
+    if let Some((name, _)) = headers
+        .iter()
+        .find(|(name, value)| !safe_header_name(name) || !safe_header_value(value))
+    {
+        return Err(io::Error::other(format!(
+            "eventsource header {name:?} holds a character that is not allowed in a header"
+        )));
+    }
     let mut connected_stream = None;
     let mut last_error = None;
     for addr in parts.dial.to_socket_addrs()? {
@@ -488,6 +499,25 @@ struct UrlParts {
     dial: String,
     host: String,
     path_and_query: String,
+}
+
+/// Whether `value` can go into a request header without adding a line.
+///
+/// RFC 9110 Section 5.5 allows a visible character, a space or a horizontal
+/// tab. A control character could end the header and add request lines that
+/// carry the credentials, as a control character in the URL could.
+fn safe_header_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte == b'\t' || (0x20..0x7f).contains(&byte) || byte >= 0x80)
+}
+
+/// Whether `name` is a header name, that is a token of RFC 9110 Section 5.6.2.
+fn safe_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
 }
 
 /// Split an `http(s)://host[:port]/path?query` URL into its parts.
@@ -710,8 +740,12 @@ fn stream_events(
             let val = value.trim();
             if val.is_empty() {
                 frame_id = Some(None);
-            } else {
+            } else if safe_header_value(val) {
                 frame_id = Some(Some(val.to_owned()));
+            } else {
+                // The id goes back in `Last-Event-ID`. A line ends at LF, so
+                // a value can still hold a CR. Drop such an id and continue.
+                tracing::debug!("eventsource: an event id with a control character is dropped");
             }
         } else if trimmed == "id" {
             frame_id = Some(None);
@@ -966,6 +1000,86 @@ mod tests {
                 Err(error) => panic!("accept failed: {error}"),
             }
         }
+    }
+
+    #[test]
+    fn safe_header_value_refuses_a_control_character() {
+        assert!(safe_header_value("Bearer abc.def-ghi_jkl~"));
+        assert!(safe_header_value("Basic dXNlcjpwYXNz"));
+        assert!(safe_header_value("token with a space and a \ttab"));
+        for value in [
+            "Bearer t\r\nSET key value",
+            "Bearer t\nX-Evil: 1",
+            "Bearer t\rX-Evil: 1",
+            "Bearer t\0",
+            "Bearer t\u{7f}",
+        ] {
+            assert!(!safe_header_value(value), "{value:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn safe_header_name_refuses_anything_that_is_not_a_token() {
+        assert!(safe_header_name("Authorization"));
+        assert!(safe_header_name("Last-Event-ID"));
+        for name in ["Auth orization", "Auth:orization", "Auth\r\nX-Evil", ""] {
+            assert!(!safe_header_name(name), "{name:?} must be refused");
+        }
+    }
+
+    /// A hostile server picks the bearer token and the `eventSourceUrl`. With
+    /// the loopback exception, a token with CR LF would add request lines for
+    /// a service on this machine. The subscription must never dial.
+    #[test]
+    fn a_header_value_with_an_injected_request_line_is_never_dialed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let url = format!(
+            "http://{}/eventsource",
+            listener.local_addr().expect("addr")
+        );
+        let _subscription = EventSourceSubscription::start(
+            url,
+            SharedHeaders::new(vec![(
+                "Authorization".into(),
+                "Bearer t\r\nSET key value\r\n".into(),
+            )]),
+            CancelFlag::default(),
+        );
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok(_) => panic!("the subscription dialed with a CR LF header value"),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        }
+    }
+
+    /// The `id` of a frame goes back to the server in `Last-Event-ID`. A line
+    /// ends at LF, so a value can still hold a CR. Such an id is dropped, and
+    /// the stream continues.
+    #[test]
+    fn stream_events_ignores_an_event_id_with_a_carriage_return() {
+        let raw = b"id: 42\rX-Evil: 1\nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\n\n";
+        let mut reader = BufReader::new(Cursor::new(&raw[..]));
+        let (sender, receiver) = mpsc::channel();
+        let last_id_slot = Arc::new(Mutex::new(None));
+        stream_events(&mut reader, &CancelFlag::new(), &sender, &last_id_slot)
+            .expect("no I/O error");
+
+        let received = receiver.try_recv().expect("the state event still arrives");
+        assert_eq!(
+            received,
+            EventSourceItem::State(changed("a1", "Mailbox", "1"))
+        );
+        assert_eq!(
+            *last_id_slot.lock().unwrap(),
+            None,
+            "an id with a control character must not be remembered"
+        );
     }
 
     #[test]
