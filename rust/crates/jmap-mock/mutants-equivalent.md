@@ -150,3 +150,26 @@ This lane is comment-only in `rust/crates/jmap-mock`, so this file records reaso
 - `crates/jmap-mock/src/sieve.rs:318:5: replace activate with ()`: not equivalent, because this disables activation state changes and leaves script `isActive` flags untouched.
 - `crates/jmap-mock/src/sieve.rs:328:43: replace == with != in activate`: not equivalent, because this flips target selection and activates every non-target script while deactivating the target.
 - `crates/jmap-mock/src/sieve.rs:329:33: replace != with == in activate`: not equivalent, because this skips needed updates and can leave scripts in the wrong active state.
+- `crates/jmap-mock/src/state.rs:168:9: replace ServerState::session_state -> State with Default::default()`: not equivalent, because this drops the live session state token and can break state-aware calls that rely on the current session value.
+- `crates/jmap-mock/src/state.rs:204:9: replace ServerState::objects_in_get -> u64 with 1`: not equivalent, because this forces `maxObjectsInGet` to 1 and can reject valid batched `*/get` requests that should pass.
+- `crates/jmap-mock/src/state.rs:278:9: replace QueryPaging::page -> (Vec<Id>, Option<u64>) with (vec![Default::default()], None)`: not equivalent, because this ignores real query matches and returns a fabricated id with no computed limit.
+- `crates/jmap-mock/src/state.rs:278:9: replace QueryPaging::page -> (Vec<Id>, Option<u64>) with (vec![Default::default()], Some(0))`: not equivalent, because this ignores real query matches and reports a fake limit value.
+- `crates/jmap-mock/src/state.rs:278:9: replace QueryPaging::page -> (Vec<Id>, Option<u64>) with (vec![Default::default()], Some(1))`: not equivalent, because this ignores real query matches and reports an unrelated fixed limit.
+- `crates/jmap-mock/src/state.rs:283:66: replace < with == in QueryPaging::page`: not equivalent, because this reports `limit` only when `page_size == asked` instead of when `page_size` actually truncates results.
+- `crates/jmap-mock/src/state.rs:283:66: replace < with > in QueryPaging::page`: not equivalent, because this can hide `limit` when truncation happens and report `limit` when it should be absent.
+- `crates/jmap-mock/src/state.rs:283:66: replace < with <= in QueryPaging::page`: not equivalent, because this reports `limit` even when `asked` equals `page_size` and no truncation occurred.
+- `crates/jmap-mock/src/state.rs:284:32: delete ! in QueryPaging::page`: not equivalent, because this inverts `hides_limit` and can expose hidden limits or hide visible ones.
+- `crates/jmap-mock/src/state.rs:399:9: replace AccountState::alloc_blob_id -> Id with Default::default()`: not equivalent, because blob uploads can get invalid or duplicate ids instead of monotonic `B<n>` ids.
+- `crates/jmap-mock/src/state.rs:400:27: replace += with *= in AccountState::alloc_blob_id`: not equivalent, because `next_blob_id` can stop advancing and repeatedly allocate the same blob id.
+- `crates/jmap-mock/src/state.rs:491:9: replace Store<T>::state -> State with Default::default()`: not equivalent, because this drops each store's actual state counter and breaks `/changes` and state token consistency.
+- `crates/jmap-mock/src/state.rs:503:9: replace Store<T>::get_mut -> Option<&mut T> with None`: not equivalent, because every mutable lookup fails and valid updates become impossible.
+- `crates/jmap-mock/src/state.rs:507:9: replace Store<T>::contains -> bool with true`: not equivalent, because existence checks always pass and can treat missing ids as present.
+- `crates/jmap-mock/src/state.rs:515:9: replace Store<T>::len -> usize with 0`: not equivalent, because store size reporting becomes wrong and can corrupt query totals and empty checks.
+- `crates/jmap-mock/src/state.rs:515:9: replace Store<T>::len -> usize with 1`: not equivalent, because store size reporting becomes wrong and can corrupt query totals and empty checks.
+- `crates/jmap-mock/src/state.rs:519:9: replace Store<T>::is_empty -> bool with true`: not equivalent, because stores appear empty even when objects exist.
+- `crates/jmap-mock/src/state.rs:519:9: replace Store<T>::is_empty -> bool with false`: not equivalent, because stores appear non-empty even when no objects exist.
+- `crates/jmap-mock/src/state.rs:524:9: replace Store<T>::seed -> Id with Default::default()`: not equivalent, because fixture seeding can return invalid ids that do not match the inserted object keys.
+- `crates/jmap-mock/src/state.rs:571:9: replace Transaction<'_, T>::alloc_id -> Id with Default::default()`: not equivalent, because transactional creates can reuse invalid ids instead of fresh per-store ids.
+- `crates/jmap-mock/src/state.rs:575:9: replace Transaction<'_, T>::get -> Option<&T> with None`: not equivalent, because reads inside a transaction cannot see existing objects and can trigger wrong `notFound` paths.
+- `crates/jmap-mock/src/state.rs:579:9: replace Transaction<'_, T>::contains -> bool with true`: not equivalent, because transactional existence checks always pass and can allow invalid updates or destroys.
+- `crates/jmap-mock/src/state.rs:579:9: replace Transaction<'_, T>::contains -> bool with false`: not equivalent, because transactional existence checks always fail and can reject valid updates or destroys.
