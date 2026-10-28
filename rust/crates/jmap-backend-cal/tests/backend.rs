@@ -621,3 +621,13 @@ fn class_init_replaces_the_default_get_destination_address_rather_than_leaving_i
          as the backend's connectable"
     );
 }
+
+/// `JmapCalBackend` embeds and delegates its connection and push lifecycle to
+/// `MetaState<CalSync>` from `jmap-backend-core`.
+#[test]
+fn jmap_cal_backend_shares_core_meta_state() {
+    let backend = JmapCalBackend::detached();
+    let state: &jmap_backend_core::meta::MetaState<jmap_cal_sync::CalSync> = &backend;
+    assert!(!state.is_connected());
+    assert!(!state.is_pushing());
+}

@@ -654,3 +654,13 @@ fn e_contact_field_id_resolves_every_supported_field_name() {
         glib_sys::g_free(prop.cast());
     }
 }
+
+/// `JmapBookBackend` embeds and delegates its connection and push lifecycle to
+/// `MetaState<BookSync>` from `jmap-backend-core`.
+#[test]
+fn jmap_book_backend_shares_core_meta_state() {
+    let backend = JmapBookBackend::detached();
+    let state: &jmap_backend_core::meta::MetaState<jmap_book_sync::BookSync> = &backend;
+    assert!(!state.is_connected());
+    assert!(!state.is_pushing());
+}
