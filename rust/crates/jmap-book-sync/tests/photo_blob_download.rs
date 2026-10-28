@@ -82,3 +82,55 @@ fn a_blob_id_photo_too_large_to_inline_stays_hidden() {
         info.vcard
     );
 }
+
+#[test]
+fn a_photo_well_under_the_byte_cap_is_still_inlined() {
+    let fixture = Fixture::start();
+    // Comfortably under `MAX_INLINE_PHOTO_BYTES` (512 KiB), but far bigger
+    // than a few bytes, so a much smaller accidental cap would reject it.
+    let bytes = vec![0x5a_u8; 100 * 1024];
+    let id = seed_blob_photo(&fixture, &bytes, "image/png");
+
+    let info = fixture.sync().load_contact(id.as_str()).unwrap();
+
+    assert!(
+        info.vcard.contains("PHOTO"),
+        "a photo well under the cap must be inlined: {:?}",
+        info.vcard
+    );
+}
+
+#[test]
+fn a_photo_that_already_has_a_uri_is_never_re_downloaded() {
+    let fixture = Fixture::start();
+    // A `photo` entry that already carries a `uri` must stay as it is, even if
+    // it also names a `blob_id`: only an entry with no `uri` yet is resolved.
+    let other = fixture
+        .client()
+        .upload_blob(&fixture.account_id, "image/png", b"replaced-bytes".to_vec())
+        .unwrap();
+    let original = base64::engine::general_purpose::STANDARD.encode(b"original-bytes");
+    let original_uri = format!("data:image/png;base64,{original}");
+    let mut card = ContactCard::simple(fixture.ours.clone(), "Vera Oldenburg", "vera@example.test");
+    card.media = Some(BTreeMap::from([(
+        "m".to_owned(),
+        Media::new(original_uri)
+            .with_kind("photo")
+            .with_blob_id(other.blob_id)
+            .with_media_type("image/png"),
+    )]));
+    let id = fixture
+        .client()
+        .contact_create(&fixture.account_id, &card)
+        .unwrap()
+        .id
+        .expect("server assigned id");
+
+    let info = fixture.sync().load_contact(id.as_str()).unwrap();
+
+    assert!(
+        info.vcard.contains(&original),
+        "a photo with its own uri already set must keep it: {:?}",
+        info.vcard
+    );
+}
