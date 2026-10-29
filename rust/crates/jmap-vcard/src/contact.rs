@@ -21,6 +21,9 @@ use jmap_proto::contacts::{
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
     Relation, SchedulingAddress, Title,
 };
+use jmap_proto::text::{
+    caret_decoded, caret_encoded, fold_overlong_lines, has_uri_scheme, uri_scheme,
+};
 use serde_json::{Map, Value, json};
 
 use crate::error::VCardError;
@@ -417,16 +420,7 @@ fn names_a_person(key: &str) -> bool {
 
 /// Whether `value` starts with an RFC 3986 scheme and `:`.
 fn names_a_uri(value: &str) -> bool {
-    let Some((scheme, _)) = value.split_once(':') else {
-        return false;
-    };
-    let mut characters = scheme.chars();
-    characters
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic())
-        && characters.all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
-        })
+    has_uri_scheme(value)
 }
 
 /// Whether this media entry can be emitted as `PHOTO`.
@@ -568,18 +562,6 @@ fn states_unsupported_photo_uri(uri: &str) -> bool {
 /// Whether this value looks like a URI reference with an empty scheme.
 fn states_empty_scheme_photo_uri(uri: &str) -> bool {
     uri.starts_with("://")
-}
-
-/// Return the URI scheme name when the value starts with one.
-fn uri_scheme(value: &str) -> Option<&str> {
-    let (scheme, _) = value.split_once(':')?;
-    let mut characters = scheme.chars();
-    characters
-        .next()
-        .filter(|first| first.is_ascii_alphabetic())?;
-    characters
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'))
-        .then_some(scheme)
 }
 
 /// Case-insensitive prefix strip used for URI schemes and media types.
@@ -1319,67 +1301,6 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
     out.push_str("END:VCARD\r\n");
     fold_overlong_lines(out)
-}
-
-/// Maximum physical line width from RFC 2426 §2.6, in octets.
-/// Excludes the trailing line break.
-const MAX_LINE_OCTETS: usize = 75;
-
-/// Fold physical lines longer than [`MAX_LINE_OCTETS`] at UTF-8 boundaries.
-///
-/// `calcard` already folds lines.
-/// This pass still enforces the RFC 2426 75-octet limit.
-/// This pass keeps escaped pairs on one folded line.
-fn fold_overlong_lines(vcard: String) -> String {
-    if vcard
-        .split("\r\n")
-        .all(|line| line.len() <= MAX_LINE_OCTETS)
-    {
-        return vcard;
-    }
-    let mut out = String::with_capacity(vcard.len() + 16);
-    for (index, line) in vcard.split("\r\n").enumerate() {
-        if index > 0 {
-            out.push_str("\r\n");
-        }
-        let mut rest = line;
-        // The continuation space uses one of the 75 octets.
-        let mut budget = MAX_LINE_OCTETS;
-        while rest.len() > budget {
-            if rest.is_empty() {
-                break;
-            }
-            let mut cut = budget;
-            while cut > 0 && !rest.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            // An odd trailing backslash run escapes the next octet.
-            // Move the cut into that run so the escaped pair stays on one line.
-            if rest[..cut]
-                .bytes()
-                .rev()
-                .take_while(|&byte| byte == b'\\')
-                .count()
-                % 2
-                == 1
-            {
-                cut -= 1;
-            }
-            if cut == 0 {
-                // Fallback: cut at the first UTF-8 boundary to keep progress.
-                // Unfolding restores octets in both cases.
-                cut = (1..=rest.len())
-                    .find(|&i| rest.is_char_boundary(i))
-                    .unwrap_or(rest.len());
-            }
-            out.push_str(&rest[..cut]);
-            out.push_str("\r\n ");
-            rest = &rest[cut..];
-            budget = MAX_LINE_OCTETS - 1;
-        }
-        out.push_str(rest);
-    }
-    out
 }
 
 /// Normalize extended ISO 8601 values on calendar properties before `calcard`
@@ -2554,45 +2475,6 @@ fn param_value_text(value: impl AsRef<str>) -> VCardParameterValue {
     VCardParameterValue::Text(caret_encoded(value.as_ref()))
 }
 
-/// A parameter value with RFC 6868 section 3 caret escapes applied.
-fn caret_encoded(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '^' => out.push_str("^^"),
-            '"' => out.push_str("^'"),
-            '\n' => out.push_str("^n"),
-            '\r' => {
-                chars.next_if_eq(&'\n');
-                out.push_str("^n");
-            }
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-/// A parameter value with RFC 6868 section 3 caret escapes resolved.
-fn caret_decoded(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    let mut chars = value.chars().peekable();
-    while let Some(ch) = chars.next() {
-        let decoded = match (ch, chars.peek()) {
-            ('^', Some('^')) => '^',
-            ('^', Some('\'')) => '"',
-            ('^', Some('n' | 'N')) => '\n',
-            _ => {
-                out.push(ch);
-                continue;
-            }
-        };
-        chars.next();
-        out.push(decoded);
-    }
-    out
-}
-
 fn param_text(value: &VCardParameterValue) -> String {
     match value {
         VCardParameterValue::Text(text) => caret_decoded(text),
@@ -2639,18 +2521,14 @@ fn value_text(value: &VCardValue) -> Option<String> {
 }
 
 fn entry_text(entry: &VCardEntry) -> String {
-    entry_items(entry).join(";")
+    entry_components(entry).join(";")
 }
 
 fn entry_text_list(entry: &VCardEntry) -> String {
-    entry_items(entry).join(",")
+    entry_components(entry).join(",")
 }
 
 fn entry_components(entry: &VCardEntry) -> Vec<String> {
-    entry_items(entry)
-}
-
-fn entry_items(entry: &VCardEntry) -> Vec<String> {
     entry.values.iter().filter_map(value_text).collect()
 }
 
@@ -2692,14 +2570,15 @@ fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_LINE_OCTETS, VCardEntry, VCardProperty, data_uri, entry_key, entry_text,
-        entry_text_list, fold_overlong_lines, normalize_vcard_dates, service_of,
-        split_vcard_property_line, states_unsupported_photo_uri,
+        VCardEntry, VCardProperty, data_uri, entry_key, entry_text, entry_text_list,
+        fold_overlong_lines, normalize_vcard_dates, service_of, split_vcard_property_line,
+        states_unsupported_photo_uri,
     };
     use calcard::common::CalendarScale;
     use calcard::vcard::{
         VCardKind, VCardLevel, VCardParameterValue, VCardPhonetic, VCardSex, VCardValue,
     };
+    use jmap_proto::text::MAX_LINE_OCTETS;
     use std::collections::BTreeMap;
 
     fn unfold_lines(vcard: &str) -> String {
