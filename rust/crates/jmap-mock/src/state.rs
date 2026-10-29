@@ -79,6 +79,8 @@ pub struct ServerState {
     pub max_contact_size: Option<u64>,
     /// Whether new `AddressBook` and `Calendar` objects default to `isSubscribed: false`.
     pub new_collections_default_unsubscribed: bool,
+    /// Whether a new `Mailbox` defaults to `isSubscribed: false`.
+    pub new_mailboxes_default_unsubscribed: bool,
     /// Whether `CalendarEvent/set` create returns only `id` in `created`.
     pub terse_calendar_event_create: bool,
     /// Disable scheduling support on this server when true.
@@ -142,6 +144,7 @@ impl ServerState {
             terse_contact_create: false,
             max_contact_size: None,
             new_collections_default_unsubscribed: false,
+            new_mailboxes_default_unsubscribed: false,
             terse_calendar_event_create: false,
             without_scheduling: false,
             terse_collection_create: false,
