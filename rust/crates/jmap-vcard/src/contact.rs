@@ -2521,18 +2521,14 @@ fn value_text(value: &VCardValue) -> Option<String> {
 }
 
 fn entry_text(entry: &VCardEntry) -> String {
-    entry_items(entry).join(";")
+    entry_components(entry).join(";")
 }
 
 fn entry_text_list(entry: &VCardEntry) -> String {
-    entry_items(entry).join(",")
+    entry_components(entry).join(",")
 }
 
 fn entry_components(entry: &VCardEntry) -> Vec<String> {
-    entry_items(entry)
-}
-
-fn entry_items(entry: &VCardEntry) -> Vec<String> {
     entry.values.iter().filter_map(value_text).collect()
 }
 
