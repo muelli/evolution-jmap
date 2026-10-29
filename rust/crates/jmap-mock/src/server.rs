@@ -86,6 +86,8 @@ pub struct Faults {
     pub terse_contact_create: bool,
     /// Default new `AddressBook` and `Calendar` objects to `isSubscribed: false`.
     pub new_collections_default_unsubscribed: bool,
+    /// Default a new `Mailbox` to `isSubscribed: false`.
+    pub new_mailboxes_default_unsubscribed: bool,
     /// Return terse `CalendarEvent/set` creates with only `id` in `created`.
     pub terse_calendar_event_create: bool,
     /// Simulate a server that sends no scheduling messages.
@@ -345,6 +347,12 @@ impl MockServerBuilder {
         self
     }
 
+    /// Default a new `Mailbox` to `isSubscribed: false`, like Stalwart 1.0.1.
+    pub fn new_mailboxes_default_unsubscribed(mut self) -> Self {
+        self.faults.new_mailboxes_default_unsubscribed = true;
+        self
+    }
+
     /// Return terse `CalendarEvent/set` creates with only `id` in `created`.
     pub fn terse_calendar_event_create(mut self) -> Self {
         self.faults.terse_calendar_event_create = true;
@@ -420,6 +428,7 @@ impl MockServerBuilder {
         state.max_contact_size = self.max_contact_size;
         state.new_collections_default_unsubscribed =
             self.faults.new_collections_default_unsubscribed;
+        state.new_mailboxes_default_unsubscribed = self.faults.new_mailboxes_default_unsubscribed;
         state.terse_calendar_event_create = self.faults.terse_calendar_event_create;
         state.without_scheduling = self.faults.without_scheduling;
         state.terse_collection_create = self.faults.terse_collection_create;

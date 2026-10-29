@@ -23,7 +23,7 @@
 //!   and a refused destroy must not remove one.
 
 use jmap_mail_sync::{FolderInfo, SyncError};
-use jmap_mock::EmailSeed;
+use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::error::set::{INVALID_PROPERTIES, NOT_FOUND};
 use jmap_proto::mail::mailbox_set_error::{HAS_CHILD, HAS_EMAIL};
@@ -126,6 +126,22 @@ fn a_new_folder_is_empty_and_childless() {
 #[test]
 fn a_new_folder_is_subscribed() {
     let fixture = Fixture::start();
+
+    let created = fixture.sync().create_folder(None, "Projects").unwrap();
+
+    assert!(created.subscribed);
+    assert_eq!(
+        fixture.folder("Projects").map(|folder| folder.subscribed),
+        Some(true)
+    );
+}
+
+/// Stalwart 1.0.1 sets `isSubscribed: false` on a new mailbox and says so
+/// explicitly, instead of staying silent. `create_folder` must ask for
+/// `isSubscribed: true` rather than rely on a server default.
+#[test]
+fn a_new_folder_is_subscribed_even_when_the_server_defaults_new_mailboxes_to_unsubscribed() {
+    let fixture = Fixture::started_with(MockServer::builder().new_mailboxes_default_unsubscribed());
 
     let created = fixture.sync().create_folder(None, "Projects").unwrap();
 

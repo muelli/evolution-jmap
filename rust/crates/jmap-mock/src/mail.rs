@@ -134,6 +134,7 @@ fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Op
 /// Handle `Mailbox/set` (RFC 8621 §2.5) with full-request mailbox validation.
 pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Mailbox> = parse_arguments(arguments)?;
+    let default_unsubscribed = state.new_mailboxes_default_unsubscribed;
     let account = account_mut(state, &request.account_id)?;
 
     let old_state = account.mailboxes.state();
@@ -170,9 +171,11 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
         if mailbox.sort_order.is_none() {
             mailbox.sort_order = Some(0);
         }
-        // Default new mailboxes to subscribed (RFC 8621 §2 server latitude).
+        // RFC 8621 §2 leaves the default to the server. Stalwart 1.0.1 defaults to
+        // unsubscribed and says so explicitly; earlier Stalwart stayed silent and
+        // meant subscribed. This mock copies whichever a test asks for.
         if mailbox.is_subscribed.is_none() {
-            mailbox.is_subscribed = Some(true);
+            mailbox.is_subscribed = Some(!default_unsubscribed);
         }
         created.insert(creation_id, counted_empty(&mailbox));
         tree.insert(id.clone(), mailbox.clone());

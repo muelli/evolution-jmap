@@ -935,11 +935,13 @@ impl MailSync {
     /// sets no role. A role read from the response would bypass the role
     /// selection of [`FolderTree`], which prevents two inboxes in one account.
     ///
-    /// This function reads `isSubscribed` from the response if the server sent
-    /// it. RFC 8621 §2 lets the server select the default, and the client
-    /// cannot calculate it. If the server sent no value, the default is `true`.
-    /// The user asked for this folder, so the user wants to see it. `false`
-    /// would hide the new folder until the next listing.
+    /// The create asks for `isSubscribed: true`. RFC 8621 §2 lets the server
+    /// pick the default for an unstated value. Stalwart 1.0.1 picked
+    /// unsubscribed, and states it rather than omitting the property, so a
+    /// client that does not ask stays silently unsubscribed. The user asked
+    /// for this folder, so the user wants to see it; a hidden new folder
+    /// would be wrong until the next listing. `jmap-collection-sync`'s
+    /// `create_collection` requests the same property for the same reason.
     ///
     /// A refusal (for example, a duplicate sibling name or a missing parent)
     /// stays [`SyncError::Client`]. The server reason is a message for the
@@ -949,7 +951,7 @@ impl MailSync {
         parent: Option<&FolderInfo>,
         name: &str,
     ) -> Result<FolderInfo, SyncError> {
-        let mut requested = Mailbox::new(name);
+        let mut requested = Mailbox::new(name).is_subscribed(true);
         if let Some(parent) = parent {
             requested = requested.with_parent_id(parent.id.clone());
         }
