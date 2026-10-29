@@ -23,15 +23,31 @@
 //! `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset. When a `_USER` variable is set,
 //! a missing `_PASSWORD` or `JMAP_LIVE_SERVER_URL` causes a panic.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use jmap_cal_sync::{CalSync, Itip};
 use jmap_client::Client;
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
+use jmap_proto::date::civil_from_days;
 use jmap_proto::mail::EmailQueryFilter;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_MAIL};
 use jmap_test_support::{connect_owner, connect_recipient_with_user, unique_suffix};
+
+/// An iCalendar `DATE-TIME` 30 days from the moment this runs, so the meeting
+/// is always in the future. A server is free to skip scheduling messages for
+/// an event already in the past, so a date fixed at the time this file was
+/// written goes stale and silently breaks every test in this file, the way
+/// a hardcoded `20261022` did until this was caught against a real server.
+fn future_dtstart() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock reads a time after 1970");
+    let days = i64::try_from(now.as_secs() / 86_400).expect("seconds since epoch fits an i64") + 30;
+    let (year, month, day) =
+        civil_from_days(days).expect("30 days from now stays within the civil calendar's range");
+    format!("{year:04}{month:02}{day:02}T130000")
+}
 
 fn default_calendar(client: &Client, account_id: &Id) -> Id {
     client
@@ -77,13 +93,14 @@ fn meeting(uid: &str, organizer: &str, guest: &str) -> String {
          BEGIN:VEVENT\r\n\
          UID:{uid}\r\n\
          SUMMARY:{uid}\r\n\
-         DTSTART;TZID=Europe/Berlin:20261022T130000\r\n\
+         DTSTART;TZID=Europe/Berlin:{}\r\n\
          DURATION:PT1H\r\n\
          ORGANIZER;CN=Organizer:mailto:{organizer}\r\n\
          ATTENDEE;CN=Organizer;PARTSTAT=ACCEPTED:mailto:{organizer}\r\n\
          ATTENDEE;CN=Guest;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{guest}\r\n\
          END:VEVENT\r\n\
-         END:VCALENDAR\r\n"
+         END:VCALENDAR\r\n",
+        future_dtstart(),
     )
 }
 
