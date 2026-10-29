@@ -148,17 +148,28 @@ const NEXT_MONDAY: Preset = Preset::NextMonday;
 #[cfg(evolution_eui_manager)]
 const GROUP_NAME: &CStr = c"jmap-snooze";
 
-/// The submenu is a direct child of `/mail-message-popup`
-/// (3.52: `<popup name='mail-message-popup'>`; 3.55+: `<menu id='mail-message-popup'>`).
+/// The submenu is a direct child of `/mail-message-popup`, the context menu
+/// of the message list, and of `/mail-preview-popup`, the context menu of the
+/// message body (3.52: `<popup name='...'>`; 3.55+: `<menu id='...'>`). A
+/// detached message window (`EMailBrowser`, "Open in New Window") shows only
+/// `mail-preview-popup` on its body, with no message list at all, so Snooze
+/// needs both popups to be reachable there.
 ///
-/// That popup has a `mail-message-popup-common-actions` placeholder
-/// (in the installed 3.52.3 `evolution-mail.ui` and `evolution-mail-reader.ui`).
-/// This fragment does not use the placeholder.
-/// The placeholder `mail-message-popup-actions` is in `mail-preview-popup`, not in this popup.
-/// `mail-to-task.c` also merges its submenu as a direct child of this popup,
-/// and its merge fragment also does not set `is-popup`.
+/// Both popups have their own placeholder for an extra action
+/// (`mail-message-popup-common-actions` and `mail-preview-popup-actions` in
+/// the installed 3.52.3 `evolution-mail.ui` and `evolution-mail-reader.ui`;
+/// `mail-preview-popup-actions` in the 3.60.2 `evolution-mail-reader.eui`).
+/// This fragment uses neither: `mail-to-task.c` also merges its submenu as a
+/// direct child of `mail-message-popup`, and its merge fragment does not set
+/// `is-popup` either.
 #[cfg(not(evolution_eui_manager))]
 const UI: &CStr = c"<popup name='mail-message-popup'>\
+<menu action='jmap-snooze-menu'>\
+<menuitem action='jmap-snooze-hour'/>\
+<menuitem action='jmap-snooze-tomorrow'/>\
+<menuitem action='jmap-snooze-monday'/>\
+</menu></popup>\
+<popup name='mail-preview-popup'>\
 <menu action='jmap-snooze-menu'>\
 <menuitem action='jmap-snooze-hour'/>\
 <menuitem action='jmap-snooze-tomorrow'/>\
@@ -167,6 +178,13 @@ const UI: &CStr = c"<popup name='mail-message-popup'>\
 #[cfg(evolution_eui_manager)]
 const UI: &CStr = c"<eui>\
 <menu id='mail-message-popup'>\
+<submenu action='jmap-snooze-menu'>\
+<item action='jmap-snooze-hour'/>\
+<item action='jmap-snooze-tomorrow'/>\
+<item action='jmap-snooze-monday'/>\
+</submenu>\
+</menu>\
+<menu id='mail-preview-popup'>\
 <submenu action='jmap-snooze-menu'>\
 <item action='jmap-snooze-hour'/>\
 <item action='jmap-snooze-tomorrow'/>\

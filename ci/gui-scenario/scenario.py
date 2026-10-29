@@ -470,6 +470,14 @@ def double_click(node):
     pyatspi.Registry.generateMouseEvent(x, y, "b1d")
 
 
+def right_click(node):
+    """Right-click the centre of `node` with the synthetic mouse, to open its context menu."""
+    extents = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    x = extents.x + extents.width // 2
+    y = extents.y + extents.height // 2
+    pyatspi.Registry.generateMouseEvent(x, y, "b3c")
+
+
 def text_of(node):
     """Return the full text of a text node."""
     text = node.queryText()
