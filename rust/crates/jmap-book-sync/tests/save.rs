@@ -2862,11 +2862,23 @@ fn the_photo_the_user_chose_reaches_the_server() {
 
     let media = fixture.card(&id).media.expect("media");
     assert_eq!(media.len(), 1, "patched in place, not re-added: {media:?}");
+    // The chosen photo is a genuine edit, so it is uploaded and sent as
+    // `blobId` (RFC 9610 section 2), not as the inline `uri` the vCard stated.
     assert_eq!(
-        media["m1"].uri.as_deref(),
-        Some("data:image/png;base64,bmV3LXBob3RvISE=")
+        media["m1"].uri, None,
+        "an edited photo must not also carry a uri: {:?}",
+        media["m1"]
     );
+    let blob_id = media["m1"]
+        .blob_id
+        .clone()
+        .expect("an edited photo must be sent as blobId");
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/png"));
+    let downloaded = fixture
+        .client()
+        .download_blob(&fixture.account_id, &blob_id, "photo", 1024)
+        .unwrap();
+    assert_eq!(downloaded, b"new-photo!!");
     assert_eq!(
         media["m1"].pref.or_else(|| media["m1"]
             .extra
@@ -2977,9 +2989,10 @@ fn only_the_first_of_several_pictures_is_the_one_the_user_edits() {
     let media = fixture.card(&id).media.expect("media");
     assert_eq!(media.len(), 2, "{media:?}");
     assert_eq!(
-        media["m1"].uri.as_deref(),
-        Some("data:image/png;base64,bmV3LXBob3RvISE=")
+        media["m1"].uri, None,
+        "an edited photo must be sent as blobId: {media:?}"
     );
+    assert!(media["m1"].blob_id.is_some(), "{media:?}");
     assert_eq!(
         media["m9"].uri.as_deref(),
         Some("https://vera.example/other.png"),
@@ -3020,8 +3033,11 @@ fn a_logo_survives_a_save_it_was_never_part_of() {
         "the logo was overwritten by the photo the user chose: {media:?}"
     );
     assert_eq!(
-        media["m2"].uri.as_deref(),
-        Some("data:image/png;base64,bmV3LXBob3RvISE="),
+        media["m2"].uri, None,
+        "an edited photo must be sent as blobId: {media:?}"
+    );
+    assert!(
+        media["m2"].blob_id.is_some(),
         "the picture was re-added rather than patched: {media:?}"
     );
     assert_eq!(media.len(), 2, "{media:?}");

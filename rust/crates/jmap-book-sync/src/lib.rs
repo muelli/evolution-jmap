@@ -214,7 +214,7 @@ impl BookSync {
         // property), so diffing against the raw copy would read every
         // untouched `blobId` photo as edited.
         let resolved = resolve_inline_photos(&self.client, &self.account_id, &current);
-        let patch = match base {
+        let mut patch = match base {
             Some(base) => jmap_object_sync::patch_since::<Cards>(
                 vcard_to_card(base.vcard),
                 base.on_conflict,
@@ -228,6 +228,7 @@ impl BookSync {
         if patch.is_empty() {
             return ContactInfo::render(&self.client, &self.account_id, &current);
         }
+        upload_inline_photos(&self.client, &self.account_id, &mut patch);
         let account_id = self.account_id().to_string();
         let address_book_id = self.address_book_id().to_string();
         tracing::debug!(account_id, address_book_id, uid, "updating contact card");
@@ -440,6 +441,59 @@ fn decoded_octets(uri: &str) -> u64 {
     (payload.len() as u64 * 3) / 4
 }
 
+/// Decode a `data:` URI (RFC 2397) that declares base64 into its media type
+/// and raw bytes. `uri` must already satisfy [`is_data_uri`]. Returns `None`
+/// for a URI with no base64 marker, no media type, or bytes that do not
+/// decode: [`upload_inline_photos`] then leaves the photo as the inline `uri`
+/// the diff already computed.
+fn decode_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
+    let rest = uri.get(5..)?;
+    let (header, payload) = rest.split_once(',')?;
+    if header.len() < BASE64_MARKER.len()
+        || !header.as_bytes()[header.len() - BASE64_MARKER.len()..]
+            .eq_ignore_ascii_case(BASE64_MARKER.as_bytes())
+    {
+        return None;
+    }
+    let media_type = &header[..header.len() - BASE64_MARKER.len()];
+    if media_type.is_empty() {
+        return None;
+    }
+    let bytes = BASE64.decode(payload).ok()?;
+    Some((media_type.to_owned(), bytes))
+}
+
+/// Upload a photo the diff stated inline (`media/<key>/uri` as a `data:`
+/// URI) and send it to the server as `blobId` instead (RFC 9610 section 2: a
+/// client MAY send `blobId` instead of `uri`). A genuinely edited photo then
+/// travels through `Blob/upload`, not as base64 inside the `ContactCard/set`
+/// request body. A failed upload leaves the `uri` entry untouched: the save
+/// still reaches the server, just without the `blobId` indirection this time.
+fn upload_inline_photos(client: &Client, account_id: &Id, patch: &mut Map<String, Value>) {
+    let keys: Vec<String> = patch
+        .keys()
+        .filter(|key| key.starts_with("media/") && key.ends_with("/uri"))
+        .cloned()
+        .collect();
+    for key in keys {
+        let Some(Value::String(uri)) = patch.get(&key) else {
+            continue;
+        };
+        if !is_data_uri(uri) {
+            continue;
+        }
+        let Some((media_type, bytes)) = decode_data_uri(uri) else {
+            continue;
+        };
+        let Ok(uploaded) = client.upload_blob(account_id, &media_type, bytes) else {
+            continue;
+        };
+        let blob_id_key = format!("{}blobId", &key[..key.len() - "uri".len()]);
+        patch.insert(key, Value::Null);
+        patch.insert(blob_id_key, Value::String(uploaded.blob_id.to_string()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,6 +584,34 @@ mod tests {
         assert!(is_data_uri("DATA:,hello"));
         assert!(!is_data_uri("http://example.test/vera.jpg"));
         assert!(!is_data_uri("urn:uuid:1"));
+    }
+
+    #[test]
+    fn a_base64_data_uri_decodes_to_its_media_type_and_bytes() {
+        assert_eq!(
+            decode_data_uri("data:image/png;base64,aGVsbG8="),
+            Some(("image/png".to_owned(), b"hello".to_vec()))
+        );
+        assert_eq!(
+            decode_data_uri("DATA:image/jpeg;BASE64,aGVsbG8="),
+            Some(("image/jpeg".to_owned(), b"hello".to_vec())),
+            "the base64 marker has no case"
+        );
+    }
+
+    #[test]
+    fn a_data_uri_with_no_base64_marker_does_not_decode() {
+        assert_eq!(decode_data_uri("data:,hello"), None);
+    }
+
+    #[test]
+    fn a_data_uri_with_no_media_type_does_not_decode() {
+        assert_eq!(decode_data_uri("data:;base64,aGVsbG8="), None);
+    }
+
+    #[test]
+    fn a_data_uri_with_invalid_base64_does_not_decode() {
+        assert_eq!(decode_data_uri("data:image/png;base64,not-base64!"), None);
     }
 
     #[test]
