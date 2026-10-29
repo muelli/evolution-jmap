@@ -26,9 +26,8 @@ themselves send.
 | `rfc9404/` | RFC 9404, JMAP Blob Management | August 2023 |
 
 The calendars fixtures come from draft -33. `jmap_proto::calendars` cites draft
--28 for its property names. Draft -28 and draft -33 define the same properties
-and the same section structure. Only the example values changed. The -33
-examples therefore check that model.
+-33 for its property names and section numbers. Draft -28 and draft -33 define
+the same section structure, so the -33 examples check that model.
 
 ## How they differ from the specification text
 

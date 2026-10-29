@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Calendars types (draft-ietf-jmap-calendars-28). A `CalendarEvent` is a
+//! JMAP Calendars types (draft-ietf-jmap-calendars-33). A `CalendarEvent` is a
 //! jscalendarbis (`draft-ietf-calext-jscalendarbis`, the JSCalendar 2.0 base
 //! that obsoletes RFC 8984) Event carrying the JMAP-side `id` and
 //! `calendarIds` properties.
 //!
 //! The draft is in final approval as of mid-2026; property names follow
-//! draft-ietf-jmap-calendars-28. Unmodeled properties ride in `extra`.
+//! draft-ietf-jmap-calendars-33. Unmodeled properties ride in `extra`.
 
 use std::collections::BTreeMap;
 
@@ -266,7 +266,7 @@ impl CalendarRights {
     }
 }
 
-/// `Calendar/set` arguments (draft-ietf-jmap-calendars-28 §4.3).
+/// `Calendar/set` arguments (draft-ietf-jmap-calendars-33 §4.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -582,7 +582,7 @@ impl CalendarEvent {
             event_type: Some("Event".to_owned()),
             // A standalone Event MUST state its JSCalendar version
             // (jscalendarbis §3.1.2); in JMAP context the object is a
-            // jscalendarbis Event (draft-ietf-jmap-calendars-28 §1.4) = "2.0".
+            // jscalendarbis Event (draft-ietf-jmap-calendars-33 §1.4) = "2.0".
             version: Some("2.0".to_owned()),
             title: Some(title.to_owned()),
             start: Some(start.to_owned()),
@@ -1785,7 +1785,7 @@ impl OffsetTrigger {
     }
 }
 
-/// Calendar user preferences (draft-ietf-jmap-calendars-28 §6).
+/// Calendar user preferences (not in draft-ietf-jmap-calendars-33, where §6 is Alerts).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -1829,7 +1829,7 @@ impl CalendarPreferences {
     }
 }
 
-/// Calendar preferences capability properties (draft-ietf-jmap-calendars-28 §6).
+/// Calendar preferences capability properties (not in draft-ietf-jmap-calendars-33, where §6 is Alerts).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -1854,7 +1854,7 @@ impl CalendarPreferencesCapability {
     }
 }
 
-/// `CalendarEvent/set` arguments (draft-ietf-jmap-calendars-28 §5.9).
+/// `CalendarEvent/set` arguments (draft-ietf-jmap-calendars-33 §5.9).
 /// Extends [`SetRequest`] with `sendEventNotifications`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1886,7 +1886,7 @@ impl CalendarEventSetRequest {
 }
 
 /// iTIP methods (RFC 5546 §3.2) a server sends for
-/// draft-ietf-jmap-calendars-28 §5.9.2's scheduling messages.
+/// draft-ietf-jmap-calendars-33 §5.9.2's scheduling messages.
 pub mod scheduling_method {
     /// An invitation, from the event's origin to its participants.
     pub const REQUEST: &str = "REQUEST";
@@ -1898,7 +1898,7 @@ pub mod scheduling_method {
     pub const REPLY: &str = "REPLY";
 }
 
-/// Properties stored per user (draft-ietf-jmap-calendars-28 §5.4).
+/// Properties stored per user (draft-ietf-jmap-calendars-33 §5.4).
 /// Updates to these properties send no scheduling messages.
 pub const PER_USER_PROPERTIES: &[&str] = &[
     "alerts",
@@ -1909,7 +1909,7 @@ pub const PER_USER_PROPERTIES: &[&str] = &[
     "useDefaultAlerts",
 ];
 
-/// `CalendarEvent/parse` arguments (draft-ietf-jmap-calendars-28 §5.7).
+/// `CalendarEvent/parse` arguments (draft-ietf-jmap-calendars-33 §5.13).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -1943,7 +1943,7 @@ impl CalendarEventParseRequest {
     }
 }
 
-/// `CalendarEvent/parse` response (draft-ietf-jmap-calendars-28 §5.7).
+/// `CalendarEvent/parse` response (draft-ietf-jmap-calendars-33 §5.13).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2150,7 +2150,7 @@ impl EventRelation {
     }
 }
 
-/// `CalendarEvent/getFreeBusy` arguments (draft-ietf-jmap-calendars-28 §5.7).
+/// `CalendarEvent/getFreeBusy` arguments (not in draft-ietf-jmap-calendars-33; compare `Principal/getAvailability`, §2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2198,7 +2198,7 @@ impl GetFreeBusyRequest {
     }
 }
 
-/// One free/busy interval block within `CalendarEvent/getFreeBusy` (draft-ietf-jmap-calendars-28 §5.7).
+/// One free/busy interval block within `CalendarEvent/getFreeBusy` (not in draft-ietf-jmap-calendars-33; compare `Principal/getAvailability`, §2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2250,7 +2250,7 @@ impl FreeBusyBlock {
     }
 }
 
-/// `CalendarEvent/getFreeBusy` response (draft-ietf-jmap-calendars-28 §5.7).
+/// `CalendarEvent/getFreeBusy` response (not in draft-ietf-jmap-calendars-33; compare `Principal/getAvailability`, §2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2272,7 +2272,7 @@ impl GetFreeBusyResponse {
     }
 }
 
-/// The `SetError` types draft-ietf-jmap-calendars-28 §5.9 adds for `CalendarEvent/set`.
+/// The `SetError` types draft-ietf-jmap-calendars-33 §5.9 adds for `CalendarEvent/set`.
 pub mod calendar_event_set_error {
     /// A referenced blob id does not exist.
     pub const BLOB_NOT_FOUND: &str = "blobNotFound";
@@ -2286,7 +2286,7 @@ pub mod calendar_event_set_error {
     pub const NO_SUPPORTED_SCHEDULE_METHODS: &str = "noSupportedScheduleMethods";
 }
 
-/// Standard free/busy status values (draft-ietf-jmap-calendars-28 §5.7).
+/// Standard free/busy status values (not in draft-ietf-jmap-calendars-33; compare `Principal/getAvailability`, §2.2).
 pub mod calendar_free_busy_status {
     /// The block does not block time.
     pub const FREE: &str = "free";
@@ -2458,7 +2458,7 @@ fn default_calendar_alert_type() -> String {
     CalendarAlert::TYPE.to_owned()
 }
 
-/// A push notification for a calendar alert (draft-ietf-jmap-calendars-28 §6.4).
+/// A push notification for a calendar alert (draft-ietf-jmap-calendars-33 §6.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2521,7 +2521,7 @@ fn default_calendar_event_notification_type() -> String {
     CalendarEventNotification::TYPE.to_owned()
 }
 
-/// A notification of changes to calendar events (draft-ietf-jmap-calendars-28 §8).
+/// A notification of changes to calendar events (draft-ietf-jmap-calendars-33 §7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2619,7 +2619,7 @@ impl CalendarEventNotification {
     }
 }
 
-/// Filter for `CalendarEventNotification/query` (draft-ietf-jmap-calendars-28 §8).
+/// Filter for `CalendarEventNotification/query` (draft-ietf-jmap-calendars-33 §7.4.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2663,7 +2663,7 @@ impl CalendarEventNotificationQueryFilter {
     }
 }
 
-/// Well-known notification types for calendar event notifications (draft-ietf-jmap-calendars-28 §8).
+/// Well-known notification types for calendar event notifications (draft-ietf-jmap-calendars-33 §7).
 pub mod calendar_event_notification_type {
     /// The event was created.
     pub const CREATED: &str = "created";
@@ -2675,7 +2675,7 @@ pub mod calendar_event_notification_type {
     pub const REPLY: &str = "reply";
 }
 
-/// Arguments for `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
+/// Arguments for `CalendarEvent/send` (not in draft-ietf-jmap-calendars-33; compare `sendSchedulingMessages`, §5.9.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2741,7 +2741,7 @@ impl CalendarEventSendRequest {
     }
 }
 
-/// A single calendar event to send via `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
+/// A single calendar event to send via `CalendarEvent/send` (not in draft-ietf-jmap-calendars-33; compare `sendSchedulingMessages`, §5.9.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2794,7 +2794,7 @@ impl SendCalendarEvent {
     }
 }
 
-/// Response for `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
+/// Response for `CalendarEvent/send` (not in draft-ietf-jmap-calendars-33; compare `sendSchedulingMessages`, §5.9.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2836,7 +2836,7 @@ impl CalendarEventSendResponse {
     }
 }
 
-/// Result of sending a single calendar event (draft-ietf-jmap-calendars-28 §7).
+/// Result of sending a single calendar event (not in draft-ietf-jmap-calendars-33; compare `sendSchedulingMessages`, §5.9.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2874,7 +2874,7 @@ impl SendCalendarEventResult {
     }
 }
 
-/// Problem delivering an event to a participant (draft-ietf-jmap-calendars-28 §7.3).
+/// Problem delivering an event to a participant (not in draft-ietf-jmap-calendars-33).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2907,7 +2907,7 @@ impl ParticipantProblem {
     }
 }
 
-/// Standard participant problem error types (draft-ietf-jmap-calendars-28 §7.3).
+/// Standard participant problem error types (not in draft-ietf-jmap-calendars-33).
 pub mod participant_problem_kind {
     /// The recipient is the sender's own calendar address.
     pub const CANNOT_SEND_TO_SELF: &str = "cannotSendToSelf";
@@ -2923,7 +2923,7 @@ pub mod participant_problem_kind {
     pub const NOT_AUTHORIZED: &str = "notAuthorized";
 }
 
-/// SetError types added for `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
+/// SetError types added for `CalendarEvent/send` (not in draft-ietf-jmap-calendars-33; compare `sendSchedulingMessages`, §5.9.2).
 pub mod calendar_send_error {
     /// The caller may not send as the given identity.
     pub const FORBIDDEN_FROM: &str = "forbiddenFrom";
@@ -2937,7 +2937,7 @@ pub mod calendar_send_error {
     pub const EVENT_NOT_FOUND: &str = "eventNotFound";
 }
 
-/// An RSVP reply to a calendar event invitation (draft-ietf-jmap-calendars-28 §10).
+/// An RSVP reply to a calendar event invitation (not in draft-ietf-jmap-calendars-33).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -2992,7 +2992,7 @@ impl ParticipantReply {
     }
 }
 
-/// Standard participation status values for participants and replies (draft-ietf-jmap-calendars-28 §10, RFC 8984 §4.4.6).
+/// Standard participation status values for participants and replies (RFC 8984 §4.4.6; not in draft-ietf-jmap-calendars-33).
 pub mod participant_participation_status {
     /// The participant has not yet responded.
     pub const NEEDS_ACTION: &str = "needs-action";
@@ -3006,7 +3006,7 @@ pub mod participant_participation_status {
     pub const DELEGATED: &str = "delegated";
 }
 
-/// A participant identity (draft-ietf-jmap-calendars-28 §3): how a user is
+/// A participant identity (draft-ietf-jmap-calendars-33 §3): how a user is
 /// identified when participating in events and scheduling.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -3021,7 +3021,7 @@ pub struct ParticipantIdentity {
     /// The identity's iTIP `SCHEDULE-ID`, if different from its calendar address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_id: Option<String>,
-    /// The URI that represents this participant for iTIP scheduling (draft-ietf-jmap-calendars-28 §3).
+    /// The URI that represents this participant for iTIP scheduling (draft-ietf-jmap-calendars-33 §3).
     /// Matches participant `calendarAddress` using RFC 3986 §6.2.2 normalization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_address: Option<String>,
@@ -3094,13 +3094,13 @@ impl ParticipantIdentity {
     }
 }
 
-/// The `SetError` types draft-ietf-jmap-calendars-28 §3.2 adds for `ParticipantIdentity/set`.
+/// The `SetError` types draft-ietf-jmap-calendars-33 §3.3 adds for `ParticipantIdentity/set`.
 pub mod participant_identity_set_error {
     /// The identity is the account's default and cannot be destroyed.
     pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
 }
 
-/// `ParticipantIdentity/set` arguments (draft-ietf-jmap-calendars-28 §3.2).
+/// `ParticipantIdentity/set` arguments (draft-ietf-jmap-calendars-33 §3.3).
 /// Adds the `onSuccessSetIsDefault` argument to the standard `/set` shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

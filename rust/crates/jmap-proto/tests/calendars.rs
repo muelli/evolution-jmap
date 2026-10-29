@@ -536,7 +536,7 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
     );
 }
 
-/// CalendarsCapability, AbsoluteTrigger, and EventRelation cover draft-ietf-jmap-calendars-28 §1.3 and RFC 8984 §1.4.10, §4.5.2.
+/// CalendarsCapability, AbsoluteTrigger, and EventRelation cover draft-ietf-jmap-calendars-33 §1.5.1 and RFC 8984 §1.4.10, §4.5.2.
 #[test]
 fn calendars_capabilities_absolute_trigger_and_event_relation_roundtrip_covers_draft_jmap_calendars()
  {

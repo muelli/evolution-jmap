@@ -547,7 +547,7 @@ pub mod principal_set_error {
     pub const INVALID_PROPERTIES: &str = "invalidProperties";
 }
 
-/// Principal availability calculation capability properties (draft-ietf-jmap-calendars-28 §1.5.2).
+/// Principal availability calculation capability properties (draft-ietf-jmap-calendars-33 §1.5.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
