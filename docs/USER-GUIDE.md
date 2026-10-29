@@ -130,6 +130,12 @@ In the context menu of a message list, use the `Snooze` presets.
 
 Snooze needs the Cyrus snooze capability. Stalwart and Fastmail do not offer it. The menu therefore stays disabled for their accounts. This is the expected behavior.
 
+### Externally hosted contact photos
+
+A contact can keep its photo on a web server instead of in the contact. The address book preview then shows the text `Externally hosted image` and the full address of the image. The preview does not download the image.
+
+This keeps the owner of that web server from learning when you look at the contact.
+
 ## Known limits
 
 - Snooze works only on servers that offer the Cyrus snooze capability.

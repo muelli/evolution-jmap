@@ -198,6 +198,15 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // so the extension keys its menu merge on the window.
     "e_mail_reader_get_type",
     "e_mail_reader_get_window",
+    // The address book preview, which jmap-ui's external photo extension
+    // extends. Evolution installs no header for `EABContactDisplay`, so the
+    // extension names this public parent class as its extensible type and
+    // tests the real type by name when it is constructed.
+    "e_web_view_get_type",
+    // Runs one script in the page the preview shows. The `_take` form frees
+    // the script string with `g_free` after it starts the script, so the
+    // caller must allocate that string with GLib.
+    "e_web_view_jsc_run_script_take",
     "e_mail_reader_get_selected_uids",
     "e_mail_reader_ref_folder",
     "e_mail_reader_get_action_group",
@@ -425,6 +434,21 @@ fn blocked_source_types() -> Vec<String> {
 /// cross-checks, nothing would hold such a claim accountable.
 const BLOCKED_GTK_TYPES: &[&str] = &["Gtk.*", "_Gtk.*"];
 
+/// WebKit's *types*, for the same reason as [`BLOCKED_GTK_TYPES`]. No
+/// `webkit2gtk-sys` generation matches this workspace's `glib-sys`, and this
+/// crate neither subclasses nor allocates a WebKit class. The one WebKit
+/// class it names is an argument type, so [`WEBKIT_HANDLES`] declares it
+/// opaque instead.
+const BLOCKED_WEBKIT_TYPES: &[&str] = &["WebKit.*", "_WebKit.*"];
+
+/// The WebKit class the calls above mention, as an opaque handle.
+///
+/// `e_web_view_jsc_run_script_take` takes a `WebKitWebView *`. An `EWebView`
+/// is one, because `struct _EWebView` starts with a `WebKitWebView` field.
+/// `tests/web_view.rs` asks the running type system to confirm that, which
+/// is what licenses the pointer cast at the call site.
+const WEBKIT_HANDLES: &[&str] = &["WebKitWebView"];
+
 /// Evolution's own classes, reached only as a pointer. Nothing here
 /// subclasses them, so a generated layout would be a claim about a struct
 /// nobody reads a field of. `EMailConfigServicePage` is the clearest case:
@@ -464,6 +488,9 @@ const BLOCKED_EVO_TYPES: &[&str] = &[
     "_?EUIManager",
     "_?EUIAction",
     "_?EUIActionGroup",
+    // The preview class and the private struct beside it. Both reach
+    // WebKit classes that [`WEBKIT_HANDLES`] keeps opaque.
+    "_?EWebView[A-Za-z]*",
     // A `GtkHBox` subclass.
     "_?EDateEdit[A-Za-z]*",
     // The alert and the interface of its sink, reached only as pointers.
@@ -531,6 +558,9 @@ const EVO_HANDLES: &[&str] = &[
     "EUIManager",
     "EUIAction",
     "EUIActionGroup",
+    // The address book preview. It is a `WebKitWebView` three classes down,
+    // so its layout belongs to WebKit, not to this crate.
+    "EWebView",
     // The vacation page's date fields.
     "EDateEdit",
     // The info bar after a collection delete.
@@ -711,7 +741,7 @@ fn main() {
     // `_EMailConfigServicePage`, the header's own `typedef struct` spelling.
     // So this defines the handle under the tag, then aliases it to the
     // public name.
-    for t in EVO_HANDLES {
+    for t in EVO_HANDLES.iter().chain(WEBKIT_HANDLES) {
         builder = builder.raw_line(format!(
             "#[repr(C)]\npub struct _{t} {{\n    _opaque: [u8; 0],\n}}\npub type {t} = _{t};"
         ));
@@ -732,6 +762,7 @@ fn main() {
         .copied()
         .chain(BLOCKED_GTK_TYPES.iter().copied())
         .chain(BLOCKED_EVO_TYPES.iter().copied())
+        .chain(BLOCKED_WEBKIT_TYPES.iter().copied())
         .chain(source_types.iter().map(String::as_str))
     {
         builder = builder.blocklist_type(t);

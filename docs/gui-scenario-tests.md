@@ -228,6 +228,24 @@ must still have its photo entry.
 
 The log must show no error of evolution-jmap.
 
+### `contact-photo-fetch`
+
+One collection account with an address book. The server has one contact
+whose photo is an `http:` URI. The scenario serves the image on port 8091 of
+the local host and counts every request. It does these steps and checks:
+
+1. Fetch the image directly, before Evolution starts to show the contact.
+   The photo server must answer and must log the request. A later "no
+   request" result means nothing if the photo server is unreachable.
+2. Select the contact and wait 10 seconds. The photo server must log no
+   request. Evolution must not download an image that a contact names.
+3. The preview must show the placeholder of jmap-ui: the text
+   `Externally hosted image` and the URL in full. The photo server must
+   still log no request.
+4. The server must still have the photo URI.
+
+The log must show no error of evolution-jmap.
+
 ### `vacation`
 
 One mail account in a collection, as the account assistant makes it. The

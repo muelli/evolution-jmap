@@ -11,7 +11,9 @@
 //! - scheduled send in the composer,
 //! - snooze in the message list,
 //! - an info bar with "Undo" after the delete of a calendar or an address
-//!   book.
+//!   book,
+//! - a placeholder, instead of a silent `<img src>`, for a contact photo
+//!   that a vCard gives as an http(s) URL.
 //!
 //! Evolution has no concept of these server features and no backend hook for
 //! them. Upstream, scheduled send is GNOME/evolution#411 and snooze is
@@ -27,6 +29,7 @@
 //!    sensitive.
 
 pub mod dispatch;
+pub mod external_photo;
 pub mod link;
 pub mod module;
 pub mod send_later;

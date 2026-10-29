@@ -1,18 +1,22 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Scenario: does the preview fetch an http(s) contact photo today?
+"""Scenario: what the preview does with an http(s) contact photo.
 
-Item 151 (a). A contact has a photo at an http URL. The scenario selects
-the contact in the preview and waits, then checks whether the local http
-photo server saw a request. This settles the question for item 151's
-design note: do not trust a "no request" result unless this scenario
-sees the photo server up and reachable first (checked with a direct
-fetch before the Evolution part of the scenario runs), since a routing
-problem would also show as "no request" for the wrong reason.
+A contact has a photo at an http URL. The scenario selects the contact in
+the preview and waits, then checks two things.
 
-If a request does happen, this is a privacy leak item 151 (b) must fix
-before this scenario can pass: a server that controls the photo URL can
-use it to detect when, and how often, a person views a contact.
+First, whether the local http photo server saw a request. Do not trust a
+"no request" result unless this scenario sees the photo server up and
+reachable first (checked with a direct fetch before the Evolution part of
+the scenario runs), since a routing problem would also show as "no
+request" for the wrong reason. If a request does happen, that is a privacy
+leak: a server that controls the photo URL can use it to detect when, and
+how often, a person views a contact.
+
+Second, whether the preview says so. Stock Evolution shows a broken image
+icon and never names the URL. The placeholder of jmap-ui replaces it with
+a label and the URL in full, so the user can read where the image claims
+to be.
 """
 
 import time
@@ -24,6 +28,8 @@ from scenario import Jmap, ScenarioFailure, expect_no_errors, main, say, screens
 NAME = "Helen Httpphoto"
 CARDS = [cp.card("photo-fetch", NAME, cp.PHOTO_URL)]
 WAIT_SECONDS = 10
+# The label of the placeholder, as jmap-ui writes it in English.
+PLACEHOLDER = "Externally hosted image"
 
 
 def run():
@@ -46,6 +52,13 @@ def run():
     if photos.requests:
         raise ScenarioFailure(f"the preview fetched the http photo: {photos.requests}")
     say(f"photo server: no request for the http photo after {WAIT_SECONDS}s")
+
+    texts = cp.wait_for_text(PLACEHOLDER, "the placeholder of the external photo")
+    if not any(cp.PHOTO_URL in text for text in texts):
+        raise ScenarioFailure(f"the placeholder does not name the URL: {texts}")
+    say(f"preview: the placeholder names {cp.PHOTO_URL}")
+    if photos.requests:
+        raise ScenarioFailure(f"the placeholder fetched the http photo: {photos.requests}")
 
     server_id = cp.card_ids(server)[NAME]
     if server.get("ContactCard", server_id)["media"]["p1"]["uri"] != cp.PHOTO_URL:
