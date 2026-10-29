@@ -21,11 +21,12 @@
 //!
 //! One `EExtension` on the `EMailReader` interface ([`reader_ext`]) covers
 //! both reader windows: the mail window and the detached message window
-//! (`EMailBrowser`). It merges the submenu into `/mail-message-popup` of the
-//! UI manager of each window. The submenu is a direct child of the popup and
-//! does not use the placeholder of the popup (see [`action`]). The reader of
-//! the window gives the selection and the folder. The menu has presets and no
-//! time picker, for the same reasons as scheduled send
+//! (`EMailBrowser`). It merges the submenu into `/mail-message-popup` (the
+//! message list) and `/mail-preview-popup` (the message body) of the UI
+//! manager of each window. The submenu is a direct child of each popup and
+//! does not use the placeholder of either popup (see [`action`]). The reader
+//! of the window gives the selection and the folder. The menu has presets and
+//! no time picker, for the same reasons as scheduled send
 //! ([`crate::send_later::schedule`]).
 
 pub mod action;
