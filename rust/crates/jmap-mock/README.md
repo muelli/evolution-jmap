@@ -25,8 +25,8 @@ binary for integration tests.
 - Limit and pagination controls: `calls_in_request`, `changes_page_size`,
   `query_page_size`, `objects_in_get`, `size_request`, `size_upload`.
 - Fault injection controls through `Faults` (for example non-terminating paging,
-  unrequested objects, local `file:` URI rewrites, redirected discovery, terse
-  create responses).
+  unrequested objects, local `file:` URI rewrites, `data:` contact-photo
+  `blobId` serving, redirected discovery, terse create responses).
 - OAuth endpoints for integration tests: `oauth_authorization_server`,
   `oauth_client_registration`, `oauth_token`.
 
