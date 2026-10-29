@@ -483,12 +483,12 @@ fn calendar_preferences_and_capabilities_builders() {
     let mut cal_extra = BTreeMap::new();
     cal_extra.insert("customVendorQuota".to_string(), json!(1000));
     let cal_cap = CalendarsCapability::new()
-        .with_max_size_attachments_per_event(52428800)
-        .with_max_concurrent_availabilities(16)
+        .with_max_participants_per_event(52428800)
+        .with_max_calendars_per_event(16)
         .with_extra(cal_extra);
 
-    assert_eq!(cal_cap.max_size_attachments_per_event, 52428800);
-    assert_eq!(cal_cap.max_concurrent_availabilities, 16);
+    assert_eq!(cal_cap.max_participants_per_event, Some(52428800));
+    assert_eq!(cal_cap.max_calendars_per_event, Some(16));
     assert_eq!(cal_cap.extra.get("customVendorQuota"), Some(&json!(1000)));
 
     let val = serde_json::to_value(&cal_cap).expect("serialize CalendarsCapability");

@@ -557,11 +557,11 @@ fn calendars_capabilities_absolute_trigger_and_event_relation_roundtrip_covers_d
     assert_eq!(priority::LOW, 9);
 
     let cap = CalendarsCapability::new()
-        .with_max_size_attachments_per_event(25_000_000)
-        .with_max_concurrent_availabilities(10);
+        .with_max_participants_per_event(25_000_000)
+        .with_max_calendars_per_event(10);
     let cap_val = serde_json::to_value(&cap).unwrap();
-    assert_eq!(cap_val["maxSizeAttachmentsPerEvent"], 25_000_000);
-    assert_eq!(cap_val["maxConcurrentAvailabilities"], 10);
+    assert_eq!(cap_val["maxParticipantsPerEvent"], 25_000_000);
+    assert_eq!(cap_val["maxCalendarsPerEvent"], 10);
 
     let round_cap: CalendarsCapability = serde_json::from_value(cap_val).unwrap();
     assert_eq!(round_cap, cap);
@@ -962,10 +962,10 @@ fn calendar_event_and_capability_builders() {
     use jmap_proto::calendars::{CalendarEvent, CalendarsCapability, RecurrenceRule};
 
     let cap = CalendarsCapability::new()
-        .with_max_size_attachments_per_event(50_000_000)
-        .with_max_concurrent_availabilities(10);
-    assert_eq!(cap.max_size_attachments_per_event, 50_000_000);
-    assert_eq!(cap.max_concurrent_availabilities, 10);
+        .with_max_participants_per_event(50_000_000)
+        .with_max_calendars_per_event(10);
+    assert_eq!(cap.max_participants_per_event, Some(50_000_000));
+    assert_eq!(cap.max_calendars_per_event, Some(10));
 
     let event = CalendarEvent::default()
         .with_id("evt_100")
@@ -1472,4 +1472,41 @@ fn calendar_event_top_level_bis_fields_roundtrip() {
 
     let round_tripped: CalendarEvent = serde_json::from_value(val).unwrap();
     assert_eq!(round_tripped, event);
+}
+
+/// The calendars capability object of draft-ietf-jmap-calendars-33 §1.5.1 parses
+/// with all six fields, and an object with no fields parses too.
+#[test]
+fn calendars_capability_parses_draft_33_fields() {
+    use jmap_proto::calendars::CalendarsCapability;
+
+    let cap: CalendarsCapability = serde_json::from_value(serde_json::json!({
+        "maxCalendarsPerEvent": 1,
+        "minDateTime": "1970-01-01T00:00:00",
+        "maxDateTime": "2100-01-01T00:00:00",
+        "maxExpandedQueryDuration": "P366D",
+        "maxParticipantsPerEvent": 50,
+        "mayCreateCalendar": true
+    }))
+    .unwrap();
+    assert_eq!(cap.max_calendars_per_event, Some(1));
+    assert_eq!(cap.min_date_time.as_deref(), Some("1970-01-01T00:00:00"));
+    assert_eq!(cap.max_date_time.as_deref(), Some("2100-01-01T00:00:00"));
+    assert_eq!(cap.max_expanded_query_duration.as_deref(), Some("P366D"));
+    assert_eq!(cap.max_participants_per_event, Some(50));
+    assert_eq!(cap.may_create_calendar, Some(true));
+    assert!(cap.extra.is_empty());
+
+    let back = serde_json::to_value(&cap).unwrap();
+    assert_eq!(back["maxExpandedQueryDuration"], "P366D");
+    assert_eq!(back["mayCreateCalendar"], true);
+
+    let empty: CalendarsCapability = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(empty, CalendarsCapability::new());
+    assert_eq!(serde_json::to_value(&empty).unwrap(), serde_json::json!({}));
+
+    // A null maxCalendarsPerEvent means "no limit" and must parse.
+    let null_limit: CalendarsCapability =
+        serde_json::from_value(serde_json::json!({"maxCalendarsPerEvent": null})).unwrap();
+    assert_eq!(null_limit.max_calendars_per_event, None);
 }
