@@ -33,6 +33,8 @@ only where the server supports the feature.
   `evo-sys/tests/alert.rs`, `evo-sys/tests/layout.rs`).
 - The text, the time and the undo of the info bar after a delete
   (`jmap-ui/tests/undo_delete.rs`).
+- The placeholder for an externally hosted contact photo, in a real
+  Evolution (`ci/gui-scenario/scenarios/contact-photo-fetch.py`).
 - `docs/gui-smoke-test.md` checks that the controls are present against
   `jmap-mockd`.
 
@@ -110,6 +112,16 @@ this only with a test account.
    time. They return to the inbox at that time. The message window
    (double-click a message) has the same submenu.
 4. Check that the messages come back at the wake time.
+
+## Externally hosted contact photo
+
+1. On the server, give a contact a photo that is a `https:` URL, not image
+   data. Let Evolution sync the address book.
+2. Select the contact. The preview shows the text **Externally hosted image**
+   and the URL in full, in place of the photo.
+3. Check the web server log. It must show no request for that URL.
+4. Select a contact whose photo is image data. The preview shows that photo
+   as before.
 
 ## Undo after a delete
 

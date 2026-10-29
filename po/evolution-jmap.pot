@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-22 06:36+0000\n"
+"POT-Creation-Date: 2026-10-29 23:10+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -18,7 +18,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 
 #. TRANSLATORS: shown when a contact could not be saved because of its picture. %1$s is the picture's size, such as "1.2 MB".
-#: rust/crates/jmap-backend-book/src/ops.rs:426
+#: rust/crates/jmap-backend-book/src/ops.rs:482
 #, c-format
 msgid ""
 "The server cannot store a contact with a picture this large (%1$s), so the "
@@ -26,21 +26,21 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when an invitation or import tries to change a meeting that the user organizes.
-#: rust/crates/jmap-backend-cal/src/ops.rs:451
+#: rust/crates/jmap-backend-cal/src/ops.rs:503
 msgid ""
 "You organize this meeting. A received invitation or an import cannot change "
 "its guests or its organizer, or delete it."
 msgstr ""
 
 #. TRANSLATORS: shown when the server refused to send a meeting's invitations.
-#: rust/crates/jmap-backend-cal/src/ops.rs:464
+#: rust/crates/jmap-backend-cal/src/ops.rs:516
 msgid ""
 "The server cannot send meeting invitations to every guest, so the change was "
 "not saved. Check that each guest has a valid email address."
 msgstr ""
 
 #. TRANSLATORS: shown when the server refused to send a meeting's invitations. %1$s is a comma-separated list of guest addresses.
-#: rust/crates/jmap-backend-cal/src/ops.rs:468
+#: rust/crates/jmap-backend-cal/src/ops.rs:520
 #, c-format
 msgid ""
 "The server cannot send meeting invitations to every guest, so the change was "
@@ -48,14 +48,14 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when the server does not send meeting invitations.
-#: rust/crates/jmap-backend-cal/src/ops.rs:473
+#: rust/crates/jmap-backend-cal/src/ops.rs:525
 msgid ""
 "This server cannot send meeting invitations, so the change was not saved. To "
 "save it, choose not to send the invitations."
 msgstr ""
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.
-#: rust/crates/jmap-backend-cal/src/ops.rs:483
+#: rust/crates/jmap-backend-cal/src/ops.rs:535
 #, c-format
 msgid ""
 "This event repeats until %1$s, and the time zone it is in, %2$s, is not "
@@ -65,7 +65,7 @@ msgid ""
 msgstr ""
 
 #. TRANSLATORS: shown when a new recurring appointment could not be saved.
-#: rust/crates/jmap-backend-cal/src/ops.rs:488
+#: rust/crates/jmap-backend-cal/src/ops.rs:540
 msgid ""
 "This event repeats in a way that cannot be stored on the server, so it was "
 "not created. Stating the recurrence as a repeat count is the spelling that "
@@ -107,24 +107,24 @@ msgid "the server offers no default %1$s for this account"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar".
-#: rust/crates/jmap-backend-core/src/connect.rs:577
+#: rust/crates/jmap-backend-core/src/connect.rs:716
 #, c-format
 msgid "the %1$s backend has no account to connect to"
 msgstr ""
 
-#: rust/crates/jmap-backend-core/src/oauth2.rs:740
-#: rust/crates/jmap-backend-core/src/oauth2.rs:869
-#: rust/crates/jmap-ui/src/link.rs:308 rust/crates/jmap-ui/src/link.rs:313
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1095
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1098
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1120
+#: rust/crates/jmap-backend-core/src/oauth2.rs:721
+#: rust/crates/jmap-backend-core/src/oauth2.rs:850
+#: rust/crates/jmap-ui/src/link.rs:309 rust/crates/jmap-ui/src/link.rs:314
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1047
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1050
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1072
 msgid "no further detail was given"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the message bus's own text naming which service
 #. has no owner, e.g. "The name :1.4 was not provided by any .service
 #. files".
-#: rust/crates/jmap-backend-core/src/oauth2.rs:739
+#: rust/crates/jmap-backend-core/src/oauth2.rs:720
 #, c-format
 msgid ""
 "a service this account's sign-in needs is not running, so no access token "
@@ -133,7 +133,7 @@ msgstr ""
 
 #. TRANSLATORS: %1$s is EDS's own message for why the
 #. account's secret store (keyring) could not be reached.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:868
+#: rust/crates/jmap-backend-core/src/oauth2.rs:849
 #, c-format
 msgid "the account's secret store (keyring) could not be reached: %1$s"
 msgstr ""
@@ -142,7 +142,7 @@ msgstr ""
 #. the account's stored token cannot be read because the
 #. system keyring is locked, which signing in again cannot
 #. fix.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:900
+#: rust/crates/jmap-backend-core/src/oauth2.rs:881
 msgid ""
 "the login keyring is locked, so this account's OAuth 2.0 token can be "
 "neither read nor stored; unlock the keyring and try again"
@@ -151,7 +151,7 @@ msgstr ""
 #. TRANSLATORS: shown instead of a fresh sign-in window when
 #. the system has no keyring service at all, so a token
 #. obtained by signing in could not be saved anywhere.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:927
+#: rust/crates/jmap-backend-core/src/oauth2.rs:908
 msgid ""
 "this system has no keyring service to store an OAuth 2.0 token in, so "
 "signing in again would not keep this account signed in; enable a keyring "
@@ -160,30 +160,30 @@ msgstr ""
 
 #. TRANSLATORS: shown when EDS refused an OAuth 2.0 account's
 #. access token but did not say why.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:939
+#: rust/crates/jmap-backend-core/src/oauth2.rs:920
 msgid "the account has no OAuth 2.0 access token"
 msgstr ""
 
 #. TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
 #. token that was empty rather than absent.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:971
+#: rust/crates/jmap-backend-core/src/oauth2.rs:952
 msgid "the OAuth 2.0 service returned an empty access token"
 msgstr ""
 
 #. TRANSLATORS: shown when an account's Authentication
 #. extension names no host to connect to.
-#: rust/crates/jmap-backend-core/src/source.rs:147
+#: rust/crates/jmap-backend-core/src/source.rs:225
 msgid "the account does not name a JMAP server"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the host name the account named.
-#: rust/crates/jmap-backend-core/src/source.rs:151
+#: rust/crates/jmap-backend-core/src/source.rs:229
 #, c-format
 msgid "\"%1$s\" is not a valid server host name"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the host name the account named.
-#: rust/crates/jmap-backend-core/src/source.rs:156
+#: rust/crates/jmap-backend-core/src/source.rs:234
 #, c-format
 msgid ""
 "refusing to contact %1$s without TLS: credentials and contacts would go over "
@@ -299,18 +299,18 @@ msgid ""
 "Details\" instead."
 msgstr ""
 
-#: rust/crates/jmap-config/src/config_lookup.rs:463
+#: rust/crates/jmap-config/src/config_lookup.rs:431
 msgid "Look up JMAP account details"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the server this account was discovered
 #. against, shown in the account assistant's list of lookup results.
-#: rust/crates/jmap-config/src/config_lookup.rs:531
+#: rust/crates/jmap-config/src/config_lookup.rs:499
 #, c-format
 msgid "JMAP account at %1$s, using OAuth 2.0"
 msgstr ""
 
-#: rust/crates/jmap-config/src/config_lookup.rs:548
+#: rust/crates/jmap-config/src/config_lookup.rs:516
 msgid "JMAP account (OAuth 2.0)"
 msgstr ""
 
@@ -442,136 +442,140 @@ msgstr ""
 msgid "Uses an OAuth 2.0 access token to connect to the JMAP server."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/link.rs:53
+#: rust/crates/jmap-ui/src/external_photo/display_ext.rs:50
+msgid "Externally hosted image"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/link.rs:52
 msgid ""
 "the server rejected the account's credentials — it may need to be signed in "
 "again"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/link.rs:56
+#: rust/crates/jmap-ui/src/link.rs:55
 msgid "the server refused: this account is not allowed to do that"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the network error the transport reported.
-#: rust/crates/jmap-ui/src/link.rs:60
+#: rust/crates/jmap-ui/src/link.rs:59
 #, c-format
 msgid "the server could not be reached: %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/link.rs:69
+#: rust/crates/jmap-ui/src/link.rs:68
 #, c-format
 msgid "the server rejected the change: %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s and %2$s are the URLs the server redirected
 #. between; they differ in host.
-#: rust/crates/jmap-ui/src/link.rs:77
+#: rust/crates/jmap-ui/src/link.rs:76
 #, c-format
 msgid ""
 "the server at %1$s redirected to %2$s, a different host, so its credentials "
 "were not sent there — check the account's host setting"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/link.rs:250
+#: rust/crates/jmap-ui/src/link.rs:237
 msgid "the session document names no usable mail account"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:100
+#: rust/crates/jmap-ui/src/send_later/extension.rs:96
 msgid "Checking whether the sending account offers scheduled send…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:101
+#: rust/crates/jmap-ui/src/send_later/extension.rs:97
 msgid "The selected sending account is not a JMAP account"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:102
+#: rust/crates/jmap-ui/src/send_later/extension.rs:98
 msgid "The account’s server does not offer scheduled send"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/send_later/extension.rs:104
-#: rust/crates/jmap-ui/src/snooze/action.rs:84
+#: rust/crates/jmap-ui/src/send_later/extension.rs:100
+#: rust/crates/jmap-ui/src/snooze/action.rs:81
 #, c-format
 msgid "The account’s server could not be asked: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:105
+#: rust/crates/jmap-ui/src/send_later/extension.rs:101
 msgid "The server holds the message and sends it at the chosen time"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:108
+#: rust/crates/jmap-ui/src/send_later/extension.rs:104
 #, c-format
 msgid ""
 "The message could not be scheduled: %1$s (a copy may remain in the server’s "
 "Drafts folder)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:110
+#: rust/crates/jmap-ui/src/send_later/extension.rs:106
 msgid "The message names no recipients"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:111
+#: rust/crates/jmap-ui/src/send_later/extension.rs:107
 msgid "The message has no From address"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:112
+#: rust/crates/jmap-ui/src/send_later/extension.rs:108
 msgid "The chosen time is further ahead than the server accepts"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:113
-#: rust/crates/jmap-ui/src/snooze/action.rs:88
+#: rust/crates/jmap-ui/src/send_later/extension.rs:109
+#: rust/crates/jmap-ui/src/snooze/action.rs:85
 msgid "The local calendar could not name the chosen time"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:114
+#: rust/crates/jmap-ui/src/send_later/extension.rs:110
 msgid "That time has already passed — choose one in the future"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:300
-#: rust/crates/jmap-ui/src/send_later/extension.rs:386
+#: rust/crates/jmap-ui/src/send_later/extension.rs:265
+#: rust/crates/jmap-ui/src/send_later/extension.rs:351
 msgid "Send _Later"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:322
-#: rust/crates/jmap-ui/src/send_later/extension.rs:405
+#: rust/crates/jmap-ui/src/send_later/extension.rs:287
+#: rust/crates/jmap-ui/src/send_later/extension.rs:370
 msgid "_Custom Time…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:407
+#: rust/crates/jmap-ui/src/send_later/extension.rs:372
 msgid "…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:872
+#: rust/crates/jmap-ui/src/send_later/extension.rs:824
 msgid "Send Later"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:876
+#: rust/crates/jmap-ui/src/send_later/extension.rs:828
 msgid "_Cancel"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:881
+#: rust/crates/jmap-ui/src/send_later/extension.rs:833
 msgid "_Send Later"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/schedule.rs:101
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:106
 msgid "In One _Hour"
 msgstr ""
 
 #. TRANSLATORS: %1$s is a time of day, e.g. "18:00".
-#: rust/crates/jmap-ui/src/send_later/schedule.rs:234
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:267
 #, c-format
 msgid "Today, %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is a time of day, e.g. "08:00".
-#: rust/crates/jmap-ui/src/send_later/schedule.rs:238
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:271
 #, c-format
 msgid "Tomorrow, %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is a weekday name, %2$s a time of day.
-#: rust/crates/jmap-ui/src/send_later/schedule.rs:248
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:281
 #, c-format
 msgid "%1$s, %2$s"
 msgstr ""
@@ -591,46 +595,46 @@ msgid ""
 "%1$s)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:80
+#: rust/crates/jmap-ui/src/snooze/action.rs:77
 msgid "The folder does not belong to a JMAP account"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:81
+#: rust/crates/jmap-ui/src/snooze/action.rs:78
 msgid "Checking whether the account’s server offers snooze…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:82
+#: rust/crates/jmap-ui/src/snooze/action.rs:79
 msgid "The account’s server does not offer snooze"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:85
+#: rust/crates/jmap-ui/src/snooze/action.rs:82
 msgid "The server hides the message until then and wakes it in the inbox"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/snooze/action.rs:87
+#: rust/crates/jmap-ui/src/snooze/action.rs:84
 #, c-format
 msgid "The message could not be snoozed: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:139
+#: rust/crates/jmap-ui/src/snooze/action.rs:127
 msgid "For One _Hour"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:142
+#: rust/crates/jmap-ui/src/snooze/action.rs:130
 msgid "Until _Tomorrow Morning"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:147
+#: rust/crates/jmap-ui/src/snooze/action.rs:135
 msgid "Until Next _Monday Morning"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:217
-#: rust/crates/jmap-ui/src/snooze/action.rs:302
+#: rust/crates/jmap-ui/src/snooze/action.rs:226
+#: rust/crates/jmap-ui/src/snooze/action.rs:306
 msgid "S_nooze"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:706
+#: rust/crates/jmap-ui/src/snooze/action.rs:705
 msgid "the server named no id for the snoozed mailbox"
 msgstr ""
 
@@ -672,12 +676,12 @@ msgid ""
 "this message closes."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:279
+#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:240
 msgid "_Undo"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason from the registry.
-#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:353
+#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:314
 #, c-format
 msgid "The delete could not be undone: %1$s"
 msgstr ""
@@ -692,40 +696,40 @@ msgid ""
 "open"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:74
+#: rust/crates/jmap-ui/src/vacation/page.rs:76
 msgid "Contacting the mail server…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:75
+#: rust/crates/jmap-ui/src/vacation/page.rs:77
 msgid "This account’s server does not offer a vacation autoresponder."
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/vacation/page.rs:77
+#: rust/crates/jmap-ui/src/vacation/page.rs:79
 #, c-format
 msgid "The autoresponder could not be read: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:169
+#: rust/crates/jmap-ui/src/vacation/page.rs:160
 msgid "Vacation Responder"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:220
+#: rust/crates/jmap-ui/src/vacation/page.rs:211
 msgid "Send _automatic replies"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:237
+#: rust/crates/jmap-ui/src/vacation/page.rs:228
 msgid "_First day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:239
+#: rust/crates/jmap-ui/src/vacation/page.rs:230
 msgid "_Last day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:241
+#: rust/crates/jmap-ui/src/vacation/page.rs:232
 msgid "_Subject:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:244
+#: rust/crates/jmap-ui/src/vacation/page.rs:235
 msgid "_Message:"
 msgstr ""

@@ -16,7 +16,7 @@ use gobject_sys::GTypeModule;
 use jmap_backend_core::module;
 use jmap_backend_core::subclass::register_dynamic;
 
-use crate::{send_later, snooze, undo_delete, vacation};
+use crate::{external_photo, send_later, snooze, undo_delete, vacation};
 
 /// Register the types of this crate against `type_module`.
 ///
@@ -39,9 +39,12 @@ pub unsafe fn load(type_module: *mut GTypeModule) {
             register_dynamic::<send_later::extension::JmapSendLaterExtension>(type_module);
             register_dynamic::<snooze::reader_ext::JmapSnoozeReaderExtension>(type_module);
             register_dynamic::<undo_delete::shell_ext::JmapUndoDeleteShellExtension>(type_module);
+            register_dynamic::<external_photo::display_ext::JmapExternalPhotoExtension>(
+                type_module,
+            );
         }
         tracing::trace!(
-            "jmap-ui loaded: vacation, scheduled send, snooze and undo of a delete registered"
+            "jmap-ui loaded: vacation, scheduled send, snooze, undo of a delete and the external photo placeholder registered"
         );
     });
 }

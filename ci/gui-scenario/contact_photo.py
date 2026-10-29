@@ -34,6 +34,7 @@ from scenario import (
     screenshot,
     set_text,
     text_field,
+    text_of,
     wait_find,
     wait_for,
     window,
@@ -176,6 +177,31 @@ def preview(full_name, label):
     # The preview is a web view. Give it time to load the image.
     time.sleep(PREVIEW_SECONDS)
     screenshot(label)
+
+
+def preview_texts():
+    """Return the accessible text of every node of Evolution that has text.
+
+    The preview is a web view, so its content reaches AT-SPI as text nodes
+    with no accessible name. A search by name cannot find them.
+    """
+    found = []
+    for node in descendants(evolution()):
+        try:
+            found.append(text_of(node))
+        except Exception:  # noqa: BLE001
+            continue
+    return found
+
+
+def wait_for_text(needle, what, timeout=30):
+    """Wait until a node of Evolution shows `needle` and return every text."""
+
+    def showing():
+        texts = preview_texts()
+        return texts if any(needle in text for text in texts) else None
+
+    return wait_for(showing, what, timeout)
 
 
 def edit_name(full_name, new_name):
