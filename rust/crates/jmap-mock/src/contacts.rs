@@ -6,12 +6,16 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine;
 use jmap_proto::Id;
 use jmap_proto::contacts::{
     AddressBook, AddressBookRights, ContactCard, ContactCardQueryFilter, Media,
 };
 use jmap_proto::error::{self, MethodError, SetError};
-use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest};
+use jmap_proto::methods::{
+    GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+};
+use percent_encoding::percent_decode_str;
 use serde_json::Value;
 
 #[cfg(feature = "parse")]
@@ -21,6 +25,8 @@ use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
 
 const HOSTILE_CONTACT_PHOTO_URI: &str = "file:///home/victim/.ssh/id_ed25519";
+const DATA_URI_PREFIX: &str = "data:";
+const DEFAULT_DATA_URI_MEDIA_TYPE: &str = "text/plain;charset=US-ASCII";
 
 /// `caller` comes from [`crate::auth::AuthConfig::identity_for`].
 /// `None` means owner access. Non-owners see only shared books.
@@ -200,7 +206,20 @@ pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Val
     }
 
     let contact_photo_uses_file_uri = state.contact_photo_uses_file_uri;
+    let contact_photo_data_uri_as_blob_id = state.contact_photo_data_uri_as_blob_id;
     let account = account_mut(state, &request.account_id)?;
+
+    if contact_photo_data_uri_as_blob_id {
+        let card_ids: Vec<Id> = match &request.ids {
+            Some(ids) => ids.clone(),
+            None => account
+                .contact_cards
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect(),
+        };
+        promote_cards_photo_data_uris(account, card_ids);
+    }
 
     let mut list = Vec::new();
     let mut not_found = Vec::new();
@@ -236,6 +255,7 @@ fn rewrite_photo_uri_to_file_scheme(card: &mut ContactCard) {
     for entry in media.values_mut() {
         if is_photo_media(entry) {
             entry.uri = Some(HOSTILE_CONTACT_PHOTO_URI.to_owned());
+            entry.blob_id = None;
         }
     }
 }
@@ -249,17 +269,12 @@ fn is_photo_media(entry: &Media) -> bool {
 
 pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<ContactCard> = parse_arguments(arguments)?;
+    let contact_photo_data_uri_as_blob_id = state.contact_photo_data_uri_as_blob_id;
     let max_contact_size = state.max_contact_size;
     let account = account_mut(state, &request.account_id)?;
 
-    // Split borrows: validation reads books while `simple_set` updates cards.
-    let AccountState {
-        address_books,
-        contact_cards,
-        ..
-    } = account;
-
-    let response = simple_set(contact_cards, request, |id, card| {
+    let address_books = &account.address_books;
+    let mut response = simple_set(&mut account.contact_cards, request, |id, card| {
         // RFC 8620 §5.3: `id` is server-set and must not appear in create.
         if card.id.is_some() {
             return Err(SetError::new(error::set::INVALID_PROPERTIES)
@@ -302,6 +317,11 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
         }
         Ok(())
     })?;
+
+    if contact_photo_data_uri_as_blob_id {
+        promote_photo_data_uris_in_set_response(account, &mut response);
+    }
+
     let mut result = to_result(&response)?;
 
     // RFC 8620 §5.3 allows omitting client `created` properties.
@@ -317,6 +337,148 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     }
 
     Ok(result)
+}
+
+fn promote_photo_data_uris_in_set_response(
+    account: &mut AccountState,
+    response: &mut SetResponse<ContactCard>,
+) {
+    let mut card_ids: Vec<Id> = response
+        .created
+        .as_ref()
+        .into_iter()
+        .flat_map(|created| created.values())
+        .filter_map(|card| card.id.clone())
+        .collect();
+
+    card_ids.extend(
+        response
+            .updated
+            .as_ref()
+            .into_iter()
+            .flat_map(|updated| updated.keys().cloned()),
+    );
+
+    promote_cards_photo_data_uris(account, card_ids);
+
+    if let Some(created) = response.created.as_mut() {
+        for card in created.values_mut() {
+            if let Some(id) = card.id.as_ref()
+                && let Some(stored) = account.contact_cards.get(id)
+            {
+                *card = stored.clone();
+            }
+        }
+    }
+}
+
+fn promote_cards_photo_data_uris(account: &mut AccountState, card_ids: Vec<Id>) {
+    for id in card_ids {
+        promote_card_photo_data_uris(account, &id);
+    }
+}
+
+fn promote_card_photo_data_uris(account: &mut AccountState, card_id: &Id) {
+    let replacements = account
+        .contact_cards
+        .get(card_id)
+        .map(planned_photo_data_uri_replacements)
+        .unwrap_or_default();
+    if replacements.is_empty() {
+        return;
+    }
+
+    let replacements: Vec<(String, Id, String)> = replacements
+        .into_iter()
+        .map(|(key, media_type, bytes)| {
+            let blob_id = account.add_blob(media_type.clone(), bytes);
+            (key, blob_id, media_type)
+        })
+        .collect();
+
+    if let Some(card) = account.contact_cards.get_mut(card_id)
+        && let Some(media) = card.media.as_mut()
+    {
+        for (key, blob_id, media_type) in replacements {
+            let Some(entry) = media.get_mut(&key) else {
+                continue;
+            };
+            if !is_photo_media(entry) {
+                continue;
+            }
+            if entry.blob_id.is_some() {
+                continue;
+            }
+            if !entry
+                .uri
+                .as_deref()
+                .is_some_and(|uri| uri.starts_with(DATA_URI_PREFIX))
+            {
+                continue;
+            }
+
+            entry.uri = None;
+            entry.blob_id = Some(blob_id);
+            if entry.media_type.is_none() {
+                entry.media_type = Some(media_type);
+            }
+        }
+    }
+}
+
+fn planned_photo_data_uri_replacements(card: &ContactCard) -> Vec<(String, String, Vec<u8>)> {
+    let Some(media) = card.media.as_ref() else {
+        return Vec::new();
+    };
+
+    media
+        .iter()
+        .filter_map(|(key, entry)| {
+            if !is_photo_media(entry) {
+                return None;
+            }
+            if entry.blob_id.is_some() {
+                return None;
+            }
+            let uri = entry.uri.as_ref()?;
+            parse_data_uri(uri).map(|(media_type, bytes)| (key.clone(), media_type, bytes))
+        })
+        .collect()
+}
+
+fn parse_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
+    let encoded = uri.strip_prefix(DATA_URI_PREFIX)?;
+    let (metadata, payload) = encoded.split_once(',')?;
+
+    let mut base64 = false;
+    let mut media_parts = Vec::new();
+    for part in metadata.split(';') {
+        if part.eq_ignore_ascii_case("base64") {
+            base64 = true;
+            continue;
+        }
+        if !part.is_empty() {
+            media_parts.push(part);
+        }
+    }
+
+    let media_type = if media_parts.is_empty() {
+        DEFAULT_DATA_URI_MEDIA_TYPE.to_owned()
+    } else if media_parts[0].contains('/') {
+        media_parts.join(";")
+    } else {
+        format!("text/plain;{}", media_parts.join(";"))
+    };
+
+    let bytes = if base64 {
+        base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .ok()?
+    } else {
+        percent_decode_str(payload).collect()
+    };
+
+    Some((media_type, bytes))
 }
 
 pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {

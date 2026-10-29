@@ -43,6 +43,7 @@ fn help_lists_the_expanded_builder_mode_flags() {
         "--no-size-request",
         "--size-upload",
         "--no-size-upload",
+        "--contact-photo-data-uri-as-blob-id",
         "--session-via-redirect",
         "--download-via-redirect-to",
         "--reject-download-accept-json",
