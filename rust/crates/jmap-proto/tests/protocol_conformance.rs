@@ -7,7 +7,7 @@
 //! - RFC 8620 (Core): Request/Response envelopes, Session capabilities & unknown URNs.
 //! - RFC 8621 (Mail): Required vs optional fields, defaults, unknown mailbox roles ("snoozed" per draft-ietf-extra-email-snooze), snooze payloads on Email.
 //! - RFC 9610 & RFC 9553 (Contacts / JSContact): Required vs optional fields, forward-compatibility with unknown kinds and components.
-//! - draft-ietf-jmap-calendars-28 & RFC 8984 (Calendars / JSCalendar): Forward-compatibility with unknown event statuses, free/busy states, and alert actions.
+//! - draft-ietf-jmap-calendars-33 & RFC 8984 (Calendars / JSCalendar): Forward-compatibility with unknown event statuses, free/busy states, and alert actions.
 //! - RFC 9670 (Principals): Forward-compatibility with unknown principal types and extension capability bags.
 
 use jmap_proto::calendars::{
@@ -562,7 +562,7 @@ fn address_book_conformance_required_vs_optional_fields() {
 }
 
 // ===========================================================================
-// draft-ietf-jmap-calendars-28 & RFC 8984: JSCalendar Conformance
+// draft-ietf-jmap-calendars-33 & RFC 8984: JSCalendar Conformance
 // ===========================================================================
 
 #[test]
@@ -826,7 +826,7 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     assert_eq!(free_busy_status::FREE, "free");
     assert_eq!(free_busy_status::BUSY, "busy");
 
-    // CalendarEvent/getFreeBusy free/busy statuses (draft-ietf-jmap-calendars-28 §5.4)
+    // CalendarEvent/getFreeBusy free/busy statuses (not in draft-ietf-jmap-calendars-33)
     assert_eq!(calendar_free_busy_status::FREE, "free");
     assert_eq!(calendar_free_busy_status::BUSY, "busy");
     assert_eq!(calendar_free_busy_status::BUSY_TENTATIVE, "busy-tentative");
@@ -979,7 +979,7 @@ fn rfc8984_calendar_group_and_capabilities_forward_compatibility() {
 }
 
 // ===========================================================================
-// draft-ietf-jmap-calendars-28 §7, §8, §10: Scheduling, Notifications & Replies
+// draft-ietf-jmap-calendars-33 §5.9.2, §7: Scheduling, Notifications & Replies
 // ===========================================================================
 
 #[test]
