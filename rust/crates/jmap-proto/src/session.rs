@@ -25,7 +25,7 @@ pub const CAPABILITY_MDN: &str = "urn:ietf:params:jmap:mdn";
 pub const CAPABILITY_CONTACTS: &str = "urn:ietf:params:jmap:contacts";
 /// The Calendars capability (draft-ietf-jmap-calendars-33 §1.5.1).
 pub const CAPABILITY_CALENDARS: &str = "urn:ietf:params:jmap:calendars";
-/// The Calendar Preferences capability (draft-ietf-jmap-calendars-33 §6).
+/// The Calendar Preferences capability (not in draft-ietf-jmap-calendars-33, where §6 is Alerts).
 pub const CAPABILITY_CALENDAR_PREFERENCES: &str = "urn:ietf:params:jmap:calendars:preferences";
 /// The Principals capability (RFC 9670 §1.3).
 pub const CAPABILITY_PRINCIPALS: &str = "urn:ietf:params:jmap:principals";
@@ -295,7 +295,7 @@ impl Session {
         serde_json::from_value(val.clone()).ok()
     }
 
-    /// Typed calendars capability struct, if present (draft-ietf-jmap-calendars-28 §1.3).
+    /// Typed calendars capability struct, if present (draft-ietf-jmap-calendars-33 §1.5.1).
     #[cfg(feature = "calendars")]
     pub fn calendars_capability(&self) -> Option<crate::calendars::CalendarsCapability> {
         let val = self.capabilities.get(CAPABILITY_CALENDARS)?;
@@ -363,7 +363,7 @@ impl Session {
         serde_json::from_value(val.clone()).ok()
     }
 
-    /// Typed calendar preferences capability struct, if present (draft-ietf-jmap-calendars-28 §6).
+    /// Typed calendar preferences capability struct, if present (not in draft-ietf-jmap-calendars-33, where §6 is Alerts).
     #[cfg(feature = "calendars")]
     pub fn calendar_preferences_capability(
         &self,
@@ -404,7 +404,7 @@ impl Session {
         serde_json::from_value(val.clone()).ok()
     }
 
-    /// Typed Principal availability capability struct, if present (draft-ietf-jmap-calendars-28 §1.5.2).
+    /// Typed Principal availability capability struct, if present (draft-ietf-jmap-calendars-33 §1.5.2).
     #[cfg(feature = "principals")]
     pub fn principals_availability_capability(
         &self,
