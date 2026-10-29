@@ -1994,17 +1994,31 @@ impl CalendarEventParseResponse {
     }
 }
 
-/// Calendars capability properties (draft-ietf-jmap-calendars-28 §1.3).
+/// Calendars capability properties (draft-ietf-jmap-calendars-33 §1.5.1).
+///
+/// Every field is optional on the wire, so a server that leaves one out still parses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct CalendarsCapability {
-    /// The maximum attachment size in bytes the server allows per event.
-    #[serde(default)]
-    pub max_size_attachments_per_event: u64,
-    /// The maximum number of calendars the server allows querying at once for free/busy.
-    #[serde(default)]
-    pub max_concurrent_availabilities: u64,
+    /// The maximum number of calendars one event can be in. Absent or null means no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_calendars_per_event: Option<u64>,
+    /// The earliest date-time (a LocalDateTime) the server accepts for an event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_date_time: Option<String>,
+    /// The latest date-time (a LocalDateTime) the server accepts for an event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_date_time: Option<String>,
+    /// The maximum duration (a Duration) of a `CalendarEvent/query` with `expandRecurrences`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_expanded_query_duration: Option<String>,
+    /// The maximum number of participants one event can have. Absent or null means no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_participants_per_event: Option<u64>,
+    /// True if the user can create a calendar in this account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_create_calendar: Option<bool>,
     /// Properties the server sent that this type does not model, round-tripped on save.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -2016,15 +2030,39 @@ impl CalendarsCapability {
         Self::default()
     }
 
-    /// Set the maximum attachment size in bytes per event.
-    pub fn with_max_size_attachments_per_event(mut self, max: u64) -> Self {
-        self.max_size_attachments_per_event = max;
+    /// Set `max_calendars_per_event`.
+    pub fn with_max_calendars_per_event(mut self, v: u64) -> Self {
+        self.max_calendars_per_event = Some(v);
         self
     }
 
-    /// Set the maximum number of calendars to query at once for free/busy.
-    pub fn with_max_concurrent_availabilities(mut self, max: u64) -> Self {
-        self.max_concurrent_availabilities = max;
+    /// Set `min_date_time`.
+    pub fn with_min_date_time(mut self, v: impl Into<String>) -> Self {
+        self.min_date_time = Some(v.into());
+        self
+    }
+
+    /// Set `max_date_time`.
+    pub fn with_max_date_time(mut self, v: impl Into<String>) -> Self {
+        self.max_date_time = Some(v.into());
+        self
+    }
+
+    /// Set `max_expanded_query_duration`.
+    pub fn with_max_expanded_query_duration(mut self, v: impl Into<String>) -> Self {
+        self.max_expanded_query_duration = Some(v.into());
+        self
+    }
+
+    /// Set `max_participants_per_event`.
+    pub fn with_max_participants_per_event(mut self, v: u64) -> Self {
+        self.max_participants_per_event = Some(v);
+        self
+    }
+
+    /// Set `may_create_calendar`.
+    pub fn with_may_create_calendar(mut self, v: bool) -> Self {
+        self.may_create_calendar = Some(v);
         self
     }
 

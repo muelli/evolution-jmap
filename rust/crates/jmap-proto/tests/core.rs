@@ -1181,8 +1181,8 @@ fn session_typed_capability_accessors_and_websocket_roundtrip() {
                 "maxNumberOfCardsInSet": 100
             },
             CAPABILITY_CALENDARS: {
-                "maxSizeAttachmentsPerEvent": 20000000,
-                "maxConcurrentAvailabilities": 10
+                "maxParticipantsPerEvent": 20000000,
+                "maxCalendarsPerEvent": 10
             },
             CAPABILITY_PRINCIPALS: {
                 "maxPrincipalsPerGet": 50
@@ -1236,7 +1236,7 @@ fn session_typed_capability_accessors_and_websocket_roundtrip() {
     let cal_cap = session
         .calendars_capability()
         .expect("calendars capability");
-    assert_eq!(cal_cap.max_concurrent_availabilities, 10);
+    assert_eq!(cal_cap.max_calendars_per_event, Some(10));
 
     let princ_cap = session
         .principals_capability()
