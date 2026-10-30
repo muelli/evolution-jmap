@@ -304,9 +304,10 @@ fn accepting_a_held_invitation_without_an_answer_mails_nobody() {
     assert_eq!(fixture.sent(), Vec::<(String, String)>::new());
 }
 
-/// A cancellation with an answer lets the server tell the organizer.
+/// RFC 5546 defines no response to a CANCEL, so a received cancellation never
+/// tells the organizer, whatever `reply` says.
 #[test]
-fn a_received_cancellation_with_an_answer_tells_only_the_organizer() {
+fn a_received_cancellation_never_tells_the_organizer_even_with_an_answer() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
     let invitation = meeting(Some(VERA), &[(OLGA, "ACCEPTED"), (VERA, "ACCEPTED")]);
@@ -316,5 +317,5 @@ fn a_received_cancellation_with_an_answer_tells_only_the_organizer() {
     sync.remove_component_with(&saved.uid, ANSWER)
         .expect("the cancellation is applied");
     assert_eq!(fixture.count(), 0);
-    assert_eq!(fixture.sent(), vec![("REPLY".to_owned(), VERA.to_owned())]);
+    assert_eq!(fixture.sent(), Vec::<(String, String)>::new());
 }
