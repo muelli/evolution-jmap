@@ -16,6 +16,11 @@
 //! install it into. Keeping it out of the `#[cfg]` is what lets this runner's
 //! own tests drive it. This runner's EDS is 3.52.
 //!
+//! [`search_until`] retries a search for up to two seconds: a server can
+//! queue full-text indexing instead of indexing a message synchronously at
+//! import time, the same gap `jmap-mail-sync/tests/live_server_search.rs`
+//! already works around.
+//!
 //! ## Running it
 //!
 //! This test needs the same environment as the other live-server tests. See
@@ -32,6 +37,7 @@ mod common;
 
 use std::ffi::CStr;
 use std::ptr;
+use std::time::{Duration, Instant};
 
 use common::Account;
 use common::array::StringArray;
@@ -90,6 +96,31 @@ unsafe fn search(folder: *mut CamelFolder, words: &[&str]) -> Vec<String> {
     // Its own free function releases the pooled strings in it.
     unsafe { g_ptr_array_unref(out_uids) };
     uids
+}
+
+/// Calls [`search`] for `words`, retrying for up to two seconds until the
+/// sorted result equals sorted `wanted`. Some servers queue full-text
+/// indexing instead of indexing a message synchronously at import time, so a
+/// body search right after `Email/import` can miss a message for a short
+/// window. Returns the last result once it matches `wanted` or the deadline
+/// passes, so a genuine mismatch still fails the caller's own assertion.
+///
+/// # Safety
+///
+/// `folder` must be a live `JmapFolder` instance.
+unsafe fn search_until(folder: *mut CamelFolder, words: &[&str], wanted: &[&str]) -> Vec<String> {
+    let mut wanted: Vec<String> = wanted.iter().map(|word| (*word).to_owned()).collect();
+    wanted.sort();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        // SAFETY: the caller's contract.
+        let mut found = unsafe { search(folder, words) };
+        found.sort();
+        if found == wanted || Instant::now() >= deadline {
+            return found;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Imports two messages with distinct bodies into one real folder.
@@ -164,26 +195,41 @@ fn a_body_term_is_answered_by_the_real_server() {
 
     // A word both messages share finds both.
     // SAFETY: `folder` is the live instance just constructed.
-    let mut found = unsafe { search(folder, &[&shared_word]) };
-    found.sort();
-    let mut expected = vec![
-        both_words_uid.as_str().to_owned(),
-        shared_only_uid.as_str().to_owned(),
-    ];
-    expected.sort();
-    assert_eq!(found, expected);
+    assert_eq!(
+        unsafe {
+            search_until(
+                folder,
+                &[&shared_word],
+                &[both_words_uid.as_str(), shared_only_uid.as_str()],
+            )
+        },
+        {
+            let mut expected = vec![
+                both_words_uid.as_str().to_owned(),
+                shared_only_uid.as_str().to_owned(),
+            ];
+            expected.sort();
+            expected
+        }
+    );
 
     // A word only one message has finds only that one.
     // SAFETY: as above.
     assert_eq!(
-        unsafe { search(folder, &[&only_word]) },
+        unsafe { search_until(folder, &[&only_word], &[both_words_uid.as_str()]) },
         vec![both_words_uid.as_str().to_owned()]
     );
 
     // Two words ANDed together find only the message with both.
     // SAFETY: as above.
     assert_eq!(
-        unsafe { search(folder, &[&shared_word, &only_word]) },
+        unsafe {
+            search_until(
+                folder,
+                &[&shared_word, &only_word],
+                &[both_words_uid.as_str()],
+            )
+        },
         vec![both_words_uid.as_str().to_owned()]
     );
 
