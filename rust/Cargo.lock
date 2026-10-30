@@ -865,6 +865,7 @@ dependencies = [
 name = "jmap-ui"
 version = "0.5.0"
 dependencies = [
+ "base64",
  "eds-sys",
  "evo-sys",
  "evolution-jmap-client",

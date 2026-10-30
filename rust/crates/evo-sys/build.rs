@@ -207,6 +207,10 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // the script string with `g_free` after it starts the script, so the
     // caller must allocate that string with GLib.
     "e_web_view_jsc_run_script_take",
+    // Calls back when an element of a given class is clicked. Evolution
+    // forgets every registration on the next content load, so the extension
+    // calls this again each time, after the script that creates the element.
+    "e_web_view_register_element_clicked",
     "e_mail_reader_get_selected_uids",
     "e_mail_reader_ref_folder",
     "e_mail_reader_get_action_group",
@@ -598,6 +602,10 @@ const GTK_HANDLES: &[&str] = &[
     "GtkWindow",
     // The Undo button of the info bar after a collection delete.
     "GtkButton",
+    // `EWebViewElementClickedFunc`'s click-position argument. A plain
+    // `typedef GdkRectangle GtkAllocation` in the real header, not a class;
+    // this crate never reads a field of it, only passes the pointer on.
+    "GtkAllocation",
 ];
 
 fn main() {
@@ -734,7 +742,24 @@ fn main() {
         .raw_line("pub const GTK_RESPONSE_OK: ::std::os::raw::c_int = -5;")
         .raw_line("pub const GTK_RESPONSE_CANCEL: ::std::os::raw::c_int = -6;")
         // The response that closes an alert in the info bar.
-        .raw_line("pub const GTK_RESPONSE_CLOSE: ::std::os::raw::c_int = -7;");
+        .raw_line("pub const GTK_RESPONSE_CLOSE: ::std::os::raw::c_int = -7;")
+        // `e_web_view_register_element_clicked`'s callback type. Bindgen
+        // will not generate this on its own: its signature names
+        // `GtkAllocation`, a blocklisted type, so bindgen drops the typedef
+        // but still names it at the one call site that takes it.
+        .raw_line(
+            "pub type EWebViewElementClickedFunc = ::std::option::Option<\n\
+             unsafe extern \"C\" fn(\n\
+             web_view: *mut EWebView,\n\
+             iframe_id: *const ::std::os::raw::c_char,\n\
+             element_id: *const ::std::os::raw::c_char,\n\
+             element_class: *const ::std::os::raw::c_char,\n\
+             element_value: *const ::std::os::raw::c_char,\n\
+             element_position: *const GtkAllocation,\n\
+             user_data: *mut ::std::os::raw::c_void,\n\
+             ),\n\
+             >;",
+        );
 
     // Evolution's handles need the struct tag as well as the typedef. A
     // blocklisted `EMailConfigServicePage` comes through as

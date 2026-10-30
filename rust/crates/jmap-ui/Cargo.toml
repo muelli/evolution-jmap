@@ -23,6 +23,8 @@ name = "jmap_ui"
 crate-type = ["rlib"]
 
 [dependencies]
+# The external contact photo fetch encodes its result as a `data:` URI.
+base64 = { workspace = true }
 eds-sys = { workspace = true }
 # The Evolution side: the notebook that the vacation extension extends, and
 # the page interface that it implements. All EDS/GLib types in evo-sys are

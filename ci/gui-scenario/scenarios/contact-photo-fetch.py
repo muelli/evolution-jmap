@@ -3,7 +3,7 @@
 """Scenario: what the preview does with an http(s) contact photo.
 
 A contact has a photo at an http URL. The scenario selects the contact in
-the preview and waits, then checks two things.
+the preview and waits, then checks three things.
 
 First, whether the local http photo server saw a request. Do not trust a
 "no request" result unless this scenario sees the photo server up and
@@ -17,19 +17,35 @@ Second, whether the preview says so. Stock Evolution shows a broken image
 icon and never names the URL. The placeholder of jmap-ui replaces it with
 a label and the URL in full, so the user can read where the image claims
 to be.
+
+Third, that clicking the "Load image" button is the one thing that makes a
+request happen, and that it makes exactly one, not zero and not a retry
+storm.
 """
 
 import time
 import urllib.request
 
 import contact_photo as cp
-from scenario import Jmap, ScenarioFailure, expect_no_errors, main, say, screenshot
+from scenario import (
+    Jmap,
+    ScenarioFailure,
+    do_action,
+    expect_no_errors,
+    main,
+    say,
+    screenshot,
+    wait_find,
+    wait_for,
+)
 
 NAME = "Helen Httpphoto"
 CARDS = [cp.card("photo-fetch", NAME, cp.PHOTO_URL)]
 WAIT_SECONDS = 10
 # The label of the placeholder, as jmap-ui writes it in English.
 PLACEHOLDER = "Externally hosted image"
+# The text of the button that fetches the photo, as jmap-ui writes it.
+LOAD_BUTTON = "Load image"
 
 
 def run():
@@ -63,6 +79,17 @@ def run():
     server_id = cp.card_ids(server)[NAME]
     if server.get("ContactCard", server_id)["media"]["p1"]["uri"] != cp.PHOTO_URL:
         raise ScenarioFailure("the server lost the photo URL")
+
+    button = wait_find(None, LOAD_BUTTON, showing=True)
+    do_action(button)
+    say(f"clicked {LOAD_BUTTON!r}")
+
+    wait_for(lambda: photos.requests or None, "the photo server to see the click's request")
+    time.sleep(2)
+    screenshot("after-click")
+    if photos.requests != ["/photo.png"]:
+        raise ScenarioFailure(f"the click made an unexpected request shape: {photos.requests}")
+    say(f"photo server: exactly one request after the click: {photos.requests}")
 
     expect_no_errors()
     expect_no_errors("dbus.log")
