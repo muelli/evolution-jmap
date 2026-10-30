@@ -43,6 +43,8 @@ Two suites fail against this container for reasons outside this project:
   test against the oracle is expected, not a regression.
 - `jmap-config`'s OAuth 2.0 discovery test skips here instead of running: the
   container publishes no RFC 8414 metadata document at all.
+- `jmap-cal-sync`'s free/busy test skips here instead of running: the
+  container does not advertise `urn:ietf:params:jmap:principals:availability`.
 
 ### Stalwart or other deployments
 
