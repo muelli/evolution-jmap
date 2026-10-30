@@ -21,6 +21,7 @@ use serde_json::Value;
 
 use crate::dispatch::{account_mut, parse_arguments, project_properties, to_result};
 use crate::patch::apply_patch;
+use crate::sieve::ensure_vacation_script;
 use crate::state::{AccountState, RecordedSubmission, ServerState};
 
 /// Fixed stand-in for "now" in reproducible tests.
@@ -900,6 +901,10 @@ pub fn vacation_response_set(
     arguments: Value,
 ) -> Result<Value, MethodError> {
     let request: SetRequest<VacationResponse> = parse_arguments(arguments)?;
+
+    let vacation_script_mode = state.sieve_vacation_script;
+    let vacation_script_name = state.sieve_vacation_script_name.clone();
+
     let account = account_mut(state, &request.account_id)?;
 
     let old_state = account.vacation_response.state();
@@ -936,6 +941,7 @@ pub fn vacation_response_set(
 
     let mut not_updated: BTreeMap<Id, SetError> = BTreeMap::new();
     let mut to_update: Vec<(Id, VacationResponse)> = Vec::new();
+    let mut has_enabled_vacation_update = false;
     for (id, patch) in request.update.unwrap_or_default() {
         let Some(existing) = account.vacation_response.get(&id) else {
             not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
@@ -968,6 +974,9 @@ pub fn vacation_response_set(
             );
             continue;
         }
+        if patched.is_enabled {
+            has_enabled_vacation_update = true;
+        }
         to_update.push((id, patched));
     }
 
@@ -978,6 +987,10 @@ pub fn vacation_response_set(
             updated.insert(id, None);
         }
     });
+
+    if vacation_script_mode && has_enabled_vacation_update {
+        ensure_vacation_script(account, &vacation_script_name);
+    }
 
     let mut response = SetResponse::new(request.account_id, account.vacation_response.state())
         .with_old_state(old_state);

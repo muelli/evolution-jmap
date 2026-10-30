@@ -135,6 +135,9 @@ fn main() {
                 );
                 builder = builder.without_capability(&capability);
             }
+            "--no-sieve" => {
+                builder = builder.no_sieve();
+            }
             "--without-primary-accounts" => {
                 builder = builder.without_primary_accounts();
             }
@@ -187,6 +190,13 @@ fn main() {
             }
             "--no-size-upload" => {
                 builder = builder.no_size_upload();
+            }
+            "--sieve-extensions" => {
+                let value = next_argument(
+                    &mut arguments,
+                    "--sieve-extensions needs a comma-separated list",
+                );
+                builder = builder.sieve_extensions(parse_csv_list(&value));
             }
             "--email-get-includes-unrequested" => {
                 builder = builder.email_get_includes_unrequested();
@@ -266,6 +276,9 @@ fn main() {
             "--snooze-extension" => {
                 builder = builder.snooze_extension();
             }
+            "--sieve-vacation-script" => {
+                builder = builder.sieve_vacation_script();
+            }
             "--seed" => {
                 let path = next_argument(&mut arguments, "--seed needs a JSON file path");
                 seed_path = Some(path);
@@ -338,6 +351,15 @@ fn parse_u64(value: String, usage_message: &str) -> u64 {
 
 fn next_argument(arguments: &mut impl Iterator<Item = String>, usage_message: &str) -> String {
     arguments.next().unwrap_or_else(|| usage(usage_message))
+}
+
+fn parse_csv_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn seed_default_data(server: &MockServer, seed_spoofed_shared_account: bool) {
@@ -488,17 +510,17 @@ fn usage(error: &str) -> ! {
     }
     eprintln!(
         "usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--bearer-as TOKEN:PRINCIPAL] [--oauth2] \
-         [--without-capability URN] [--without-primary-accounts] [--calls-in-request N] [--no-calls-in-request] \
+         [--without-capability URN] [--no-sieve] [--without-primary-accounts] [--calls-in-request N] [--no-calls-in-request] \
          [--changes-page-size N] [--changes-never-terminates] [--stalwart-shaped-unrecognized-changes-state] \
          [--objects-in-get N] [--query-page-size N] [--query-never-terminates] [--query-hides-limit] \
-         [--size-request N] [--no-size-request] [--size-upload N] [--no-size-upload] \
+         [--size-request N] [--no-size-request] [--size-upload N] [--no-size-upload] [--sieve-extensions A,B,C] \
          [--email-get-includes-unrequested] [--contact-photo-uses-file-uri] [--contact-photo-data-uri-as-blob-id] [--calendar-event-link-uses-file-uri] \
          [--session-via-redirect] [--well-known-redirect-to ORIGIN] [--advertise-origin ORIGIN] \
          [--shared-account-name-copies-user] [--download-via-redirect-to ORIGIN] [--reject-download-accept-json] \
          [--terse-submission-create] [--terse-contact-create] [--max-contact-size N] \
          [--new-collections-default-unsubscribed] [--terse-calendar-event-create] [--without-scheduling] \
          [--terse-collection-create] [--id-omitting-collection-create] [--reject-collection-create] \
-         [--max-delayed-send N] [--snooze-extension] [--seed PATH]"
+         [--max-delayed-send N] [--snooze-extension] [--sieve-vacation-script] [--seed PATH]"
     );
     std::process::exit(if error.is_empty() { 0 } else { 2 });
 }

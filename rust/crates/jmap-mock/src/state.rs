@@ -98,6 +98,18 @@ pub struct ServerState {
     /// Advertise the Cyrus snooze extension when true.
     /// In this mode, the server accepts `Email.snoozed`.
     pub snooze_extension: bool,
+    /// Largest accepted Sieve script source size in octets.
+    pub sieve_max_size_script: u64,
+    /// Largest number of Sieve scripts this account allows.
+    pub sieve_max_number_scripts: Option<u64>,
+    /// Largest accepted Sieve script name size in octets.
+    pub sieve_max_size_script_name: u64,
+    /// Advertised Sieve extension names.
+    pub sieve_extensions: Vec<String>,
+    /// Mirror VacationResponse enablement to an active server-managed Sieve script.
+    pub sieve_vacation_script: bool,
+    /// Name of the server-managed vacation Sieve script.
+    pub sieve_vacation_script_name: String,
     /// Connected `/eventsource` subscribers for state-change delivery.
     pub event_source: EventSourceHub,
 }
@@ -152,6 +164,18 @@ impl ServerState {
             reject_collection_create: false,
             max_delayed_send: None,
             snooze_extension: false,
+            sieve_max_size_script: 65_536,
+            sieve_max_number_scripts: Some(32),
+            sieve_max_size_script_name: 512,
+            sieve_extensions: vec![
+                "fileinto".to_owned(),
+                "imap4flags".to_owned(),
+                "copy".to_owned(),
+                "mailboxid".to_owned(),
+                "vacation".to_owned(),
+            ],
+            sieve_vacation_script: false,
+            sieve_vacation_script_name: "vacation".to_owned(),
             event_source: EventSourceHub::new(),
         }
     }

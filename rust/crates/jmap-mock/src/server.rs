@@ -123,6 +123,11 @@ pub struct MockServerBuilder {
     download_via_redirect_to: Option<String>,
     max_contact_size: Option<u64>,
     max_delayed_send: Option<u64>,
+    sieve_max_size_script: u64,
+    sieve_max_number_scripts: Option<u64>,
+    sieve_max_size_script_name: u64,
+    sieve_extensions: Vec<String>,
+    sieve_vacation_script: bool,
     faults: Faults,
 }
 
@@ -147,6 +152,13 @@ impl MockServerBuilder {
     /// Omit one capability from `capabilities` and `primaryAccounts`.
     pub fn without_capability(mut self, capability: &str) -> Self {
         self.omitted_capabilities.insert(capability.to_owned());
+        self
+    }
+
+    /// Omit the Sieve capability from the session.
+    pub fn no_sieve(mut self) -> Self {
+        self.omitted_capabilities
+            .insert(CAPABILITY_SIEVE.to_owned());
         self
     }
 
@@ -252,6 +264,33 @@ impl MockServerBuilder {
     /// Omit `maxSizeUpload` and accept any upload size.
     pub fn no_size_upload(mut self) -> Self {
         self.size_upload = None;
+        self
+    }
+
+    /// Advertise a custom `maxSizeScript` for the Sieve capability.
+    pub fn sieve_max_size_script(mut self, octets: u64) -> Self {
+        self.sieve_max_size_script = octets;
+        self
+    }
+
+    /// Advertise a custom `maxNumberScripts` for the Sieve capability.
+    pub fn sieve_max_number_scripts(mut self, count: u64) -> Self {
+        self.sieve_max_number_scripts = Some(count);
+        self
+    }
+
+    /// Advertise a custom `maxSizeScriptName` for the Sieve capability.
+    pub fn sieve_max_size_script_name(mut self, octets: u64) -> Self {
+        self.sieve_max_size_script_name = octets;
+        self
+    }
+
+    /// Advertise a custom Sieve extension list.
+    pub fn sieve_extensions(
+        mut self,
+        extensions: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.sieve_extensions = extensions.into_iter().map(Into::into).collect();
         self
     }
 
@@ -405,6 +444,12 @@ impl MockServerBuilder {
         self
     }
 
+    /// Keep a server-managed active `vacation` Sieve script in sync with VacationResponse.
+    pub fn sieve_vacation_script(mut self) -> Self {
+        self.sieve_vacation_script = true;
+        self
+    }
+
     /// Bind localhost and serve requests in a background thread.
     pub fn start(self) -> MockServer {
         let mut state = ServerState::new();
@@ -445,6 +490,11 @@ impl MockServerBuilder {
         state.reject_collection_create = self.faults.reject_collection_create;
         state.max_delayed_send = self.max_delayed_send;
         state.snooze_extension = self.faults.snooze_extension;
+        state.sieve_max_size_script = self.sieve_max_size_script;
+        state.sieve_max_number_scripts = self.sieve_max_number_scripts;
+        state.sieve_max_size_script_name = self.sieve_max_size_script_name;
+        state.sieve_extensions = self.sieve_extensions;
+        state.sieve_vacation_script = self.sieve_vacation_script;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -512,6 +562,17 @@ impl MockServer {
             download_via_redirect_to: None,
             max_contact_size: None,
             max_delayed_send: None,
+            sieve_max_size_script: 65_536,
+            sieve_max_number_scripts: Some(32),
+            sieve_max_size_script_name: 512,
+            sieve_extensions: vec![
+                "fileinto".to_owned(),
+                "imap4flags".to_owned(),
+                "copy".to_owned(),
+                "mailboxid".to_owned(),
+                "vacation".to_owned(),
+            ],
+            sieve_vacation_script: false,
             faults: Faults::default(),
         }
     }
@@ -1035,10 +1096,21 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
 
 /// Build a capability object for `capability`.
 /// Return `{}` for capabilities with no extra fields.
-fn capability_value(capability: &str) -> Value {
+fn capability_value(capability: &str, state: &ServerState) -> Value {
     if capability == CAPABILITY_SIEVE {
-        serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
-            .expect("SieveCapability serializes")
+        let mut capability = SieveCapability::new(state.sieve_max_size_script)
+            .with_sieve_extensions(state.sieve_extensions.iter().cloned());
+        if let Some(max_number_scripts) = state.sieve_max_number_scripts {
+            capability = capability.with_max_number_scripts(max_number_scripts);
+        }
+        let mut value = serde_json::to_value(capability).expect("SieveCapability serializes");
+        if let Value::Object(ref mut object) = value {
+            object.insert(
+                "maxSizeScriptName".to_owned(),
+                json!(state.sieve_max_size_script_name),
+            );
+        }
+        value
     } else if capability == CAPABILITY_BLOB {
         serde_json::to_value(
             BlobCapability::new()
@@ -1077,7 +1149,12 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                 ACCOUNT_CAPABILITIES
                     .iter()
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
-                    .map(|capability| ((*capability).to_owned(), capability_value(capability)))
+                    .map(|capability| {
+                        (
+                            (*capability).to_owned(),
+                            capability_value(capability, state),
+                        )
+                    })
                     .collect();
             // Add `submission` account data only when `maxDelayedSend` is set.
             if let Some(seconds) = state.max_delayed_send
@@ -1170,7 +1247,12 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     .iter()
                     .chain([&CAPABILITY_PRINCIPALS, &CAPABILITY_PRINCIPALS_OWNER])
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
-                    .map(|capability| ((*capability).to_owned(), capability_value(capability))),
+                    .map(|capability| {
+                        (
+                            (*capability).to_owned(),
+                            capability_value(capability, state),
+                        )
+                    }),
             )
             .collect();
     if state.snooze_extension {

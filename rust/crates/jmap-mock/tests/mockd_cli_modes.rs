@@ -33,6 +33,7 @@ fn help_lists_the_expanded_builder_mode_flags() {
     for flag in [
         "--bearer-as",
         "--without-capability",
+        "--no-sieve",
         "--without-primary-accounts",
         "--calls-in-request",
         "--no-calls-in-request",
@@ -43,6 +44,7 @@ fn help_lists_the_expanded_builder_mode_flags() {
         "--no-size-request",
         "--size-upload",
         "--no-size-upload",
+        "--sieve-extensions",
         "--contact-photo-data-uri-as-blob-id",
         "--session-via-redirect",
         "--download-via-redirect-to",
@@ -58,6 +60,7 @@ fn help_lists_the_expanded_builder_mode_flags() {
         "--reject-collection-create",
         "--max-delayed-send",
         "--snooze-extension",
+        "--sieve-vacation-script",
         "--seed",
     ] {
         assert!(
