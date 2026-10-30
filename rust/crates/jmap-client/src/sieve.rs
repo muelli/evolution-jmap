@@ -3,18 +3,20 @@
 
 //! JMAP Sieve operations (RFC 9661).
 //!
-//! Provides `SieveScript/get`, `/set`, `/query`, and `/validate`.
+//! Provides `SieveScript/get`, `/set`, `/query`, `/validate`, script upload and
+//! download helpers, capability lookup, and `SetError` classification.
 
 use serde_json::Value;
 
 use jmap_proto::Id;
+use jmap_proto::error::{SetError, set};
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
-use jmap_proto::sieve::{
-    SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest, SieveScriptValidateRequest,
-    SieveScriptValidateResponse,
+pub use jmap_proto::sieve::{
+    SieveCapability, SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest,
+    SieveScriptValidateRequest, SieveScriptValidateResponse, sieve_set_error,
 };
 
 use crate::client::Client;
@@ -23,7 +25,181 @@ use crate::set::{expect_created, expect_destroyed, expect_updated};
 
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_SIEVE];
 
+/// How [`Client::sieve_script_put`] changes script activation once `/set` succeeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activation {
+    /// Keep the account's current script activation state unchanged.
+    Keep,
+    /// Activate the created or updated script via `onSuccessActivateScript`.
+    Activate,
+    /// Deactivate the account's active script via `onSuccessDeactivateScript`.
+    Deactivate,
+}
+
+/// Known `SetError` kinds returned by `SieveScript/set` and `SieveScript/validate`
+/// (RFC 8620 Section 5.3 and RFC 9661 Sections 2.4 and 2.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SieveSetErrorKind {
+    /// The script failed syntax or semantic validation (`invalidSieve` or `invalidScript`).
+    InvalidSieve,
+    /// The script is active and cannot be destroyed (`sieveIsActive` or `scriptIsActive`).
+    SieveIsActive,
+    /// The script exceeds the server's `maxSizeScript` limit (`tooLarge`).
+    TooLarge,
+    /// The account has reached `maxNumberScripts` (`overQuota`).
+    OverQuota,
+    /// Another script with the same name already exists (`alreadyExists`).
+    AlreadyExists,
+}
+
+/// Map a [`SetError`] to its typed [`SieveSetErrorKind`], if recognized.
+///
+/// Matches both standard RFC 9661 error types and early-draft variants returned
+/// by Stalwart and Cyrus (`invalidScript` and `scriptIsActive`).
+pub fn set_error_kind(error: &SetError) -> Option<SieveSetErrorKind> {
+    match error.error_type.as_str() {
+        sieve_set_error::INVALID_SIEVE | "invalidScript" => Some(SieveSetErrorKind::InvalidSieve),
+        sieve_set_error::SIEVE_IS_ACTIVE | "scriptIsActive" => {
+            Some(SieveSetErrorKind::SieveIsActive)
+        }
+        set::TOO_LARGE => Some(SieveSetErrorKind::TooLarge),
+        set::OVER_QUOTA | "maxQuotaReached" => Some(SieveSetErrorKind::OverQuota),
+        set::ALREADY_EXISTS => Some(SieveSetErrorKind::AlreadyExists),
+        _ => None,
+    }
+}
+
 impl Client {
+    /// Return the [`SieveCapability`] for `account`, if both the session and the
+    /// account advertise `urn:ietf:params:jmap:sieve` (RFC 9661 Section 1.2).
+    ///
+    /// Merges top-level session capability properties (such as `implementation`)
+    /// with per-account capability limits and `sieveExtensions`.
+    pub fn sieve_capability(&self, account: &Id) -> Option<SieveCapability> {
+        let session_val = self.session().capabilities.get(CAPABILITY_SIEVE)?;
+        let acct = self.session().accounts.get(account)?;
+        let acct_val = acct.account_capabilities.get(CAPABILITY_SIEVE)?;
+        let mut merged = session_val.as_object()?.clone();
+        for (key, value) in acct_val.as_object()? {
+            if !value.is_null() || !merged.contains_key(key) {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+        serde_json::from_value(Value::Object(merged)).ok()
+    }
+
+    /// Download the UTF-8 source text of `script` (RFC 9661 Section 2.1).
+    ///
+    /// Returns [`Error::Protocol`] if `script.blob_id` is empty or the blob
+    /// bytes are not valid UTF-8.
+    pub fn sieve_script_text(&self, account: &Id, script: &SieveScript) -> Result<String, Error> {
+        if script.blob_id.is_empty() {
+            return Err(Error::Protocol(
+                "SieveScript has an empty blobId".to_owned(),
+            ));
+        }
+        let max_bytes = self
+            .sieve_capability(account)
+            .map(|cap| cap.max_size_script)
+            .filter(|&limit| limit > 0)
+            .map_or(crate::limits::MAX_BLOB_BYTES, |limit| {
+                limit.min(crate::limits::MAX_BLOB_BYTES)
+            });
+        let download_name = if script.name.is_empty() {
+            "script.sieve"
+        } else {
+            script.name.as_str()
+        };
+        let bytes = self.download_blob(account, &script.blob_id, download_name, max_bytes)?;
+        String::from_utf8(bytes)
+            .map_err(|err| Error::Protocol(format!("Sieve script blob is not valid UTF-8: {err}")))
+    }
+
+    /// Upload `text` and create or update a Sieve script in one `SieveScript/set` call
+    /// (RFC 9661 Section 2.4).
+    ///
+    /// Creates a new script when `id` is `None`, or updates the existing script when
+    /// `id` is `Some`. Applies `activate` in the same `/set` request.
+    pub fn sieve_script_put(
+        &self,
+        account: &Id,
+        id: Option<&Id>,
+        name: &str,
+        text: &str,
+        activate: Activation,
+    ) -> Result<SieveScript, Error> {
+        let uploaded = self.upload_blob_slice(account, "application/sieve", text.as_bytes())?;
+        let blob_id = uploaded.blob_id;
+        let is_cyrus = self.is_cyrus_sieve(account);
+
+        match id {
+            None => {
+                let script = SieveScript::new(name, blob_id.clone());
+                let set = SetRequest::<SieveScript>::new(account.clone()).create("new", script);
+                let mut request = SieveScriptSetRequest::new(set);
+                request = match activate {
+                    Activation::Keep => request,
+                    Activation::Activate => request.activating("#new"),
+                    Activation::Deactivate => request.deactivating(),
+                };
+                let response = self.sieve_script_set_inner(&request, is_cyrus)?;
+                let mut created = expect_created(&response, "new")?;
+                if created.name.is_empty() {
+                    created.name = name.to_owned();
+                }
+                if created.blob_id.is_empty() || is_cyrus {
+                    created.blob_id = blob_id;
+                }
+                match activate {
+                    Activation::Activate => created.is_active = true,
+                    Activation::Deactivate => created.is_active = false,
+                    Activation::Keep => {}
+                }
+                Ok(created)
+            }
+            Some(existing_id) => {
+                let patch = serde_json::json!({
+                    "name": name,
+                    "blobId": blob_id,
+                });
+                let set = SetRequest::<SieveScript>::new(account.clone())
+                    .update(existing_id.clone(), patch);
+                let mut request = SieveScriptSetRequest::new(set);
+                request = match activate {
+                    Activation::Keep => request,
+                    Activation::Activate => request.activating(existing_id.clone()),
+                    Activation::Deactivate => request.deactivating(),
+                };
+                let response = self.sieve_script_set_inner(&request, is_cyrus)?;
+                expect_updated(&response, existing_id)?;
+                let mut updated = response
+                    .updated
+                    .as_ref()
+                    .and_then(|map| map.get(existing_id))
+                    .and_then(Option::clone)
+                    .unwrap_or_default();
+                updated.id = Some(existing_id.clone());
+                if updated.name.is_empty() {
+                    updated.name = name.to_owned();
+                }
+                if updated.blob_id.is_empty() || is_cyrus {
+                    updated.blob_id = blob_id;
+                }
+                match activate {
+                    Activation::Activate => updated.is_active = true,
+                    Activation::Deactivate => updated.is_active = false,
+                    Activation::Keep => {}
+                }
+                Ok(updated)
+            }
+        }
+    }
+
+    fn is_cyrus_sieve(&self, account: &Id) -> bool {
+        self.sieve_capability(account)
+            .and_then(|cap| cap.implementation)
+            .is_some_and(|imp| imp.contains("Cyrus"))
+    }
     /// Fetch all Sieve scripts (`SieveScript/get` with `ids: null`).
     pub fn sieve_scripts(&self, account_id: &Id) -> Result<Vec<SieveScript>, Error> {
         let arguments = self.single_call(
@@ -139,6 +315,14 @@ impl Client {
         &self,
         request: &SieveScriptSetRequest,
     ) -> Result<SetResponse<SieveScript>, Error> {
+        self.sieve_script_set_inner(request, false)
+    }
+
+    fn sieve_script_set_inner(
+        &self,
+        request: &SieveScriptSetRequest,
+        cyrus_deactivate: bool,
+    ) -> Result<SetResponse<SieveScript>, Error> {
         let limit = self
             .session()
             .max_objects_in_set()
@@ -172,6 +356,13 @@ impl Client {
                 && let Some(obj) = wire_req.as_object_mut()
             {
                 obj.remove("onSuccessActivateScript");
+            }
+            if cyrus_deactivate
+                && chunk_req.on_success_deactivate_script == Some(true)
+                && let Some(obj) = wire_req.as_object_mut()
+            {
+                obj.remove("onSuccessDeactivateScript");
+                obj.insert("onSuccessDeactivatescript".to_owned(), Value::Bool(true));
             }
             let arguments = self.single_call_with_created_ids(
                 USING,
