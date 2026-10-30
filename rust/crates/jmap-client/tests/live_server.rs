@@ -6580,12 +6580,12 @@ fn large_blob_upload_download_fidelity_rss_and_limits_through_the_real_api() {
     }
 }
 
-/// Tests that `CalendarEvent/set` silently drops `participants`.
-/// Stalwart accepts `participants` on create and update without error.
-/// Subsequent `CalendarEvent/get` calls return events without `participants`.
+/// Tests a participant with neither `calendarAddress` nor `sendTo` set.
+/// Stalwart 1.0.1 accepts it and keeps it on a later `CalendarEvent/get`.
+/// Cyrus still requires `calendarAddress` and rejects the create instead.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
-fn calendar_event_set_silently_drops_participants_through_the_real_api() {
+fn calendar_event_set_preserves_participants_without_calendar_address_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
         return;
@@ -6603,7 +6603,7 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         .expect("the server named the calendar");
 
     let suffix = unique_suffix();
-    let title = format!("agent-participants-drop-{suffix}");
+    let title = format!("agent-participants-no-addr-{suffix}");
     let mut event = CalendarEvent::simple(calendar_id, &title, "2026-12-01T09:00:00", "PT1H");
     let mut participants = BTreeMap::new();
     participants.insert(
@@ -6636,16 +6636,16 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         return;
     }
 
-    // 1. Create succeeds with no error, as if the participants were accepted:
+    // 1. Create succeeds with no error:
     let created = client
         .event_create(&account_id, &event)
         .expect("CalendarEvent/set create failed against the real server");
     let event_id = created.id.clone().expect("the server named the new event");
 
-    // 2. A fresh CalendarEvent/get, explicitly asking for participants, comes
-    // back with none at all: not an empty map, the property is
-    // simply absent from the object, exactly as jmap-cal-sync's own
-    // load_component would observe it:
+    // 2. A fresh CalendarEvent/get, explicitly asking for participants, keeps
+    // the participant (Finding 23's narrowed scope: only a participant
+    // carrying `sendTo` vanishes; one with neither `calendarAddress` nor
+    // `sendTo` round-trips intact on Stalwart 1.0.1):
     let raw_args = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
@@ -6663,13 +6663,21 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         fetched.get("title").and_then(|v| v.as_str()),
         Some(title.as_str())
     );
-    assert!(
-        fetched.get("participants").is_none(),
-        "live Stalwart CalendarEvent/get must omit participants entirely after \
-         create silently dropped them (Finding 23), got: {fetched:?}"
+    let fetched_participant = fetched
+        .get("participants")
+        .and_then(|v| v.get("attendee-1"))
+        .unwrap_or_else(|| {
+            panic!(
+                "live Stalwart CalendarEvent/get must keep the participant intact, got: {fetched:?}"
+            )
+        });
+    assert_eq!(
+        fetched_participant.get("email").and_then(|v| v.as_str()),
+        Some("nobody@example.net")
     );
+    assert!(fetched_participant.get("calendarAddress").is_none());
 
-    // 3. Driving the client's own round-trip path confirms the same loss:
+    // 3. Driving the client's own round-trip path confirms the same kept data:
     let reloaded = client
         .event_get(&account_id, std::slice::from_ref(&event_id))
         .expect("CalendarEvent/get failed against the real server");
@@ -6677,11 +6685,14 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         .list
         .first()
         .expect("CalendarEvent/get must return the just-created event");
-    assert!(
-        reloaded_event.participants.is_none()
-            || reloaded_event.participants.as_ref().unwrap().is_empty(),
-        "Client::event_get must observe the same participant loss, got: {:?}",
-        reloaded_event.participants
+    let reloaded_participant = reloaded_event
+        .participants
+        .as_ref()
+        .and_then(|participants| participants.get("attendee-1"))
+        .expect("Client::event_get must observe the same kept participant");
+    assert_eq!(
+        reloaded_participant.get("email").and_then(|v| v.as_str()),
+        Some("nobody@example.net")
     );
 
     client
