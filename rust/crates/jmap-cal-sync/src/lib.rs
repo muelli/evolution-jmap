@@ -128,12 +128,36 @@ pub enum Itip {
     Suppress,
     /// The change comes from a received iTIP message or an import, not from the user.
     ///
-    /// The server sends at most the user's answer to another organizer, and only
-    /// when `reply` is true. See [`CalSync::save_component_with`].
+    /// On a create or edit, the server sends at most the user's answer to
+    /// another organizer, and only when `reply` is true. See
+    /// [`CalSync::save_component_with`]. On a remove, the server never sends
+    /// anything: [`CalSync::remove_component_with`] ignores `reply`, because a
+    /// removal this variant describes always comes from a received CANCEL,
+    /// and RFC 5546 defines no response to a CANCEL.
     Received {
         /// False when EDS set `E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE`.
         reply: bool,
     },
+}
+
+/// Whether `icalendar`'s top-level `METHOD` is absent or `PUBLISH`, the iTIP
+/// shape of a plain import or backup restore (RFC 5546 1.4) rather than a
+/// request, reply or cancellation that asks for a scheduling response.
+///
+/// An unparseable document is treated as an import too: the safer default
+/// when this check cannot tell is never to schedule a reply the user did not
+/// ask for.
+pub fn is_import(icalendar: &str) -> bool {
+    let Ok(calendar) = jmap_ical::event::parse_ical(icalendar) else {
+        return true;
+    };
+    let Some(root) = calendar.components.first() else {
+        return true;
+    };
+    match jmap_ical::event::component_entry(root, "METHOD") {
+        Some(entry) => jmap_ical::event::entry_text(entry).eq_ignore_ascii_case("PUBLISH"),
+        None => true,
+    }
 }
 
 /// Returns `error` from a create, edit or delete as an [`Unscheduled`] refusal
@@ -587,12 +611,16 @@ impl CalSync {
     /// get messages.
     pub fn remove_component_with(&self, uid: &str, itip: Itip) -> Result<(), SyncError> {
         let schedule = match itip {
-            Itip::Received { reply } => {
+            // A removal that `Itip::Received` marks always comes from a
+            // received CANCEL: it is the only iTip method a receive turns
+            // into a delete. RFC 5546 defines no response to a CANCEL, so
+            // this never schedules, whatever `reply` says.
+            Itip::Received { .. } => {
                 let own = self.own_addresses()?;
                 if organised_here(&self.fetch(uid)?, &own) {
                     return Err(SyncError::OwnMeeting);
                 }
-                reply && self.server_schedules && !own.is_empty()
+                false
             }
             Itip::Send | Itip::Suppress => self.schedules(itip),
         };

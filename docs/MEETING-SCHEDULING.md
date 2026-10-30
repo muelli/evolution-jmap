@@ -166,12 +166,20 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
      that this calendar already holds goes into that event. The answer reaches
      the organizer the same way as from the editor.
    - A component from `receive_objects` (an accepted invitation or an import)
-     comes from another person. The backend marks it as received. The server
-     then schedules only the answer of the user to an organizer that is not
-     the user. The change cannot set the organizer. It cannot change the
-     guests or the organizer of a meeting that the user organizes, or delete
-     that meeting. The save fails with a permission error. While the backend
-     is offline, `receive_objects` fails.
+     comes from another person. The backend marks it as received. The change
+     cannot set the organizer. It cannot change the guests or the organizer of
+     a meeting that the user organizes, or delete that meeting. The save fails
+     with a permission error. While the backend is offline, `receive_objects`
+     fails.
+   - Within that, two cases never ask the server to schedule, whatever the
+     opflags say. A removal always comes from a received CANCEL (the only
+     iTip method `receive_objects` turns into a delete), and RFC 5546 defines
+     no response to a CANCEL. A create or edit whose payload is not a real
+     invitation (`METHOD` absent or `PUBLISH`, RFC 5546 1.4: a plain import or
+     a backup restore) is not something the user answered, so it must not
+     silently mail a foreign organizer a reply either. Only a create or edit
+     from a real invitation (`METHOD` `REQUEST` or `REPLY`) schedules the
+     user's own answer to an organizer that is not the user.
 4. **Refusals are errors, not fallbacks.** When the server answers, Evolution
    already knows that the backend sends. A quiet retry without scheduling
    would leave the guests uninvited. The user would not know.
@@ -198,7 +206,13 @@ These items come from the sources of EDS 3.52 and Evolution 3.52 (GNOME 46).
     `receive_objects_sync` gives to EDS, and the save reads it. EDS keeps
     these flags with a change that it queues offline, so the mark stays when
     EDS uploads the change later. The account's `ParticipantIdentity`
-    addresses tell if the user is the organizer.
+    addresses tell if the user is the organizer. `remove_component_with`
+    ignores `Itip::Received`'s `reply` field entirely: a removal it describes
+    is always a received CANCEL, which never earns a reply. For a create or
+    edit, `jmap_cal_sync::is_import` reads `receive_objects_sync`'s raw
+    payload for a top-level `METHOD`; the calendar backend sets a second mark
+    when it is absent or `PUBLISH`, and `Itip::Received`'s `reply` is forced
+    false whenever that mark is set, whatever the opflags otherwise say.
   - A call asked the server to schedule, and the server refused it. The
     refusal comes back as `SyncError::Unscheduled`:
     - `Unreachable` for `noSupportedScheduleMethods`. It names the

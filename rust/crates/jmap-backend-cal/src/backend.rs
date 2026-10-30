@@ -574,6 +574,9 @@ unsafe extern "C" fn discard_alarm_sync(
 ///
 /// Evolution calls this for an accepted invitation and for an import. The data
 /// comes from another person, so the sync layer applies [`Itip::Received`].
+/// When `calobj`'s top-level `METHOD` is absent or `PUBLISH` (the shape of a
+/// plain import or backup restore, not a real invitation), the mark also
+/// tells the sync layer never to reply: see [`scheduling::received`].
 /// The call fails while the backend cannot connect. If the backend goes offline
 /// after this check, the meta backend queues the change with the marked opflags.
 unsafe extern "C" fn receive_objects_sync(
@@ -597,7 +600,8 @@ unsafe extern "C" fn receive_objects_sync(
             {
                 return;
             }
-            let opflags = scheduling::received(opflags);
+            let opflags =
+                scheduling::received(opflags, read_string(calobj).as_deref().unwrap_or_default());
             parent(backend, cal, cancellable, calobj, opflags, error);
         })
     }
