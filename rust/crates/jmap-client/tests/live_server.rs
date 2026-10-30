@@ -5303,12 +5303,14 @@ fn current_user_principal_resolves_through_the_real_api() {
     assert_eq!(list_p[0].id.as_ref(), Some(&account_id));
 }
 
-/// Tests that `CalendarEvent/set` handles time zone property rejection cleanly.
-/// Stalwart rejects RFC 8984 section 4.7.2 `timeZones` properties with `invalidProperties`.
-/// Confirms that `Client::event_create` surfaces the `invalidProperties` error.
+/// Tests that `CalendarEvent/set` accepts an explicit `timeZones` property.
+/// Stalwart 1.0.1 accepts RFC 8984 section 4.7.2 `timeZones` definitions that
+/// 0.16.x rejected with `invalidProperties` (finding 13, fixed upstream).
+/// Confirms `Client::event_create` stores such an event cleanly, and that a
+/// later unfiltered get returns the submitted `timeZones` map intact.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
-fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
+fn calendar_event_set_accepts_timezones_property_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!("no live server configured or write credentials missing; skipping");
         return;
@@ -5328,8 +5330,7 @@ fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
         .id
         .expect("calendar must have an ID");
 
-    // 2. Direct raw CalendarEvent/set create with empty "timeZones": {} reproduces the
-    // invalidProperties rejection on live Stalwart:
+    // 2. Direct raw CalendarEvent/set create with empty "timeZones": {} succeeds:
     let raw_args = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
@@ -5347,29 +5348,26 @@ fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
             }),
         )
         .expect("raw CalendarEvent/set call succeeds on wire");
-    let not_created = raw_args
-        .get("notCreated")
+    let raw_created = raw_args
+        .get("created")
         .and_then(|v| v.as_object())
-        .expect("notCreated map present in response");
-    let error_obj = not_created
+        .expect("created map present in response")
         .get("probe_raw_tz")
-        .expect("probe_raw_tz present in notCreated");
-    assert_eq!(
-        error_obj.get("type").and_then(|v| v.as_str()),
-        Some("invalidProperties")
+        .expect("probe_raw_tz present in created");
+    let raw_created_id = Id::new(
+        raw_created
+            .get("id")
+            .and_then(|v| v.as_str())
+            .expect("created event has an id")
+            .to_string(),
     );
-    let props = error_obj
-        .get("properties")
-        .and_then(|v| v.as_array())
-        .expect("properties array present");
-    assert!(
-        props.iter().any(|p| p.as_str() == Some("timeZones")),
-        "properties array must name timeZones"
-    );
+    client
+        .event_destroy(&account_id, &raw_created_id)
+        .expect("event_destroy succeeds for the raw-probe event");
 
-    // 3. Client::event_create with time_zones set returns Error::Set cleanly:
+    // 3. Client::event_create with a non-empty time_zones map also succeeds:
     let mut event_with_tz = CalendarEvent::simple(
-        calendar_id.clone(),
+        calendar_id,
         "Probe Event With TimeZones",
         "2026-10-05T12:00:00",
         "PT1H",
@@ -5384,43 +5382,33 @@ fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
     );
     event_with_tz.time_zones = Some(tz_map);
 
-    let set_err = client
-        .event_create(&account_id, &event_with_tz)
-        .expect_err("event_create with time_zones must fail on Stalwart");
-    match set_err {
-        Error::Set(err) => {
-            assert_eq!(err.error_type, "invalidProperties");
-            if is_cyrus_server(&client) {
-                assert!(err.description.is_none());
-            } else {
-                assert_eq!(err.description.as_deref(), Some("Invalid property."));
-            }
-            assert_eq!(
-                err.properties.as_ref(),
-                Some(&vec!["timeZones".to_string()])
-            );
-        }
-        other => panic!("expected Error::Set with invalidProperties, got {other:?}"),
-    }
-
-    // 4. Client::event_create without time_zones succeeds cleanly:
-    let event_clean = CalendarEvent::simple(
-        calendar_id,
-        "Probe Event Without TimeZones",
-        "2026-10-05T12:00:00",
-        "PT1H",
-    );
     let created = client
-        .event_create(&account_id, &event_clean)
-        .expect("event_create without time_zones must succeed on Stalwart");
+        .event_create(&account_id, &event_with_tz)
+        .expect("event_create with time_zones must succeed on Stalwart 1.0.1");
     let created_id = created.id.expect("created event must have an ID");
+
+    // The server stores the submitted timeZones map and returns it intact:
+    let fetched = client
+        .event_get(&account_id, std::slice::from_ref(&created_id))
+        .expect("event_get succeeds")
+        .list;
+    let fetched_event = fetched.first().expect("fetched event present");
+    assert_eq!(
+        fetched_event.title.as_deref(),
+        Some("Probe Event With TimeZones")
+    );
+    assert_eq!(
+        fetched_event.time_zones.as_ref(),
+        event_with_tz.time_zones.as_ref(),
+        "server must round-trip the submitted timeZones map"
+    );
 
     // Clean up created event:
     client
         .event_destroy(&account_id, &created_id)
         .expect("event_destroy succeeds");
 
-    // 5. CalendarEvent/parse on an .ics blob with custom VTIMEZONE passes the server's
+    // 4. CalendarEvent/parse on an .ics blob with custom VTIMEZONE passes the server's
     // representation through intact to the client:
     let ics = "BEGIN:VCALENDAR\r\n\
 VERSION:2.0\r\n\
