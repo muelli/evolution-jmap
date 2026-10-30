@@ -35,6 +35,15 @@ To stop the Cyrus container:
 $ ./ci/cyrus-oracle.sh stop
 ```
 
+Two suites fail against this container for reasons outside this project:
+
+- `jmap-backend-core`'s wrong-password rejection test. The container's
+  `fakesaslauthd` accepts any password for a provisioned account, so a
+  deliberately wrong password never gets rejected here. A failure in this
+  test against the oracle is expected, not a regression.
+- `jmap-config`'s OAuth 2.0 discovery test skips here instead of running: the
+  container publishes no RFC 8414 metadata document at all.
+
 ### Stalwart or other deployments
 
 In Stalwart, you can create accounts from the admin UI or with

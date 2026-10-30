@@ -42,7 +42,8 @@
 //! $ cargo test -p jmap-config -- --ignored
 //! ```
 //!
-//! Skipped, not failed, when `JMAP_LIVE_SERVER_URL` is unset.
+//! Skipped, not failed, when `JMAP_LIVE_SERVER_URL` is unset, or when the
+//! deployment publishes no RFC 8414 metadata document at all.
 
 use std::env;
 
@@ -102,6 +103,13 @@ fn real_issuer() -> Option<(String, String, u16, bool)> {
             max_response_bytes: 64 * 1024,
         })
         .expect("the real deployment must answer the RFC 8414 well-known request");
+    // RFC 8414 Section 3 does not require every deployment to publish this
+    // document; a 404 here means the deployment just does not offer OAuth
+    // 2.0 discovery, not a broken response. Treat it the same as the env
+    // var being unset: skip, do not fail.
+    if response.status == 404 {
+        return None;
+    }
     assert_eq!(
         response.status, 200,
         "the real deployment's OAuth 2.0 metadata request did not return 200"
@@ -131,7 +139,10 @@ fn real_issuer() -> Option<(String, String, u16, bool)> {
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn discover_and_register_resolves_a_full_config_against_the_real_server() {
     let Some((issuer, host, port, secure)) = real_issuer() else {
-        eprintln!("JMAP_LIVE_SERVER_URL not set; skipping the live-server test");
+        eprintln!(
+            "JMAP_LIVE_SERVER_URL not set, or the deployment offers no RFC 8414 metadata document; \
+             skipping the live-server test"
+        );
         return;
     };
     let reachable_origin = env::var("JMAP_LIVE_SERVER_URL").unwrap();
