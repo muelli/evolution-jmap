@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use jmap_proto::Id;
 use jmap_proto::session::{
-    CAPABILITY_CYRUS_MAIL, CAPABILITY_MAIL, CAPABILITY_VACATION_RESPONSE, Session,
+    CAPABILITY_CYRUS_MAIL, CAPABILITY_MAIL, CAPABILITY_SIEVE, CAPABILITY_VACATION_RESPONSE, Session,
 };
 
 /// The server-side facts that the gates of one account need, in one read.
@@ -44,6 +44,12 @@ pub struct AccountFeatures {
     /// wake messages. Then snoozed messages stay in a folder that nothing
     /// empties.
     pub snooze: bool,
+    /// The server offers `SieveScript/get` and `/set` (RFC 9661): both the
+    /// session and the account must list the capability. A server can list a
+    /// capability at the session level while withholding it from one
+    /// account's `accountCapabilities` (RFC 8620 Section 1.6.2); either
+    /// omission means the account has no Sieve scripts to manage.
+    pub sieve: bool,
 }
 
 impl AccountFeatures {
@@ -55,10 +61,13 @@ impl AccountFeatures {
         let account_id = session.resolve_primary_account(CAPABILITY_MAIL)?.clone();
         let account = session.accounts.get(&account_id)?;
         let max_hold = account.max_delayed_send().filter(|&seconds| seconds > 0);
+        let sieve = session.capabilities.contains_key(CAPABILITY_SIEVE)
+            && account.has_capability(CAPABILITY_SIEVE);
         Some(Self {
             vacation: account.has_capability(CAPABILITY_VACATION_RESPONSE),
             snooze: account.has_capability(CAPABILITY_CYRUS_MAIL),
             max_hold,
+            sieve,
             account_id,
         })
     }
@@ -141,6 +150,7 @@ mod tests {
             "capabilities": {
                 "urn:ietf:params:jmap:core": {},
                 "urn:ietf:params:jmap:mail": {},
+                "urn:ietf:params:jmap:sieve": {},
             },
             "accounts": {
                 "A1": {
@@ -170,12 +180,14 @@ mod tests {
                 "submissionExtensions": {"FUTURERELEASE": []},
             },
             "https://cyrusimap.org/ns/jmap/mail": {},
+            "urn:ietf:params:jmap:sieve": {},
         })))
         .unwrap();
         assert_eq!(features.account_id.as_str(), "A1");
         assert!(features.vacation);
         assert_eq!(features.max_hold, Some(2_592_000));
         assert!(features.snooze);
+        assert!(features.sieve);
 
         let bare = AccountFeatures::from_session(&session(json!({
             "urn:ietf:params:jmap:mail": {},
@@ -184,6 +196,51 @@ mod tests {
         assert!(!bare.vacation);
         assert_eq!(bare.max_hold, None);
         assert!(!bare.snooze);
+        assert!(!bare.sieve);
+    }
+
+    /// RFC 8620 Section 1.6.2 lets a server list a capability at the session
+    /// level while withholding it from one account. Only the account check
+    /// alone would wrongly gate the feature on for such an account.
+    #[test]
+    fn sieve_needs_both_the_session_and_the_account_to_list_it() {
+        let account_only = AccountFeatures::from_session(&session(json!({
+            "urn:ietf:params:jmap:mail": {},
+            "urn:ietf:params:jmap:sieve": {},
+        })))
+        .unwrap();
+        assert!(account_only.sieve);
+
+        let session_without_it: Session = serde_json::from_value(json!({
+            "capabilities": {
+                "urn:ietf:params:jmap:core": {},
+                "urn:ietf:params:jmap:mail": {},
+            },
+            "accounts": {
+                "A1": {
+                    "name": "alice@example.com",
+                    "isPersonal": true,
+                    "isReadOnly": false,
+                    "accountCapabilities": {
+                        "urn:ietf:params:jmap:mail": {},
+                        "urn:ietf:params:jmap:sieve": {},
+                    },
+                },
+            },
+            "primaryAccounts": {"urn:ietf:params:jmap:mail": "A1"},
+            "username": "alice@example.com",
+            "apiUrl": "https://example.com/jmap",
+            "downloadUrl": "https://example.com/dl",
+            "uploadUrl": "https://example.com/up",
+            "state": "s1",
+        }))
+        .unwrap();
+        assert!(
+            !AccountFeatures::from_session(&session_without_it)
+                .unwrap()
+                .sieve,
+            "the session omits the capability, so the account's own claim is not enough"
+        );
     }
 
     /// The scheduled-send gate is only `maxDelayedSend` (RFC 8621: "MUST be
@@ -242,6 +299,7 @@ mod tests {
             vacation: true,
             max_hold: None,
             snooze: false,
+            sieve: false,
         };
         let now = Instant::now();
 
@@ -273,6 +331,7 @@ mod tests {
             vacation: false,
             max_hold: Some(60),
             snooze: true,
+            sieve: true,
         };
         let now = Instant::now();
         shared().store("uid-shared-test", features.clone(), now);

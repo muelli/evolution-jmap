@@ -10,9 +10,11 @@
 //! [`rules`] and [`script`] are the pure model: a rule, independent of
 //! Sieve, and the generator and parser that turn a list of rules into
 //! managed Sieve script text and back. Both have no FFI and are
-//! unit-tested directly. The rest of the page (load and save over a
-//! connected client, the widgets, the `EExtension`) follows in later
-//! commits, the same way [`crate::vacation`] is laid out.
+//! unit-tested directly. [`io`] does the round trips over a connected
+//! [`jmap_client::Client`]; it runs on worker threads only. The widgets and
+//! the `EExtension` follow in later commits, the same way
+//! [`crate::vacation`] is laid out.
 
+pub mod io;
 pub mod rules;
 pub mod script;
