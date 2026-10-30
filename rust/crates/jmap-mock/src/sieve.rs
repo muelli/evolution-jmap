@@ -571,7 +571,9 @@ fn validate_sieve_source(source: &str, settings: &SieveSettings) -> Result<(), S
         }
     }
 
-    if let Some(line) = statement_start {
+    if let Some(line) = statement_start
+        && statement_requires_terminator(&statement)
+    {
         return Err(invalid_sieve(
             line,
             "statement must end with ';' or a block",
@@ -626,6 +628,13 @@ fn validate_statement(
     }
 
     Ok(())
+}
+
+fn statement_requires_terminator(statement: &[&SieveToken]) -> bool {
+    statement_is_require(statement)
+        || first_word_line(statement, "fileinto").is_some()
+        || first_word_line(statement, "addflag").is_some()
+        || first_word_line(statement, "redirect").is_some()
 }
 
 fn statement_is_require(statement: &[&SieveToken]) -> bool {
