@@ -27,7 +27,7 @@ use jmap_client::{ChangeSet, Client};
 use jmap_object_sync::{ObjectKind, revision_of};
 use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
 use jmap_proto::{Id, State};
-use jmap_vcard::{card_to_vcard, states_group_kind, vcard_to_card};
+use jmap_vcard::{VENDOR_MEMBER_DETAILS, card_to_vcard, states_group_kind, vcard_to_card};
 use serde_json::{Map, Value};
 
 pub use error::SyncError;
@@ -390,16 +390,43 @@ fn resolve_member_ids(client: &Client, account_id: &Id, card: &ContactCard) -> C
         return card;
     };
     let mut resolved = BTreeMap::new();
+    let mut uid_to_id = BTreeMap::new();
     for (uid, active) in members {
-        let filter = jmap_proto::contacts::ContactCardQueryFilter::default().uid(uid);
+        let filter = jmap_proto::contacts::ContactCardQueryFilter::default().uid(uid.clone());
         if let Ok(ids) = client.contact_query_every_id(account_id, filter)
             && let Some(id) = ids.into_iter().next()
         {
+            uid_to_id.insert(uid, id.to_string());
             resolved.insert(id.to_string(), active);
         }
     }
     card.members = (!resolved.is_empty()).then_some(resolved);
+    rekey_member_details(&mut card, &uid_to_id);
     card
+}
+
+/// Rewrites `VENDOR_MEMBER_DETAILS`'s keys with `map` (old key to new key), the
+/// same key change [`resolve_member_ids`]/[`resolve_member_uids`] give
+/// `members`. A member detail with no entry in `map` is dropped: it names a
+/// member that just left `members` for the same reason (see each caller).
+fn rekey_member_details(card: &mut ContactCard, map: &BTreeMap<String, String>) {
+    let Some(details) = card
+        .extra
+        .get(VENDOR_MEMBER_DETAILS)
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    let rekeyed: Map<String, Value> = details
+        .iter()
+        .filter_map(|(key, value)| map.get(key).map(|new_key| (new_key.clone(), value.clone())))
+        .collect();
+    if rekeyed.is_empty() {
+        card.extra.remove(VENDOR_MEMBER_DETAILS);
+    } else {
+        card.extra
+            .insert(VENDOR_MEMBER_DETAILS.to_owned(), Value::Object(rekeyed));
+    }
 }
 
 /// Give a group card's `members` the server's JSContact `uid` for each member,
@@ -425,15 +452,22 @@ fn resolve_member_uids(client: &Client, account_id: &Id, card: &mut ContactCard)
         .map(|response| response.list)
         .unwrap_or_default();
     let mut resolved = BTreeMap::new();
+    let mut id_to_uid = BTreeMap::new();
     for stored in found {
-        let Some(active) = stored.id.as_ref().and_then(|id| members.get(id.as_str())) else {
+        let Some(id) = stored.id.as_ref() else {
             continue;
         };
-        if let Some(member_uid) = stored.uid {
-            resolved.insert(member_uid, *active);
-        }
+        let Some(active) = members.get(id.as_str()) else {
+            continue;
+        };
+        let Some(member_uid) = stored.uid else {
+            continue;
+        };
+        id_to_uid.insert(id.to_string(), member_uid.clone());
+        resolved.insert(member_uid, *active);
     }
     card.members = (!resolved.is_empty()).then_some(resolved);
+    rekey_member_details(card, &id_to_uid);
 }
 
 /// What to report for a save of `card` that the server refused with `error`.

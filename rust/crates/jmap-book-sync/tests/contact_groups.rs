@@ -17,7 +17,10 @@ use std::collections::BTreeSet;
 use common::Fixture;
 use jmap_proto::Id;
 use jmap_proto::contacts::{ContactCard, Name};
-use jmap_vcard::{GROUP_KIND, card_to_vcard, vcard_to_card};
+use jmap_vcard::{
+    GROUP_KIND, VENDOR_BARE_MEMBERS, VENDOR_MEMBER_DETAILS, card_to_vcard, vcard_to_card,
+};
+use serde_json::json;
 
 /// The vCard Evolution would save for a contact list, naming members by the
 /// id their own vCard `UID` line carries.
@@ -116,5 +119,108 @@ fn a_contact_list_round_trips_through_the_server() {
     assert!(
         sync.load_contact(&renamed.uid).is_err(),
         "the group is gone after delete"
+    );
+}
+
+/// A bare member (a destination with no address-book contact behind it) is
+/// outside `members`: `jmap_vcard` keeps it in `VENDOR_BARE_MEMBERS`. It
+/// round-trips through `BookSync` on create.
+#[test]
+fn a_bare_member_round_trips_through_the_server() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Newsletter\r\n",
+        "X-EVOLUTION-LIST:TRUE\r\n",
+        "EMAIL;X-EVOLUTION-DEST-NAME=\"Outside Reader\";X-EVOLUTION-DEST-EMAIL=\
+         outsider@example.com:Outside Reader <outsider@example.com>\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let created = sync.save_contact(vcard, None).unwrap();
+    let stored = fixture.card(&Id::from(created.uid.as_str()));
+    assert_eq!(
+        stored.extra.get(VENDOR_BARE_MEMBERS),
+        Some(&json!([{"name": "Outside Reader", "email": "outsider@example.com"}])),
+        "{stored:?}"
+    );
+    assert_eq!(stored.members, None, "a bare member is not in `members`");
+
+    let loaded = sync.load_contact(&created.uid).unwrap();
+    assert!(
+        loaded.vcard.contains("outsider@example.com"),
+        "{}",
+        loaded.vcard
+    );
+    assert!(
+        !loaded.vcard.contains("X-EVOLUTION-DEST-CONTACT-UID"),
+        "a bare member names no contact: {}",
+        loaded.vcard
+    );
+}
+
+/// A member's cached display name and email (`VENDOR_MEMBER_DETAILS`) round
+/// trip through `BookSync` alongside the member itself.
+#[test]
+fn a_member_detail_round_trips_through_the_server() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let member = fixture
+        .seed(&fixture.ours, "Vera Oldenburg", "vera@example.com")
+        .to_string();
+
+    let vcard = format!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Book Club\r\nX-EVOLUTION-LIST:TRUE\r\n\
+         EMAIL;X-EVOLUTION-DEST-CONTACT-UID={member};X-EVOLUTION-DEST-NAME=\"Vera O.\":\
+         Vera O. <vera@example.com>\r\nEND:VCARD\r\n"
+    );
+
+    let created = sync.save_contact(&vcard, None).unwrap();
+    let stored = fixture.card(&Id::from(created.uid.as_str()));
+    let uid = fixture.card(&Id::from(member.as_str())).uid.unwrap();
+    assert_eq!(
+        stored.extra.get(VENDOR_MEMBER_DETAILS),
+        Some(&json!({uid: {"name": "Vera O.", "email": "vera@example.com"}})),
+        "{stored:?}"
+    );
+
+    let loaded = sync.load_contact(&created.uid).unwrap();
+    assert!(
+        loaded.vcard.contains("X-EVOLUTION-DEST-NAME=\"Vera O.\""),
+        "{}",
+        loaded.vcard
+    );
+}
+
+/// Before `diff_member_vendor_extra`, an edit that only added a bare member
+/// or changed a member detail never reached the server: `diff_members`
+/// patches `members` alone, and these two properties live outside it.
+#[test]
+fn adding_a_bare_member_on_an_edit_reaches_the_server() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    let created = sync
+        .save_contact(&group_vcard("Friends", &[]), None)
+        .unwrap();
+
+    let edited_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Friends\r\n",
+        "X-EVOLUTION-LIST:TRUE\r\n",
+        "EMAIL;X-EVOLUTION-DEST-NAME=\"Outside Reader\";X-EVOLUTION-DEST-EMAIL=\
+         outsider@example.com:Outside Reader <outsider@example.com>\r\n",
+        "END:VCARD\r\n"
+    );
+    let edited = sync
+        .save_contact(edited_vcard, Some(created.uid.as_str()))
+        .unwrap();
+    let stored = fixture.card(&Id::from(edited.uid.as_str()));
+    assert_eq!(
+        stored.extra.get(VENDOR_BARE_MEMBERS),
+        Some(&json!([{"name": "Outside Reader", "email": "outsider@example.com"}])),
+        "the bare member reaches the server on an edit, not only on create: {stored:?}"
     );
 }

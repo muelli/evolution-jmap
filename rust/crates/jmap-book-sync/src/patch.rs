@@ -93,14 +93,14 @@ use jmap_proto::contacts::{
     Link, Media, Name, Nickname, Note, OnlineService, OrgUnit, Organization, Relation, Title,
 };
 use jmap_vcard::{
-    address_label, anniversary_date, maps_context, maps_phone_feature, online_service_handle,
-    online_service_uri, restore_address_components, restore_name_components, same_photo,
-    same_service, states_a_point_in_time, states_address, states_address_component,
-    states_anniversary, states_assistant, states_calendar, states_context, states_email,
-    states_keyword, states_link, states_manager, states_media, states_member, states_name,
-    states_name_component, states_nickname, states_note, states_online_service, states_org_unit,
-    states_organization, states_phone, states_phone_feature, states_spouse, states_title,
-    title_kind,
+    VENDOR_BARE_MEMBERS, VENDOR_MEMBER_DETAILS, address_label, anniversary_date, maps_context,
+    maps_phone_feature, online_service_handle, online_service_uri, restore_address_components,
+    restore_name_components, same_photo, same_service, states_a_point_in_time, states_address,
+    states_address_component, states_anniversary, states_assistant, states_calendar,
+    states_context, states_email, states_keyword, states_link, states_manager, states_media,
+    states_member, states_name, states_name_component, states_nickname, states_note,
+    states_online_service, states_org_unit, states_organization, states_phone,
+    states_phone_feature, states_spouse, states_title, title_kind,
 };
 use serde_json::{Map, Value, json};
 
@@ -165,6 +165,7 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         current.members.as_ref(),
         edited.members.as_ref(),
     );
+    diff_member_vendor_extra(&mut patch, &current.extra, &edited.extra);
     patch
 }
 
@@ -406,6 +407,28 @@ fn diff_members(
     }
     for &uid in wanted.difference(&shown) {
         patch.insert(format!("members/{}", escape(uid)), Value::Bool(true));
+    }
+}
+
+/// Patches the vendor contact-list extras (a destination the address book
+/// cannot show as a member, and a cached display name or email for a shown
+/// member). Neither has a vCard-visible key list to diff entry by entry
+/// (see `jmap-vcard`'s `read_group_email_entry`), so a change writes the
+/// whole vendor property. Without this, an edit that only adds or changes
+/// one of these never reaches the server: `diff_members` patches `members`
+/// alone, and these two properties live outside it in `extra`.
+fn diff_member_vendor_extra(
+    patch: &mut Map<String, Value>,
+    current: &BTreeMap<String, Value>,
+    edited: &BTreeMap<String, Value>,
+) {
+    for key in [VENDOR_BARE_MEMBERS, VENDOR_MEMBER_DETAILS] {
+        let current_value = current.get(key);
+        let edited_value = edited.get(key);
+        if current_value == edited_value {
+            continue;
+        }
+        patch.insert(key.to_owned(), edited_value.cloned().unwrap_or(Value::Null));
     }
 }
 
@@ -1501,6 +1524,93 @@ mod tests {
             patch,
             Map::from_iter([("members".to_owned(), json!({"a": true}))])
         );
+    }
+
+    /// Adding a bare member (a destination with no address-book member) on
+    /// an edit writes the whole vendor property, since it has no key to
+    /// patch into entry by entry.
+    #[test]
+    fn adding_a_bare_member_patches_the_whole_vendor_property() {
+        let current: BTreeMap<String, Value> = BTreeMap::new();
+        let edited: BTreeMap<String, Value> = [(
+            VENDOR_BARE_MEMBERS.to_owned(),
+            json!([{"email": "outsider@example.com"}]),
+        )]
+        .into();
+
+        let mut patch = Map::new();
+        diff_member_vendor_extra(&mut patch, &current, &edited);
+
+        assert_eq!(
+            patch,
+            Map::from_iter([(
+                VENDOR_BARE_MEMBERS.to_owned(),
+                json!([{"email": "outsider@example.com"}])
+            )])
+        );
+    }
+
+    /// Changing a member's cached display name writes the whole vendor
+    /// property, same reason as a bare member.
+    #[test]
+    fn changing_a_member_detail_patches_the_whole_vendor_property() {
+        let current: BTreeMap<String, Value> = [(
+            VENDOR_MEMBER_DETAILS.to_owned(),
+            json!({"a": {"name": "Old Name"}}),
+        )]
+        .into();
+        let edited: BTreeMap<String, Value> = [(
+            VENDOR_MEMBER_DETAILS.to_owned(),
+            json!({"a": {"name": "New Name"}}),
+        )]
+        .into();
+
+        let mut patch = Map::new();
+        diff_member_vendor_extra(&mut patch, &current, &edited);
+
+        assert_eq!(
+            patch,
+            Map::from_iter([(
+                VENDOR_MEMBER_DETAILS.to_owned(),
+                json!({"a": {"name": "New Name"}})
+            )])
+        );
+    }
+
+    /// Removing the last bare member clears the vendor property with `null`,
+    /// the RFC 8620 §5.3 default for an absent property.
+    #[test]
+    fn removing_the_last_bare_member_clears_the_vendor_property() {
+        let current: BTreeMap<String, Value> = [(
+            VENDOR_BARE_MEMBERS.to_owned(),
+            json!([{"email": "outsider@example.com"}]),
+        )]
+        .into();
+        let edited: BTreeMap<String, Value> = BTreeMap::new();
+
+        let mut patch = Map::new();
+        diff_member_vendor_extra(&mut patch, &current, &edited);
+
+        assert_eq!(
+            patch,
+            Map::from_iter([(VENDOR_BARE_MEMBERS.to_owned(), Value::Null)])
+        );
+    }
+
+    /// An unchanged vendor extra patches nothing.
+    #[test]
+    fn unchanged_member_vendor_extra_patches_nothing() {
+        let current: BTreeMap<String, Value> = [(
+            VENDOR_MEMBER_DETAILS.to_owned(),
+            json!({"a": {"name": "Same Name"}}),
+        )]
+        .into();
+        let edited = current.clone();
+
+        let mut patch = Map::new();
+        diff_member_vendor_extra(&mut patch, &current, &edited);
+
+        assert!(patch.is_empty(), "{patch:?}");
     }
 
     #[derive(Clone, serde::Serialize)]
