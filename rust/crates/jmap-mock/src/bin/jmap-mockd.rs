@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
-use jmap_proto::calendars::CalendarEvent;
-use jmap_proto::contacts::ContactCard;
-use jmap_proto::mail::{EmailAddress, EmailHeader, Mailbox};
+use jmap_proto::calendars::{CalendarEvent, CalendarRights};
+use jmap_proto::contacts::{AddressBookRights, ContactCard};
+use jmap_proto::mail::{EmailAddress, EmailHeader, Mailbox, MailboxRights};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -100,6 +100,7 @@ fn main() {
     let mut port: u16 = 8080;
     let mut oauth2 = false;
     let mut seed_spoofed_shared_account = false;
+    let mut seed_shared_account = false;
     let mut seed_path: Option<String> = None;
     let mut builder = MockServer::builder();
 
@@ -134,6 +135,9 @@ fn main() {
                     "--without-capability needs a capability URN",
                 );
                 builder = builder.without_capability(&capability);
+            }
+            "--no-sieve" => {
+                builder = builder.no_sieve();
             }
             "--without-primary-accounts" => {
                 builder = builder.without_primary_accounts();
@@ -188,6 +192,13 @@ fn main() {
             "--no-size-upload" => {
                 builder = builder.no_size_upload();
             }
+            "--sieve-extensions" => {
+                let value = next_argument(
+                    &mut arguments,
+                    "--sieve-extensions needs a comma-separated list",
+                );
+                builder = builder.sieve_extensions(parse_csv_list(&value));
+            }
             "--email-get-includes-unrequested" => {
                 builder = builder.email_get_includes_unrequested();
             }
@@ -218,6 +229,9 @@ fn main() {
             "--shared-account-name-copies-user" => {
                 builder = builder.shared_account_name_copies_user();
                 seed_spoofed_shared_account = true;
+            }
+            "--share" => {
+                seed_shared_account = true;
             }
             "--download-via-redirect-to" => {
                 let origin = next_argument(
@@ -266,6 +280,9 @@ fn main() {
             "--snooze-extension" => {
                 builder = builder.snooze_extension();
             }
+            "--sieve-vacation-script" => {
+                builder = builder.sieve_vacation_script();
+            }
             "--seed" => {
                 let path = next_argument(&mut arguments, "--seed needs a JSON file path");
                 seed_path = Some(path);
@@ -309,7 +326,7 @@ fn main() {
 
     match seed_path {
         Some(path) => seed_from_file(&server, &path).unwrap_or_else(|error| usage(&error)),
-        None => seed_default_data(&server, seed_spoofed_shared_account),
+        None => seed_default_data(&server, seed_spoofed_shared_account, seed_shared_account),
     }
 
     println!("jmap-mockd listening on {}", server.origin());
@@ -340,12 +357,28 @@ fn next_argument(arguments: &mut impl Iterator<Item = String>, usage_message: &s
     arguments.next().unwrap_or_else(|| usage(usage_message))
 }
 
-fn seed_default_data(server: &MockServer, seed_spoofed_shared_account: bool) {
+fn parse_csv_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn seed_default_data(
+    server: &MockServer,
+    seed_spoofed_shared_account: bool,
+    seed_shared_account: bool,
+) {
     let state = server.state();
     let mut state = state.lock().expect("state lock");
-    if seed_spoofed_shared_account {
+    if seed_spoofed_shared_account && !seed_shared_account {
         let shared = state.add_account("A2", "sharer@example.test");
         shared.is_personal = false;
+    }
+    if seed_shared_account {
+        seed_shared_account_data(&mut state);
     }
     let account = state
         .account_mut(&server.account_id())
@@ -370,6 +403,46 @@ fn seed_default_data(server: &MockServer, seed_spoofed_shared_account: bool) {
         "Another seeded message.",
         "2026-08-02T09:30:00Z",
     ));
+}
+
+fn seed_shared_account_data(state: &mut jmap_mock::ServerState) {
+    let grantee_principal_id = Id::from("P-grantee");
+    let owner_principal_id = Id::from("P-owner");
+
+    if let Some(account) = state.account_mut(&Id::from("A1")) {
+        account.current_user_principal_id = Some(grantee_principal_id.clone());
+    }
+
+    let shared = state.add_account("A2", "owner@example.test");
+    shared.is_personal = false;
+    shared.current_user_principal_id = Some(owner_principal_id);
+
+    let shared_mailbox_id =
+        shared.seed_mailbox("Shared Inbox", Some(jmap_proto::mail::role::INBOX));
+    let _private_mailbox_id = shared.seed_mailbox("Private", None);
+    let shared_book_id = shared.seed_address_book("Shared", false);
+    let _private_book_id = shared.seed_address_book("Private", false);
+    let shared_calendar_id = shared.seed_calendar("Shared", false);
+    let _private_calendar_id = shared.seed_calendar("Private", false);
+
+    if let Some(mailbox) = shared.mailboxes.get_mut(&shared_mailbox_id) {
+        mailbox.share_with = Some(BTreeMap::from([(
+            grantee_principal_id.clone(),
+            MailboxRights::read_only(),
+        )]));
+    }
+    if let Some(book) = shared.address_books.get_mut(&shared_book_id) {
+        book.share_with = Some(BTreeMap::from([(
+            grantee_principal_id.clone(),
+            AddressBookRights::read_only(),
+        )]));
+    }
+    if let Some(calendar) = shared.calendars.get_mut(&shared_calendar_id) {
+        calendar.share_with = Some(BTreeMap::from([(
+            grantee_principal_id,
+            CalendarRights::read_only(),
+        )]));
+    }
 }
 
 fn seed_from_file(server: &MockServer, path: &str) -> Result<(), String> {
@@ -488,17 +561,17 @@ fn usage(error: &str) -> ! {
     }
     eprintln!(
         "usage: jmap-mockd [--port N] [--basic user:pass] [--bearer TOKEN] [--bearer-as TOKEN:PRINCIPAL] [--oauth2] \
-         [--without-capability URN] [--without-primary-accounts] [--calls-in-request N] [--no-calls-in-request] \
+         [--without-capability URN] [--no-sieve] [--without-primary-accounts] [--calls-in-request N] [--no-calls-in-request] \
          [--changes-page-size N] [--changes-never-terminates] [--stalwart-shaped-unrecognized-changes-state] \
          [--objects-in-get N] [--query-page-size N] [--query-never-terminates] [--query-hides-limit] \
-         [--size-request N] [--no-size-request] [--size-upload N] [--no-size-upload] \
+         [--size-request N] [--no-size-request] [--size-upload N] [--no-size-upload] [--sieve-extensions A,B,C] \
          [--email-get-includes-unrequested] [--contact-photo-uses-file-uri] [--contact-photo-data-uri-as-blob-id] [--calendar-event-link-uses-file-uri] \
          [--session-via-redirect] [--well-known-redirect-to ORIGIN] [--advertise-origin ORIGIN] \
          [--shared-account-name-copies-user] [--download-via-redirect-to ORIGIN] [--reject-download-accept-json] \
          [--terse-submission-create] [--terse-contact-create] [--max-contact-size N] \
          [--new-collections-default-unsubscribed] [--terse-calendar-event-create] [--without-scheduling] \
          [--terse-collection-create] [--id-omitting-collection-create] [--reject-collection-create] \
-         [--max-delayed-send N] [--snooze-extension] [--seed PATH]"
+         [--max-delayed-send N] [--snooze-extension] [--sieve-vacation-script] [--share] [--seed PATH]"
     );
     std::process::exit(if error.is_empty() { 0 } else { 2 });
 }
