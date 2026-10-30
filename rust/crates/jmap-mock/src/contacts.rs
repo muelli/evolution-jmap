@@ -4,7 +4,7 @@
 //! Implement contact methods (`AddressBook/get`, `ContactCard/get|set|query`,
 //! RFC 9610) and contact seed helpers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine;
 use jmap_proto::Id;
@@ -21,7 +21,7 @@ use serde_json::Value;
 #[cfg(feature = "parse")]
 use crate::dispatch::project_properties;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
-use crate::setops::simple_set;
+use crate::setops::{simple_set, simple_set_with_validation};
 use crate::state::{AccountState, ServerState};
 
 const HOSTILE_CONTACT_PHOTO_URI: &str = "file:///home/victim/.ssh/id_ed25519";
@@ -272,51 +272,60 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let contact_photo_data_uri_as_blob_id = state.contact_photo_data_uri_as_blob_id;
     let max_contact_size = state.max_contact_size;
     let account = account_mut(state, &request.account_id)?;
+    let known_uids = known_contact_uids(account);
 
     let address_books = &account.address_books;
-    let mut response = simple_set(&mut account.contact_cards, request, |id, card| {
-        // RFC 8620 §5.3: `id` is server-set and must not appear in create.
-        if card.id.is_some() {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description("id is set by the server and must not be given in a create"));
-        }
-        if let Some(limit) = max_contact_size {
-            let size = serde_json::to_vec(card).map_or(0, |json| json.len() as u64);
-            if size > limit {
-                return Err(
-                    SetError::new(error::set::TOO_LARGE).with_description(format!(
-                        "{size} octets is more than the {limit} a card may take"
-                    )),
-                );
-            }
-        }
-        let Some(book_ids) = card
-            .address_book_ids
-            .as_ref()
-            .filter(|book_ids| !book_ids.is_empty())
-        else {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description("addressBookIds must name at least one address book"));
-        };
-        if let Some(unknown) = book_ids
-            .keys()
-            .find(|book_id| !address_books.contains(book_id))
-        {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description(format!("address book {unknown} does not exist")));
-        }
-        card.id = Some(id.clone());
-        if card.card_type.is_none() {
-            card.card_type = Some("Card".to_owned());
-        }
-        if card.version.is_none() {
-            card.version = Some("1.0".to_owned());
-        }
-        if card.uid.is_none() {
-            card.uid = Some(format!("urn:example:card:{}", id.as_str()));
-        }
-        Ok(())
-    })?;
+    let mut response =
+        simple_set_with_validation(
+            &mut account.contact_cards,
+            request,
+            |id, card| {
+                // RFC 8620 §5.3: `id` is server-set and must not appear in create.
+                if card.id.is_some() {
+                    return Err(
+                        SetError::new(error::set::INVALID_PROPERTIES).with_description(
+                            "id is set by the server and must not be given in a create",
+                        ),
+                    );
+                }
+                if let Some(limit) = max_contact_size {
+                    let size = serde_json::to_vec(card).map_or(0, |json| json.len() as u64);
+                    if size > limit {
+                        return Err(SetError::new(error::set::TOO_LARGE).with_description(
+                            format!("{size} octets is more than the {limit} a card may take"),
+                        ));
+                    }
+                }
+                let Some(book_ids) = card
+                    .address_book_ids
+                    .as_ref()
+                    .filter(|book_ids| !book_ids.is_empty())
+                else {
+                    return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                        .with_description("addressBookIds must name at least one address book"));
+                };
+                if let Some(unknown) = book_ids
+                    .keys()
+                    .find(|book_id| !address_books.contains(book_id))
+                {
+                    return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                        .with_description(format!("address book {unknown} does not exist")));
+                }
+                card.id = Some(id.clone());
+                if card.card_type.is_none() {
+                    card.card_type = Some("Card".to_owned());
+                }
+                if card.version.is_none() {
+                    card.version = Some("1.0".to_owned());
+                }
+                if card.uid.is_none() {
+                    card.uid = Some(format!("urn:example:card:{}", id.as_str()));
+                }
+                validate_members_keys_are_known_uids(card, &known_uids)
+            },
+            |_, _, patched| validate_members_keys_are_known_uids(patched, &known_uids),
+            |_, _| Ok(()),
+        )?;
 
     if contact_photo_data_uri_as_blob_id {
         promote_photo_data_uris_in_set_response(account, &mut response);
@@ -337,6 +346,35 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
     }
 
     Ok(result)
+}
+
+fn known_contact_uids(account: &AccountState) -> BTreeSet<String> {
+    account
+        .contact_cards
+        .iter()
+        .filter_map(|(_, card)| card.uid.clone())
+        .collect()
+}
+
+fn validate_members_keys_are_known_uids(
+    card: &ContactCard,
+    known_uids: &BTreeSet<String>,
+) -> Result<(), SetError> {
+    for (uid, is_member) in card.members.iter().flatten() {
+        if !*is_member {
+            continue;
+        }
+        if uid.trim().is_empty() {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("members keys must be non-empty card uid strings"));
+        }
+        let is_self_uid = card.uid.as_deref().is_some_and(|self_uid| self_uid == uid);
+        if !is_self_uid && !known_uids.contains(uid) {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description(format!("members key {uid} does not match any card uid")));
+        }
+    }
+    Ok(())
 }
 
 fn promote_photo_data_uris_in_set_response(
@@ -481,6 +519,78 @@ fn parse_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
     Some((media_type, bytes))
 }
 
+#[cfg(feature = "parse")]
+fn apply_group_data_from_vcard(card: &mut ContactCard, text: &str) {
+    let mut parsed_kind = None;
+    let mut parsed_members = BTreeMap::new();
+
+    for line in unfold_vcard_lines(text) {
+        let Some((name_and_params, value)) = line.split_once(':') else {
+            continue;
+        };
+        let property_name = name_and_params.split(';').next().unwrap_or_default().trim();
+        let value = value.trim();
+
+        if property_name.eq_ignore_ascii_case("KIND")
+            || property_name.eq_ignore_ascii_case("X-ADDRESSBOOKSERVER-KIND")
+        {
+            if !value.is_empty() {
+                parsed_kind = Some(value.to_ascii_lowercase());
+            }
+            continue;
+        }
+
+        if property_name.eq_ignore_ascii_case("MEMBER") {
+            if let Some(uid) = member_uid_from_member_property(value) {
+                parsed_members.insert(uid, true);
+            }
+            continue;
+        }
+
+        if property_name.eq_ignore_ascii_case("X-ADDRESSBOOKSERVER-MEMBER") && !value.is_empty() {
+            parsed_members.insert(value.to_owned(), true);
+        }
+    }
+
+    if let Some(kind) = parsed_kind {
+        card.kind = Some(kind);
+    }
+    if !parsed_members.is_empty() {
+        card.members = Some(parsed_members);
+    }
+}
+
+#[cfg(feature = "parse")]
+fn member_uid_from_member_property(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    value
+        .to_ascii_lowercase()
+        .starts_with("urn:")
+        .then(|| value.to_owned())
+}
+
+#[cfg(feature = "parse")]
+fn unfold_vcard_lines(text: &str) -> Vec<String> {
+    let mut unfolded: Vec<String> = Vec::new();
+
+    for raw_line in text.lines() {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if let Some(current) = unfolded.last_mut()
+            && (line.starts_with(' ') || line.starts_with('\t'))
+        {
+            current.push_str(line.trim_start_matches([' ', '\t']));
+        } else {
+            unfolded.push(line.to_owned());
+        }
+    }
+
+    unfolded
+}
+
 pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<ContactCardQueryFilter> = parse_arguments(arguments)?;
     let paging = state.query_paging();
@@ -542,7 +652,8 @@ pub fn contact_card_parse(state: &mut ServerState, arguments: Value) -> Result<V
                 continue;
             };
             match jmap_vcard::vcard_to_card(text) {
-                Ok(card) => {
+                Ok(mut card) => {
+                    apply_group_data_from_vcard(&mut card, text);
                     parsed.insert(
                         id.to_string(),
                         project_properties(&card, request.properties.as_deref())?,
@@ -590,6 +701,14 @@ fn card_matches(card: &ContactCard, filter: &ContactCardQueryFilter) -> bool {
         && !emails
             .iter()
             .any(|address| address.contains(email.as_str()))
+    {
+        return false;
+    }
+    if let Some(kind) = &filter.kind
+        && !card
+            .kind
+            .as_deref()
+            .is_some_and(|card_kind| card_kind.eq_ignore_ascii_case(kind.as_str()))
     {
         return false;
     }
