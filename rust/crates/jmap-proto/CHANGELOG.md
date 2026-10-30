@@ -10,6 +10,19 @@ All notable changes to the `evolution-jmap-proto` crate will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-10-30
+
+### Added
+- `Media.blob_id: Option<Id>` and an optional `Media.uri` per RFC 9610 §2, so a contact photo returned as a blob reference round-trips.
+- draft-33 calendars capability fields (updated from draft-32).
+- A documented stability policy: types tied to a published RFC follow normal semantic versioning, but types tied to an active IETF draft (`filenode`, `metadata`, `RefPlusCapability`, the mail-sharing types, and everything behind the `calendars` feature) can still break in a minor version bump, because the draft itself keeps moving.
+
+### Changed
+- Aligned `ContactCard`, `CardGroup`, `AddressBook` and their sub-types more closely with RFC 9553 and RFC 9610.
+
+### Fixed
+- A JSContact integer preference (`listAs`, a language preference, or an `Anniversary` preference) above `u32::MAX`, or a negative language preference, is now rejected instead of silently wrapping into a small value.
+
 ## [0.5.0] - 2026-10-10
 
 ### Added

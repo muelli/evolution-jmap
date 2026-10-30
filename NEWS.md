@@ -5,6 +5,66 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # NEWS
 
+## 0.6.0 (2026-10-30)
+
+- Calendars and address books that another user shares are now shown
+  as additional collections, so they can be browsed and, with the
+  right permissions, edited. Deleting a shared calendar or address
+  book now acts on the correct account and is only offered when the
+  user actually has permission to remove it.
+- An address book or calendar without write access now opens
+  read-only, so Evolution greys out editing instead of letting a save
+  fail afterwards.
+- A shared calendar or address book's display name can no longer be
+  set by its owner to hide who shared it: the name is now always
+  "owner: collection name".
+- The server now sends meeting invitations, updates and cancellations
+  itself. A clear error is shown when the server cannot do this for
+  one of the guests, and Evolution's own "do not send invitation"
+  option still suppresses a single change. A plain import or backup
+  restore of a meeting no longer mails its organizer by mistake, and
+  neither does removing an invitation that was already cancelled.
+- Dismissing a calendar reminder is now sent to the server, so the
+  same reminder does not fire again on your other devices.
+- Editing a contact or event that was changed elsewhere at the same
+  time now follows Evolution's own conflict choice (keep mine, keep
+  the server's, or fail) instead of silently overwriting the other
+  change.
+- An "Undo" notice now appears after deleting a calendar or address
+  book collection.
+- Contact photos are now uploaded and downloaded through the server's
+  blob storage, handling larger images without encoding them inline.
+  You are told when a photo is too large for the server to store.
+- Added a "Load image" option for an externally hosted (http or
+  https) contact photo in the address book preview: a placeholder and
+  the URL are shown instead of loading the image automatically, and
+  the photo is fetched only on request.
+- Snooze is now reachable by right-clicking a message's body, not
+  only through its menu button, including in a detached message
+  window. Fixed the "Next Monday Morning" snooze preset landing on
+  the wrong day.
+- Fixed newly created mail folders becoming invisible on servers that
+  default new folders to unsubscribed.
+- Fixed a deadlock that could freeze Evolution while an address book
+  refreshed in the background.
+- Fixed a pushed folder change (for example, creating the Snoozed
+  folder) sometimes jumping the mail view to a different account.
+- Deleting a message now moves it to Trash as usual; it is only
+  permanently removed when Trash is emptied.
+- Fixed Send Later sometimes choosing the wrong outgoing identity.
+- Large batches of changes that exceed a server's per-request limit
+  are now split automatically instead of failing outright.
+- Server rate-limit responses are now retried automatically with a
+  backoff, without duplicating any writes.
+- The JMAP client now refuses a server redirect that would drop the
+  connection from https to http, so credentials are never sent over a
+  plain connection.
+- Updated the bundled TLS library (rustls-webpki, webpki-roots) to
+  close two published security advisories (RUSTSEC-2026-0381 and
+  RUSTSEC-2026-0382).
+- Updated the German translation (fully translated, no missing or
+  fuzzy strings).
+
 ## 0.5.0 (2026-10-15)
 
 - Fixed a brand-new account silently signing in twice on its first

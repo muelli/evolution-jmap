@@ -15,6 +15,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `Client::upload_blob`: planned breaking change to take borrowed data (`&[u8]`) instead of owned `Vec<u8>` at the next breaking release. Callers can use `Client::upload_blob_slice` in the meantime.
 
+## [0.6.0] - 2026-10-30
+
+### Added
+- `Client::sieve_capability`, `Client::sieve_script_text`, `Client::sieve_script_put` (with `Activation`), and `jmap_client::sieve::set_error_kind` with `SieveSetErrorKind`, for a Sieve filter editor.
+- `Error::needs_full_resync` to detect an RFC 8620 §5.2 answer that means incremental sync is impossible and a full resync is required.
+- `Error::is_unknown_method`; `Client::participant_identities` now returns an empty list instead of an error when the server answers `unknownMethod`, matching Fastmail.
+- Sorting support in `query_every_id`.
+- `expect_updated` and `expect_destroyed`, alongside the existing `expect_created`, for evaluating a single-object `/set` response.
+- `/set` request chunking across `maxObjectsInSet`, with creation ids resolved by the server across chunks, matching the existing `/get` chunking.
+- A generic chunked `/get` implementation (`single_call` with a `maxSizeRequest` split) shared by every `/get` call site.
+
+### Changed
+- `Principal/getAvailability` now declares the `principals:availability` capability it uses, as RFC 8620 §3.3 and draft-ietf-jmap-calendars §2.2 require; a server enforcing that strictly (Stalwart 1.0) used to reject the call.
+- A connection origin is now normalized: scheme and host lower-cased, default ports (80, 443) and userinfo dropped, and a trailing root dot removed, so a redirect to the same host under a different spelling keeps its credentials.
+- `http`/`https` URL schemes are recognized case-insensitively in push (EventSource) and redirect handling.
+- A partial `/set` failure now reports the actual `401` or `429` of its failed part instead of hiding it.
+- HTTP `429` and object-limit errors are now retried with a backoff instead of failing the call, without duplicating any write.
+
+### Fixed
+- A redirect that would leave TLS, a session that sends credentials off TLS, or a session document from another origin is now refused.
+- An EventSource request header or URL containing a control character, a CR/LF pair, or a confusing host is now refused.
+- `SieveScript/set`'s wire shape now matches the server's actual answer shape (found testing against Cyrus).
+- Credentials no longer appear in the `Debug` output of `Client`.
+- A `/get` answer's objects that the request did not name are now dropped from the result, and one with no id can still be reported to the caller.
+
 ## [0.5.0] - 2026-10-10
 
 ### Added
