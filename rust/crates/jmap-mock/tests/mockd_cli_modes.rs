@@ -61,6 +61,7 @@ fn help_lists_the_expanded_builder_mode_flags() {
         "--max-delayed-send",
         "--snooze-extension",
         "--sieve-vacation-script",
+        "--tasks",
         "--share",
         "--seed",
     ] {

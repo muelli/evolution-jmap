@@ -283,6 +283,9 @@ fn main() {
             "--sieve-vacation-script" => {
                 builder = builder.sieve_vacation_script();
             }
+            "--tasks" => {
+                builder = builder.tasks();
+            }
             "--seed" => {
                 let path = next_argument(&mut arguments, "--seed needs a JSON file path");
                 seed_path = Some(path);
@@ -571,7 +574,7 @@ fn usage(error: &str) -> ! {
          [--terse-submission-create] [--terse-contact-create] [--max-contact-size N] \
          [--new-collections-default-unsubscribed] [--terse-calendar-event-create] [--without-scheduling] \
          [--terse-collection-create] [--id-omitting-collection-create] [--reject-collection-create] \
-         [--max-delayed-send N] [--snooze-extension] [--sieve-vacation-script] [--share] [--seed PATH]"
+         [--max-delayed-send N] [--snooze-extension] [--sieve-vacation-script] [--tasks] [--share] [--seed PATH]"
     );
     std::process::exit(if error.is_empty() { 0 } else { 2 });
 }
