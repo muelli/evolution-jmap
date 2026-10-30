@@ -4,4 +4,5 @@
 //! The placeholder for an externally hosted contact photo.
 
 pub mod display_ext;
+pub mod fetch;
 pub mod script;

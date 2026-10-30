@@ -25,11 +25,16 @@
 //! price of not linking a private library.
 
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 use std::ptr;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use eds_sys::{EExtension, e_extension_get_extensible};
-use evo_sys::{EWebView, e_web_view_get_type, e_web_view_jsc_run_script_take};
+use evo_sys::{
+    EWebView, GtkAllocation, e_web_view_get_type, e_web_view_jsc_run_script_take,
+    e_web_view_register_element_clicked,
+};
 use glib_sys::{GType, g_strdup, gpointer};
 use gobject_sys::{
     GObject, GTypeInstance, g_signal_connect_data, g_type_check_instance_is_a, g_type_from_name,
@@ -39,7 +44,8 @@ use jmap_backend_core::extension::{Extension, ExtensionObject};
 use jmap_backend_core::i18n::{N_, translate};
 use jmap_backend_core::trampoline::guard;
 
-use crate::external_photo::script;
+use crate::dispatch;
+use crate::external_photo::{fetch, script};
 
 /// The type name of the address book preview, the one `EWebView` subclass
 /// this extension works on.
@@ -48,6 +54,13 @@ const CONTACT_DISPLAY: &CStr = c"EABContactDisplay";
 /// The text above the URL. It says what the user is looking at, which is the
 /// whole of the placeholder's job: no separate warning follows it.
 const LABEL: &CStr = N_(c"Externally hosted image");
+
+/// The text of the button that fetches the photo.
+const LOAD_ACTION: &CStr = N_(c"Load image");
+
+/// [`script::LOAD_CLASS`], as the `CStr` the registration call needs.
+/// `tests::the_load_class_matches_the_script_module` keeps the two equal.
+const LOAD_CLASS: &CStr = c"__jmap-external-photo-load";
 
 /// The placeholder for an externally hosted contact photo.
 pub struct ExternalPhoto;
@@ -117,25 +130,124 @@ unsafe fn is_contact_display(view: *mut EWebView) -> bool {
 ///
 /// The script is idempotent, so a second frame in the same page costs one
 /// script run and changes nothing.
+///
+/// `e_web_view_register_element_clicked` is called here, not in
+/// `constructed`: Evolution forgets every registration on each new content
+/// load, so the extension must register again every time, and only after
+/// the script above has had the chance to create the button.
 unsafe extern "C" fn on_content_loaded(
     object: *mut GObject,
     _frame_id: *const c_char,
     _user_data: gpointer,
 ) {
     guard("JmapExternalPhotoExtension::content-loaded", (), || {
-        let Ok(script) = CString::new(script::placeholder_script(&translate(LABEL))) else {
+        let Ok(placeholder) = CString::new(script::placeholder_script(
+            &translate(LABEL),
+            &translate(LOAD_ACTION),
+        )) else {
             return;
         };
         // SAFETY: `object` is the live `EWebView` that emitted the signal,
         // and an `EWebView` starts with a `WebKitWebView` (checked by
         // `evo-sys`'s `tests/web_view.rs`). The callee frees the script with
         // `g_free`, so the copy it gets comes from GLib, not from Rust.
+        // `e_web_view_register_element_clicked` re-scans the current
+        // document for `LOAD_CLASS` elements once it is called, which is
+        // why it runs after the script above, not before.
         unsafe {
             e_web_view_jsc_run_script_take(
                 object.cast(),
-                g_strdup(script.as_ptr()),
+                g_strdup(placeholder.as_ptr()),
+                ptr::null_mut(),
+            );
+            e_web_view_register_element_clicked(
+                object.cast(),
+                LOAD_CLASS.as_ptr(),
+                Some(on_load_clicked),
                 ptr::null_mut(),
             );
         }
     });
+}
+
+/// `EWebViewElementClickedFunc`: called when the "Load image" button is
+/// clicked. `element_value` is the button's `value` attribute, the photo URL
+/// copied verbatim from the document by the placeholder script.
+///
+/// # Safety
+///
+/// `web_view` is the live `EWebView` that is clicked in. Evolution owns it
+/// for the duration of this call, but does not keep it alive beyond that, so
+/// the fetch itself only touches `web_view` again through the weak reference
+/// [`dispatch::spawn_for`] takes.
+unsafe extern "C" fn on_load_clicked(
+    web_view: *mut EWebView,
+    _iframe_id: *const c_char,
+    _element_id: *const c_char,
+    _element_class: *const c_char,
+    element_value: *const c_char,
+    _element_position: *const GtkAllocation,
+    _user_data: *mut c_void,
+) {
+    guard("JmapExternalPhotoExtension::element-clicked", (), || {
+        if element_value.is_null() {
+            return;
+        }
+        // SAFETY: GLib hands this callback a NUL-terminated string it owns;
+        // this code does not keep the pointer past the call.
+        let Ok(url) = unsafe { CStr::from_ptr(element_value) }.to_str() else {
+            return;
+        };
+        let lower = url.to_ascii_lowercase();
+        if !lower.starts_with("http://") && !lower.starts_with("https://") {
+            // The placeholder script only ever gives this button an http(s)
+            // URL. A mismatch here means the document changed under it.
+            return;
+        }
+        let url = url.to_owned();
+        let work = move || fetch::fetch_external_photo(&url);
+        let finish = |owner: *mut GObject, outcome: Result<fetch::Photo, String>| {
+            let photo = match outcome {
+                Ok(photo) => photo,
+                Err(message) => {
+                    tracing::debug!(%message, "external photo: the fetch did not produce one");
+                    return;
+                }
+            };
+            let data_uri = format!(
+                "data:{};base64,{}",
+                photo.media_type,
+                BASE64.encode(photo.bytes)
+            );
+            let Ok(script) = CString::new(script::loaded_script(&data_uri)) else {
+                return;
+            };
+            // SAFETY: `owner` is the live `EWebView` that `spawn_for`'s weak
+            // reference resolved, and an `EWebView` starts with a
+            // `WebKitWebView`, as above. The callee frees the script with
+            // `g_free`.
+            unsafe {
+                e_web_view_jsc_run_script_take(
+                    owner.cast(),
+                    g_strdup(script.as_ptr()),
+                    ptr::null_mut(),
+                );
+            }
+        };
+        // SAFETY: `web_view` is live for the duration of this call, per the
+        // contract of this function.
+        unsafe { dispatch::spawn_for(web_view.cast(), work, finish) };
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The registration call and the script that creates the button must
+    /// name the same class, or Evolution never binds the click.
+    #[test]
+    fn the_load_class_matches_the_script_module() {
+        assert_eq!(LOAD_CLASS.to_str().unwrap(), script::LOAD_CLASS);
+    }
 }

@@ -79,3 +79,26 @@ fn both_web_view_classes_stay_opaque() {
         "WebKitWebView carries a layout now"
     );
 }
+
+/// `EWebViewElementClickedFunc`'s click-position argument stays opaque too.
+/// Nothing in this crate reads a field of it.
+#[test]
+fn the_click_position_type_stays_opaque() {
+    assert_eq!(
+        size_of::<GtkAllocation>(),
+        0,
+        "GtkAllocation carries a layout now"
+    );
+}
+
+/// `e_web_view_register_element_clicked` exists in the library this crate
+/// links. A missing entry point becomes an `undefined symbol` the moment
+/// Evolution dlopens the module.
+#[test]
+fn the_register_element_clicked_entry_point_resolves() {
+    let address = e_web_view_register_element_clicked as *const ();
+    assert!(
+        !address.is_null(),
+        "e_web_view_register_element_clicked resolved to NULL"
+    );
+}

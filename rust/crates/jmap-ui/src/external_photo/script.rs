@@ -25,6 +25,12 @@ pub const PHOTO_ID: &str = "__evo-contact-photo";
 /// The class of the placeholder element the script inserts.
 pub const PLACEHOLDER_CLASS: &str = "__jmap-external-photo";
 
+/// The class of the "Load image" button the script inserts.
+///
+/// `e_web_view_register_element_clicked` looks this up as a literal key, so
+/// the button carries this class and no other.
+pub const LOAD_CLASS: &str = "__jmap-external-photo-load";
+
 /// `text` as a JavaScript string literal, quotes included.
 ///
 /// Single quotes and backslashes get a backslash. Every other character a
@@ -51,7 +57,8 @@ pub fn js_string(text: &str) -> String {
     out
 }
 
-/// The script, with `label` as the text above the URL.
+/// The script, with `label` above the URL and `action` as the text of the
+/// button that loads it.
 ///
 /// The script does nothing at all unless the document holds a photo element
 /// whose source is an `http` or `https` URL. It leaves three other cases
@@ -64,7 +71,13 @@ pub fn js_string(text: &str) -> String {
 /// - The compact render of a vCard attached to a mail. That render is the
 ///   only one that gives the photo a `width` attribute, and it is a different
 ///   context that the operator has not decided about yet.
-pub fn placeholder_script(label: &str) -> String {
+///
+/// The button carries the URL as its `value` attribute, read verbatim from
+/// the photo element, and nowhere does the URL enter the script text itself.
+/// Evolution reads a clicked element's `value` on the native side
+/// (`e_web_view_register_element_clicked`), so the handler never parses the
+/// URL out of a string this script built.
+pub fn placeholder_script(label: &str, action: &str) -> String {
     format!(
         "(function() {{\n\
          var img = document.getElementById('{PHOTO_ID}');\n\
@@ -79,12 +92,39 @@ pub fn placeholder_script(label: &str) -> String {
          var url = document.createElement('div');\n\
          url.textContent = img.getAttribute('src');\n\
          url.style.wordBreak = 'break-all';\n\
+         var load = document.createElement('button');\n\
+         load.type = 'button';\n\
+         load.className = '{LOAD_CLASS}';\n\
+         load.setAttribute('value', img.getAttribute('src'));\n\
+         load.textContent = {action};\n\
          box.appendChild(title);\n\
          box.appendChild(url);\n\
+         box.appendChild(load);\n\
          img.style.display = 'none';\n\
          img.parentNode.insertBefore(box, img);\n\
          }})();",
-        label = js_string(label)
+        label = js_string(label),
+        action = js_string(action)
+    )
+}
+
+/// The script that shows a photo this project fetched, with `data_uri` as
+/// its new `src`.
+///
+/// Idempotent, like [`placeholder_script`]: if the placeholder is already
+/// gone (a second click after the first succeeded, racing the DOM update),
+/// this does nothing.
+pub fn loaded_script(data_uri: &str) -> String {
+    format!(
+        "(function() {{\n\
+         var img = document.getElementById('{PHOTO_ID}');\n\
+         if (!img) {{ return; }}\n\
+         img.src = {data_uri};\n\
+         img.style.display = '';\n\
+         var box = document.getElementsByClassName('{PLACEHOLDER_CLASS}')[0];\n\
+         if (box) {{ box.remove(); }}\n\
+         }})();",
+        data_uri = js_string(data_uri)
     )
 }
 
@@ -117,16 +157,24 @@ mod tests {
     }
 
     #[test]
-    fn the_script_names_the_photo_and_the_placeholder() {
-        let script = placeholder_script("Externally hosted image");
+    fn the_script_names_the_photo_the_placeholder_and_the_button() {
+        let script = placeholder_script("Externally hosted image", "Load image");
         assert!(script.contains(PHOTO_ID), "the script lost the photo id");
         assert!(
             script.contains(PLACEHOLDER_CLASS),
             "the script lost the placeholder class"
         );
         assert!(
+            script.contains(LOAD_CLASS),
+            "the script lost the load button class"
+        );
+        assert!(
             script.contains("'Externally hosted image'"),
             "the script lost the label"
+        );
+        assert!(
+            script.contains("'Load image'"),
+            "the script lost the button text"
         );
     }
 
@@ -135,10 +183,21 @@ mod tests {
     /// of the parsed script text, and the reason the function takes no URL.
     #[test]
     fn the_script_reads_the_url_from_the_document() {
-        let script = placeholder_script("Externally hosted image");
+        let script = placeholder_script("Externally hosted image", "Load image");
         assert!(
             script.contains("img.getAttribute('src')"),
             "the script no longer reads the URL from the document"
+        );
+    }
+
+    /// The button carries the URL as its own `value`, read from the photo
+    /// element, not typed into the script as a literal.
+    #[test]
+    fn the_button_carries_the_url_as_its_value_from_the_document() {
+        let script = placeholder_script("Externally hosted image", "Load image");
+        assert!(
+            script.contains("load.setAttribute('value', img.getAttribute('src'))"),
+            "the button no longer carries the photo URL as its value"
         );
     }
 
@@ -146,10 +205,24 @@ mod tests {
     /// one string.
     #[test]
     fn a_hostile_label_stays_one_string() {
-        let script = placeholder_script("'; alert(1); var x='");
+        let script = placeholder_script("'; alert(1); var x='", "Load image");
         assert!(
             script.contains(r"'\'; alert(1); var x=\''"),
             "the label escaped its literal: {script}"
+        );
+    }
+
+    #[test]
+    fn the_loaded_script_names_the_photo_and_the_placeholder() {
+        let script = loaded_script("data:image/png;base64,AAAA");
+        assert!(script.contains(PHOTO_ID), "the script lost the photo id");
+        assert!(
+            script.contains(PLACEHOLDER_CLASS),
+            "the script lost the placeholder class"
+        );
+        assert!(
+            script.contains("'data:image/png;base64,AAAA'"),
+            "the script lost the data URI"
         );
     }
 }
