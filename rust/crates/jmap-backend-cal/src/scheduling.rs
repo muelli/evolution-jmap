@@ -8,7 +8,7 @@
 use std::ffi::CStr;
 
 use eds_sys::{E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE, ECalOperationFlags};
-use jmap_cal_sync::Itip;
+use jmap_cal_sync::{Itip, is_import};
 
 /// Static capability indicating the backend creates messages.
 pub const CREATE_MESSAGES: &str = "create-messages";
@@ -46,14 +46,22 @@ pub fn capabilities(inherited: Option<&str>) -> String {
 /// EDS keeps the opflags of a queued offline change and uploads with them later.
 const RECEIVED: ECalOperationFlags = 1 << 30;
 
+/// Marks a received change whose iTip method is not a real invitation: absent
+/// or `PUBLISH` (RFC 5546 1.4), the shape of a plain import or backup
+/// restore. Such a change never earns a reply, whatever the other flags say.
+const IMPORTED: ECalOperationFlags = 1 << 29;
+
 /// Determines whether an operation sends iTIP messages to guests.
 ///
 /// Returns [`Itip::Send`] unless `opflags` suppresses the message.
-/// Returns [`Itip::Received`] when [`received`] marked the opflags.
+/// Returns [`Itip::Received`] when [`received`] marked the opflags; its
+/// `reply` is forced false when [`received`] also found the payload import-shaped.
 pub fn itip(opflags: ECalOperationFlags) -> Itip {
     let send = opflags & E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE == 0;
     if opflags & RECEIVED != 0 {
-        Itip::Received { reply: send }
+        Itip::Received {
+            reply: send && opflags & IMPORTED == 0,
+        }
     } else if send {
         Itip::Send
     } else {
@@ -63,9 +71,17 @@ pub fn itip(opflags: ECalOperationFlags) -> Itip {
 
 /// Returns the flags that `receive_objects_sync` gives to the meta backend.
 ///
-/// The mark stays with the change through EDS's offline queue.
-pub fn received(opflags: ECalOperationFlags) -> ECalOperationFlags {
-    opflags | RECEIVED
+/// The mark stays with the change through EDS's offline queue. `calobj` is the
+/// full iTip payload that `receive_objects_sync` received; [`is_import`] reads
+/// its top-level `METHOD` to tell a plain import from a real invitation,
+/// reply or cancellation.
+pub fn received(opflags: ECalOperationFlags, calobj: &str) -> ECalOperationFlags {
+    let opflags = opflags | RECEIVED;
+    if is_import(calobj) {
+        opflags | IMPORTED
+    } else {
+        opflags
+    }
 }
 
 /// Returns the flags for a reminder dismissal, which never sends iTIP.

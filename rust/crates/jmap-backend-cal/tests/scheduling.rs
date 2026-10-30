@@ -25,6 +25,13 @@ const SCHEDULING_CAPS: [&str; 3] = [
     ITIP_SUPPRESS_ON_REMOVE_SUPPORTED,
 ];
 
+/// A real invitation: `received` must not mark this as an import.
+const REQUEST: &str = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n";
+/// The iTIP shape of a plain import or backup restore (RFC 5546 1.4).
+const PUBLISH: &str = "BEGIN:VCALENDAR\r\nMETHOD:PUBLISH\r\nEND:VCALENDAR\r\n";
+/// Also the shape of a plain import: no `METHOD` at all.
+const NO_METHOD: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n";
+
 fn split(caps: &str) -> Vec<&str> {
     caps.split(',').filter(|cap| !cap.is_empty()).collect()
 }
@@ -107,11 +114,11 @@ fn disable_itip_message_is_read_as_one_bit_among_the_conflict_flags() {
 #[test]
 fn a_received_change_is_marked_received_and_keeps_the_users_choice() {
     assert_eq!(
-        itip(received(E_CAL_OPERATION_FLAG_NONE)),
+        itip(received(E_CAL_OPERATION_FLAG_NONE, REQUEST)),
         Itip::Received { reply: true }
     );
     assert_eq!(
-        itip(received(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE)),
+        itip(received(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE, REQUEST)),
         Itip::Received { reply: false }
     );
     assert_eq!(itip(E_CAL_OPERATION_FLAG_NONE), Itip::Send);
@@ -123,8 +130,8 @@ fn a_received_change_stays_received_on_a_thread_with_no_mark() {
     // ecmb_create_object_sync), and later uploads it on another thread.
     let replayed = std::thread::spawn(|| {
         (
-            itip(received(E_CAL_OPERATION_FLAG_NONE)),
-            itip(received(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE)),
+            itip(received(E_CAL_OPERATION_FLAG_NONE, REQUEST)),
+            itip(received(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE, REQUEST)),
         )
     })
     .join()
@@ -143,13 +150,64 @@ fn the_received_mark_is_one_bit_outside_the_eds_flags() {
     let flags =
         E_CAL_OPERATION_FLAG_CONFLICT_KEEP_SERVER | E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE;
     assert_eq!(
-        received(flags) & flags,
+        received(flags, REQUEST) & flags,
         flags,
         "the other flags pass through"
     );
-    let mark = received(flags) & !flags;
+    let mark = received(flags, REQUEST) & !flags;
     assert_eq!(mark.count_ones(), 1, "the mark is one bit");
     // EDS 3.52 to master define bits 0 to 4. The cache keeps the flags as a guint32.
+    assert_eq!(mark & 0x1f, 0, "the mark is not an EDS flag");
+    assert!(mark < 1 << 31, "the mark stays positive in a gint");
+}
+
+// ---------------------------------------------------------------------------
+// telling an import from a real invitation
+
+#[test]
+fn a_plain_import_never_earns_a_reply() {
+    assert_eq!(
+        itip(received(E_CAL_OPERATION_FLAG_NONE, PUBLISH)),
+        Itip::Received { reply: false }
+    );
+    assert_eq!(
+        itip(received(E_CAL_OPERATION_FLAG_NONE, NO_METHOD)),
+        Itip::Received { reply: false }
+    );
+}
+
+#[test]
+fn a_plain_import_stays_unreplied_even_without_disable_itip_message() {
+    // `PUBLISH`/no-`METHOD` forces `reply: false` on its own: the user never
+    // asked to suppress anything, the payload itself is not a real invitation.
+    assert_eq!(
+        itip(received(E_CAL_OPERATION_FLAG_CONFLICT_KEEP_SERVER, PUBLISH)),
+        Itip::Received { reply: false }
+    );
+}
+
+#[test]
+fn a_real_invitation_keeps_the_users_choice_of_reply() {
+    assert_eq!(
+        itip(received(E_CAL_OPERATION_FLAG_NONE, REQUEST)),
+        Itip::Received { reply: true }
+    );
+    assert_eq!(
+        itip(received(E_CAL_OPERATION_FLAG_DISABLE_ITIP_MESSAGE, REQUEST)),
+        Itip::Received { reply: false }
+    );
+}
+
+#[test]
+fn the_import_mark_is_one_more_bit_outside_the_eds_flags_and_distinct_from_received() {
+    let not_imported = received(E_CAL_OPERATION_FLAG_NONE, REQUEST);
+    let imported = received(E_CAL_OPERATION_FLAG_NONE, PUBLISH);
+    let mark = imported & !not_imported;
+    assert_eq!(
+        mark.count_ones(),
+        1,
+        "the import mark is one additional bit"
+    );
     assert_eq!(mark & 0x1f, 0, "the mark is not an EDS flag");
     assert!(mark < 1 << 31, "the mark stays positive in a gint");
 }
