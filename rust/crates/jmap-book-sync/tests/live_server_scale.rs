@@ -42,6 +42,7 @@ use std::time::{Duration, Instant};
 
 use jmap_book_sync::{BookSync, SyncError};
 use jmap_client::Error as ClientError;
+use jmap_proto::contacts::AddressBook;
 use jmap_proto::session::CAPABILITY_CONTACTS;
 use jmap_test_support::{connect_for_write, env_count, unique_suffix};
 
@@ -125,18 +126,22 @@ fn a_real_sized_address_book_round_trips_through_the_real_server() {
     let account_id = client
         .primary_account(CAPABILITY_CONTACTS)
         .expect("the write-test account needs the contacts capability");
-    let address_book_id = client
-        .address_books(&account_id)
-        .unwrap()
-        .into_iter()
-        .next()
-        .expect("the write-test account needs a default address book")
-        .id
-        .expect("the server named the address book");
-
-    let sync = BookSync::new(client, account_id, address_book_id);
     let n = batch_size();
     let run = unique_suffix();
+    // A dedicated book, not the account's default one. The three tests in this
+    // file run concurrently under cargo's default test threading; `get_changes`
+    // is account-wide before `classify` narrows it to one book, so sharing a
+    // book would let one test's cards show up as another test's changes.
+    let address_book_id = client
+        .address_book_create(
+            &account_id,
+            &AddressBook::new(format!("agent-scale-main-{run}")),
+        )
+        .expect("AddressBook/set create failed against the real server")
+        .id
+        .expect("the server named the new address book");
+
+    let sync = BookSync::new(client, account_id, address_book_id);
 
     let import_start = Instant::now();
     let mut saved_uids = Vec::with_capacity(n);
@@ -223,18 +228,20 @@ fn deleting_from_a_real_sized_address_book_is_reported_correctly() {
     let account_id = client
         .primary_account(CAPABILITY_CONTACTS)
         .expect("the write-test account needs the contacts capability");
-    let address_book_id = client
-        .address_books(&account_id)
-        .unwrap()
-        .into_iter()
-        .next()
-        .expect("the write-test account needs a default address book")
-        .id
-        .expect("the server named the address book");
-
-    let sync = BookSync::new(client, account_id, address_book_id);
     let n = batch_size();
     let run = unique_suffix();
+    // A dedicated book, not the account's default one; see the same note in
+    // `a_real_sized_address_book_round_trips_through_the_real_server`.
+    let address_book_id = client
+        .address_book_create(
+            &account_id,
+            &AddressBook::new(format!("agent-scale-del-{run}")),
+        )
+        .expect("AddressBook/set create failed against the real server")
+        .id
+        .expect("the server named the new address book");
+
+    let sync = BookSync::new(client, account_id, address_book_id);
 
     let import_start = Instant::now();
     let mut saved_uids = Vec::with_capacity(n);
@@ -313,19 +320,21 @@ fn a_real_sized_address_book_with_photos_round_trips_through_the_real_server() {
     let account_id = client
         .primary_account(CAPABILITY_CONTACTS)
         .expect("the write-test account needs the contacts capability");
-    let address_book_id = client
-        .address_books(&account_id)
-        .unwrap()
-        .into_iter()
-        .next()
-        .expect("the write-test account needs a default address book")
-        .id
-        .expect("the server named the address book");
-
-    let sync = BookSync::new(client, account_id, address_book_id);
     let n = batch_size();
     let run = unique_suffix();
     let photo = photo_base64();
+    // A dedicated book, not the account's default one; see the same note in
+    // `a_real_sized_address_book_round_trips_through_the_real_server`.
+    let address_book_id = client
+        .address_book_create(
+            &account_id,
+            &AddressBook::new(format!("agent-scale-photo-{run}")),
+        )
+        .expect("AddressBook/set create failed against the real server")
+        .id
+        .expect("the server named the new address book");
+
+    let sync = BookSync::new(client, account_id, address_book_id);
 
     let import_start = Instant::now();
     let mut saved_uids = Vec::with_capacity(n);
