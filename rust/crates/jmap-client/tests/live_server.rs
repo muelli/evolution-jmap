@@ -5220,11 +5220,21 @@ fn participant_identity_get_includes_state_through_the_real_api() {
 }
 
 /// Tests resolving the current user principal when `currentUserPrincipalId` is the account identifier.
-/// Confirms that `current_user_principal` resolves the principal object.
+/// Confirms that `current_user_principal` resolves the principal object directly, with no
+/// account-id-to-principal-id mismatch to tolerate.
 /// Confirms that `principal_get` accepts the advertised account identifier.
+///
+/// An account-id mismatch (the advertised ID resolving to `notFound`, with the true
+/// principal under a different ID) used to reproduce here for Stalwart's built-in
+/// `admin` login (Finding 18). It never reproduced for a regular account, on any
+/// Stalwart version this project has tested, and `docs/manual-test-live-server.md`
+/// asks for a regular account, not `admin`, so this test exercises the regular-account
+/// path only. `Client::current_user_principal`'s mismatch-tolerance fallback (see
+/// `principal_get`'s doc comment) stays in the client for whichever server or login
+/// still needs it; it is just not this test's job to reproduce the admin-only case.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
-fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api() {
+fn current_user_principal_resolves_through_the_real_api() {
     let client = connect();
     let Ok(account_id) = client.primary_account(CAPABILITY_PRINCIPALS) else {
         eprintln!("server names no primary account for {CAPABILITY_PRINCIPALS}; skipping");
@@ -5245,47 +5255,8 @@ fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api
         "server advertises account ID as currentUserPrincipalId"
     );
 
-    if is_cyrus_server(&client) {
-        // On Cyrus, currentUserPrincipalId is the true principal ID, so raw Principal/get finds it directly.
-        let raw_args = client
-            .single_call(
-                &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS],
-                "Principal/get",
-                &json!({ "accountId": account_id, "ids": [account_id.as_str()] }),
-            )
-            .expect("raw Principal/get call succeeds");
-        let list = raw_args
-            .get("list")
-            .and_then(|v| v.as_array())
-            .expect("list present");
-        assert_eq!(list.len(), 1);
-
-        let principal = client
-            .current_user_principal(&account_id)
-            .expect("current_user_principal must succeed")
-            .expect("owner principal must be resolved");
-        assert!(principal.id.is_some(), "principal must have an ID");
-        assert_eq!(principal.id.as_ref(), Some(&account_id));
-        let expected_user =
-            env::var("JMAP_LIVE_SERVER_USER").unwrap_or_else(|_| "user1".to_string());
-        let expected_email = format!("{expected_user}@example.com");
-        assert_eq!(principal.email.as_deref(), Some(expected_email.as_str()));
-
-        let principal_id = client
-            .current_user_principal_id(&account_id)
-            .expect("current_user_principal_id must succeed")
-            .expect("owner principal ID must be resolved");
-        assert_eq!(principal_id, account_id);
-
-        let list_p = client
-            .principal_get(&account_id, std::slice::from_ref(&account_id))
-            .expect("principal_get with account ID must succeed on Cyrus");
-        assert_eq!(list_p.len(), 1);
-        assert_eq!(list_p[0].id.as_ref(), Some(&account_id));
-        return;
-    }
-
-    // 2. Direct raw Principal/get with the advertised ID reproduces the notFound response:
+    // 2. Direct raw Principal/get with the advertised ID resolves it with no fallback
+    // needed, on both server families:
     let raw_args = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS],
@@ -5293,52 +5264,43 @@ fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api
             &json!({ "accountId": account_id, "ids": [account_id.as_str()] }),
         )
         .expect("raw Principal/get call succeeds");
-    let not_found = raw_args
-        .get("notFound")
+    let list = raw_args
+        .get("list")
         .and_then(|v| v.as_array())
-        .expect("notFound array present in response");
-    assert!(
-        not_found
-            .iter()
-            .any(|v| v.as_str() == Some(account_id.as_str())),
-        "raw Principal/get with account ID must return notFound on live Stalwart"
+        .expect("list present in response");
+    assert_eq!(
+        list.len(),
+        1,
+        "Principal/get with the advertised account ID must resolve directly, got: {raw_args:?}"
     );
 
-    // 3. Client::current_user_principal tolerates the mismatch and resolves the true principal:
+    // 3. Client::current_user_principal resolves the same principal, with no mismatch
+    // to tolerate:
     let principal = client
         .current_user_principal(&account_id)
         .expect("current_user_principal must succeed")
         .expect("owner principal must be resolved");
-    assert!(principal.id.is_some(), "principal must have an ID");
-    assert_ne!(
-        principal.id.as_ref(),
-        Some(&account_id),
-        "resolved principal ID must be distinct from the account ID"
-    );
-    assert_eq!(principal.id.as_ref(), Some(&Id::new("b")));
-    assert_eq!(principal.name, "admin@example.internal");
-    assert_eq!(principal.email.as_deref(), Some("admin@example.internal"));
+    assert_eq!(principal.id.as_ref(), Some(&account_id));
+    if client.session().username.contains('@') {
+        assert_eq!(
+            principal.email.as_deref(),
+            Some(client.session().username.as_str())
+        );
+    }
 
-    // 4. Client::current_user_principal_id resolves the true principal ID:
+    // 4. Client::current_user_principal_id agrees:
     let principal_id = client
         .current_user_principal_id(&account_id)
         .expect("current_user_principal_id must succeed")
         .expect("owner principal ID must be resolved");
-    assert_eq!(principal_id, Id::new("b"));
+    assert_eq!(principal_id, account_id);
 
-    // 5. Client::principal_get with the advertised account ID tolerates the mismatch:
-    let list = client
+    // 5. Client::principal_get with the advertised account ID succeeds directly:
+    let list_p = client
         .principal_get(&account_id, std::slice::from_ref(&account_id))
-        .expect("principal_get with advertised ID must succeed via tolerance fallback");
-    assert_eq!(list.len(), 1);
-    assert_eq!(list[0].id.as_ref(), Some(&Id::new("b")));
-
-    // 6. Client::principal_get with the real principal ID succeeds directly:
-    let list_b = client
-        .principal_get(&account_id, &[Id::new("b")])
-        .expect("principal_get with real ID must succeed");
-    assert_eq!(list_b.len(), 1);
-    assert_eq!(list_b[0].id.as_ref(), Some(&Id::new("b")));
+        .expect("principal_get with the advertised ID must succeed directly");
+    assert_eq!(list_p.len(), 1);
+    assert_eq!(list_p[0].id.as_ref(), Some(&account_id));
 }
 
 /// Tests that `CalendarEvent/set` handles time zone property rejection cleanly.
