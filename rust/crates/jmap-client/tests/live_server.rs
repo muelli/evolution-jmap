@@ -2113,11 +2113,13 @@ fn blob_copy_within_the_same_real_account_copies_the_content() {
 
 /// A genuine `fromAccountId != accountId` copy was the first shape tried
 /// here, mirroring the two throwaway accounts every other cross-account test
-/// in this file uses. Real Stalwart rejected it outright: `Blob/copy` with a
-/// target account the caller does not own answers a `forbidden` method
-/// error ("You are not an owner of account ..."), while Cyrus answers
-/// `accountNotFound` (RFC 8620 §3.6.2), even though `jmap-mockd`'s
-/// own implementation allows it unconditionally (`blob_copy_between_two_
+/// in this file uses. Real Stalwart rejects it outright: `Blob/copy` with a
+/// target account the caller does not own answers a method error, same as
+/// Cyrus's `accountNotFound` (RFC 8620 §3.6.2). Stalwart 0.16 answered
+/// `forbidden` ("You are not an owner of account ..."); 1.0.1 answers
+/// `accountNotFound` instead, hiding the target account's existence more
+/// conservatively. `jmap-mockd`'s own implementation allows the copy
+/// unconditionally (`blob_copy_between_two_
 /// accounts_copies_the_content` in `blob_management.rs`): the mock never
 /// modeled an ownership check at all. Setting up ACL sharing between the two
 /// throwaway accounts so a real cross-account copy could succeed is out of
@@ -2164,11 +2166,7 @@ fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
         .expect_err("copying into an account this session does not own must be rejected");
     match error {
         jmap_client::Error::Method(method_error) => {
-            if is_cyrus_server(&from_client) {
-                assert_eq!(method_error.error_type, method::ACCOUNT_NOT_FOUND);
-            } else {
-                assert_eq!(method_error.error_type, method::FORBIDDEN);
-            }
+            assert_eq!(method_error.error_type, method::ACCOUNT_NOT_FOUND);
         }
         other => panic!("expected a Method error, got {other:?}"),
     }
