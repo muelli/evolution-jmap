@@ -5168,12 +5168,12 @@ fn calendar_event_notification_destroy_tolerates_server_dropped_id_through_the_r
     }
 }
 
-/// Tests that `Client::participant_identities` tolerates omitted `state` fields.
-/// Stalwart omits the required `state` property from `ParticipantIdentity/get` responses.
-/// Raw responses omit state and fail strict `GetResponse` deserialization.
+/// Tests that `ParticipantIdentity/get` includes the mandatory `state` field.
+/// Stalwart 1.0.1 fixed Finding 19 (0.16 omitted `state`, breaking strict
+/// `GetResponse` deserialization); Cyrus already included it.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
-fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api() {
+fn participant_identity_get_includes_state_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!(
             "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping participant identity test"
@@ -5199,43 +5199,24 @@ fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api(
         )
         .expect("raw ParticipantIdentity/get succeeds");
 
-    // 3. Inspect the mandatory state field:
-    if is_cyrus_server(&client) {
-        assert!(
-            raw_args.get("state").is_some(),
-            "Cyrus includes mandatory state field per RFC 8620 Section 5.1"
-        );
-        let strict_result: Result<GetResponse<ParticipantIdentity>, _> =
-            serde_json::from_value(raw_args);
-        assert!(
-            strict_result.is_ok(),
-            "GetResponse deserializes cleanly on Cyrus"
-        );
-    } else {
-        assert!(
-            raw_args.get("state").is_none(),
-            "live Stalwart ParticipantIdentity/get response must omit the state field (Finding 19), got: {raw_args:?}"
-        );
-        assert!(
-            raw_args.get("list").is_some(),
-            "live Stalwart ParticipantIdentity/get response must contain list"
-        );
+    // 3. The mandatory state field is present per RFC 8620 Section 5.1, on Stalwart
+    // 1.0.1 (Finding 19 is fixed) as well as on Cyrus:
+    assert!(
+        raw_args.get("state").is_some(),
+        "ParticipantIdentity/get response must include the mandatory state field, got: {raw_args:?}"
+    );
+    assert!(
+        raw_args.get("list").is_some(),
+        "ParticipantIdentity/get response must contain list"
+    );
 
-        // 4. Demonstrate that standard RFC 8620 GetResponse<ParticipantIdentity> fails
-        // deserialization due to the missing state field on Stalwart:
-        let strict_result: Result<GetResponse<ParticipantIdentity>, _> =
-            serde_json::from_value(raw_args);
-        match strict_result {
-            Err(err) => {
-                let msg = err.to_string();
-                assert!(
-                    msg.contains("missing field") && msg.contains("state"),
-                    "expected missing field `state` error, got: {msg}"
-                );
-            }
-            Ok(_) => panic!("expected strict GetResponse deserialization to fail on omitted state"),
-        }
-    }
+    // 4. Standard RFC 8620 GetResponse<ParticipantIdentity> deserializes cleanly:
+    let strict_result: Result<GetResponse<ParticipantIdentity>, _> =
+        serde_json::from_value(raw_args);
+    assert!(
+        strict_result.is_ok(),
+        "GetResponse must deserialize cleanly now that state is present: {strict_result:?}"
+    );
 }
 
 /// Tests resolving the current user principal when `currentUserPrincipalId` is the account identifier.
@@ -6136,8 +6117,8 @@ fn contact_card_online_service_without_uri_through_the_real_api() {
 /// 5. `notes`: `Author` object (`@type: "Author"`, `name`, `uri`) preserved on storage.
 /// 6. `schedulingAddresses`: `label` and `@type` preserved on storage.
 /// 7. `personalInfo`: `type` and `listAs` preserved on storage.
-/// 8. `Directory`: Stalwart accepts create and preserves `listAs`, but drops `label` upon
-///    storage (Finding 26).
+/// 8. `Directory`: Stalwart 1.0.1 preserves both `listAs` and `label` on storage (Finding 26
+///    is fixed; 0.16 dropped `label`).
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn contact_card_set_preserves_rfc9553_shapes_through_the_real_api() {
@@ -6355,7 +6336,8 @@ fn contact_card_set_preserves_rfc9553_shapes_through_the_real_api() {
     assert_eq!(fetched_info.personal_info_type.as_deref(), Some("craft"));
     assert_eq!(fetched_info.list_as, Some(2));
 
-    // Verify Directory: listAs is preserved; label is dropped by Stalwart (Finding 26)
+    // Verify Directory: label and listAs are both preserved on Stalwart 1.0.1 (Finding 26
+    // is fixed; 0.16 dropped label). Cyrus drops listAs instead.
     let fetched_dir = fetched_card
         .directories
         .as_ref()
@@ -6373,9 +6355,10 @@ fn contact_card_set_preserves_rfc9553_shapes_through_the_real_api() {
         );
     } else {
         assert_eq!(fetched_dir.list_as, Some(1));
-        assert!(
-            fetched_dir.label.is_none(),
-            "Stalwart drops Directory.label on storage (Finding 26)"
+        assert_eq!(
+            fetched_dir.label.as_deref(),
+            Some("Public Staff Directory"),
+            "Stalwart 1.0.1 preserves Directory.label on storage (Finding 26 is fixed)"
         );
     }
 
