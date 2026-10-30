@@ -66,6 +66,10 @@
 //! - `keywords` is a set and goes back replaced whole, because a tag has no
 //!   key and no members. The save adds each tag that `CATEGORIES` could not
 //!   carry, so the save does not delete it (see `diff_keywords`).
+//! - `members` (a group card only) is keyed by the member's uid. The vCard
+//!   shows only a member already in the address book (see `states_member`),
+//!   so the save patches `members/<uid>` by that key and leaves a member the
+//!   vCard cannot show untouched (see `diff_members`).
 //! - The vCard states only some entries of each keyed map. These have no line:
 //!   a title of a `kind` other than `title` and `role`, an address with no
 //!   `ADR` field and no written-out form, an organisation with no name and no
@@ -93,9 +97,10 @@ use jmap_vcard::{
     online_service_uri, restore_address_components, restore_name_components, same_photo,
     same_service, states_a_point_in_time, states_address, states_address_component,
     states_anniversary, states_assistant, states_calendar, states_context, states_email,
-    states_keyword, states_link, states_manager, states_media, states_name, states_name_component,
-    states_nickname, states_note, states_online_service, states_org_unit, states_organization,
-    states_phone, states_phone_feature, states_spouse, states_title, title_kind,
+    states_keyword, states_link, states_manager, states_media, states_member, states_name,
+    states_name_component, states_nickname, states_note, states_online_service, states_org_unit,
+    states_organization, states_phone, states_phone_feature, states_spouse, states_title,
+    title_kind,
 };
 use serde_json::{Map, Value, json};
 
@@ -155,6 +160,7 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         edited.related_to.as_ref(),
     );
     diff_keywords(&mut patch, current, edited);
+    diff_members(&mut patch, current.members.as_ref(), edited.members.as_ref());
     patch
 }
 
@@ -349,6 +355,53 @@ fn diff_related_to(
                 }
             }
         }
+    }
+}
+
+/// Patches group membership (`members`). Only a group card has this property.
+///
+/// The vCard shows only a member already in the address book ([`states_member`]):
+/// an `EMAIL` destination line carries the member's `X-EVOLUTION-DEST-CONTACT-UID`.
+/// An edit adds or removes one such line, so the save patches `members/<uid>` by
+/// that key. A server-only member detail the vCard cannot show stays untouched.
+fn diff_members(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, bool>>,
+    edited: Option<&BTreeMap<String, bool>>,
+) {
+    let empty = BTreeMap::new();
+    let current = current.unwrap_or(&empty);
+    let edited = edited.unwrap_or(&empty);
+
+    let shown: BTreeSet<&String> = current
+        .iter()
+        .filter(|&(uid, &active)| states_member(uid, active))
+        .map(|(uid, _)| uid)
+        .collect();
+    let wanted: BTreeSet<&String> = edited
+        .iter()
+        .filter(|&(uid, &active)| states_member(uid, active))
+        .map(|(uid, _)| uid)
+        .collect();
+    if shown == wanted {
+        return;
+    }
+
+    // RFC 8620 §5.3: a card with no `members` has no path to patch into, so
+    // write the property whole.
+    if current.is_empty() {
+        if !wanted.is_empty() {
+            let whole: BTreeMap<&String, bool> = wanted.iter().map(|&uid| (uid, true)).collect();
+            patch.insert("members".to_owned(), json_of(&whole));
+        }
+        return;
+    }
+
+    for &uid in shown.difference(&wanted) {
+        patch.insert(format!("members/{}", escape(uid)), Value::Null);
+    }
+    for &uid in wanted.difference(&shown) {
+        patch.insert(format!("members/{}", escape(uid)), Value::Bool(true));
     }
 }
 
@@ -1387,6 +1440,54 @@ mod tests {
             json!({"manager": true, "assistant": true}),
             "{patch:?}"
         );
+    }
+
+    #[test]
+    fn adding_a_member_to_a_group_card_patches_it_in() {
+        let current: BTreeMap<String, bool> = [("a".to_owned(), true)].into();
+        let edited: BTreeMap<String, bool> =
+            [("a".to_owned(), true), ("b".to_owned(), true)].into();
+
+        let mut patch = Map::new();
+        diff_members(&mut patch, Some(&current), Some(&edited));
+
+        assert_eq!(patch, Map::from_iter([("members/b".to_owned(), json!(true))]));
+    }
+
+    #[test]
+    fn removing_a_member_from_a_group_card_patches_it_out() {
+        let current: BTreeMap<String, bool> =
+            [("a".to_owned(), true), ("b".to_owned(), true)].into();
+        let edited: BTreeMap<String, bool> = [("a".to_owned(), true)].into();
+
+        let mut patch = Map::new();
+        diff_members(&mut patch, Some(&current), Some(&edited));
+
+        assert_eq!(patch, Map::from_iter([("members/b".to_owned(), Value::Null)]));
+    }
+
+    #[test]
+    fn an_unchanged_membership_patches_nothing() {
+        let current: BTreeMap<String, bool> =
+            [("a".to_owned(), true), ("b".to_owned(), true)].into();
+        let edited = current.clone();
+
+        let mut patch = Map::new();
+        diff_members(&mut patch, Some(&current), Some(&edited));
+
+        assert!(patch.is_empty(), "{patch:?}");
+    }
+
+    /// A new group card with no `members` path yet to patch into (RFC 8620
+    /// §5.3) writes the whole property once.
+    #[test]
+    fn a_first_member_on_a_card_with_none_yet_writes_the_whole_property() {
+        let edited: BTreeMap<String, bool> = [("a".to_owned(), true)].into();
+
+        let mut patch = Map::new();
+        diff_members(&mut patch, None, Some(&edited));
+
+        assert_eq!(patch, Map::from_iter([("members".to_owned(), json!({"a": true}))]));
     }
 
     #[derive(Clone, serde::Serialize)]
