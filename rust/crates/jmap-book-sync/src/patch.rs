@@ -160,7 +160,11 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         edited.related_to.as_ref(),
     );
     diff_keywords(&mut patch, current, edited);
-    diff_members(&mut patch, current.members.as_ref(), edited.members.as_ref());
+    diff_members(
+        &mut patch,
+        current.members.as_ref(),
+        edited.members.as_ref(),
+    );
     patch
 }
 
@@ -1451,7 +1455,10 @@ mod tests {
         let mut patch = Map::new();
         diff_members(&mut patch, Some(&current), Some(&edited));
 
-        assert_eq!(patch, Map::from_iter([("members/b".to_owned(), json!(true))]));
+        assert_eq!(
+            patch,
+            Map::from_iter([("members/b".to_owned(), json!(true))])
+        );
     }
 
     #[test]
@@ -1463,7 +1470,10 @@ mod tests {
         let mut patch = Map::new();
         diff_members(&mut patch, Some(&current), Some(&edited));
 
-        assert_eq!(patch, Map::from_iter([("members/b".to_owned(), Value::Null)]));
+        assert_eq!(
+            patch,
+            Map::from_iter([("members/b".to_owned(), Value::Null)])
+        );
     }
 
     #[test]
@@ -1487,7 +1497,10 @@ mod tests {
         let mut patch = Map::new();
         diff_members(&mut patch, None, Some(&edited));
 
-        assert_eq!(patch, Map::from_iter([("members".to_owned(), json!({"a": true}))]));
+        assert_eq!(
+            patch,
+            Map::from_iter([("members".to_owned(), json!({"a": true}))])
+        );
     }
 
     #[derive(Clone, serde::Serialize)]

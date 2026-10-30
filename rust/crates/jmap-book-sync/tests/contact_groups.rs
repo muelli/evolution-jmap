@@ -15,8 +15,8 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::Fixture;
-use jmap_proto::contacts::{ContactCard, Name};
 use jmap_proto::Id;
+use jmap_proto::contacts::{ContactCard, Name};
 use jmap_vcard::{GROUP_KIND, card_to_vcard, vcard_to_card};
 
 /// The vCard Evolution would save for a contact list, naming members by the
@@ -35,7 +35,11 @@ fn group_vcard(name: &str, member_ids: &[&str]) -> String {
 }
 
 fn member_keys(card: &ContactCard) -> BTreeSet<String> {
-    card.members.iter().flatten().map(|(key, _)| key.clone()).collect()
+    card.members
+        .iter()
+        .flatten()
+        .map(|(key, _)| key.clone())
+        .collect()
 }
 
 #[test]

@@ -426,11 +426,7 @@ fn resolve_member_uids(client: &Client, account_id: &Id, card: &mut ContactCard)
         .unwrap_or_default();
     let mut resolved = BTreeMap::new();
     for stored in found {
-        let Some(active) = stored
-            .id
-            .as_ref()
-            .and_then(|id| members.get(id.as_str()))
-        else {
+        let Some(active) = stored.id.as_ref().and_then(|id| members.get(id.as_str())) else {
             continue;
         };
         if let Some(member_uid) = stored.uid {
