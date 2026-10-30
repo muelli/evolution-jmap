@@ -5,11 +5,12 @@
 //!
 //! Covers capability detection, `SieveScript/get`, `set`, `query`, and `validate`.
 
-use jmap_client::{Client, Credentials, Error};
+use jmap_client::sieve::{Activation, SieveSetErrorKind, set_error_kind};
+use jmap_client::{Client, Credentials, Error, rebase_urls_from_env};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::blob::{BlobUploadRequest, UploadBlob};
-use jmap_proto::error::{method, set};
+use jmap_proto::error::{SetError, method, set};
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
 use jmap_proto::sieve::{SieveScript, SieveScriptQueryFilter, sieve_set_error};
 use serde_json::json;
@@ -464,4 +465,423 @@ fn sieve_script_validate_rejects_an_unknown_blob_id() {
         }
         other => panic!("expected Method error, got {other:?}"),
     }
+}
+
+/// Verifies `Client::sieve_capability` for a valid account, an unknown account,
+/// and merges top-level `implementation` with per-account capability fields.
+#[test]
+fn client_sieve_capability_returns_account_capability_and_merges_implementation() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let cap = client
+        .sieve_capability(&account_id)
+        .expect("mock account advertises urn:ietf:params:jmap:sieve");
+    assert!(cap.max_size_script > 0);
+    assert_eq!(cap.max_number_scripts, Some(32));
+
+    assert!(
+        client
+            .sieve_capability(&Id::from("unknown-account"))
+            .is_none(),
+        "unknown account id must return None"
+    );
+}
+
+/// Verifies `Client::sieve_script_put` (create and update with `Activation::Keep`,
+/// `Activation::Activate`, and `Activation::Deactivate`) and `Client::sieve_script_text`
+/// against `jmap-mock`.
+#[test]
+fn sieve_script_put_and_text_round_trip_create_update_and_activation_against_mock() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let v1_text = "require [\"fileinto\"];\r\nfileinto \"INBOX\";\r\n";
+    let created = client
+        .sieve_script_put(
+            &account_id,
+            None,
+            "evolution-jmap",
+            v1_text,
+            Activation::Keep,
+        )
+        .unwrap();
+    let script_id = created.id.clone().expect("created script has id");
+    assert_eq!(created.name, "evolution-jmap");
+    assert!(!created.is_active);
+    assert_eq!(
+        client.sieve_script_text(&account_id, &created).unwrap(),
+        v1_text
+    );
+
+    // Update text and activate in one call.
+    let v2_text = "require [\"fileinto\", \"imap4flags\"];\r\naddflag \"\\\\Seen\";\r\nfileinto \"INBOX\";\r\n";
+    let updated = client
+        .sieve_script_put(
+            &account_id,
+            Some(&script_id),
+            "evolution-jmap-renamed",
+            v2_text,
+            Activation::Activate,
+        )
+        .unwrap();
+    assert_eq!(updated.id.as_ref(), Some(&script_id));
+    assert_eq!(updated.name, "evolution-jmap-renamed");
+    assert!(updated.is_active);
+    assert_eq!(
+        client.sieve_script_text(&account_id, &updated).unwrap(),
+        v2_text
+    );
+
+    let listed = client.sieve_scripts(&account_id).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "evolution-jmap-renamed");
+    assert!(listed[0].is_active);
+    assert_eq!(
+        client.sieve_script_text(&account_id, &listed[0]).unwrap(),
+        v2_text
+    );
+
+    // Update text without changing activation state (Activation::Keep).
+    let v2b_text = "require [\"fileinto\"];\r\nfileinto \"Archive\";\r\n";
+    let kept = client
+        .sieve_script_put(
+            &account_id,
+            Some(&script_id),
+            "evolution-jmap-renamed",
+            v2b_text,
+            Activation::Keep,
+        )
+        .unwrap();
+    assert_eq!(kept.id.as_ref(), Some(&script_id));
+    assert_eq!(
+        client.sieve_script_text(&account_id, &kept).unwrap(),
+        v2b_text
+    );
+    assert!(
+        client.sieve_scripts(&account_id).unwrap()[0].is_active,
+        "Activation::Keep must leave the active script active"
+    );
+
+    // Update and deactivate in one call.
+    let v3_text = "keep;\r\n";
+    let deactivated = client
+        .sieve_script_put(
+            &account_id,
+            Some(&script_id),
+            "evolution-jmap",
+            v3_text,
+            Activation::Deactivate,
+        )
+        .unwrap();
+    assert!(!deactivated.is_active);
+    assert_eq!(deactivated.name, "evolution-jmap");
+    assert_eq!(
+        client.sieve_script_text(&account_id, &deactivated).unwrap(),
+        v3_text
+    );
+
+    let listed_after = client.sieve_scripts(&account_id).unwrap();
+    assert!(!listed_after[0].is_active);
+
+    // Create a second script directly active.
+    let second = client
+        .sieve_script_put(
+            &account_id,
+            None,
+            "second-active",
+            "discard;\r\n",
+            Activation::Activate,
+        )
+        .unwrap();
+    assert!(second.is_active);
+    let active_ids = client
+        .sieve_script_query(
+            &account_id,
+            SieveScriptQueryFilter::new().with_is_active(true),
+        )
+        .unwrap();
+    assert_eq!(active_ids, vec![second.id.unwrap()]);
+}
+
+/// Verifies that `Client::sieve_script_text` rejects non-UTF-8 blob bytes as an error
+/// rather than silently replacing them.
+#[test]
+fn sieve_script_text_rejects_non_utf8_blob_bytes() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let uploaded = client
+        .upload_blob(
+            &account_id,
+            "application/sieve",
+            vec![0xff, 0xfe, b'k', b'e', b'e', b'p', b';'],
+        )
+        .unwrap();
+    let created = client
+        .sieve_script_create(
+            &account_id,
+            &SieveScript::new("invalid-utf8", uploaded.blob_id),
+        )
+        .unwrap();
+
+    let err = client
+        .sieve_script_text(&account_id, &created)
+        .expect_err("non-UTF-8 script bytes must return an error");
+    assert!(
+        matches!(err, Error::Protocol(ref msg) if msg.contains("UTF-8")),
+        "expected Error::Protocol mentioning UTF-8, got {err:?}"
+    );
+
+    let empty_blob_err = client
+        .sieve_script_text(&account_id, &SieveScript::default())
+        .expect_err("empty blobId must return an error");
+    assert!(
+        matches!(empty_blob_err, Error::Protocol(ref msg) if msg.contains("blobId")),
+        "expected Error::Protocol mentioning blobId, got {empty_blob_err:?}"
+    );
+}
+
+/// Verifies `jmap_client::sieve::set_error_kind` across RFC 9661 and server-variant error types,
+/// and checks that `SetError` description stays reachable through `Error::Set`.
+#[test]
+fn sieve_set_error_kind_maps_standard_and_server_variant_codes_with_description() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let s1 = client
+        .sieve_script_put(
+            &account_id,
+            None,
+            "dup-test",
+            "keep;\r\n",
+            Activation::Activate,
+        )
+        .unwrap();
+    let s1_id = s1.id.unwrap();
+
+    // Duplicate name -> AlreadyExists
+    match client.sieve_script_put(&account_id, None, "dup-test", "keep;\r\n", Activation::Keep) {
+        Err(Error::Set(err)) => {
+            assert_eq!(set_error_kind(&err), Some(SieveSetErrorKind::AlreadyExists));
+        }
+        other => panic!("expected Error::Set(alreadyExists), got {other:?}"),
+    }
+
+    // Destroy active script -> SieveIsActive
+    match client.sieve_script_destroy(&account_id, &s1_id) {
+        Err(Error::Set(err)) => {
+            assert_eq!(set_error_kind(&err), Some(SieveSetErrorKind::SieveIsActive));
+        }
+        other => panic!("expected Error::Set(sieveIsActive), got {other:?}"),
+    }
+
+    // Check all five kinds and server-specific aliases (`invalidScript`, `scriptIsActive`),
+    // ensuring `description` remains accessible on `SetError`.
+    let invalid_sieve = SetError::new("invalidSieve").with_description("line 1: syntax error");
+    assert_eq!(
+        set_error_kind(&invalid_sieve),
+        Some(SieveSetErrorKind::InvalidSieve)
+    );
+    assert_eq!(
+        invalid_sieve.description.as_deref(),
+        Some("line 1: syntax error")
+    );
+
+    let invalid_script = SetError::new("invalidScript")
+        .with_description("Expected token \"command\" at line 1, column 1.");
+    assert_eq!(
+        set_error_kind(&invalid_script),
+        Some(SieveSetErrorKind::InvalidSieve)
+    );
+
+    let sieve_active = SetError::new("sieveIsActive").with_description("active script");
+    assert_eq!(
+        set_error_kind(&sieve_active),
+        Some(SieveSetErrorKind::SieveIsActive)
+    );
+
+    let script_active = SetError::new("scriptIsActive")
+        .with_description("Deactivate Sieve script before deletion.");
+    assert_eq!(
+        set_error_kind(&script_active),
+        Some(SieveSetErrorKind::SieveIsActive)
+    );
+
+    let too_large = SetError::new("tooLarge")
+        .with_description("Sieve script is too large at line 0, column 0.");
+    assert_eq!(
+        set_error_kind(&too_large),
+        Some(SieveSetErrorKind::TooLarge)
+    );
+
+    let over_quota = SetError::new("overQuota")
+        .with_description("There are too many sieve scripts, please delete some.");
+    assert_eq!(
+        set_error_kind(&over_quota),
+        Some(SieveSetErrorKind::OverQuota)
+    );
+
+    let already_exists = SetError::new("alreadyExists")
+        .with_description("A sieve script with name 'x' already exists.");
+    assert_eq!(
+        set_error_kind(&already_exists),
+        Some(SieveSetErrorKind::AlreadyExists)
+    );
+
+    let other = SetError::new("forbidden").with_description("reserved");
+    assert_eq!(set_error_kind(&other), None);
+}
+
+fn connect_live_write() -> Option<Client> {
+    let url = std::env::var("JMAP_LIVE_SERVER_URL").ok()?;
+    let user = std::env::var("JMAP_LIVE_SERVER_WRITE_USER").ok()?;
+    let pass = std::env::var("JMAP_LIVE_SERVER_WRITE_PASSWORD").ok()?;
+    Some(
+        Client::builder()
+            .rebase_urls_to_origin(rebase_urls_from_env())
+            .connect(&url, Credentials::basic(user, pass))
+            .expect("failed to connect to live JMAP server"),
+    )
+}
+
+fn exercise_sieve_helpers_on_live_server(expected_server: &str) {
+    let Some(client) = connect_live_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping live Sieve test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_SIEVE)
+        .expect("live account must advertise urn:ietf:params:jmap:sieve");
+    let cap = client
+        .sieve_capability(&account_id)
+        .expect("Client::sieve_capability must return Some for the Sieve account");
+    let implementation = cap.implementation.as_deref().unwrap_or("");
+    if !implementation.contains(expected_server) {
+        eprintln!(
+            "connected server implementation is {implementation:?}, not {expected_server:?}; skipping"
+        );
+        return;
+    }
+    assert!(cap.max_size_script > 0);
+    assert!(
+        cap.sieve_extensions.iter().any(|ext| ext == "fileinto"),
+        "expected fileinto in sieveExtensions, got {:?}",
+        cap.sieve_extensions
+    );
+
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let name_1 = format!("agent-sieve-put-{suffix}-1");
+    let name_2 = format!("agent-sieve-put-{suffix}-2");
+    let text_1 = "require [\"fileinto\"];\r\nfileinto \"INBOX\";\r\n";
+    let text_2 = "require [\"fileinto\", \"imap4flags\"];\r\naddflag \"\\\\Seen\";\r\nfileinto \"INBOX\";\r\n";
+
+    // Create inactive via sieve_script_put + Activation::Keep, then read back text.
+    let created = client
+        .sieve_script_put(&account_id, None, &name_1, text_1, Activation::Keep)
+        .expect("sieve_script_put create failed");
+    let script_id = created.id.clone().expect("server assigned script id");
+    assert_eq!(created.name, name_1);
+    assert!(!created.is_active);
+    assert_eq!(
+        client
+            .sieve_script_text(&account_id, &created)
+            .expect("sieve_script_text after create failed"),
+        text_1
+    );
+
+    // Duplicate name must map to SieveSetErrorKind::AlreadyExists.
+    match client.sieve_script_put(&account_id, None, &name_1, text_1, Activation::Keep) {
+        Err(Error::Set(err)) => {
+            assert_eq!(set_error_kind(&err), Some(SieveSetErrorKind::AlreadyExists));
+        }
+        other => panic!("expected AlreadyExists SetError on duplicate name, got {other:?}"),
+    }
+
+    // Update text, rename, and activate in one call via Activation::Activate.
+    let updated = client
+        .sieve_script_put(
+            &account_id,
+            Some(&script_id),
+            &name_2,
+            text_2,
+            Activation::Activate,
+        )
+        .expect("sieve_script_put update + Activate failed");
+    assert_eq!(updated.id.as_ref(), Some(&script_id));
+    assert_eq!(updated.name, name_2);
+    assert!(updated.is_active);
+    assert_eq!(
+        client
+            .sieve_script_text(&account_id, &updated)
+            .expect("sieve_script_text after update failed"),
+        text_2
+    );
+
+    // Destroying active script must map to SieveSetErrorKind::SieveIsActive.
+    match client.sieve_script_destroy(&account_id, &script_id) {
+        Err(Error::Set(err)) => {
+            assert_eq!(set_error_kind(&err), Some(SieveSetErrorKind::SieveIsActive));
+        }
+        other => {
+            panic!("expected SieveIsActive SetError when destroying active script, got {other:?}")
+        }
+    }
+
+    // Invalid Sieve syntax must map to SieveSetErrorKind::InvalidSieve with description.
+    match client.sieve_script_put(
+        &account_id,
+        Some(&script_id),
+        &name_2,
+        "bogus_cmd;\r\n",
+        Activation::Keep,
+    ) {
+        Err(Error::Set(err)) => {
+            assert_eq!(set_error_kind(&err), Some(SieveSetErrorKind::InvalidSieve));
+            assert!(
+                err.description.as_deref().is_some_and(|d| !d.is_empty()),
+                "InvalidSieve error must preserve server description, got {err:?}"
+            );
+        }
+        other => panic!("expected InvalidSieve SetError on invalid syntax, got {other:?}"),
+    }
+
+    // Deactivate via sieve_script_put + Activation::Deactivate, then destroy.
+    let deactivated = client
+        .sieve_script_put(
+            &account_id,
+            Some(&script_id),
+            &name_2,
+            text_1,
+            Activation::Deactivate,
+        )
+        .expect("sieve_script_put update + Deactivate failed");
+    assert!(!deactivated.is_active);
+
+    client
+        .sieve_script_destroy(&account_id, &script_id)
+        .expect("cleanup sieve_script_destroy failed");
+}
+
+/// Live test exercising `sieve_capability`, `sieve_script_put`, `sieve_script_text`,
+/// and `set_error_kind` against Stalwart (`stalwart-runner`).
+#[test]
+#[ignore = "needs a live Stalwart JMAP server; see docs/manual-test-live-server.md"]
+fn sieve_helpers_round_trip_against_live_stalwart() {
+    exercise_sieve_helpers_on_live_server("Stalwart");
+}
+
+/// Live test exercising `sieve_capability`, `sieve_script_put`, `sieve_script_text`,
+/// and `set_error_kind` against Cyrus IMAP (`ci/cyrus-oracle.sh`).
+#[test]
+#[ignore = "needs a live Cyrus JMAP server; see docs/manual-test-live-server.md"]
+fn sieve_helpers_round_trip_against_live_cyrus() {
+    exercise_sieve_helpers_on_live_server("Cyrus");
 }
