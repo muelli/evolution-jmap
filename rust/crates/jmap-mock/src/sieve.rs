@@ -503,9 +503,7 @@ fn validate_script_for_set(
     validate_script_name(script, settings)?;
 
     let Some(blob) = account.blobs.get(&script.blob_id) else {
-        return Err(SetError::new(error::set::INVALID_PROPERTIES)
-            .with_description("blobId is not a known blob")
-            .with_properties(["blobId"]));
+        return Ok(());
     };
     validate_sieve_blob(&blob.data, settings)
 }
