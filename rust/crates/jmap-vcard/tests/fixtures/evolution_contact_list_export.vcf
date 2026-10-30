@@ -1,0 +1,16 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:pas-id-GROUP-2026-1030-0001
+X-JMAP-UID:urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
+X-EVOLUTION-FILE-AS:Core Maintainers
+FN:Core Maintainers
+X-EVOLUTION-LIST:TRUE
+X-EVOLUTION-LIST-SHOW-ADDRESSES:TRUE
+EMAIL;X-EVOLUTION-DEST-CONTACT-UID="urn:uuid:11111111-2222-4333-8444-555555555555";X-EVOLUTION-DEST-NAME="Henri François Dubois";X-EVOLUTION-DEST-EMAIL=henri.dubois@aerospatiale.example:Henri François Dubois <henri.dubois@aerospatiale.example>
+EMAIL;X-EVOLUTION-DEST-CONTACT-UID="urn:uuid:66666666-7777-4888-8999-000000000000";X-EVOLUTION-DEST-EMAIL=marie.dubois@aerospatiale.example:marie.dubois@aerospatiale.example
+EMAIL;X-EVOLUTION-DEST-CONTACT-UID=pas-id-LOCAL-MEMBER-03:pas-id-LOCAL-MEMBER-03
+EMAIL;X-EVOLUTION-DEST-NAME=External Reviewer;X-EVOLUTION-DEST-EMAIL=reviewer@partner.example:External Reviewer <reviewer@partner.example>
+EMAIL;X-EVOLUTION-DEST-EMAIL=auditor@partner.example:auditor@partner.example
+NOTE;X-JMAP-KEY=n1:Release sign-off distribution list.
+CATEGORIES:Engineering,Release
+END:VCARD

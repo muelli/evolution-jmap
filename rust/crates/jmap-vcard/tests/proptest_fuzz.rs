@@ -12,7 +12,10 @@ use jmap_proto::contacts::{
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
     Relation, Title,
 };
-use jmap_vcard::{card_to_vcard, vcard_to_card};
+use jmap_vcard::{
+    GROUP_KIND, VENDOR_BARE_MEMBERS, VENDOR_LIST_SHOW_ADDRESSES, VENDOR_MEMBER_DETAILS,
+    card_to_vcard, vcard_to_card,
+};
 use proptest::prelude::*;
 use serde_json::json;
 
@@ -673,6 +676,8 @@ prop_compose! {
             Just("X-EVOLUTION-BLOG-URL".to_string()),
             Just("X-EVOLUTION-VIDEO-URL".to_string()),
             Just("X-EVOLUTION-FILE-AS".to_string()),
+            Just("X-EVOLUTION-LIST".to_string()),
+            Just("X-EVOLUTION-LIST-SHOW-ADDRESSES".to_string()),
             Just("FILE-AS".to_string()),
             Just("X-FILE-AS".to_string()),
             Just("X-ABLabel".to_string()),
@@ -1078,6 +1083,18 @@ fn identify_oscillating_card_field(card2: &ContactCard, card3: &ContactCard) -> 
         return format!(
             "Field 'related_to' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
             card2.related_to, card3.related_to
+        );
+    }
+    if card2.kind != card3.kind {
+        return format!(
+            "Field 'kind' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.kind, card3.kind
+        );
+    }
+    if card2.members != card3.members {
+        return format!(
+            "Field 'members' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.members, card3.members
         );
     }
     if card2.extra != card3.extra {
@@ -1926,5 +1943,172 @@ proptest! {
             assert_vcard_fixpoint(&vcard2, &vcard3)?;
             assert_card_fixpoint(&parsed2, &parsed3)?;
         }
+    }
+
+    #[test]
+    fn prop_fixpoint_contact_group_domain(
+        list_name in prop_oneof![
+            "[A-Z][a-zA-Z0-9 _-]{1,20}",
+            Just("Core Maintainers".to_string()),
+            Just("Release, Team; 2026".to_string()),
+        ],
+        show_addresses in prop::option::of(any::<bool>()),
+        members in prop::collection::btree_map(
+            prop_oneof![
+                "[a-zA-Z0-9_:-]{1,24}",
+                Just("urn:uuid:11111111-2222-4333-8444-555555555555".to_string()),
+                Just("pas-id-6890AB12".to_string()),
+                Just(" leading".to_string()),
+                Just("trailing ".to_string()),
+                Just("".to_string()),
+            ],
+            any::<bool>(),
+            0..6,
+        ),
+        member_details in prop::collection::btree_map(
+            "[a-zA-Z0-9_:-]{1,24}",
+            (
+                prop::option::of(prop_oneof![
+                    "[A-Za-z0-9 .,_-]{1,20}",
+                    Just("Alice Smith".to_string()),
+                    Just("Dr. <Strange>, Jr.".to_string()),
+                    Just("".to_string()),
+                ]),
+                prop::option::of(prop_oneof![
+                    "[a-z0-9._+-]{1,12}@[a-z0-9.-]{1,12}\\.example",
+                    Just("alice@example.com".to_string()),
+                    Just("".to_string()),
+                ]),
+            ),
+            0..4,
+        ),
+        bare_members in prop::collection::vec(
+            (
+                prop::option::of(prop_oneof![
+                    "[A-Za-z0-9 .,_-]{1,20}",
+                    Just("External Guest".to_string()),
+                    Just("Doe, Jane".to_string()),
+                    Just("".to_string()),
+                ]),
+                prop_oneof![
+                    "[a-z0-9._+-]{1,12}@[a-z0-9.-]{1,12}\\.example",
+                    Just("guest@example.com".to_string()),
+                    Just(" leading@example.com".to_string()),
+                    Just("".to_string()),
+                ],
+            ),
+            0..4,
+        ),
+    ) {
+        let mut extra = BTreeMap::new();
+        if let Some(show) = show_addresses {
+            extra.insert(VENDOR_LIST_SHOW_ADDRESSES.to_string(), json!(show));
+        }
+        let mut details_obj = serde_json::Map::new();
+        for (uid, (name_opt, email_opt)) in member_details {
+            let mut entry = serde_json::Map::new();
+            if let Some(n) = name_opt {
+                entry.insert("name".to_string(), json!(n));
+            }
+            if let Some(e) = email_opt {
+                entry.insert("email".to_string(), json!(e));
+            }
+            if !entry.is_empty() {
+                details_obj.insert(uid, serde_json::Value::Object(entry));
+            }
+        }
+        if !details_obj.is_empty() {
+            extra.insert(
+                VENDOR_MEMBER_DETAILS.to_string(),
+                serde_json::Value::Object(details_obj),
+            );
+        }
+        let mut bare_arr = Vec::new();
+        for (name_opt, email) in bare_members {
+            let mut entry = serde_json::Map::new();
+            if let Some(n) = name_opt {
+                entry.insert("name".to_string(), json!(n));
+            }
+            entry.insert("email".to_string(), json!(email));
+            bare_arr.push(serde_json::Value::Object(entry));
+        }
+        if !bare_arr.is_empty() {
+            extra.insert(
+                VENDOR_BARE_MEMBERS.to_string(),
+                serde_json::Value::Array(bare_arr),
+            );
+        }
+
+        let mut card = ContactCard::default();
+        card.id = Some("C-GROUP".into());
+        card.uid = Some("urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".to_owned());
+        card.kind = Some(GROUP_KIND.to_owned());
+        card.name = Some({
+            let mut n = Name::default();
+            n.full = Some(list_name);
+            n
+        });
+        card.members = (!members.is_empty()).then_some(members);
+        card.extra = extra;
+
+        let vcard1 = card_to_vcard(&card);
+        prop_assert!(vcard1.contains("X-EVOLUTION-LIST:TRUE\r\n"));
+
+        let parsed1 = vcard_to_card(&vcard1).expect("parse group vcard1");
+        prop_assert_eq!(parsed1.kind.as_deref(), Some(GROUP_KIND));
+
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("parse group vcard2");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_evolution_contact_list_vcard_domain(
+        list_name in "[A-Z][a-zA-Z0-9 _-]{1,20}",
+        show_line in prop_oneof![
+            Just("X-EVOLUTION-LIST-SHOW-ADDRESSES:TRUE\r\n"),
+            Just("X-EVOLUTION-LIST-SHOW-ADDRESSES:FALSE\r\n"),
+            Just("x-evolution-list-show-addresses:true\r\n"),
+            Just(""),
+        ],
+        email_lines in prop::collection::vec(
+            prop_oneof![
+                Just("EMAIL;X-EVOLUTION-DEST-CONTACT-UID=pas-id-1;X-EVOLUTION-DEST-NAME=\"Alice Smith\";X-EVOLUTION-DEST-EMAIL=alice@example.com:Alice Smith <alice@example.com>".to_string()),
+                Just("EMAIL;X-EVOLUTION-DEST-CONTACT-UID=\"urn:uuid:11111111-2222-4333-8444-555555555555\";X-EVOLUTION-DEST-EMAIL=bob@example.com:bob@example.com".to_string()),
+                Just("EMAIL;X-EVOLUTION-DEST-CONTACT-UID=pas-id-2:Carol Danvers <carol@example.com>".to_string()),
+                Just("EMAIL;X-EVOLUTION-DEST-CONTACT-UID=pas-id-3:pas-id-3".to_string()),
+                Just("EMAIL;X-EVOLUTION-DEST-CONTACT-UID=pas-id-4:".to_string()),
+                Just("EMAIL;X-EVOLUTION-CONTACT-LIST-UID=legacy-uid-1:Dave <dave@example.com>".to_string()),
+                Just("EMAIL;X-EVOLUTION-DEST-NAME=\"External Guest\";X-EVOLUTION-DEST-EMAIL=guest@example.com:External Guest <guest@example.com>".to_string()),
+                Just("EMAIL;X-EVOLUTION-DEST-EMAIL=bare@example.com:bare@example.com".to_string()),
+                Just("EMAIL:Plain Person <plain@example.com>".to_string()),
+                Just("EMAIL:solo@example.com".to_string()),
+            ],
+            0..6,
+        ),
+    ) {
+        let mut raw_vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:list-fuzz-1\r\nFN:{list_name}\r\nX-EVOLUTION-LIST:TRUE\r\n{show_line}"
+        );
+        for line in email_lines {
+            raw_vcard.push_str(&line);
+            raw_vcard.push_str("\r\n");
+        }
+        raw_vcard.push_str("END:VCARD\r\n");
+
+        let parsed1 = vcard_to_card(&raw_vcard).expect("parse contact list raw_vcard");
+        prop_assert_eq!(parsed1.kind.as_deref(), Some(GROUP_KIND));
+
+        let vcard1 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard1).expect("reparse contact list vcard1");
+        let vcard2 = card_to_vcard(&parsed2);
+        let parsed3 = vcard_to_card(&vcard2).expect("reparse contact list vcard2");
+        let vcard3 = card_to_vcard(&parsed3);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed2, &parsed3)?;
     }
 }

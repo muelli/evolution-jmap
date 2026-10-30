@@ -15,14 +15,15 @@ use jmap_proto::contacts::{
     Relation, SchedulingAddress, Title,
 };
 use jmap_vcard::{
-    VCardError, address_label, anniversary_date, card_to_vcard, maps_context, maps_phone_feature,
+    GROUP_KIND, VCardError, VENDOR_BARE_MEMBERS, VENDOR_LIST_SHOW_ADDRESSES, VENDOR_MEMBER_DETAILS,
+    address_label, anniversary_date, card_to_vcard, maps_context, maps_phone_feature,
     online_service_handle, online_service_uri, restore_address_components, restore_name_components,
     same_photo, same_service, states_a_point_in_time, states_address, states_address_component,
     states_anniversary, states_assistant, states_calendar, states_context, states_email,
-    states_file_as, states_keyword, states_link, states_manager, states_media, states_name,
-    states_name_component, states_nickname, states_note, states_nothing_but_the_marriage,
-    states_online_service, states_org_unit, states_organization, states_phone,
-    states_phone_feature, states_spouse, states_title, title_kind, vcard_to_card,
+    states_file_as, states_group_kind, states_keyword, states_link, states_manager, states_media,
+    states_member, states_name, states_name_component, states_nickname, states_note,
+    states_nothing_but_the_marriage, states_online_service, states_org_unit, states_organization,
+    states_phone, states_phone_feature, states_spouse, states_title, title_kind, vcard_to_card,
 };
 use serde_json::{Value, json};
 
@@ -5679,10 +5680,15 @@ fn vcard_apple_and_eds_group_list_extensions_characterization() {
         card2.name.as_ref().and_then(|n| n.full.as_deref()),
         Some("Release Coordinators")
     );
-    let emails = card2.emails.expect("emails");
+    assert_eq!(card2.kind.as_deref(), Some(GROUP_KIND));
+    assert_eq!(card2.emails, None);
     assert_eq!(
-        emails.values().next().map(|e| e.address.as_str()),
-        Some("rel-coord@example.com")
+        card2.extra.get(VENDOR_LIST_SHOW_ADDRESSES),
+        Some(&json!(false))
+    );
+    assert_eq!(
+        card2.extra.get(VENDOR_BARE_MEMBERS),
+        Some(&json!([{"email": "rel-coord@example.com"}]))
     );
 }
 
@@ -7526,8 +7532,8 @@ fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
         "X-EVOLUTION-RADIO:+49 30 22222\r\n",
         "X-EVOLUTION-TELEX:+49 30 33333\r\n",
         "X-EVOLUTION-TTYTDD:+49 30 44444\r\n",
-        // EDS contact list markers (E_CONTACT_IS_LIST)
-        "X-EVOLUTION-LIST:TRUE\r\n",
+        // Non-list marker (E_CONTACT_IS_LIST is FALSE on individual cards)
+        "X-EVOLUTION-LIST:FALSE\r\n",
         "X-EVOLUTION-LIST-SHOW-ADDRESSES:FALSE\r\n",
         "X-EVOLUTION-DEST-EMAIL:group-dest@example.com\r\n",
         "END:VCARD\r\n"
@@ -23720,4 +23726,194 @@ fn pref_parameter_rank_is_normalized_to_flag_in_eds_profile() {
         parsed, reparsed,
         "profile reaches fixed point after one pass"
     );
+}
+
+#[test]
+fn evolution_contact_list_golden_fixture_roundtrips_group_members_and_bare_addresses() {
+    let vcard_text = read_fixture("evolution_contact_list_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Evolution contact list fixture");
+
+    assert_eq!(
+        card.id.as_ref().map(|id| id.as_str()),
+        Some("pas-id-GROUP-2026-1030-0001")
+    );
+    assert_eq!(
+        card.uid.as_deref(),
+        Some("urn:uuid:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+    );
+    assert_eq!(card.kind.as_deref(), Some(GROUP_KIND));
+    assert!(states_group_kind(card.kind.as_deref()));
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Core Maintainers")
+    );
+    assert_eq!(card.emails, None);
+
+    let members = card.members.as_ref().expect("group members map");
+    assert_eq!(members.len(), 3);
+    assert_eq!(
+        members.get("urn:uuid:11111111-2222-4333-8444-555555555555"),
+        Some(&true)
+    );
+    assert_eq!(
+        members.get("urn:uuid:66666666-7777-4888-8999-000000000000"),
+        Some(&true)
+    );
+    assert_eq!(members.get("pas-id-LOCAL-MEMBER-03"), Some(&true));
+
+    assert_eq!(
+        card.extra.get(VENDOR_LIST_SHOW_ADDRESSES),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        card.extra.get(VENDOR_BARE_MEMBERS),
+        Some(&json!([
+            {
+                "name": "External Reviewer",
+                "email": "reviewer@partner.example"
+            },
+            {
+                "email": "auditor@partner.example"
+            }
+        ]))
+    );
+    assert_eq!(
+        card.extra.get(VENDOR_MEMBER_DETAILS),
+        Some(&json!({
+            "urn:uuid:11111111-2222-4333-8444-555555555555": {
+                "name": "Henri François Dubois",
+                "email": "henri.dubois@aerospatiale.example"
+            },
+            "urn:uuid:66666666-7777-4888-8999-000000000000": {
+                "email": "marie.dubois@aerospatiale.example"
+            }
+        }))
+    );
+
+    let emitted = card_to_vcard(&card);
+    let unfolded_emitted = unfolded(&emitted);
+    assert!(unfolded_emitted.contains("X-EVOLUTION-LIST:TRUE\r\n"));
+    assert!(unfolded_emitted.contains("X-EVOLUTION-LIST-SHOW-ADDRESSES:TRUE\r\n"));
+    assert!(unfolded_emitted.contains(
+        "EMAIL;X-EVOLUTION-DEST-CONTACT-UID=pas-id-LOCAL-MEMBER-03:pas-id-LOCAL-MEMBER-03\r\n"
+    ));
+    assert!(unfolded_emitted.contains(
+        "EMAIL;X-EVOLUTION-DEST-CONTACT-UID=\"urn:uuid:11111111-2222-4333-8444-555555555555\";X-EVOLUTION-DEST-NAME=\"Henri François Dubois\";X-EVOLUTION-DEST-EMAIL=henri.dubois@aerospatiale.example:Henri François Dubois <henri.dubois@aerospatiale.example>\r\n"
+    ));
+    assert!(unfolded_emitted.contains(
+        "EMAIL;X-EVOLUTION-DEST-CONTACT-UID=\"urn:uuid:66666666-7777-4888-8999-000000000000\";X-EVOLUTION-DEST-EMAIL=marie.dubois@aerospatiale.example:marie.dubois@aerospatiale.example\r\n"
+    ));
+    assert!(unfolded_emitted.contains(
+        "EMAIL;X-EVOLUTION-DEST-NAME=\"External Reviewer\";X-EVOLUTION-DEST-EMAIL=reviewer@partner.example:External Reviewer <reviewer@partner.example>\r\n"
+    ));
+    assert!(unfolded_emitted.contains(
+        "EMAIL;X-EVOLUTION-DEST-EMAIL=auditor@partner.example:auditor@partner.example\r\n"
+    ));
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted contact list vcard");
+    assert_eq!(reparsed, card);
+    assert_eq!(card_to_vcard(&reparsed), emitted);
+}
+
+#[test]
+fn pure_jscontact_group_card_from_server_roundtrips_with_empty_extra() {
+    let mut card = ContactCard::default();
+    card.id = Some("group-server-1".into());
+    card.uid = Some("urn:uuid:99999999-8888-4777-8666-555555555555".to_owned());
+    card.card_type = Some("Card".to_owned());
+    card.version = Some("1.0".to_owned());
+    card.kind = Some(GROUP_KIND.to_owned());
+    card.name = Some({
+        let mut n = Name::default();
+        n.full = Some("Server Group".to_owned());
+        n
+    });
+    card.members = Some(BTreeMap::from([
+        (
+            "urn:uuid:11111111-2222-4333-8444-555555555555".to_owned(),
+            true,
+        ),
+        (
+            "urn:uuid:22222222-3333-4444-8555-666666666666".to_owned(),
+            true,
+        ),
+    ]));
+
+    let vcard = card_to_vcard(&card);
+    let unfolded_vcard = unfolded(&vcard);
+    assert!(unfolded_vcard.contains("X-EVOLUTION-LIST:TRUE\r\n"));
+    assert!(!unfolded_vcard.contains("X-EVOLUTION-LIST-SHOW-ADDRESSES"));
+    assert!(unfolded_vcard.contains(
+        "EMAIL;X-EVOLUTION-DEST-CONTACT-UID=\"urn:uuid:11111111-2222-4333-8444-555555555555\":urn:uuid:11111111-2222-4333-8444-555555555555\r\n"
+    ));
+
+    let back = vcard_to_card(&vcard).expect("parse server group vcard");
+    assert_eq!(back, card);
+    assert!(back.extra.is_empty());
+}
+
+#[test]
+fn group_card_parses_eds_angle_address_destinations_without_explicit_dest_email_params() {
+    // EDS `e_destination_export_to_vcard_attribute` can write `Name <email>` in the
+    // `EMAIL` value with `X-EVOLUTION-DEST-CONTACT-UID` as the only parameter.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:eds-angle-group\r\n",
+        "FN:Angle Address List\r\n",
+        "X-EVOLUTION-LIST:TRUE\r\n",
+        "EMAIL;X-EVOLUTION-DEST-CONTACT-UID=member-1:Alice Smith <alice@example.com>\r\n",
+        "EMAIL;X-EVOLUTION-CONTACT-LIST-UID=member-2:bob@example.com\r\n",
+        "EMAIL:\"Carol, Jr.\" <carol@example.com>\r\n",
+        "EMAIL:dave@example.com\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse angle address list");
+    assert_eq!(card.kind.as_deref(), Some(GROUP_KIND));
+    assert_eq!(
+        card.members,
+        Some(BTreeMap::from([
+            ("member-1".to_owned(), true),
+            ("member-2".to_owned(), true),
+        ]))
+    );
+    assert_eq!(
+        card.extra.get(VENDOR_MEMBER_DETAILS),
+        Some(&json!({
+            "member-1": {
+                "name": "Alice Smith",
+                "email": "alice@example.com"
+            },
+            "member-2": {
+                "email": "bob@example.com"
+            }
+        }))
+    );
+    assert_eq!(
+        card.extra.get(VENDOR_BARE_MEMBERS),
+        Some(&json!([
+            {
+                "name": "Carol, Jr.",
+                "email": "carol@example.com"
+            },
+            {
+                "email": "dave@example.com"
+            }
+        ]))
+    );
+
+    let emitted = card_to_vcard(&card);
+    let back = vcard_to_card(&emitted).expect("reparse emitted angle address list");
+    assert_eq!(back, card);
+}
+
+#[test]
+fn states_member_rejects_inactive_empty_or_whitespace_edged_uids() {
+    assert!(states_member("uid-1", true));
+    assert!(!states_member("uid-1", false));
+    assert!(!states_member("", true));
+    assert!(!states_member(" uid-1", true));
+    assert!(!states_member("uid-1 ", true));
+    assert!(!states_member("uid\r1", true));
+    assert!(!states_member("uid\u{7}1", true));
 }

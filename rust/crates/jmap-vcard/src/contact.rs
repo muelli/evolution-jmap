@@ -171,6 +171,57 @@ const X_EVOLUTION_BLOG_URL: &str = "X-EVOLUTION-BLOG-URL";
 /// EDS line that keeps `E_CONTACT_VIDEO_URL`.
 const X_EVOLUTION_VIDEO_URL: &str = "X-EVOLUTION-VIDEO-URL";
 
+/// RFC 9553 §2.1.4 card kind for a contact group.
+pub const GROUP_KIND: &str = "group";
+
+/// EDS line that marks an `E_CONTACT_IS_LIST` contact list.
+pub const X_EVOLUTION_LIST: &str = "X-EVOLUTION-LIST";
+
+/// EDS line that keeps `E_CONTACT_LIST_SHOW_ADDRESSES`.
+pub const X_EVOLUTION_LIST_SHOW_ADDRESSES: &str = "X-EVOLUTION-LIST-SHOW-ADDRESSES";
+
+/// EDS parameter that stores the contact UID of a list destination.
+pub const X_EVOLUTION_DEST_CONTACT_UID: &str = "X-EVOLUTION-DEST-CONTACT-UID";
+
+/// Legacy EDS parameter alias for [`X_EVOLUTION_DEST_CONTACT_UID`].
+const X_EVOLUTION_CONTACT_LIST_UID: &str = "X-EVOLUTION-CONTACT-LIST-UID";
+
+/// EDS parameter that stores the email address of a list destination.
+pub const X_EVOLUTION_DEST_EMAIL: &str = "X-EVOLUTION-DEST-EMAIL";
+
+/// EDS parameter that stores the display name of a list destination.
+pub const X_EVOLUTION_DEST_NAME: &str = "X-EVOLUTION-DEST-NAME";
+
+/// Vendor property that stores `X-EVOLUTION-LIST-SHOW-ADDRESSES` on a group card.
+pub const VENDOR_LIST_SHOW_ADDRESSES: &str = "evolution-jmap.org:listShowAddresses";
+
+/// Vendor property that stores bare list addresses without a contact UID.
+pub const VENDOR_BARE_MEMBERS: &str = "evolution-jmap.org:bareMembers";
+
+/// Vendor property that stores display names and emails for contact-backed members.
+pub const VENDOR_MEMBER_DETAILS: &str = "evolution-jmap.org:memberDetails";
+
+/// Whether `kind` states a JSContact group card (`kind: "group"`).
+pub fn states_group_kind(kind: Option<&str>) -> bool {
+    kind == Some(GROUP_KIND)
+}
+
+/// Whether a group `members` entry can be emitted on a contact list `EMAIL` line.
+pub fn states_member(member_uid: &str, active: bool) -> bool {
+    active && is_drawable_group_token(member_uid)
+}
+
+/// Whether `value` is non-empty, trim-stable, and free of control characters that
+/// `calcard` drops from parameter values.
+fn is_drawable_group_token(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains('\r')
+        && !edged_with_whitespace(value)
+        && !value
+            .chars()
+            .any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
+}
+
 /// JSContact calendar kinds mapped to vCard lines EDS preserves.
 const CALENDAR_KINDS: [(&str, &str); 2] = [("calendar", "CALURI"), ("freeBusy", "FBURL")];
 
@@ -964,28 +1015,32 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    let mut emails: Vec<_> = card.emails.iter().flatten().collect();
-    emails.sort_by_key(|(key, email)| (email.pref.unwrap_or(u32::MAX), *key));
-    for (key, email) in emails {
-        if !states_email(email) {
-            continue;
+    if states_group_kind(card.kind.as_deref()) {
+        emit_group_entries(card, &mut entries);
+    } else {
+        let mut emails: Vec<_> = card.emails.iter().flatten().collect();
+        emails.sort_by_key(|(key, email)| (email.pref.unwrap_or(u32::MAX), *key));
+        for (key, email) in emails {
+            if !states_email(email) {
+                continue;
+            }
+            let mut params = vec![VCardParameter::new(
+                VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                param_value_text(key),
+            )];
+            for type_name in type_names(&CONTEXTS, email.contexts.as_ref()) {
+                params.push(VCardParameter::typ(param_value_text(type_name)));
+            }
+            if email.pref.is_some() {
+                // vCard 3.0 has no ranking, only a preferred flag.
+                params.push(VCardParameter::typ(param_value_text("PREF")));
+            }
+            entries.push(
+                VCardEntry::new(VCardProperty::Email)
+                    .with_params(params)
+                    .with_value(email.address.clone()),
+            );
         }
-        let mut params = vec![VCardParameter::new(
-            VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-            param_value_text(key),
-        )];
-        for type_name in type_names(&CONTEXTS, email.contexts.as_ref()) {
-            params.push(VCardParameter::typ(param_value_text(type_name)));
-        }
-        if email.pref.is_some() {
-            // vCard 3.0 has no ranking, only a preferred flag.
-            params.push(VCardParameter::typ(param_value_text("PREF")));
-        }
-        entries.push(
-            VCardEntry::new(VCardProperty::Email)
-                .with_params(params)
-                .with_value(email.address.clone()),
-        );
     }
 
     let mut phones: Vec<_> = card.phones.iter().flatten().collect();
@@ -1430,9 +1485,17 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
             .filter(|value| !value.is_empty())
     };
 
+    let is_group = card.entries.iter().any(|entry| {
+        entry.name.as_str().eq_ignore_ascii_case(X_EVOLUTION_LIST)
+            && entry_text(entry).trim().eq_ignore_ascii_case("TRUE")
+    });
+
     let name = read_name(&card.entries);
     let mut nicknames = BTreeMap::new();
     let mut emails = BTreeMap::new();
+    let mut members = BTreeMap::new();
+    let mut member_details = Map::new();
+    let mut bare_members = Vec::new();
     let mut phones = BTreeMap::new();
     let mut addresses = BTreeMap::new();
     let mut organizations = BTreeMap::new();
@@ -1471,6 +1534,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     continue;
                 }
                 nicknames.insert(entry_key(entry, "k", &nicknames), nickname);
+            }
+            "EMAIL" if is_group => {
+                read_group_email_entry(entry, &mut members, &mut member_details, &mut bare_members);
             }
             "EMAIL" => {
                 let address = entry_text(entry);
@@ -1935,9 +2001,247 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     contact_card.speak_to_as = None;
     contact_card.preferred_languages = None;
     contact_card.localizations = None;
-    contact_card.kind = None;
-    contact_card.extra = BTreeMap::new();
+    let mut card_extra = BTreeMap::new();
+    if is_group {
+        contact_card.kind = Some(GROUP_KIND.to_owned());
+        contact_card.members = (!members.is_empty()).then_some(members);
+        if let Some(show) = read_list_show_addresses(&card.entries) {
+            card_extra.insert(VENDOR_LIST_SHOW_ADDRESSES.to_owned(), Value::Bool(show));
+        }
+        if !member_details.is_empty() {
+            card_extra.insert(
+                VENDOR_MEMBER_DETAILS.to_owned(),
+                Value::Object(member_details),
+            );
+        }
+        if !bare_members.is_empty() {
+            card_extra.insert(VENDOR_BARE_MEMBERS.to_owned(), Value::Array(bare_members));
+        }
+    } else {
+        contact_card.kind = None;
+    }
+    contact_card.extra = card_extra;
     Ok(contact_card)
+}
+
+/// Emit `X-EVOLUTION-LIST` lines and destination `EMAIL` lines for a group card.
+fn emit_group_entries(card: &ContactCard, entries: &mut Vec<VCardEntry>) {
+    entries.push(
+        VCardEntry::new(VCardProperty::Other(X_EVOLUTION_LIST.to_owned()))
+            .with_value("TRUE".to_owned()),
+    );
+    if let Some(show) = card
+        .extra
+        .get(VENDOR_LIST_SHOW_ADDRESSES)
+        .and_then(Value::as_bool)
+    {
+        let flag = if show { "TRUE" } else { "FALSE" };
+        entries.push(
+            VCardEntry::new(VCardProperty::Other(
+                X_EVOLUTION_LIST_SHOW_ADDRESSES.to_owned(),
+            ))
+            .with_value(flag.to_owned()),
+        );
+    }
+
+    let details_map = card
+        .extra
+        .get(VENDOR_MEMBER_DETAILS)
+        .and_then(Value::as_object);
+    for (member_uid, &active) in card.members.iter().flatten() {
+        if !states_member(member_uid, active) {
+            continue;
+        }
+        let detail_obj = details_map
+            .and_then(|m| m.get(member_uid))
+            .and_then(Value::as_object);
+        let name = detail_obj
+            .and_then(|d| d.get("name"))
+            .and_then(Value::as_str)
+            .filter(|s| is_drawable_group_token(s));
+        let email = detail_obj
+            .and_then(|d| d.get("email"))
+            .and_then(Value::as_str)
+            .filter(|s| is_drawable_group_token(s));
+
+        let mut params = vec![VCardParameter::new(
+            VCardParameterName::Other(X_EVOLUTION_DEST_CONTACT_UID.to_owned()),
+            param_value_text(member_uid),
+        )];
+        if let Some(name) = name {
+            params.push(VCardParameter::new(
+                VCardParameterName::Other(X_EVOLUTION_DEST_NAME.to_owned()),
+                param_value_text(name),
+            ));
+        }
+        if let Some(email) = email {
+            params.push(VCardParameter::new(
+                VCardParameterName::Other(X_EVOLUTION_DEST_EMAIL.to_owned()),
+                param_value_text(email),
+            ));
+        }
+        let value = match (name, email) {
+            (Some(n), Some(e)) => format!("{n} <{e}>"),
+            (None, Some(e)) => e.to_owned(),
+            _ => member_uid.clone(),
+        };
+        entries.push(
+            VCardEntry::new(VCardProperty::Email)
+                .with_params(params)
+                .with_value(value),
+        );
+    }
+
+    if let Some(bare_list) = card
+        .extra
+        .get(VENDOR_BARE_MEMBERS)
+        .and_then(Value::as_array)
+    {
+        for item in bare_list {
+            let Some(obj) = item.as_object() else {
+                continue;
+            };
+            let Some(email) = obj
+                .get("email")
+                .and_then(Value::as_str)
+                .filter(|s| is_drawable_group_token(s))
+            else {
+                continue;
+            };
+            let name = obj
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| is_drawable_group_token(s));
+            let mut params = Vec::new();
+            if let Some(name) = name {
+                params.push(VCardParameter::new(
+                    VCardParameterName::Other(X_EVOLUTION_DEST_NAME.to_owned()),
+                    param_value_text(name),
+                ));
+            }
+            params.push(VCardParameter::new(
+                VCardParameterName::Other(X_EVOLUTION_DEST_EMAIL.to_owned()),
+                param_value_text(email),
+            ));
+            let value = match name {
+                Some(n) => format!("{n} <{email}>"),
+                None => email.to_owned(),
+            };
+            entries.push(
+                VCardEntry::new(VCardProperty::Email)
+                    .with_params(params)
+                    .with_value(value),
+            );
+        }
+    }
+}
+
+/// Read `X-EVOLUTION-LIST-SHOW-ADDRESSES` as a boolean when present.
+fn read_list_show_addresses(entries: &[VCardEntry]) -> Option<bool> {
+    let raw = entries
+        .iter()
+        .find(|entry| {
+            entry
+                .name
+                .as_str()
+                .eq_ignore_ascii_case(X_EVOLUTION_LIST_SHOW_ADDRESSES)
+        })
+        .map(entry_text)?;
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("TRUE") {
+        Some(true)
+    } else if trimmed.eq_ignore_ascii_case("FALSE") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// Read one `EMAIL` destination line from an `X-EVOLUTION-LIST:TRUE` vCard.
+fn read_group_email_entry(
+    entry: &VCardEntry,
+    members: &mut BTreeMap<String, bool>,
+    member_details: &mut Map<String, Value>,
+    bare_members: &mut Vec<Value>,
+) {
+    let member_uid = entry_param(entry, X_EVOLUTION_DEST_CONTACT_UID)
+        .or_else(|| entry_param(entry, X_EVOLUTION_CONTACT_LIST_UID))
+        .filter(|uid| states_member(uid, true));
+    let dest_name =
+        entry_param(entry, X_EVOLUTION_DEST_NAME).filter(|s| is_drawable_group_token(s));
+    let dest_email =
+        entry_param(entry, X_EVOLUTION_DEST_EMAIL).filter(|s| is_drawable_group_token(s));
+    let raw_text = entry_text(entry);
+
+    if let Some(uid) = member_uid {
+        members.insert(uid.clone(), true);
+        let (parsed_name, parsed_email) =
+            if raw_text == uid || dest_email.as_deref() == Some(raw_text.as_str()) {
+                (None, None)
+            } else {
+                parse_destination_value(&raw_text)
+            };
+        let name = dest_name.or(parsed_name);
+        let email = dest_email.or_else(|| parsed_email.filter(|e| e != &uid));
+        if name.is_some() || email.is_some() {
+            let detail = member_details
+                .entry(uid)
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(obj) = detail.as_object_mut() {
+                if let Some(n) = name {
+                    obj.insert("name".to_owned(), Value::String(n));
+                }
+                if let Some(e) = email {
+                    obj.insert("email".to_owned(), Value::String(e));
+                }
+            }
+        }
+    } else {
+        let (parsed_name, parsed_email) = if dest_email.as_deref() == Some(raw_text.as_str()) {
+            (None, None)
+        } else {
+            parse_destination_value(&raw_text)
+        };
+        let name = dest_name.or(parsed_name);
+        let email = dest_email.or(parsed_email);
+        let Some(email) = email.filter(|s| is_drawable_group_token(s)) else {
+            return;
+        };
+        let mut bare = Map::new();
+        if let Some(n) = name.filter(|s| is_drawable_group_token(s)) {
+            bare.insert("name".to_owned(), Value::String(n));
+        }
+        bare.insert("email".to_owned(), Value::String(email));
+        bare_members.push(Value::Object(bare));
+    }
+}
+
+/// Extract display name and email from an EDS destination `EMAIL` value.
+fn parse_destination_value(raw: &str) -> (Option<String>, Option<String>) {
+    let trimmed = raw.trim();
+    if let Some(without_gt) = trimmed.strip_suffix('>')
+        && let Some((before, inside)) = without_gt.rsplit_once('<')
+    {
+        let email = inside.trim().to_owned();
+        let Some(email) = Some(email).filter(|s| is_drawable_group_token(s)) else {
+            return (None, None);
+        };
+        let name_trimmed = before.trim();
+        let unquoted = if name_trimmed.len() >= 2
+            && name_trimmed.starts_with('"')
+            && name_trimmed.ends_with('"')
+        {
+            name_trimmed[1..name_trimmed.len() - 1]
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+        } else {
+            name_trimmed.to_owned()
+        };
+        let name = Some(unquoted).filter(|s| is_drawable_group_token(s));
+        return (name, Some(email));
+    }
+    let email = Some(trimmed.to_owned()).filter(|s| is_drawable_group_token(s));
+    (None, email)
 }
 
 /// Decode one `PHOTO` line into one media entry.
