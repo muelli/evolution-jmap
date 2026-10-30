@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-30 00:03+0000\n"
+"POT-Creation-Date: 2026-10-30 21:25+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -448,6 +448,35 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/external_photo/display_ext.rs:59
 msgid "Load image"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:86
+msgid "Add at least one action"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:88
+msgid "The value cannot contain a newline or NUL character"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:91
+msgid ""
+"A header name cannot contain a colon, space, control or non-ASCII character"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:93
+msgid "Size must be a whole number of kilobytes greater than zero"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:97
+msgid "'More than' and 'Less than' compare the message size only"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:99
+msgid "The address must contain exactly one '@'"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:102
+msgid "Discard cannot be combined with Move to, Copy to or Redirect"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/link.rs:52

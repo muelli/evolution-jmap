@@ -42,6 +42,7 @@ glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
 jmap-config = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 

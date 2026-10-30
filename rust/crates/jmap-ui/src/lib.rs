@@ -30,6 +30,7 @@
 
 pub mod dispatch;
 pub mod external_photo;
+pub mod filters;
 pub mod link;
 pub mod module;
 pub mod send_later;
