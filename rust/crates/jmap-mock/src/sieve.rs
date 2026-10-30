@@ -505,7 +505,18 @@ fn validate_script_for_set(
     let Some(blob) = account.blobs.get(&script.blob_id) else {
         return Ok(());
     };
-    validate_sieve_blob(&blob.data, settings)
+    match validate_sieve_blob(&blob.data, settings) {
+        Err(set_error) if is_invalid_utf8_sieve_error(&set_error) => Ok(()),
+        result => result,
+    }
+}
+
+fn is_invalid_utf8_sieve_error(set_error: &SetError) -> bool {
+    set_error.error_type == sieve_set_error::INVALID_SIEVE
+        && set_error
+            .description
+            .as_deref()
+            .is_some_and(|description| description.contains("not valid UTF-8"))
 }
 
 fn validate_script_name(script: &SieveScript, settings: &SieveSettings) -> Result<(), SetError> {

@@ -133,10 +133,16 @@ fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Op
 }
 
 /// Handle `Mailbox/set` (RFC 8621 §2.5) with full-request mailbox validation.
-pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+pub fn mailbox_set(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
     let request: SetRequest<Mailbox> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_mailboxes_default_unsubscribed;
     let account = account_mut(state, &request.account_id)?;
+    let is_owner =
+        caller.is_none_or(|caller| account.current_user_principal_id.as_ref() == Some(caller));
 
     let old_state = account.mailboxes.state();
     if let Some(expected) = &request.if_in_state
@@ -166,6 +172,17 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
         if let Err(refusal) = placeable(&tree, None, &mailbox) {
             not_created.insert(creation_id, refusal);
             continue;
+        }
+        if !is_owner {
+            let caller = caller.expect("is_owner is false only when caller is Some");
+            if !may_create_mailbox_child(&tree, caller, mailbox.parent_id.as_ref()) {
+                not_created.insert(
+                    creation_id,
+                    SetError::new(error::set::FORBIDDEN)
+                        .with_description("you do not have write access to this mailbox"),
+                );
+                continue;
+            }
         }
         let id = account.mailboxes.alloc_id();
         mailbox.id = Some(id.clone());
@@ -197,6 +214,17 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
             not_updated.insert(id, SetError::new(error::set::INVALID_PATCH));
             continue;
         };
+        if !is_owner {
+            let caller = caller.expect("is_owner is false only when caller is Some");
+            if !may_update_mailbox(existing, caller, patch_map.keys().map(String::as_str)) {
+                not_updated.insert(
+                    id,
+                    SetError::new(error::set::FORBIDDEN)
+                        .with_description("you do not have write access to this mailbox"),
+                );
+                continue;
+            }
+        }
         let mut value = serde_json::to_value(existing).map_err(|e| {
             MethodError::new(error::method::SERVER_FAIL).with_description(e.to_string())
         })?;
@@ -239,9 +267,23 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
     let mut destroyed: Vec<Id> = Vec::new();
     let mut not_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
     for id in request.destroy.unwrap_or_default() {
-        if !tree.contains_key(&id) {
+        let Some(existing) = tree.get(&id).cloned() else {
             not_destroyed.insert(id, SetError::new(error::set::NOT_FOUND));
             continue;
+        };
+        if !is_owner {
+            let caller = caller.expect("is_owner is false only when caller is Some");
+            let may_delete = mailbox_rights_for(&existing, caller)
+                .and_then(|rights| rights.may_delete)
+                .unwrap_or(false);
+            if !may_delete {
+                not_destroyed.insert(
+                    id,
+                    SetError::new(error::set::FORBIDDEN)
+                        .with_description("you do not have write access to this mailbox"),
+                );
+                continue;
+            }
         }
         if tree
             .values()
@@ -300,6 +342,48 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
         response = response.with_not_destroyed(not_destroyed);
     }
     to_result(&response)
+}
+
+fn may_create_mailbox_child(
+    tree: &BTreeMap<Id, Mailbox>,
+    caller: &Id,
+    parent_id: Option<&Id>,
+) -> bool {
+    let Some(parent_id) = parent_id else {
+        return false;
+    };
+    tree.get(parent_id)
+        .and_then(|parent| mailbox_rights_for(parent, caller))
+        .and_then(|rights| rights.may_create_child)
+        .unwrap_or(false)
+}
+
+fn may_update_mailbox<'a>(
+    mailbox: &Mailbox,
+    caller: &Id,
+    patch_keys: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    let rights = mailbox_rights_for(mailbox, caller);
+    let may_rename = rights
+        .as_ref()
+        .and_then(|rights| rights.may_rename)
+        .unwrap_or(false);
+    let may_share = rights
+        .as_ref()
+        .and_then(|rights| rights.may_share)
+        .unwrap_or(false);
+
+    let mut needs_rename = false;
+    let mut needs_share = false;
+    for key in patch_keys {
+        if key == "shareWith" || key.starts_with("shareWith/") {
+            needs_share = true;
+            continue;
+        }
+        needs_rename = true;
+    }
+
+    (!needs_share || may_share) && (!needs_rename || may_rename)
 }
 
 /// Validate RFC 8621 §2 mailbox placement rules for `of` (`None` on create).

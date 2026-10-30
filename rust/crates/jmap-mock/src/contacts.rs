@@ -104,14 +104,82 @@ fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Opti
 
 /// `AddressBook/set` (RFC 9610 §2): create, update, and destroy books.
 /// This mock requires a non-empty `name` and a server-set `id` on create.
-pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
-    let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
+pub fn address_book_set(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
+    let mut request: SetRequest<AddressBook> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
     let terse_collection_create = state.terse_collection_create;
     let id_omitting_collection_create = state.id_omitting_collection_create;
     let reject_collection_create = state.reject_collection_create;
     let account_id = request.account_id.clone();
     let account = account_mut(state, &account_id)?;
+    let is_owner =
+        caller.is_none_or(|caller| account.current_user_principal_id.as_ref() == Some(caller));
+
+    let mut forbidden_created: BTreeMap<String, SetError> = BTreeMap::new();
+    let mut forbidden_updated: BTreeMap<Id, SetError> = BTreeMap::new();
+    let mut forbidden_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
+    if !is_owner {
+        let caller = caller.expect("is_owner is false only when caller is Some");
+
+        if let Some(create) = request.create.take() {
+            for (creation_id, _) in create {
+                forbidden_created.insert(
+                    creation_id,
+                    SetError::new(error::set::FORBIDDEN)
+                        .with_description("you do not have write access to this address book"),
+                );
+            }
+        }
+
+        if let Some(update) = request.update.take() {
+            let mut allowed = BTreeMap::new();
+            for (id, patch) in update {
+                let Some(book) = account.address_books.get(&id) else {
+                    allowed.insert(id, patch);
+                    continue;
+                };
+                let may_write =
+                    book_rights_for(book, caller).is_some_and(|rights| rights.is_writable());
+                if may_write {
+                    allowed.insert(id, patch);
+                } else {
+                    forbidden_updated.insert(
+                        id,
+                        SetError::new(error::set::FORBIDDEN)
+                            .with_description("you do not have write access to this address book"),
+                    );
+                }
+            }
+            request.update = (!allowed.is_empty()).then_some(allowed);
+        }
+
+        if let Some(destroy) = request.destroy.take() {
+            let mut allowed = Vec::new();
+            for id in destroy {
+                let Some(book) = account.address_books.get(&id) else {
+                    allowed.push(id);
+                    continue;
+                };
+                let may_delete = book_rights_for(book, caller)
+                    .and_then(|rights| rights.may_delete)
+                    .unwrap_or(false);
+                if may_delete {
+                    allowed.push(id);
+                } else {
+                    forbidden_destroyed.insert(
+                        id,
+                        SetError::new(error::set::FORBIDDEN)
+                            .with_description("you do not have write access to this address book"),
+                    );
+                }
+            }
+            request.destroy = (!allowed.is_empty()).then_some(allowed);
+        }
+    }
 
     // Keep pre-update `shareWith` values for `ShareNotification` comparisons.
     let old_share_with: BTreeMap<Id, Option<BTreeMap<Id, AddressBookRights>>> = request
@@ -126,7 +194,7 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
         })
         .collect();
 
-    let response = simple_set(&mut account.address_books, request, |id, book| {
+    let mut response = simple_set(&mut account.address_books, request, |id, book| {
         if book.id.is_some() {
             return Err(SetError::new(error::set::INVALID_PROPERTIES)
                 .with_description("id is set by the server and must not be given in a create"));
@@ -145,6 +213,25 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
         }
         Ok(())
     })?;
+
+    if !forbidden_created.is_empty() {
+        response
+            .not_created
+            .get_or_insert_with(BTreeMap::new)
+            .extend(forbidden_created);
+    }
+    if !forbidden_updated.is_empty() {
+        response
+            .not_updated
+            .get_or_insert_with(BTreeMap::new)
+            .extend(forbidden_updated);
+    }
+    if !forbidden_destroyed.is_empty() {
+        response
+            .not_destroyed
+            .get_or_insert_with(BTreeMap::new)
+            .extend(forbidden_destroyed);
+    }
 
     if let Some(updated) = &response.updated {
         for id in updated.keys() {
