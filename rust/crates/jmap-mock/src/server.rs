@@ -12,10 +12,11 @@ use jmap_proto::blob::BlobCapability;
 use jmap_proto::session::{
     Account, CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE,
     CAPABILITY_CYRUS_MAIL, CAPABILITY_MAIL, CAPABILITY_PRINCIPALS, CAPABILITY_PRINCIPALS_OWNER,
-    CAPABILITY_QUOTA, CAPABILITY_SIEVE, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
-    Session,
+    CAPABILITY_QUOTA, CAPABILITY_SIEVE, CAPABILITY_SUBMISSION, CAPABILITY_TASKS,
+    CAPABILITY_VACATION_RESPONSE, Session,
 };
 use jmap_proto::sieve::SieveCapability;
+use jmap_proto::tasks::TasksCapability;
 use serde_json::{Value, json};
 
 use crate::auth::AuthConfig;
@@ -128,6 +129,7 @@ pub struct MockServerBuilder {
     sieve_max_size_script_name: u64,
     sieve_extensions: Vec<String>,
     sieve_vacation_script: bool,
+    tasks_enabled: bool,
     faults: Faults,
 }
 
@@ -159,6 +161,12 @@ impl MockServerBuilder {
     pub fn no_sieve(mut self) -> Self {
         self.omitted_capabilities
             .insert(CAPABILITY_SIEVE.to_owned());
+        self
+    }
+
+    /// Enable `TaskList/*` and `Task/*` methods and advertise task capabilities.
+    pub fn tasks(mut self) -> Self {
+        self.tasks_enabled = true;
         self
     }
 
@@ -495,6 +503,12 @@ impl MockServerBuilder {
         state.sieve_max_size_script_name = self.sieve_max_size_script_name;
         state.sieve_extensions = self.sieve_extensions;
         state.sieve_vacation_script = self.sieve_vacation_script;
+        state.tasks_enabled = self.tasks_enabled;
+        if !self.tasks_enabled {
+            state
+                .omitted_capabilities
+                .insert(CAPABILITY_TASKS.to_owned());
+        }
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -573,6 +587,7 @@ impl MockServer {
                 "vacation".to_owned(),
             ],
             sieve_vacation_script: false,
+            tasks_enabled: false,
             faults: Faults::default(),
         }
     }
@@ -1092,6 +1107,7 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_QUOTA,
     CAPABILITY_SIEVE,
     CAPABILITY_BLOB,
+    CAPABILITY_TASKS,
 ];
 
 /// Build a capability object for `capability`.
@@ -1120,6 +1136,14 @@ fn capability_value(capability: &str, state: &ServerState) -> Value {
                 .with_supported_digest_algorithms(["sha-256", "sha-512"]),
         )
         .expect("BlobCapability serializes")
+    } else if capability == CAPABILITY_TASKS {
+        serde_json::to_value(
+            TasksCapability::new()
+                .with_max_tasks_per_get(state.objects_in_get())
+                .with_max_tasks_per_set(128)
+                .with_max_task_lists_per_get(state.objects_in_get()),
+        )
+        .expect("TasksCapability serializes")
     } else {
         json!({})
     }

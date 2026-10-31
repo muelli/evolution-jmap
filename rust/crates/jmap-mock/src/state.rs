@@ -110,6 +110,8 @@ pub struct ServerState {
     pub sieve_vacation_script: bool,
     /// Name of the server-managed vacation Sieve script.
     pub sieve_vacation_script_name: String,
+    /// Enable `TaskList/*` and `Task/*` methods and session capability output.
+    pub tasks_enabled: bool,
     /// Connected `/eventsource` subscribers for state-change delivery.
     pub event_source: EventSourceHub,
 }
@@ -176,6 +178,7 @@ impl ServerState {
             ],
             sieve_vacation_script: false,
             sieve_vacation_script_name: "vacation".to_owned(),
+            tasks_enabled: false,
             event_source: EventSourceHub::new(),
         }
     }
@@ -211,6 +214,8 @@ impl ServerState {
                     ("AddressBook", account.address_books.state_counter()),
                     ("Calendar", account.calendars.state_counter()),
                     ("CalendarEvent", account.calendar_events.state_counter()),
+                    ("TaskList", account.task_lists.state_counter()),
+                    ("Task", account.tasks.state_counter()),
                     (
                         "ShareNotification",
                         account.share_notifications.state_counter(),
@@ -361,6 +366,8 @@ pub struct AccountState {
     pub contact_cards: Store<jmap_proto::contacts::ContactCard>,
     pub calendars: Store<jmap_proto::calendars::Calendar>,
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
+    pub task_lists: Store<jmap_proto::tasks::TaskList>,
+    pub tasks: Store<jmap_proto::tasks::Task>,
     pub principals: Store<jmap_proto::principals::Principal>,
     /// `ShareNotification` records (RFC 9670 §4), keyed by recipient id.
     /// Keep this per account because this mock maps one bearer token to one account.
@@ -415,6 +422,8 @@ impl AccountState {
             contact_cards: Store::new("C"),
             calendars: Store::new("CAL"),
             calendar_events: Store::new("CE"),
+            task_lists: Store::new("TL"),
+            tasks: Store::new("TK"),
             principals: Store::new("P"),
             share_notifications: Store::new("SN"),
             calendar_event_notifications: Store::new("CEN"),

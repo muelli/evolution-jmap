@@ -67,6 +67,74 @@ fn share_mode_seeds_a_non_personal_shared_account_with_collection_grants() {
 }
 
 #[test]
+fn share_mode_seeds_read_only_and_read_write_mailboxes_with_messages() {
+    let mockd = Mockd::spawn(&["--share"]);
+
+    let response = api(
+        &mockd,
+        json!({
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [
+                ["Mailbox/get", {"accountId": "A2", "properties": ["id", "name", "shareWith"]}, "m1"],
+                ["Email/query", {"accountId": "A2"}, "q1"]
+            ]
+        }),
+    );
+
+    let mailbox_list = response["methodResponses"][0][1]["list"]
+        .as_array()
+        .expect("mailboxes list");
+    let shared_mailboxes: Vec<&Value> = mailbox_list
+        .iter()
+        .filter(|mailbox| mailbox["shareWith"].is_object())
+        .collect();
+    assert_eq!(shared_mailboxes.len(), 2, "{response}");
+
+    let read_only = shared_mailboxes
+        .iter()
+        .find(|mailbox| mailbox["name"] == json!("Shared Read Only"))
+        .expect("read-only shared mailbox");
+    assert_eq!(
+        read_only["shareWith"]["P-grantee"]["mayReadItems"],
+        json!(true)
+    );
+    assert_eq!(
+        read_only["shareWith"]["P-grantee"]["mayAddItems"],
+        Value::Null
+    );
+
+    let read_write = shared_mailboxes
+        .iter()
+        .find(|mailbox| mailbox["name"] == json!("Shared Read Write"))
+        .expect("read-write shared mailbox");
+    assert_eq!(
+        read_write["shareWith"]["P-grantee"]["mayReadItems"],
+        json!(true)
+    );
+    assert_eq!(
+        read_write["shareWith"]["P-grantee"]["mayAddItems"],
+        json!(true)
+    );
+    assert_eq!(
+        read_write["shareWith"]["P-grantee"]["mayRemoveItems"],
+        json!(true)
+    );
+    assert_eq!(
+        read_write["shareWith"]["P-grantee"]["maySetSeen"],
+        json!(true)
+    );
+    assert_eq!(
+        read_write["shareWith"]["P-grantee"]["maySetKeywords"],
+        json!(true)
+    );
+
+    let query_ids = response["methodResponses"][1][1]["ids"]
+        .as_array()
+        .expect("email query ids");
+    assert_eq!(query_ids.len(), 4, "{response}");
+}
+
+#[test]
 fn help_lists_the_share_flag() {
     let output = Command::new(env!("CARGO_BIN_EXE_jmap-mockd"))
         .arg("--help")

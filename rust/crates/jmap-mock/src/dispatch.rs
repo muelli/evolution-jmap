@@ -247,15 +247,20 @@ fn handle_method(
     created_ids: &std::collections::BTreeMap<String, jmap_proto::Id>,
     caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
+    if !state.tasks_enabled && is_tasks_method(name) {
+        return Err(MethodError::new(error::method::UNKNOWN_METHOD));
+    }
+
     match name {
         "Core/echo" => Ok(arguments),
         "Mailbox/get" => crate::mail::mailbox_get(state, arguments, caller),
         "Mailbox/set" => crate::mail::mailbox_set(state, arguments, caller),
-        "Email/get" => crate::mail::email_get(state, arguments),
+        "Email/get" => crate::mail::email_get(state, arguments, caller),
         "Thread/get" => crate::mail::thread_get(state, arguments),
         "SearchSnippet/get" => crate::mail::search_snippet_get(state, arguments),
-        "Email/query" => crate::mail::email_query(state, arguments),
-        "Email/set" => crate::mail::email_set(state, arguments),
+        "Email/query" => crate::mail::email_query(state, arguments, caller),
+        "Email/set" => crate::mail::email_set(state, arguments, caller),
+        "Email/changes" => crate::mail::email_changes(state, arguments, caller),
         "Email/import" => crate::mail::email_import(state, arguments),
         "Email/parse" => crate::mail::email_parse(state, arguments),
         "AddressBook/get" => crate::contacts::address_book_get(state, arguments, caller),
@@ -264,13 +269,20 @@ fn handle_method(
         "ContactCard/set" => crate::contacts::contact_card_set(state, arguments),
         "ContactCard/query" => crate::contacts::contact_card_query(state, arguments),
         "ContactCard/parse" => crate::contacts::contact_card_parse(state, arguments),
+        "TaskList/get" => crate::tasks::task_list_get(state, arguments),
+        "TaskList/set" => crate::tasks::task_list_set(state, arguments),
+        "TaskList/query" => crate::tasks::task_list_query(state, arguments),
+        "Task/get" => crate::tasks::task_get(state, arguments),
+        "Task/set" => crate::tasks::task_set(state, arguments),
+        "Task/query" => crate::tasks::task_query(state, arguments),
         "Mailbox/changes"
-        | "Email/changes"
         | "Thread/changes"
         | "AddressBook/changes"
         | "ContactCard/changes"
         | "Calendar/changes"
         | "CalendarEvent/changes"
+        | "TaskList/changes"
+        | "Task/changes"
         | "EmailSubmission/changes"
         | "ParticipantIdentity/changes" => {
             let request: jmap_proto::methods::ChangesRequest = parse_arguments(arguments)?;
@@ -281,12 +293,6 @@ fn handle_method(
             let mut response = match name {
                 "Mailbox/changes" => crate::setops::store_changes(
                     &account.mailboxes,
-                    request,
-                    page_size,
-                    unrecognized_state_shape,
-                ),
-                "Email/changes" => crate::setops::store_changes(
-                    &account.emails,
                     request,
                     page_size,
                     unrecognized_state_shape,
@@ -311,6 +317,18 @@ fn handle_method(
                 ),
                 "Calendar/changes" => crate::setops::store_changes(
                     &account.calendars,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
+                "TaskList/changes" => crate::setops::store_changes(
+                    &account.task_lists,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
+                "Task/changes" => crate::setops::store_changes(
+                    &account.tasks,
                     request,
                     page_size,
                     unrecognized_state_shape,
@@ -391,6 +409,20 @@ fn handle_method(
         "SieveScript/validate" => crate::sieve::sieve_script_validate(state, arguments),
         _ => Err(MethodError::new(error::method::UNKNOWN_METHOD)),
     }
+}
+
+fn is_tasks_method(name: &str) -> bool {
+    matches!(
+        name,
+        "TaskList/get"
+            | "TaskList/set"
+            | "TaskList/query"
+            | "TaskList/changes"
+            | "Task/get"
+            | "Task/set"
+            | "Task/query"
+            | "Task/changes"
+    )
 }
 
 /// Parse method arguments into a typed request.
