@@ -9,11 +9,11 @@
 # Each dependency lists the version installed on the host where the package
 # was built, as recorded by ci/deb-dependencies.sh.
 # The output is deterministic: the timestamp comes from SOURCE_DATE_EPOCH, and
-# the script adds no random serialNumber.
+# serialNumber is a UUID v5 derived from the version string, not a random one.
 # A rerun on the same tag produces an identical SBOM, like the binaries.
 # This script needs only cargo metadata (no compile step, no EDS headers), jq,
-# and dpkg-deb. All three tools are already present on the standard release
-# runner.
+# dpkg-deb and python3. All four tools are already present on the standard
+# release runner.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -23,6 +23,15 @@ out="$3"        # path for the output SBOM file
 : "${SOURCE_DATE_EPOCH:?set SOURCE_DATE_EPOCH}"
 ts="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
 ver="${GITHUB_REF_NAME:-$(git describe --tags --always)}"
+# CycloneDX's serialNumber is a URN UUID. actions/attest's CycloneDX detector
+# (actions/attest@v4.2.2, src/sbom.ts) requires bomFormat, specVersion AND
+# serialNumber all present and truthy, so a document without one fails
+# release.yml's SBOM attestation with "Unsupported SBOM format". A random
+# UUID would break this script's reproducibility, so this derives a UUID v5
+# from the version string instead: the same tag always gets the same one.
+serial="urn:uuid:$(python3 -c \
+  "import sys, uuid; print(uuid.uuid5(uuid.NAMESPACE_URL, sys.argv[1]))" \
+  "https://github.com/muelli/evolution-jmap/releases/tag/${ver}")"
 
 # Step 1: convert the .deb's Depends field into pkg:deb components.
 # Each Depends clause becomes one component, named and versioned as resolved
@@ -71,16 +80,18 @@ trap 'find rust -name "*.cdx.json" -delete' EXIT
 crate_components="$(find rust -name '*.cdx.json' -print0 \
   | xargs -0 jq -s '[.[].components[]] | unique_by(.purl // .name)')"
 
-# Step 3: assemble one deterministic document. It has no serialNumber field
-# and a fixed timestamp.
+# Step 3: assemble one deterministic document: a fixed timestamp and a
+# serialNumber derived only from the version string.
 jq -n \
   --argjson crates "$crate_components" \
   --argjson deb "$deb_components" \
   --arg ts "$ts" \
-  --arg ver "$ver" '
+  --arg ver "$ver" \
+  --arg serial "$serial" '
   {
     bomFormat: "CycloneDX",
     specVersion: "1.5",
+    serialNumber: $serial,
     version: 1,
     metadata: {
       timestamp: $ts,

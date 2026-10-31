@@ -202,6 +202,18 @@ if(_crates LESS 1)
 	message(FATAL_ERROR "the SBOM lists no Rust crates")
 endif()
 
+# actions/attest's CycloneDX detector (actions/attest@v4.2.2, src/sbom.ts)
+# requires bomFormat, specVersion AND serialNumber all present and truthy; a
+# document missing serialNumber fails release.yml's SBOM attestation with
+# "Unsupported SBOM format" (ROADMAP item 158).
+jq_raw("${_sbom}" ".serialNumber" _serial)
+# CMake's regex has no {n} repetition, so each hex group is spelled out.
+set(_hex "[0-9a-f]")
+set(_uuid_re "^urn:uuid:${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}-${_hex}${_hex}${_hex}${_hex}-${_hex}${_hex}${_hex}${_hex}-${_hex}${_hex}${_hex}${_hex}-${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}${_hex}$")
+if(NOT _serial MATCHES "${_uuid_re}")
+	message(FATAL_ERROR "sbom.sh wrote no well-formed CycloneDX serialNumber: '${_serial}'")
+endif()
+
 # sbom.sh must refuse a resolution recorded for a different package.
 fake_deb(other "libc6")
 sbom("${STAGE_DIR}/other.deb" "${_good_json}" "${STAGE_DIR}/stale.cdx.json" _result)
