@@ -81,6 +81,7 @@ use jmap_backend_core::trampoline::{guard, guard_bool};
 use jmap_book_sync::BookSync;
 use jmap_client::Credentials;
 
+use crate::capabilities;
 use crate::connect::{self, ACCEPTED_AUTH_RESULT, write_auth_result};
 use crate::marshal;
 use crate::ops::{self, Outcome};
@@ -883,7 +884,8 @@ pub fn required_fields() -> &'static str {
     ""
 }
 
-/// Answers backend property values, advertising supported-fields and required-fields.
+/// Answers backend property values: supported-fields, required-fields, and
+/// capabilities (with `contact-lists` added; see [`capabilities`]).
 unsafe extern "C" fn get_backend_property(
     backend: *mut EBookBackend,
     prop_name: *const gchar,
@@ -901,12 +903,20 @@ unsafe extern "C" fn get_backend_property(
                 }
             }
 
-            match parent_class()
+            let inherited = match parent_class()
                 .and_then(|class| class.parent_class.parent_class.impl_get_backend_property)
             {
                 Some(chain_up) => chain_up(backend, prop_name),
                 None => ptr::null_mut(),
+            };
+            if prop_name.is_null()
+                || CStr::from_ptr(prop_name) != capabilities::CAPABILITIES_PROPERTY
+            {
+                return inherited;
             }
+            let caps = capabilities::capabilities(read_string(inherited).as_deref());
+            g_free(inherited.cast());
+            dup_string(&caps)
         })
     }
 }
