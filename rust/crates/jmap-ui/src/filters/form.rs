@@ -17,7 +17,8 @@ use jmap_proto::Id;
 use jmap_proto::sieve::SieveCapability;
 
 use crate::filters::io::{ActivationChange, ActivationTarget, Loaded, SavePlan, ScriptWrite};
-use crate::filters::rules::Folder;
+use crate::filters::rules::{Folder, MANAGED_SCRIPT_NAME};
+use crate::filters::script;
 
 /// The names under which a server keeps the script of its own vacation
 /// responder: `vacation` on Stalwart, the capability URN on Cyrus. A script
@@ -105,6 +106,9 @@ pub struct FiltersForm {
     /// Every mailbox of the account, for the folder combo of the rule
     /// dialog.
     folders: Vec<Folder>,
+    /// The server's `sieveExtensions`, for `script::generate_script`/`load`
+    /// and the rule dialog's action gating.
+    extensions: Vec<String>,
 }
 
 impl FiltersForm {
@@ -119,6 +123,7 @@ impl FiltersForm {
             form.max_size_script = Some(capability.max_size_script);
             form.max_number_scripts = capability.max_number_scripts;
             form.max_size_script_name = max_size_script_name(capability);
+            form.extensions = capability.sieve_extensions.clone();
         }
         for script in loaded.scripts {
             if script.script.is_active {
@@ -151,6 +156,18 @@ impl FiltersForm {
     /// The mailboxes a rule can file into, as the load found them.
     pub fn folders(&self) -> &[Folder] {
         &self.folders
+    }
+
+    /// The server's `sieveExtensions`, for the rule dialog's action gating.
+    pub fn extensions(&self) -> &[String] {
+        &self.extensions
+    }
+
+    /// True when the server's Sieve capability lists `mailboxid` (RFC 9042).
+    pub fn has_mailboxid(&self) -> bool {
+        self.extensions
+            .iter()
+            .any(|extension| extension == "mailboxid")
     }
 
     pub fn selected(&self) -> Option<usize> {
@@ -212,13 +229,21 @@ impl FiltersForm {
         }
         self.check_name(name, None)?;
         self.next_key += 1;
+        // A script with the managed name starts as an empty rules list
+        // (D5's header, no rules) instead of the plain starter, so it opens
+        // straight into rules mode rather than as flat text with no header.
+        let text = if name == MANAGED_SCRIPT_NAME {
+            script::generate_script(&[], self.has_mailboxid())
+        } else {
+            NEW_SCRIPT_TEXT.to_owned()
+        };
         self.entries.push(ScriptEntry {
             id: None,
             key: format!("new{}", self.next_key),
             original_name: String::new(),
             original_text: String::new(),
             name: name.to_owned(),
-            text: NEW_SCRIPT_TEXT.to_owned(),
+            text,
             active: false,
             protected: false,
         });
@@ -516,6 +541,22 @@ mod tests {
 
         assert_eq!(form.add("123456789"), Err(NAME_TOO_LONG));
         assert!(form.add("12345678").is_ok());
+    }
+
+    #[test]
+    fn adding_the_managed_name_starts_an_empty_rules_script() {
+        let mut form = form(Vec::new());
+
+        let row = form
+            .add(crate::filters::rules::MANAGED_SCRIPT_NAME)
+            .unwrap();
+
+        let expected = script::generate_script(&[], false);
+        assert_eq!(form.entries()[row].text, expected);
+        assert_eq!(
+            crate::filters::script::load(&expected, false),
+            Some(Vec::new())
+        );
     }
 
     #[test]

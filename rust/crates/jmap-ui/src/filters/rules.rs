@@ -82,6 +82,9 @@ pub struct Folder {
     pub name: String,
 }
 
+/// The name of the one script the rules editor manages (decision D5).
+pub const MANAGED_SCRIPT_NAME: &str = "evolution-jmap";
+
 /// The error for a rule with no action.
 pub const NO_ACTION: &CStr = N_(c"Add at least one action");
 /// The error for a value that holds a newline or a NUL character.

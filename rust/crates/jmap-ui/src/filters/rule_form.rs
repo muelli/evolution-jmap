@@ -105,6 +105,43 @@ impl RulesEditor {
         self.selected = Some(index + 1);
         Ok(())
     }
+
+    /// Flips the enabled flag of row `index` in place. The page's rule list
+    /// owns this flag; [`crate::filters::rule_dialog::edit_rule`] never
+    /// changes it.
+    pub fn toggle_enabled(&mut self, index: usize) -> Result<(), &'static CStr> {
+        let rule = self.rules.get_mut(index).ok_or(NO_RULE_SELECTED)?;
+        rule.enabled = !rule.enabled;
+        Ok(())
+    }
+
+    /// Which buttons the rules list offers for the current selection. Add is
+    /// not here: it needs no selection, only rules mode itself.
+    pub fn buttons(&self) -> RuleButtons {
+        let Some(index) = self.selected else {
+            return RuleButtons::default();
+        };
+        let enabled = self.rules[index].enabled;
+        RuleButtons {
+            edit: true,
+            remove: true,
+            up: index > 0,
+            down: index + 1 < self.rules.len(),
+            enable: !enabled,
+            disable: enabled,
+        }
+    }
+}
+
+/// Which buttons of the rules list are usable for the current selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RuleButtons {
+    pub edit: bool,
+    pub remove: bool,
+    pub up: bool,
+    pub down: bool,
+    pub enable: bool,
+    pub disable: bool,
 }
 
 /// One rule's own dialog: every field it edits, staged until OK.
@@ -304,6 +341,60 @@ mod tests {
         let mut editor = RulesEditor::from_rules(vec![rule("a")]);
         assert_eq!(editor.move_up(5), Err(NO_RULE_SELECTED));
         assert_eq!(editor.move_down(5), Err(NO_RULE_SELECTED));
+    }
+
+    #[test]
+    fn toggle_enabled_flips_the_flag_in_place() {
+        let mut editor = RulesEditor::from_rules(vec![rule("a")]);
+        assert!(editor.rules()[0].enabled);
+
+        editor.toggle_enabled(0).unwrap();
+        assert!(!editor.rules()[0].enabled);
+
+        editor.toggle_enabled(0).unwrap();
+        assert!(editor.rules()[0].enabled);
+    }
+
+    #[test]
+    fn toggle_enabled_past_the_end_is_refused() {
+        let mut editor = RulesEditor::from_rules(vec![rule("a")]);
+        assert_eq!(editor.toggle_enabled(5), Err(NO_RULE_SELECTED));
+    }
+
+    #[test]
+    fn buttons_with_no_selection_offers_nothing() {
+        let editor = RulesEditor::from_rules(Vec::new());
+        assert_eq!(editor.buttons(), RuleButtons::default());
+    }
+
+    #[test]
+    fn buttons_at_the_only_row_disallows_both_moves() {
+        let editor = RulesEditor::from_rules(vec![rule("a")]);
+        let buttons = editor.buttons();
+        assert!(buttons.edit);
+        assert!(buttons.remove);
+        assert!(!buttons.up);
+        assert!(!buttons.down);
+        assert!(buttons.disable, "a fresh rule is enabled");
+        assert!(!buttons.enable);
+    }
+
+    #[test]
+    fn buttons_in_the_middle_allow_both_moves() {
+        let mut editor = RulesEditor::from_rules(vec![rule("a"), rule("b"), rule("c")]);
+        editor.select(Some(1));
+        let buttons = editor.buttons();
+        assert!(buttons.up);
+        assert!(buttons.down);
+    }
+
+    #[test]
+    fn buttons_reflect_a_disabled_rule() {
+        let mut editor = RulesEditor::from_rules(vec![rule("a")]);
+        editor.toggle_enabled(0).unwrap();
+        let buttons = editor.buttons();
+        assert!(buttons.enable);
+        assert!(!buttons.disable);
     }
 
     #[test]

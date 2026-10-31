@@ -33,10 +33,10 @@ use evo_sys::{
     GTK_ORIENTATION_VERTICAL, GTK_RESPONSE_CANCEL, GTK_RESPONSE_OK, GTK_SELECTION_BROWSE,
     GtkCellRenderer, GtkListStore, GtkTextBuffer, GtkTreeModel, GtkTreePath, GtkTreeSelection,
     GtkWidget, GtkWindow, e_mail_config_page_get_type, gtk_box_new, gtk_box_pack_start,
-    gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new, gtk_container_add,
-    gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run,
-    gtk_entry_new, gtk_label_new, gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget,
-    gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
+    gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new, gtk_check_button_new_with_mnemonic,
+    gtk_container_add, gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new,
+    gtk_dialog_run, gtk_entry_new, gtk_label_new, gtk_label_new_with_mnemonic,
+    gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
     gtk_list_store_insert_with_valuesv, gtk_list_store_newv, gtk_scrolled_window_get_type,
     gtk_text_view_get_buffer, gtk_text_view_new, gtk_text_view_set_editable,
     gtk_text_view_set_monospace, gtk_tree_path_free, gtk_tree_path_get_indices_with_depth,
@@ -46,8 +46,8 @@ use evo_sys::{
     gtk_tree_view_column_set_title, gtk_tree_view_get_selection, gtk_tree_view_new_with_model,
     gtk_tree_view_set_cursor, gtk_tree_view_set_headers_visible, gtk_widget_destroy,
     gtk_widget_get_toplevel, gtk_widget_set_hexpand, gtk_widget_set_sensitive,
-    gtk_widget_set_size_request, gtk_widget_set_vexpand, gtk_widget_show_all, gtk_window_get_type,
-    gtk_window_set_title, gtk_window_set_transient_for,
+    gtk_widget_set_size_request, gtk_widget_set_vexpand, gtk_widget_set_visible,
+    gtk_widget_show_all, gtk_window_get_type, gtk_window_set_title, gtk_window_set_transient_for,
 };
 use gio_sys::{
     GAsyncReadyCallback, GAsyncResult, GCancellable, GTask, g_io_error_quark, g_task_new,
@@ -70,10 +70,14 @@ use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, 
 use jmap_backend_core::trampoline::{guard, log_critical};
 
 use crate::dispatch;
-use crate::filters::form::{FiltersForm, NO_SCRIPT_SELECTED, ScriptEntry};
+use crate::filters::form::{Buttons, FiltersForm, NO_SCRIPT_SELECTED, ScriptEntry};
 use crate::filters::io::{self, Loaded, SavePlan};
+use crate::filters::rule_dialog;
+use crate::filters::rule_form::{self, NO_RULE_SELECTED, RuleDraft, RulesEditor};
+use crate::filters::rules::MANAGED_SCRIPT_NAME;
+use crate::filters::script;
 use crate::link::{self, AccountLink, SendSource};
-use crate::widget::{flag, get_text, set_text};
+use crate::widget::{flag, get_bool, get_text, set_bool, set_text};
 
 const NAME: &CStr = c"JmapFiltersPage";
 const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-filters-page-state");
@@ -98,19 +102,36 @@ const NAME_LABEL: &CStr = N_(c"_Name:");
 const CHECKING: &CStr = N_(c"Checking the script…");
 const SCRIPT_VALID: &CStr = N_(c"The script is valid.");
 
+/// The columns of the rules list: whether the rule runs, and its name.
+const RULE_COLUMN_ENABLED: c_int = 0;
+const RULE_COLUMN_NAME: c_int = 1;
+
+const ADD_RULE_TITLE: &CStr = N_(c"New Rule");
+const EDIT_RULE_TITLE: &CStr = N_(c"Edit Rule");
+const EDIT_AS_TEXT_LABEL: &CStr = N_(c"_Edit as text");
+const EXTERNAL_EDIT: &CStr = N_(c"This script was changed outside Evolution. It shows as text.");
+
 /// All page state, in a box as qdata. It holds the widget pointers (main
 /// thread only), the staged scripts, and the account link from the load.
 /// The `Arc` shares the link with the `GTask` submit threads.
 struct UiState {
     link: Option<Arc<AccountLink>>,
     form: FiltersForm,
-    /// The row whose source the text view currently holds.
+    /// The row whose source the text view or the rules list currently holds.
     showing: Option<usize>,
-    /// True while this page rewrites the list store. The selection handler
-    /// ignores the signals that rewrite emits.
+    /// The managed script's rules, while `showing` is it and rules mode is
+    /// the one in view. `None` for every other script, and for the managed
+    /// script while it fails to parse or the user forced text mode.
+    rules: Option<RulesEditor>,
+    /// True once the user ticks "Edit as text" for the script in `showing`.
+    /// Reset whenever `showing` changes.
+    force_text: bool,
+    /// True while this page rewrites a list store or a toggle button. The
+    /// selection and toggled handlers ignore the signals that rewrite emits.
     syncing: bool,
     store: *mut GtkListStore,
     view: *mut GtkWidget,
+    source_label: *mut GtkWidget,
     source_view: *mut GtkWidget,
     buffer: *mut GtkTextBuffer,
     status: *mut GtkWidget,
@@ -120,6 +141,17 @@ struct UiState {
     activate: *mut GtkWidget,
     deactivate: *mut GtkWidget,
     check: *mut GtkWidget,
+    edit_as_text: *mut GtkWidget,
+    rules_box: *mut GtkWidget,
+    rules_store: *mut GtkListStore,
+    rules_view: *mut GtkWidget,
+    rule_add: *mut GtkWidget,
+    rule_edit: *mut GtkWidget,
+    rule_remove: *mut GtkWidget,
+    rule_up: *mut GtkWidget,
+    rule_down: *mut GtkWidget,
+    rule_enable: *mut GtkWidget,
+    rule_disable: *mut GtkWidget,
 }
 
 /// The qdata of the page, while the page is alive.
@@ -249,16 +281,53 @@ unsafe fn build_widgets(page: *mut GObject) {
         let activate = add_button(page, buttons, N_(c"A_ctivate"), on_activate);
         let deactivate = add_button(page, buttons, N_(c"_Deactivate"), on_deactivate);
 
+        // Only the managed script offers rules mode; every other script
+        // shows this unchecked and insensitive.
+        let edit_as_text = gtk_check_button_new_with_mnemonic(translate_static(EDIT_AS_TEXT_LABEL));
+        gtk_box_pack_start(content.cast(), edit_as_text, GFALSE, GFALSE, 0);
+
         // The text-mode editor of decision D11: monospace, no highlighting.
         let source_view = gtk_text_view_new();
         gtk_text_view_set_monospace(source_view.cast(), GTRUE);
         gtk_widget_set_vexpand(source_view, GTRUE);
-        let label = gtk_label_new_with_mnemonic(translate_static(N_(c"_Script:")));
-        gtk_label_set_xalign(label.cast(), 0.0);
-        gtk_label_set_mnemonic_widget(label.cast(), source_view);
-        gtk_box_pack_start(content.cast(), label, GFALSE, GFALSE, 0);
+        let source_label = gtk_label_new_with_mnemonic(translate_static(N_(c"_Script:")));
+        gtk_label_set_xalign(source_label.cast(), 0.0);
+        gtk_label_set_mnemonic_widget(source_label.cast(), source_view);
+        gtk_box_pack_start(content.cast(), source_label, GFALSE, GFALSE, 0);
         gtk_box_pack_start(content.cast(), source_view, GTRUE, GTRUE, 0);
         let buffer = gtk_text_view_get_buffer(source_view.cast());
+
+        // The managed script's rules (step B of D3), shown instead of the
+        // text view while it parses and the user has not forced text mode.
+        let rules_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_box_pack_start(content.cast(), rules_box, GTRUE, GTRUE, 0);
+
+        let mut rule_types = [G_TYPE_STRING, G_TYPE_STRING];
+        let rules_store = gtk_list_store_newv(2, rule_types.as_mut_ptr());
+        let rules_view = gtk_tree_view_new_with_model(rules_store.cast::<GtkTreeModel>());
+        // SAFETY: as for the script list's store above: the view owns the
+        // only remaining reference once this one is released.
+        g_object_unref(rules_store.cast());
+        gtk_tree_view_set_headers_visible(rules_view.cast(), GTRUE);
+        add_text_column(rules_view, N_(c"Enabled"), RULE_COLUMN_ENABLED, false);
+        add_text_column(rules_view, N_(c"Name"), RULE_COLUMN_NAME, true);
+        gtk_widget_set_size_request(rules_view, -1, 160);
+        gtk_widget_set_hexpand(rules_view, GTRUE);
+        gtk_widget_set_vexpand(rules_view, GTRUE);
+        gtk_box_pack_start(rules_box.cast(), rules_view, GTRUE, GTRUE, 0);
+
+        let rule_selection = gtk_tree_view_get_selection(rules_view.cast());
+        gtk_tree_selection_set_mode(rule_selection, GTK_SELECTION_BROWSE);
+
+        let rule_buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+        gtk_box_pack_start(rules_box.cast(), rule_buttons, GFALSE, GFALSE, 0);
+        let rule_add = add_button(page, rule_buttons, N_(c"A_dd"), on_rule_add);
+        let rule_edit = add_button(page, rule_buttons, N_(c"_Edit"), on_rule_edit);
+        let rule_remove = add_button(page, rule_buttons, N_(c"Rem_ove"), on_rule_remove);
+        let rule_up = add_button(page, rule_buttons, N_(c"Move _Up"), on_rule_up);
+        let rule_down = add_button(page, rule_buttons, N_(c"Move Do_wn"), on_rule_down);
+        let rule_enable = add_button(page, rule_buttons, N_(c"E_nable"), on_rule_enable);
+        let rule_disable = add_button(page, rule_buttons, N_(c"Disa_ble"), on_rule_disable);
 
         let check = add_button(page, content, N_(c"C_heck"), on_check);
 
@@ -270,15 +339,40 @@ unsafe fn build_widgets(page: *mut GObject) {
             deactivate,
             check,
             source_view,
+            edit_as_text,
+            rule_add,
+            rule_edit,
+            rule_remove,
+            rule_up,
+            rule_down,
+            rule_enable,
+            rule_disable,
         ] {
             gtk_widget_set_sensitive(control, GFALSE);
         }
         gtk_widget_show_all(page.cast());
+        gtk_widget_set_visible(rules_box, GFALSE);
 
         g_signal_connect_data(
             selection.cast(),
             c"changed".as_ptr(),
             gcallback(on_selection_changed as unsafe extern "C" fn(*mut GObject, gpointer)),
+            page.cast(),
+            None,
+            0,
+        );
+        g_signal_connect_data(
+            rule_selection.cast(),
+            c"changed".as_ptr(),
+            gcallback(on_rule_selection_changed as unsafe extern "C" fn(*mut GObject, gpointer)),
+            page.cast(),
+            None,
+            0,
+        );
+        g_signal_connect_data(
+            edit_as_text.cast(),
+            c"toggled".as_ptr(),
+            gcallback(on_edit_as_text_toggled as unsafe extern "C" fn(*mut GObject, gpointer)),
             page.cast(),
             None,
             0,
@@ -290,9 +384,12 @@ unsafe fn build_widgets(page: *mut GObject) {
                 link: None,
                 form: FiltersForm::default(),
                 showing: None,
+                rules: None,
+                force_text: false,
                 syncing: false,
                 store,
                 view,
+                source_label,
                 source_view,
                 buffer,
                 status,
@@ -302,6 +399,17 @@ unsafe fn build_widgets(page: *mut GObject) {
                 activate,
                 deactivate,
                 check,
+                edit_as_text,
+                rules_box,
+                rules_store,
+                rules_view,
+                rule_add,
+                rule_edit,
+                rule_remove,
+                rule_up,
+                rule_down,
+                rule_enable,
+                rule_disable,
             }),
         );
     }
@@ -470,7 +578,7 @@ unsafe fn refresh(cell: &RefCell<UiState>) {
             } else {
                 String::new()
             };
-            append_row(store, name, &active);
+            append_row(store, COLUMN_NAME, name, COLUMN_ACTIVE, &active);
         }
         if let Some(row) = selected {
             set_cursor(view, row);
@@ -482,56 +590,223 @@ unsafe fn refresh(cell: &RefCell<UiState>) {
     unsafe { show_selected(cell) };
 }
 
-/// Puts the selected script's source in the text view and sets the
-/// sensitivity of every control.
+/// What one call to [`show_selected`] renders: computed once from the form
+/// and the staged [`RulesEditor`], then applied to the widgets with no
+/// borrow of the state held.
+struct ShowPlan {
+    script_text: String,
+    buttons: Buttons,
+    /// True when the managed script parses and the user has not forced text
+    /// mode: the rules list replaces the text view.
+    want_rules: bool,
+    /// The "Edit as text" check button is shown for the managed script only.
+    edit_as_text_visible: bool,
+    /// Insensitive while the script does not parse: there is no rules view
+    /// to switch back to.
+    edit_as_text_sensitive: bool,
+    edit_as_text_checked: bool,
+    /// Set the first time the selection lands on a managed script that does
+    /// not parse, so the user learns why rules mode is not available. Later
+    /// redraws of the same script leave the status label to whatever the
+    /// last action or Check wrote there.
+    status_note: Option<&'static CStr>,
+    rule_rows: Vec<(String, String)>,
+    rule_selected: Option<usize>,
+    rule_buttons: rule_form::RuleButtons,
+}
+
+/// Puts the selected script's source in the text view, or the managed
+/// script's rules in the rules list, and sets the sensitivity of every
+/// control.
 ///
 /// # Safety
 ///
 /// As [`refresh`].
 unsafe fn show_selected(cell: &RefCell<UiState>) {
-    let (buffer, text, buttons, controls) = {
+    let plan = {
         let mut ui = cell.borrow_mut();
         let row = ui.form.selected();
+        let script_changed = ui.showing != row;
         ui.showing = row;
-        let text = row
-            .and_then(|row| ui.form.entries().get(row))
-            .map(|entry| entry.text.clone())
+        if script_changed {
+            ui.force_text = false;
+            ui.rules = None;
+        }
+
+        let entry = row.and_then(|row| ui.form.entries().get(row));
+        let script_text = entry.map(|entry| entry.text.clone()).unwrap_or_default();
+        let is_managed =
+            entry.is_some_and(|entry| entry.name == MANAGED_SCRIPT_NAME && !entry.protected);
+        let has_mailboxid = ui.form.has_mailboxid();
+        let parsed = is_managed
+            .then(|| script::load(&script_text, has_mailboxid))
+            .flatten();
+        let can_parse = parsed.is_some();
+        if can_parse && !ui.force_text {
+            if ui.rules.is_none() {
+                ui.rules = parsed.map(RulesEditor::from_rules);
+            }
+        } else {
+            ui.rules = None;
+        }
+        let want_rules = ui.rules.is_some();
+
+        let rule_rows = ui
+            .rules
+            .as_ref()
+            .map(|editor| {
+                editor
+                    .rules()
+                    .iter()
+                    .map(|rule| {
+                        let enabled = if rule.enabled {
+                            translate(ACTIVE_MARK)
+                        } else {
+                            String::new()
+                        };
+                        (enabled, rule.name.clone())
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
-        let buttons = ui.form.buttons();
-        let controls = [
-            ui.add,
-            ui.rename,
-            ui.remove,
-            ui.activate,
-            ui.deactivate,
-            ui.check,
-            ui.source_view,
-        ];
-        (ui.buffer, text, buttons, controls)
+        let rule_selected = ui.rules.as_ref().and_then(RulesEditor::selected);
+        let rule_buttons = ui
+            .rules
+            .as_ref()
+            .map(RulesEditor::buttons)
+            .unwrap_or_default();
+
+        ShowPlan {
+            script_text,
+            buttons: ui.form.buttons(),
+            want_rules,
+            edit_as_text_visible: is_managed,
+            edit_as_text_sensitive: is_managed && can_parse,
+            edit_as_text_checked: is_managed && (!can_parse || ui.force_text),
+            status_note: (script_changed && is_managed && !can_parse).then_some(EXTERNAL_EDIT),
+            rule_rows,
+            rule_selected,
+            rule_buttons,
+        }
     };
-    let sensitive = [
-        buttons.add,
-        buttons.rename,
-        buttons.remove,
-        buttons.activate,
-        buttons.deactivate,
-        buttons.check,
-        buttons.view,
-    ];
-    let source_view = controls[6];
-    // SAFETY: the buffer and the controls are live children of the page, and
-    // no borrow of `cell` is held here.
+
+    let (
+        buffer,
+        source_label,
+        source_view,
+        edit_as_text,
+        rules_box,
+        rules_store,
+        rules_view,
+        script_controls,
+        rule_controls,
+    ) = {
+        let ui = cell.borrow();
+        (
+            ui.buffer,
+            ui.source_label,
+            ui.source_view,
+            ui.edit_as_text,
+            ui.rules_box,
+            ui.rules_store,
+            ui.rules_view,
+            [
+                ui.add,
+                ui.rename,
+                ui.remove,
+                ui.activate,
+                ui.deactivate,
+                ui.check,
+            ],
+            [
+                ui.rule_add,
+                ui.rule_edit,
+                ui.rule_remove,
+                ui.rule_up,
+                ui.rule_down,
+                ui.rule_enable,
+                ui.rule_disable,
+            ],
+        )
+    };
+
+    // SAFETY: every widget above is a live child of the page, and no borrow
+    // of `cell` is held across these calls.
     unsafe {
-        set_text(buffer.cast(), &text);
-        gtk_text_view_set_editable(source_view.cast(), flag(buttons.edit));
-        for (control, on) in controls.iter().zip(sensitive) {
+        let script_sensitive = [
+            plan.buttons.add,
+            plan.buttons.rename,
+            plan.buttons.remove,
+            plan.buttons.activate,
+            plan.buttons.deactivate,
+            plan.buttons.check,
+        ];
+        for (control, on) in script_controls.iter().zip(script_sensitive) {
             gtk_widget_set_sensitive(*control, flag(on));
+        }
+
+        gtk_widget_set_visible(source_label, flag(!plan.want_rules));
+        gtk_widget_set_visible(source_view, flag(!plan.want_rules));
+        gtk_widget_set_sensitive(source_view, flag(!plan.want_rules && plan.buttons.edit));
+        gtk_text_view_set_editable(source_view.cast(), flag(plan.buttons.edit));
+        set_text(
+            buffer.cast(),
+            if plan.want_rules {
+                ""
+            } else {
+                &plan.script_text
+            },
+        );
+
+        gtk_widget_set_visible(rules_box, flag(plan.want_rules));
+        gtk_widget_set_sensitive(rule_controls[0], flag(plan.want_rules));
+        let rule_sensitive = [
+            plan.want_rules,
+            plan.want_rules && plan.rule_buttons.edit,
+            plan.want_rules && plan.rule_buttons.remove,
+            plan.want_rules && plan.rule_buttons.up,
+            plan.want_rules && plan.rule_buttons.down,
+            plan.want_rules && plan.rule_buttons.enable,
+            plan.want_rules && plan.rule_buttons.disable,
+        ];
+        for (control, on) in rule_controls.iter().zip(rule_sensitive) {
+            gtk_widget_set_sensitive(*control, flag(on));
+        }
+
+        gtk_widget_set_visible(edit_as_text, flag(plan.edit_as_text_visible));
+        gtk_widget_set_sensitive(edit_as_text, flag(plan.edit_as_text_sensitive));
+
+        // Rewriting the rules store moves its cursor, which emits "changed"
+        // on its selection, and `set_bool` below emits "toggled" when the
+        // value changes. Both handlers stand down while this flag is set, as
+        // the script list's own rewrite in `refresh` already relies on.
+        cell.borrow_mut().syncing = true;
+        set_bool(edit_as_text.cast(), plan.edit_as_text_checked);
+        gtk_list_store_clear(rules_store);
+        for (enabled, name) in &plan.rule_rows {
+            append_row(
+                rules_store,
+                RULE_COLUMN_ENABLED,
+                enabled,
+                RULE_COLUMN_NAME,
+                name,
+            );
+        }
+        if let Some(row) = plan.rule_selected {
+            set_cursor(rules_view, row);
+        }
+        cell.borrow_mut().syncing = false;
+
+        if let Some(note) = plan.status_note {
+            set_status(cell, &translate(note));
         }
     }
 }
 
 /// Copies the text view back into the script it belongs to. Every action
-/// calls this first, because the page connects to no buffer signal.
+/// calls this first, because the page connects to no buffer signal. A no-op
+/// while rules mode shows the managed script: its text is not the buffer's,
+/// and the buffer holds nothing to lose.
 ///
 /// # Safety
 ///
@@ -539,6 +814,9 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
 unsafe fn flush(cell: &RefCell<UiState>) {
     let (buffer, showing) = {
         let ui = cell.borrow();
+        if ui.rules.is_some() {
+            return;
+        }
         (ui.buffer, ui.showing)
     };
     let Some(row) = showing else {
@@ -573,15 +851,22 @@ unsafe fn set_status(cell: &RefCell<UiState>, text: &str) {
     unsafe { gtk_label_set_text(status.cast(), text.as_ptr()) };
 }
 
-/// Appends one row to the list store.
+/// Appends one row of two string columns to a list store: `first` in
+/// `first_column`, `second` in `second_column`.
 ///
 /// # Safety
 ///
 /// `store` must be the live two-string-column store of a live page.
-unsafe fn append_row(store: *mut GtkListStore, name: &str, active: &str) {
-    let name = cstring_lossy(name);
-    let active = cstring_lossy(active);
-    let mut columns = [COLUMN_NAME, COLUMN_ACTIVE];
+unsafe fn append_row(
+    store: *mut GtkListStore,
+    first_column: c_int,
+    first: &str,
+    second_column: c_int,
+    second: &str,
+) {
+    let first = cstring_lossy(first);
+    let second = cstring_lossy(second);
+    let mut columns = [first_column, second_column];
     // SAFETY: a zeroed GValue is `G_VALUE_INIT`, the state `g_value_init`
     // requires. Both values are strings, which the store's two columns hold,
     // and both are released below. NULL as the iterator means "do not report
@@ -589,9 +874,9 @@ unsafe fn append_row(store: *mut GtkListStore, name: &str, active: &str) {
     unsafe {
         let mut values: [GValue; 2] = [std::mem::zeroed(), std::mem::zeroed()];
         g_value_init(&mut values[0], G_TYPE_STRING);
-        g_value_set_string(&mut values[0], name.as_ptr());
+        g_value_set_string(&mut values[0], first.as_ptr());
         g_value_init(&mut values[1], G_TYPE_STRING);
-        g_value_set_string(&mut values[1], active.as_ptr());
+        g_value_set_string(&mut values[1], second.as_ptr());
         gtk_list_store_insert_with_valuesv(
             store,
             ptr::null_mut(),
@@ -703,6 +988,71 @@ unsafe extern "C" fn on_selection_changed(selection: *mut GObject, page: gpointe
     });
 }
 
+/// The `changed` handler of the rules list selection.
+///
+/// # Safety
+///
+/// As [`on_selection_changed`], for the rules list.
+unsafe extern "C" fn on_rule_selection_changed(selection: *mut GObject, page: gpointer) {
+    guard("JmapFiltersPage::rule-selection-changed", (), || {
+        // SAFETY: the page is live, because its descendant emitted.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        if cell.borrow().syncing {
+            return;
+        }
+        // SAFETY: the selection is live, and no borrow of `cell` is held
+        // across this call.
+        let row = unsafe { selected_row(selection.cast()) };
+        {
+            let mut ui = cell.borrow_mut();
+            if let Some(rules) = ui.rules.as_mut() {
+                rules.select(row);
+            }
+        }
+        // SAFETY: as above.
+        unsafe { show_selected(cell) };
+    });
+}
+
+/// The `toggled` handler of the "Edit as text" check button.
+///
+/// # Safety
+///
+/// The GLib signal system calls this. `page` is the data pointer of the
+/// connection: the page of the button.
+unsafe extern "C" fn on_edit_as_text_toggled(_button: *mut GObject, page: gpointer) {
+    guard("JmapFiltersPage::edit-as-text-toggled", (), || {
+        // SAFETY: the page is live, because its child emitted.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        if cell.borrow().syncing {
+            return;
+        }
+        // SAFETY: the widgets are live, and no borrow is held. `flush`
+        // writes back a hand edit the user made before the click; it is a
+        // no-op while rules mode was showing, so this never overwrites the
+        // managed script's text with the hidden, stale buffer.
+        unsafe { flush(cell) };
+        let checked = {
+            let ui = cell.borrow();
+            // SAFETY: the check button is a live child of the page.
+            unsafe { get_bool(ui.edit_as_text.cast()) }
+        };
+        {
+            let mut ui = cell.borrow_mut();
+            ui.force_text = checked;
+            // Forces a fresh parse of the current text: turning rules mode
+            // back on must not keep an editor built before this toggle.
+            ui.rules = None;
+        }
+        // SAFETY: as above.
+        unsafe { show_selected(cell) };
+    });
+}
+
 /// What one button press asks the form to do.
 enum Action {
     Add,
@@ -758,8 +1108,18 @@ unsafe fn act(page: gpointer, action: Action) {
         // own.
         let changed = match action {
             Action::Add => {
+                // Suggests the managed name so that naming a script this
+                // opens it straight into rules mode (`FiltersForm::add`),
+                // unless a script already has that name.
+                let unused = cell
+                    .borrow()
+                    .form
+                    .entries()
+                    .iter()
+                    .all(|entry| entry.name != MANAGED_SCRIPT_NAME);
+                let suggested = if unused { MANAGED_SCRIPT_NAME } else { "" };
                 // SAFETY: the page is live, per the contract.
-                match unsafe { ask_for_name(page.cast(), ADD_TITLE, "") } {
+                match unsafe { ask_for_name(page.cast(), ADD_TITLE, suggested) } {
                     None => Ok(false),
                     Some(name) => cell.borrow_mut().form.add(&name).map(|_| true),
                 }
@@ -807,6 +1167,214 @@ unsafe fn act(page: gpointer, action: Action) {
             Err(reason) => refuse(cell, reason),
         }
     });
+}
+
+/// What one rules-mode button press asks [`RulesEditor`] to do.
+enum RuleAction {
+    Add,
+    Edit,
+    Remove,
+    Up,
+    Down,
+    Enable,
+    Disable,
+}
+
+unsafe extern "C" fn on_rule_add(_button: *mut GObject, page: gpointer) {
+    // SAFETY: the page is live, because its button emitted.
+    unsafe { act_rule(page, RuleAction::Add) };
+}
+
+unsafe extern "C" fn on_rule_edit(_button: *mut GObject, page: gpointer) {
+    // SAFETY: as above.
+    unsafe { act_rule(page, RuleAction::Edit) };
+}
+
+unsafe extern "C" fn on_rule_remove(_button: *mut GObject, page: gpointer) {
+    // SAFETY: as above.
+    unsafe { act_rule(page, RuleAction::Remove) };
+}
+
+unsafe extern "C" fn on_rule_up(_button: *mut GObject, page: gpointer) {
+    // SAFETY: as above.
+    unsafe { act_rule(page, RuleAction::Up) };
+}
+
+unsafe extern "C" fn on_rule_down(_button: *mut GObject, page: gpointer) {
+    // SAFETY: as above.
+    unsafe { act_rule(page, RuleAction::Down) };
+}
+
+unsafe extern "C" fn on_rule_enable(_button: *mut GObject, page: gpointer) {
+    // SAFETY: as above.
+    unsafe { act_rule(page, RuleAction::Enable) };
+}
+
+unsafe extern "C" fn on_rule_disable(_button: *mut GObject, page: gpointer) {
+    // SAFETY: as above.
+    unsafe { act_rule(page, RuleAction::Disable) };
+}
+
+/// Runs one staged rules-mode action and shows the lists again. A refusal
+/// goes to the status label; nothing reaches the server here.
+///
+/// # Safety
+///
+/// `page` must be the live page the button belongs to.
+unsafe fn act_rule(page: gpointer, action: RuleAction) {
+    guard("JmapFiltersPage::rule-action", (), || {
+        // SAFETY: the page is live, per the contract.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        if cell.borrow().rules.is_none() {
+            return;
+        }
+        let selected = cell.borrow().rules.as_ref().and_then(RulesEditor::selected);
+
+        // The rule dialog runs a nested main loop, so it must run with no
+        // borrow of the state held.
+        let changed = match action {
+            RuleAction::Add => {
+                let (folders, extensions) = {
+                    let ui = cell.borrow();
+                    (ui.form.folders().to_vec(), ui.form.extensions().to_vec())
+                };
+                let draft = RuleDraft::new();
+                // SAFETY: the page is live, per the contract.
+                match unsafe {
+                    rule_dialog::edit_rule(
+                        page.cast(),
+                        ADD_RULE_TITLE,
+                        &draft,
+                        &folders,
+                        &extensions,
+                    )
+                } {
+                    None => Ok(false),
+                    Some(rule) => {
+                        cell.borrow_mut()
+                            .rules
+                            .as_mut()
+                            .expect("checked above")
+                            .add(rule);
+                        Ok(true)
+                    }
+                }
+            }
+            RuleAction::Edit => {
+                let Some(index) = selected else {
+                    return refuse(cell, NO_RULE_SELECTED);
+                };
+                let (folders, extensions, draft) = {
+                    let ui = cell.borrow();
+                    let Some(rule) = ui.rules.as_ref().and_then(|rules| rules.rules().get(index))
+                    else {
+                        return refuse(cell, NO_RULE_SELECTED);
+                    };
+                    (
+                        ui.form.folders().to_vec(),
+                        ui.form.extensions().to_vec(),
+                        RuleDraft::from_rule(rule),
+                    )
+                };
+                // SAFETY: as above.
+                match unsafe {
+                    rule_dialog::edit_rule(
+                        page.cast(),
+                        EDIT_RULE_TITLE,
+                        &draft,
+                        &folders,
+                        &extensions,
+                    )
+                } {
+                    None => Ok(false),
+                    Some(rule) => cell
+                        .borrow_mut()
+                        .rules
+                        .as_mut()
+                        .expect("checked above")
+                        .replace(index, rule)
+                        .map(|()| true),
+                }
+            }
+            RuleAction::Remove => match selected {
+                None => return refuse(cell, NO_RULE_SELECTED),
+                Some(index) => cell
+                    .borrow_mut()
+                    .rules
+                    .as_mut()
+                    .expect("checked above")
+                    .remove(index)
+                    .map(|()| true),
+            },
+            RuleAction::Up => match selected {
+                None => return refuse(cell, NO_RULE_SELECTED),
+                Some(index) => cell
+                    .borrow_mut()
+                    .rules
+                    .as_mut()
+                    .expect("checked above")
+                    .move_up(index)
+                    .map(|()| true),
+            },
+            RuleAction::Down => match selected {
+                None => return refuse(cell, NO_RULE_SELECTED),
+                Some(index) => cell
+                    .borrow_mut()
+                    .rules
+                    .as_mut()
+                    .expect("checked above")
+                    .move_down(index)
+                    .map(|()| true),
+            },
+            RuleAction::Enable | RuleAction::Disable => match selected {
+                None => return refuse(cell, NO_RULE_SELECTED),
+                Some(index) => cell
+                    .borrow_mut()
+                    .rules
+                    .as_mut()
+                    .expect("checked above")
+                    .toggle_enabled(index)
+                    .map(|()| true),
+            },
+        };
+
+        match changed {
+            Ok(false) => {}
+            Ok(true) => {
+                // SAFETY: the widgets are live, and no borrow is held.
+                unsafe { write_back_rules(cell) };
+            }
+            Err(reason) => refuse(cell, reason),
+        }
+    });
+}
+
+/// Regenerates the managed script's text from the staged rules (keeping the
+/// round trip [`script::load`] relies on), writes it into the form, and
+/// redraws every list.
+///
+/// # Safety
+///
+/// As [`refresh`].
+unsafe fn write_back_rules(cell: &RefCell<UiState>) {
+    let Some(row) = cell.borrow().showing else {
+        return;
+    };
+    let generated = {
+        let ui = cell.borrow();
+        let Some(rules) = &ui.rules else {
+            return;
+        };
+        script::generate_script(rules.rules(), ui.form.has_mailboxid())
+    };
+    let _ = cell.borrow_mut().form.set_text(row, &generated);
+    // SAFETY: the widgets are live, and no borrow is held.
+    unsafe {
+        set_status(cell, "");
+        refresh(cell);
+    }
 }
 
 /// Shows why the page did not do what the button asked.
