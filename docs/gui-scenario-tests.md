@@ -246,6 +246,24 @@ the local host and counts every request. It does these steps and checks:
 
 The log must show no error of evolution-jmap.
 
+### `contact-photo-fetch-switch`
+
+One collection account with an address book. The server has two contacts.
+Each contact has a photo at a different `http:` URI on port 8091 of the
+local host. The photo server holds its answer for the photo of the first
+contact. The scenario does these steps and checks:
+
+1. Select the first contact and click **Load image**. The photo server must
+   get the request.
+2. Select the second contact. The preview must show the placeholder with the
+   URL of the second contact.
+3. Let the photo server answer the first request. After 5 seconds, the
+   preview must still show the URL of the second contact and its
+   **Load image** button. The photo of the first contact must not replace
+   it. The photo server must log no request for the second photo.
+
+The log must show no error of evolution-jmap.
+
 ### `vacation`
 
 One mail account in a collection, as the account assistant makes it. The

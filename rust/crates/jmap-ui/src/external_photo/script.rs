@@ -10,11 +10,12 @@
 //! and puts a placeholder before it. The placeholder names the URL, so the
 //! user can read where the image is before anything asks for it.
 //!
-//! The script reads the URL out of the document. It never carries the URL in.
-//! A contact comes from a server, so its photo URL is text this project does
-//! not control, and building a script around such text is how an injection
-//! starts. The one value this module does put into the script is the
-//! translated label, through [`js_string`].
+//! The placeholder script reads the URL out of the document. It never
+//! carries the URL in. A contact comes from a server, so its photo URL is text
+//! this project does not control, and building a script around such text is
+//! how an injection starts. The values this module does put into a script go
+//! through [`js_string`]: the translated label, and in [`loaded_script`] the
+//! fetched URL and its `data:` URI.
 
 /// The element id Evolution's contact formatter gives the photo.
 ///
@@ -108,22 +109,26 @@ pub fn placeholder_script(label: &str, action: &str) -> String {
     )
 }
 
-/// The script that shows a photo this project fetched, with `data_uri` as
+/// The script that shows the photo fetched from `url`, with `data_uri` as
 /// its new `src`.
 ///
-/// Idempotent, like [`placeholder_script`]: if the placeholder is already
-/// gone (a second click after the first succeeded, racing the DOM update),
-/// this does nothing.
-pub fn loaded_script(data_uri: &str) -> String {
+/// The web view can load another contact while the fetch runs. So the script
+/// does nothing unless the photo element still has `url` as its source. The
+/// URL goes in only through [`js_string`], and only for this comparison.
+///
+/// Idempotent, like [`placeholder_script`]: after the first run the source
+/// is the `data:` URI, so a second run does nothing.
+pub fn loaded_script(url: &str, data_uri: &str) -> String {
     format!(
         "(function() {{\n\
          var img = document.getElementById('{PHOTO_ID}');\n\
-         if (!img) {{ return; }}\n\
+         if (!img || img.getAttribute('src') !== {url}) {{ return; }}\n\
          img.src = {data_uri};\n\
          img.style.display = '';\n\
          var box = document.getElementsByClassName('{PLACEHOLDER_CLASS}')[0];\n\
          if (box) {{ box.remove(); }}\n\
          }})();",
+        url = js_string(url),
         data_uri = js_string(data_uri)
     )
 }
@@ -212,9 +217,31 @@ mod tests {
         );
     }
 
+    /// The web view can show another contact while the fetch runs. The photo
+    /// goes in only if the document still shows the URL that was fetched.
+    #[test]
+    fn the_loaded_script_applies_only_to_the_url_it_fetched() {
+        let script = loaded_script("https://a.example/p.png", "data:image/png;base64,AAAA");
+        assert!(
+            script.contains("img.getAttribute('src') !== 'https://a.example/p.png'"),
+            "the script does not check the photo URL: {script}"
+        );
+    }
+
+    /// A URL that tries to close the literal and run its own code stays one
+    /// string.
+    #[test]
+    fn a_hostile_url_stays_one_string() {
+        let script = loaded_script("https://a.example/'; alert(1); '", "data:,");
+        assert!(
+            script.contains(r"'https://a.example/\'; alert(1); \''"),
+            "the URL escaped its literal: {script}"
+        );
+    }
+
     #[test]
     fn the_loaded_script_names_the_photo_and_the_placeholder() {
-        let script = loaded_script("data:image/png;base64,AAAA");
+        let script = loaded_script("https://a.example/p.png", "data:image/png;base64,AAAA");
         assert!(script.contains(PHOTO_ID), "the script lost the photo id");
         assert!(
             script.contains(PLACEHOLDER_CLASS),

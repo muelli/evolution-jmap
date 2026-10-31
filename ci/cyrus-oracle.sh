@@ -177,6 +177,22 @@ _cyrus_oracle_stop() {
     fi
 }
 
+# The image never creates /var/imap/config/socket. Without it, idled cannot
+# bind its lock socket, Cyrus master disables the idled service after 10
+# failed starts, and every mailbox-state notification then stalls for 30s.
+_cyrus_oracle_fix_idled_socket() {
+    local i
+    for i in $(seq 1 30); do
+        if podman exec "${CYRUS_ORACLE_NAME}" test -d /var/imap/config 2>/dev/null; then
+            podman exec "${CYRUS_ORACLE_NAME}" mkdir -p /var/imap/config/socket 2>/dev/null
+            podman exec "${CYRUS_ORACLE_NAME}" chown cyrus:mail /var/imap/config/socket 2>/dev/null
+            return 0
+        fi
+        sleep 1
+    done
+    echo "warning: /var/imap/config never appeared; idled may stay disabled" >&2
+}
+
 _cyrus_oracle_start() {
     _cyrus_oracle_require_tool podman || return 1
     _cyrus_oracle_require_tool curl || return 1
@@ -196,6 +212,8 @@ _cyrus_oracle_start() {
             -e "JMAPBASEURL=http://${CYRUS_ORACLE_HOST}:${CYRUS_ORACLE_HTTP_PORT}" \
             "${CYRUS_ORACLE_IMAGE}" >/dev/null || return 1
     fi
+
+    _cyrus_oracle_fix_idled_socket
 
     local ready=0
     local i
