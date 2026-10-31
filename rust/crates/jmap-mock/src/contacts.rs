@@ -795,6 +795,11 @@ fn card_matches(card: &ContactCard, filter: &ContactCardQueryFilter) -> bool {
     {
         return false;
     }
+    if let Some(uid) = &filter.uid
+        && card.uid.as_deref() != Some(uid.as_str())
+    {
+        return false;
+    }
     let full_name = card
         .name
         .as_ref()
