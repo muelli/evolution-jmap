@@ -10,7 +10,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - Added a `Server Filters` page to the account editor for servers that
   support JMAP Sieve filters. It lists and manages filter scripts, and
   offers a rules list for one managed script so most users never need
-  to write Sieve by hand.
+  to write Sieve by hand. If another program changes the filters while
+  the page is open, the page does not overwrite that change.
 
 ## 0.6.0 (2026-10-30)
 

@@ -13,10 +13,12 @@
 use std::ffi::CStr;
 
 use jmap_backend_core::i18n::{N_, translate_with};
-use jmap_proto::Id;
 use jmap_proto::sieve::SieveCapability;
+use jmap_proto::{Id, State};
 
-use crate::filters::io::{ActivationChange, ActivationTarget, Loaded, SavePlan, ScriptWrite};
+use crate::filters::io::{
+    ActivationChange, ActivationTarget, Baseline, Loaded, SavePlan, ScriptWrite,
+};
 use crate::filters::rules::{Folder, MANAGED_SCRIPT_NAME};
 use crate::filters::script;
 
@@ -109,14 +111,20 @@ pub struct FiltersForm {
     /// The server's `sieveExtensions`, for `script::generate_script`/`load`
     /// and the rule dialog's action gating.
     extensions: Vec<String>,
+    /// The script state of the load, for the `ifInState` of the save.
+    state: Option<State>,
+    /// The scripts of the load, for a retry of the save.
+    baseline: Baseline,
 }
 
 impl FiltersForm {
     /// Builds the staged state from one [`crate::filters::io::load`].
     pub fn from_loaded(loaded: Loaded) -> Self {
         let mut form = Self {
+            baseline: loaded.baseline(),
             offered: loaded.capability.is_some(),
             folders: loaded.folders,
+            state: Some(loaded.state),
             ..Self::default()
         };
         if let Some(capability) = &loaded.capability {
@@ -366,6 +374,8 @@ impl FiltersForm {
             destroys: self.destroys.clone(),
             activation,
             deactivate_first,
+            if_in_state: self.state.clone(),
+            baseline: self.baseline.clone(),
         }))
     }
 
@@ -452,6 +462,7 @@ mod tests {
             capability: Some(SieveCapability::new(1024).with_max_number_scripts(3)),
             scripts,
             folders: Vec::new(),
+            state: State::new("s0"),
         }
     }
 
@@ -474,6 +485,7 @@ mod tests {
             capability: None,
             scripts: Vec::new(),
             folders: Vec::new(),
+            state: State::new("s0"),
         });
 
         assert!(!form.offered());
@@ -537,6 +549,7 @@ mod tests {
             )]))),
             scripts: Vec::new(),
             folders: Vec::new(),
+            state: State::new("s0"),
         });
 
         assert_eq!(form.add("123456789"), Err(NAME_TOO_LONG));
@@ -576,6 +589,20 @@ mod tests {
             }
             ScriptWrite::Create { .. } => panic!("an existing script must be an update"),
         }
+    }
+
+    #[test]
+    fn the_plan_carries_the_state_and_the_scripts_of_the_load() {
+        let scripts = || vec![script("a", "work", true), script("v", "vacation", false)];
+        let expected = loaded(scripts()).baseline();
+        let mut form = form(scripts());
+
+        form.set_text(0, "discard;\n").unwrap();
+
+        let plan = form.plan().unwrap().unwrap();
+        assert_eq!(plan.if_in_state, Some(State::new("s0")));
+        assert_eq!(plan.baseline, expected);
+        assert_ne!(plan.baseline, Baseline::default());
     }
 
     #[test]
@@ -712,6 +739,7 @@ mod tests {
             capability: Some(SieveCapability::new(16)),
             scripts: vec![script("a", "work", false)],
             folders: Vec::new(),
+            state: State::new("s0"),
         });
 
         form.set_text(0, &"#".repeat(17)).unwrap();
