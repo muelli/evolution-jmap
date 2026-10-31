@@ -76,6 +76,7 @@ use crate::filters::rule_dialog;
 use crate::filters::rule_form::{self, NO_RULE_SELECTED, RuleDraft, RulesEditor};
 use crate::filters::rules::MANAGED_SCRIPT_NAME;
 use crate::filters::script;
+use crate::hold::Hold;
 use crate::link::{self, AccountLink, SendSource};
 use crate::widget::{flag, get_bool, get_text, set_bool, set_text};
 
@@ -1095,7 +1096,10 @@ unsafe extern "C" fn on_deactivate(_button: *mut GObject, page: gpointer) {
 /// `page` must be the live page the button belongs to.
 unsafe fn act(page: gpointer, action: Action) {
     guard("JmapFiltersPage::action", (), || {
-        // SAFETY: the page is live, per the contract.
+        // SAFETY: the page is live, per the contract. The hold keeps the
+        // page and its state alive through the dialog below.
+        let hold = unsafe { Hold::new(page.cast()) };
+        // SAFETY: as above.
         let Some(cell) = (unsafe { state(page.cast()) }) else {
             return;
         };
@@ -1154,6 +1158,11 @@ unsafe fn act(page: gpointer, action: Action) {
                 Some(row) => cell.borrow_mut().form.deactivate(row).map(|()| true),
             },
         };
+        // The shell can destroy the page while the dialog runs. Its children
+        // are then gone.
+        if hold.disposed() {
+            return;
+        }
 
         match changed {
             Ok(false) => {}
@@ -1223,7 +1232,10 @@ unsafe extern "C" fn on_rule_disable(_button: *mut GObject, page: gpointer) {
 /// `page` must be the live page the button belongs to.
 unsafe fn act_rule(page: gpointer, action: RuleAction) {
     guard("JmapFiltersPage::rule-action", (), || {
-        // SAFETY: the page is live, per the contract.
+        // SAFETY: the page is live, per the contract. The hold keeps the
+        // page and its state alive through the dialog below.
+        let hold = unsafe { Hold::new(page.cast()) };
+        // SAFETY: as above.
         let Some(cell) = (unsafe { state(page.cast()) }) else {
             return;
         };
@@ -1339,6 +1351,10 @@ unsafe fn act_rule(page: gpointer, action: RuleAction) {
                     .map(|()| true),
             },
         };
+        // As in `act`.
+        if hold.disposed() {
+            return;
+        }
 
         match changed {
             Ok(false) => {}
@@ -1598,4 +1614,99 @@ unsafe extern "C" fn submit_finish(
         // finish the same result that the callback received.
         unsafe { g_task_propagate_boolean(result.cast::<GTask>(), error) }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::raw::c_char;
+    use std::sync::Mutex;
+
+    use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free};
+    use gobject_sys::{g_object_new_with_properties, g_object_set_data_full};
+    use jmap_backend_core::subclass::register_static;
+
+    use super::*;
+
+    unsafe extern "C" {
+        fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> gboolean;
+        fn gtk_window_new(kind: c_int) -> *mut GtkWidget;
+        fn gtk_window_list_toplevels() -> *mut GList;
+        fn gtk_dialog_response(dialog: *mut GtkWidget, response: c_int);
+    }
+
+    static EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+    fn note(event: &'static str) {
+        EVENTS.lock().unwrap().push(event);
+    }
+
+    unsafe extern "C" fn page_finalized(_data: gpointer) {
+        note("page finalized");
+    }
+
+    unsafe extern "C" fn close_window(window: gpointer) -> gboolean {
+        // SAFETY: the test window is live until this call destroys it.
+        unsafe { gtk_widget_destroy(window.cast()) };
+        note("window destroyed");
+        G_SOURCE_REMOVE
+    }
+
+    unsafe extern "C" fn answer_ok(_data: gpointer) -> gboolean {
+        // SAFETY: the list and its windows are live on this thread. The
+        // list is freed below; GTK owns the windows.
+        unsafe {
+            let dialog_type = g_type_from_name(c"GtkDialog".as_ptr());
+            let list = gtk_window_list_toplevels();
+            let mut node = list;
+            while !node.is_null() {
+                let window = (*node).data;
+                if g_type_check_instance_is_a(window.cast(), dialog_type) != GFALSE {
+                    note("dialog answered");
+                    gtk_dialog_response(window.cast(), GTK_RESPONSE_OK);
+                }
+                node = (*node).next;
+            }
+            g_list_free(list);
+        }
+        G_SOURCE_REMOVE
+    }
+
+    /// The shell destroys the account editor while the name dialog of Add
+    /// runs. The page must stay alive until the action ends, and the action
+    /// must not continue on the destroyed page. Needs a display; skips
+    /// without one.
+    #[test]
+    fn destroying_the_page_during_the_name_dialog_keeps_it_until_the_action_ends() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered. The window sinks the floating page
+        // and owns its only reference, as the account editor does.
+        unsafe {
+            let window = gtk_window_new(0);
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            // GObject frees qdata in finalize, not in dispose. A NULL value
+            // would remove the key, so the probe stores a dummy one.
+            g_object_set_data_full(page, c"probe".as_ptr(), page.cast(), Some(page_finalized));
+            gtk_container_add(window.cast(), page.cast());
+            gtk_widget_show_all(window);
+            // Both run inside the nested main loop of the dialog, in order.
+            g_idle_add(Some(close_window), window.cast());
+            g_idle_add(Some(answer_ok), ptr::null_mut());
+            act(page.cast(), Action::Add);
+        }
+        note("action returned");
+        assert_eq!(
+            *EVENTS.lock().unwrap(),
+            [
+                "window destroyed",
+                "dialog answered",
+                "page finalized",
+                "action returned"
+            ]
+        );
+    }
 }
