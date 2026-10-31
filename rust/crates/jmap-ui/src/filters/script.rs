@@ -126,7 +126,15 @@ fn required_extensions(rules: &[Rule], has_mailboxid: bool) -> BTreeSet<&'static
 /// The `if <test> { <actions> }` block an enabled rule generates.
 fn generate_rule_body(rule: &Rule, has_mailboxid: bool) -> String {
     let mut body = format!("if {} {{\n", test_expr(rule));
-    for action in &rule.actions {
+    // An `addflag` changes the flags the next `fileinto` or the implicit
+    // keep applies, so a flag written after the filing never reaches the
+    // filed message. Both servers behave this way. The rule keeps the order
+    // the user chose, and only the generated Sieve puts the flags first.
+    let (flags, rest): (Vec<&Action>, Vec<&Action>) = rule
+        .actions
+        .iter()
+        .partition(|action| matches!(action, Action::MarkRead | Action::Flag));
+    for action in flags.into_iter().chain(rest) {
         body.push_str("    ");
         body.push_str(&generate_action(action, has_mailboxid));
         body.push('\n');
@@ -274,6 +282,77 @@ mod tests {
             \x20\x20\x20\x20stop;\n\
             }\n";
         assert_eq!(generate_script(&[r], false), expected);
+    }
+
+    #[test]
+    fn flag_actions_come_before_the_action_that_files_the_message() {
+        // Both servers apply the flags a message carries at the moment it
+        // is filed, so an `addflag` after `fileinto` never reaches the
+        // filed copy. The rule keeps the order the user chose; only the
+        // generated Sieve moves the flags in front.
+        let r = rule(
+            "Invoices",
+            vec![],
+            vec![
+                Action::MoveTo(Folder {
+                    id: "M1".to_owned(),
+                    name: "Invoices".to_owned(),
+                }),
+                Action::MarkRead,
+            ],
+        );
+
+        let script = generate_script(&[r], false);
+
+        assert!(
+            script
+                .contains("if true {\n    addflag \"\\\\Seen\";\n    fileinto \"Invoices\";\n}\n")
+        );
+    }
+
+    #[test]
+    fn the_rule_line_keeps_the_action_order_the_user_chose() {
+        let r = rule(
+            "Invoices",
+            vec![],
+            vec![
+                Action::MoveTo(Folder {
+                    id: "M1".to_owned(),
+                    name: "Invoices".to_owned(),
+                }),
+                Action::MarkRead,
+            ],
+        );
+
+        let script = generate_script(std::slice::from_ref(&r), false);
+
+        assert!(script.contains(
+            "\"actions\":[{\"MoveTo\":{\"id\":\"M1\",\"name\":\"Invoices\"}},\"MarkRead\"]"
+        ));
+        // The reordering is in the generated Sieve only, so a script this
+        // crate wrote still round-trips byte for byte.
+        assert_eq!(load(&script, false), Some(vec![r]));
+    }
+
+    #[test]
+    fn redirect_and_discard_keep_their_place_after_the_flags() {
+        let r = rule(
+            "Away",
+            vec![],
+            vec![
+                Action::Redirect {
+                    address: "other@example.com".to_owned(),
+                    keep: false,
+                },
+                Action::Flag,
+            ],
+        );
+
+        let script = generate_script(&[r], false);
+
+        assert!(script.contains(
+            "if true {\n    addflag \"\\\\Flagged\";\n    redirect \"other@example.com\";\n}\n"
+        ));
     }
 
     #[test]
