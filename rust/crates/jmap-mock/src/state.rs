@@ -118,6 +118,12 @@ pub struct ServerState {
     pub tasks_enabled: bool,
     /// Refuse `Principal/query` with forbidden, modeling Stalwart directory policy.
     pub disable_principal_query: bool,
+    /// Active hostile scenarios for simulating adversarial server conditions.
+    pub hostile_scenarios: BTreeSet<crate::hostile::HostileScenario>,
+    /// Cached response for `HostileScenario::ReplayedResponse`.
+    pub cached_replayed_response: Option<(u16, serde_json::Value)>,
+    /// Number of state evaluations under `HostileScenario::StateBackwards`.
+    pub hostile_state_calls: usize,
     /// Connected `/eventsource` subscribers for state-change delivery.
     pub event_source: EventSourceHub,
 }
@@ -187,8 +193,16 @@ impl ServerState {
             sieve_vacation_script_name: "vacation".to_owned(),
             tasks_enabled: false,
             disable_principal_query: false,
+            hostile_scenarios: BTreeSet::new(),
+            cached_replayed_response: None,
+            hostile_state_calls: 0,
             event_source: EventSourceHub::new(),
         }
+    }
+
+    /// Whether a specific hostile scenario is enabled.
+    pub fn has_hostile(&self, scenario: crate::hostile::HostileScenario) -> bool {
+        self.hostile_scenarios.contains(&scenario)
     }
 
     pub fn add_account(&mut self, id: impl Into<Id>, name: impl Into<String>) -> &mut AccountState {

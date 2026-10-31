@@ -27,6 +27,12 @@ binary for integration tests.
 - Fault injection controls through `Faults` (for example non-terminating paging,
   unrequested objects, local `file:` URI rewrites, `data:` contact-photo
   `blobId` serving, redirected discovery, terse create responses).
+- Adversarial hostile server modes via `jmap-mockd --hostile <scenario>` and
+  `MockServerBuilder::hostile` (`oversized-response`, `deep-json`,
+  `numbers-out-of-range`, `dangerous-ids`, `blob-size-mismatch`,
+  `session-urls-file`, `session-urls-other-origin`, `redirect-other-origin`,
+  `wrong-method-call-id`, `duplicate-method-call-id`, `out-of-order-responses`,
+  `replayed-response`, `state-backwards`, `eventsource-unknown`).
 - OAuth endpoints for integration tests: `oauth_authorization_server`,
   `oauth_client_registration`, `oauth_token`.
 
