@@ -420,18 +420,32 @@ fn seed_shared_account_data(state: &mut jmap_mock::ServerState) {
     shared.is_personal = false;
     shared.current_user_principal_id = Some(owner_principal_id);
 
-    let shared_mailbox_id =
-        shared.seed_mailbox("Shared Inbox", Some(jmap_proto::mail::role::INBOX));
+    let read_only_mailbox_id =
+        shared.seed_mailbox("Shared Read Only", Some(jmap_proto::mail::role::INBOX));
+    let read_write_mailbox_id = shared.seed_mailbox("Shared Read Write", None);
     let _private_mailbox_id = shared.seed_mailbox("Private", None);
     let shared_book_id = shared.seed_address_book("Shared", false);
     let _private_book_id = shared.seed_address_book("Private", false);
     let shared_calendar_id = shared.seed_calendar("Shared", false);
     let _private_calendar_id = shared.seed_calendar("Private", false);
 
-    if let Some(mailbox) = shared.mailboxes.get_mut(&shared_mailbox_id) {
+    if let Some(mailbox) = shared.mailboxes.get_mut(&read_only_mailbox_id) {
         mailbox.share_with = Some(BTreeMap::from([(
             grantee_principal_id.clone(),
             MailboxRights::read_only(),
+        )]));
+    }
+    if let Some(mailbox) = shared.mailboxes.get_mut(&read_write_mailbox_id) {
+        mailbox.share_with = Some(BTreeMap::from([(
+            grantee_principal_id.clone(),
+            MailboxRights::read_only()
+                .with_may_add_items(true)
+                .with_may_remove_items(true)
+                .with_may_set_seen(true)
+                .with_may_set_keywords(true)
+                .with_may_create_child(true)
+                .with_may_rename(true)
+                .with_may_delete(true),
         )]));
     }
     if let Some(book) = shared.address_books.get_mut(&shared_book_id) {
@@ -446,6 +460,38 @@ fn seed_shared_account_data(state: &mut jmap_mock::ServerState) {
             CalendarRights::read_only(),
         )]));
     }
+
+    shared.seed_email(EmailSeed::new(
+        read_only_mailbox_id.clone(),
+        ("Owner", "owner@example.test"),
+        "Read-only message 1",
+        "Shared read-only mailbox message 1",
+        "2026-08-01T09:00:00Z",
+    ));
+    shared.seed_email(EmailSeed::new(
+        read_only_mailbox_id,
+        ("Owner", "owner@example.test"),
+        "Read-only message 2",
+        "Shared read-only mailbox message 2",
+        "2026-08-02T09:00:00Z",
+    ));
+    shared.seed_email(EmailSeed::new(
+        read_write_mailbox_id.clone(),
+        ("Owner", "owner@example.test"),
+        "Read-write message 1",
+        "Shared read-write mailbox message 1",
+        "2026-08-03T09:00:00Z",
+    ));
+    shared.seed_email(
+        EmailSeed::new(
+            read_write_mailbox_id,
+            ("Owner", "owner@example.test"),
+            "Read-write message 2",
+            "Shared read-write mailbox message 2",
+            "2026-08-04T09:00:00Z",
+        )
+        .keyword(jmap_proto::mail::keyword::SEEN),
+    );
 }
 
 fn seed_from_file(server: &MockServer, path: &str) -> Result<(), String> {

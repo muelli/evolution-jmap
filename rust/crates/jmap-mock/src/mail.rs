@@ -3,7 +3,7 @@
 
 //! Mail methods (`Mailbox/*`, `Email/*`) and mail seeding helpers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::mail::{
@@ -14,7 +14,8 @@ use jmap_proto::mail::{
     VacationResponse, email_import_error, role,
 };
 use jmap_proto::methods::{
-    Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse, operator,
+    ChangesRequest, Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest,
+    SetResponse, operator,
 };
 use jmap_proto::{Id, UtcDate};
 use serde_json::Value;
@@ -456,7 +457,134 @@ fn filed_in(email: &Email, id: &Id) -> bool {
         .is_some_and(|mailbox_ids| mailbox_ids.get(id).copied().unwrap_or(false))
 }
 
-pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+fn account_is_owner(account: &AccountState, caller: Option<&Id>) -> bool {
+    caller.is_none_or(|caller| account.current_user_principal_id.as_ref() == Some(caller))
+}
+
+fn shared_with_caller(account: &AccountState, caller: &Id) -> bool {
+    account
+        .mailboxes
+        .iter()
+        .any(|(_, mailbox)| mailbox_rights_for(mailbox, caller).is_some())
+}
+
+fn has_mailbox_right(
+    account: &AccountState,
+    mailbox_id: &Id,
+    caller: &Id,
+    right: fn(&jmap_proto::mail::MailboxRights) -> Option<bool>,
+) -> bool {
+    account
+        .mailboxes
+        .get(mailbox_id)
+        .and_then(|mailbox| mailbox_rights_for(mailbox, caller))
+        .and_then(|rights| right(&rights))
+        .unwrap_or(false)
+}
+
+fn filed_mailbox_ids(email: &Email) -> BTreeSet<Id> {
+    email
+        .mailbox_ids
+        .as_ref()
+        .map(|mailbox_ids| {
+            mailbox_ids
+                .iter()
+                .filter_map(|(id, filed)| filed.then_some(id.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn readable_email(account: &AccountState, email: &Email, caller: &Id) -> bool {
+    filed_mailbox_ids(email).iter().any(|mailbox_id| {
+        has_mailbox_right(account, mailbox_id, caller, |rights| rights.may_read_items)
+    })
+}
+
+fn may_create_email(account: &AccountState, email: &Email, caller: &Id) -> bool {
+    filed_mailbox_ids(email).iter().all(|mailbox_id| {
+        has_mailbox_right(account, mailbox_id, caller, |rights| rights.may_add_items)
+    })
+}
+
+fn may_update_email(account: &AccountState, before: &Email, after: &Email, caller: &Id) -> bool {
+    let before_mailboxes = filed_mailbox_ids(before);
+    let after_mailboxes = filed_mailbox_ids(after);
+
+    let added: BTreeSet<Id> = after_mailboxes
+        .difference(&before_mailboxes)
+        .cloned()
+        .collect();
+    if !added.iter().all(|mailbox_id| {
+        has_mailbox_right(account, mailbox_id, caller, |rights| rights.may_add_items)
+    }) {
+        return false;
+    }
+
+    let removed: BTreeSet<Id> = before_mailboxes
+        .difference(&after_mailboxes)
+        .cloned()
+        .collect();
+    if !removed.iter().all(|mailbox_id| {
+        has_mailbox_right(account, mailbox_id, caller, |rights| {
+            rights.may_remove_items
+        })
+    }) {
+        return false;
+    }
+
+    let before_keywords = before.keywords.clone().unwrap_or_default();
+    let after_keywords = after.keywords.clone().unwrap_or_default();
+    let seen_before = before_keywords
+        .get(jmap_proto::mail::keyword::SEEN)
+        .copied()
+        .unwrap_or(false);
+    let seen_after = after_keywords
+        .get(jmap_proto::mail::keyword::SEEN)
+        .copied()
+        .unwrap_or(false);
+    let seen_changed = seen_before != seen_after;
+
+    let mut before_without_seen = before_keywords;
+    before_without_seen.remove(jmap_proto::mail::keyword::SEEN);
+    let mut after_without_seen = after_keywords;
+    after_without_seen.remove(jmap_proto::mail::keyword::SEEN);
+    let non_seen_keywords_changed = before_without_seen != after_without_seen;
+
+    let mailbox_scope: BTreeSet<Id> = before_mailboxes.union(&after_mailboxes).cloned().collect();
+    if seen_changed
+        && !mailbox_scope.iter().all(|mailbox_id| {
+            has_mailbox_right(account, mailbox_id, caller, |rights| rights.may_set_seen)
+        })
+    {
+        return false;
+    }
+    if non_seen_keywords_changed
+        && !mailbox_scope.iter().all(|mailbox_id| {
+            has_mailbox_right(account, mailbox_id, caller, |rights| {
+                rights.may_set_keywords
+            })
+        })
+    {
+        return false;
+    }
+
+    true
+}
+
+fn may_destroy_email(account: &AccountState, email: &Email, caller: &Id) -> bool {
+    filed_mailbox_ids(email).iter().all(|mailbox_id| {
+        has_mailbox_right(account, mailbox_id, caller, |rights| {
+            rights.may_remove_items
+        })
+    })
+}
+
+pub fn email_get(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
     let limit = state.objects_in_get();
@@ -471,12 +599,26 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
 
     let include_unrequested = state.email_get_includes_unrequested;
     let account = account_mut(state, &request.account_id)?;
+    let is_owner = account_is_owner(account, caller);
+    if !is_owner {
+        let caller = caller.expect("is_owner is false only when caller is Some");
+        if !shared_with_caller(account, caller) {
+            return Err(MethodError::new(error::method::FORBIDDEN)
+                .with_description("no mailbox in this account is shared with you"));
+        }
+    }
 
     let mut list = Vec::new();
     let mut not_found = Vec::new();
     match &request.ids {
         None => {
             for (_, email) in account.emails.iter() {
+                if !is_owner {
+                    let caller = caller.expect("is_owner is false only when caller is Some");
+                    if !readable_email(account, email, caller) {
+                        continue;
+                    }
+                }
                 list.push(project_properties(email, request.properties.as_deref())?);
             }
         }
@@ -484,6 +626,14 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
             for id in ids {
                 match account.emails.get(id) {
                     Some(email) => {
+                        if !is_owner {
+                            let caller =
+                                caller.expect("is_owner is false only when caller is Some");
+                            if !readable_email(account, email, caller) {
+                                not_found.push(id.clone());
+                                continue;
+                            }
+                        }
                         list.push(project_properties(email, request.properties.as_deref())?)
                     }
                     None => not_found.push(id.clone()),
@@ -496,6 +646,12 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         for (id, email) in account.emails.iter() {
             if requested_ids.contains(id) {
                 continue;
+            }
+            if !is_owner {
+                let caller = caller.expect("is_owner is false only when caller is Some");
+                if !readable_email(account, email, caller) {
+                    continue;
+                }
             }
             list.push(project_properties(email, request.properties.as_deref())?);
         }
@@ -687,12 +843,24 @@ fn truncate_octets(text: &str, max_octets: usize) -> String {
     text[..end].to_owned()
 }
 
-pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+pub fn email_query(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
     let request: QueryRequest<Filter<EmailQueryFilter>> = parse_arguments(arguments)?;
     let page_size = state.query_page_size;
     let hides_limit = state.query_hides_limit;
     let query_never_terminates = state.query_never_terminates;
     let account = account_mut(state, &request.account_id)?;
+    let is_owner = account_is_owner(account, caller);
+    if !is_owner {
+        let caller = caller.expect("is_owner is false only when caller is Some");
+        if !shared_with_caller(account, caller) {
+            return Err(MethodError::new(error::method::FORBIDDEN)
+                .with_description("no mailbox in this account is shared with you"));
+        }
+    }
 
     let filter = request
         .filter
@@ -700,7 +868,14 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     let mut matches: Vec<(&Id, &Email)> = account
         .emails
         .iter()
-        .filter(|(_, email)| filter_matches(email, &filter))
+        .filter(|(_, email)| {
+            if is_owner {
+                filter_matches(email, &filter)
+            } else {
+                let caller = caller.expect("is_owner is false only when caller is Some");
+                readable_email(account, email, caller) && filter_matches(email, &filter)
+            }
+        })
         .collect();
 
     // Default sort uses `receivedAt` in descending order.
@@ -1124,10 +1299,22 @@ fn snooze_refusal(
     }
 }
 
-pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+pub fn email_set(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
     let request: SetRequest<Email> = parse_arguments(arguments)?;
     let snooze_extension = state.snooze_extension;
     let account = account_mut(state, &request.account_id)?;
+    let is_owner = account_is_owner(account, caller);
+    if !is_owner {
+        let caller = caller.expect("is_owner is false only when caller is Some");
+        if !shared_with_caller(account, caller) {
+            return Err(MethodError::new(error::method::FORBIDDEN)
+                .with_description("no mailbox in this account is shared with you"));
+        }
+    }
     let snoozed_mailbox: Option<Id> = account
         .mailboxes
         .iter()
@@ -1151,6 +1338,17 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         if let Err(refusal) = filed_somewhere(account, &email) {
             not_created.insert(creation_id, refusal);
             continue;
+        }
+        if !is_owner {
+            let caller = caller.expect("is_owner is false only when caller is Some");
+            if !may_create_email(account, &email, caller) {
+                not_created.insert(
+                    creation_id,
+                    SetError::new(error::set::FORBIDDEN)
+                        .with_description("you do not have write access to this mailbox"),
+                );
+                continue;
+            }
         }
         if let Some(refusal) = snooze_refusal(snooze_extension, snoozed_mailbox.as_ref(), &email) {
             not_created.insert(creation_id, refusal);
@@ -1215,7 +1413,21 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
                 .err()
                 .or_else(|| snooze_refusal(snooze_extension, snoozed_mailbox.as_ref(), &patched))
             {
-                None => to_update.push((id, patched)),
+                None => {
+                    if !is_owner {
+                        let caller = caller.expect("is_owner is false only when caller is Some");
+                        if !may_update_email(account, existing, &patched, caller) {
+                            not_updated.insert(
+                                id,
+                                SetError::new(error::set::FORBIDDEN).with_description(
+                                    "you do not have write access to this mailbox",
+                                ),
+                            );
+                            continue;
+                        }
+                    }
+                    to_update.push((id, patched))
+                }
                 Some(refusal) => {
                     not_updated.insert(id, refusal);
                 }
@@ -1226,7 +1438,26 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         }
     }
 
-    let destroy_ids = request.destroy.unwrap_or_default();
+    let mut destroy_ids: Vec<Id> = Vec::new();
+    for id in request.destroy.unwrap_or_default() {
+        let Some(existing) = account.emails.get(&id) else {
+            not_destroyed.insert(id, SetError::new(error::set::NOT_FOUND));
+            continue;
+        };
+        if !is_owner {
+            let caller = caller.expect("is_owner is false only when caller is Some");
+            if !may_destroy_email(account, existing, caller) {
+                not_destroyed.insert(
+                    id,
+                    SetError::new(error::set::FORBIDDEN)
+                        .with_description("you do not have write access to this mailbox"),
+                );
+                continue;
+            }
+        }
+        destroy_ids.push(id);
+    }
+
     let destroy_thread_ids: BTreeMap<Id, Id> = destroy_ids
         .iter()
         .filter_map(|id| {
@@ -1287,6 +1518,67 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     if !not_destroyed.is_empty() {
         response = response.with_not_destroyed(not_destroyed);
     }
+    to_result(&response)
+}
+
+pub fn email_changes(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
+    let request: ChangesRequest = parse_arguments(arguments)?;
+    let page_size = state.changes_page_size;
+    let never_terminates = state.changes_never_terminates;
+    let unrecognized_state_shape = state.stalwart_shaped_unrecognized_changes_state;
+    let account = account_mut(state, &request.account_id)?;
+    let is_owner = account_is_owner(account, caller);
+    if !is_owner {
+        let caller = caller.expect("is_owner is false only when caller is Some");
+        if !shared_with_caller(account, caller) {
+            return Err(MethodError::new(error::method::FORBIDDEN)
+                .with_description("no mailbox in this account is shared with you"));
+        }
+    }
+
+    let mut response = crate::setops::store_changes(
+        &account.emails,
+        request,
+        page_size,
+        unrecognized_state_shape,
+    )?;
+
+    if !is_owner {
+        let caller = caller.expect("is_owner is false only when caller is Some");
+        response.created.retain(|id| {
+            account
+                .emails
+                .get(id)
+                .is_some_and(|email| readable_email(account, email, caller))
+        });
+        response.updated.retain(|id| {
+            account
+                .emails
+                .get(id)
+                .is_some_and(|email| readable_email(account, email, caller))
+        });
+        response.destroyed.retain(|id| {
+            account
+                .emails
+                .get(id)
+                .is_some_and(|email| readable_email(account, email, caller))
+        });
+    }
+
+    if never_terminates
+        && (page_size.is_some() || response.has_more_changes)
+        && (!response.created.is_empty()
+            || !response.updated.is_empty()
+            || !response.destroyed.is_empty())
+    {
+        response.has_more_changes = true;
+        response.new_state = response.old_state.clone();
+    }
+
     to_result(&response)
 }
 

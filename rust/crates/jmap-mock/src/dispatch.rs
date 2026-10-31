@@ -255,11 +255,12 @@ fn handle_method(
         "Core/echo" => Ok(arguments),
         "Mailbox/get" => crate::mail::mailbox_get(state, arguments, caller),
         "Mailbox/set" => crate::mail::mailbox_set(state, arguments, caller),
-        "Email/get" => crate::mail::email_get(state, arguments),
+        "Email/get" => crate::mail::email_get(state, arguments, caller),
         "Thread/get" => crate::mail::thread_get(state, arguments),
         "SearchSnippet/get" => crate::mail::search_snippet_get(state, arguments),
-        "Email/query" => crate::mail::email_query(state, arguments),
-        "Email/set" => crate::mail::email_set(state, arguments),
+        "Email/query" => crate::mail::email_query(state, arguments, caller),
+        "Email/set" => crate::mail::email_set(state, arguments, caller),
+        "Email/changes" => crate::mail::email_changes(state, arguments, caller),
         "Email/import" => crate::mail::email_import(state, arguments),
         "Email/parse" => crate::mail::email_parse(state, arguments),
         "AddressBook/get" => crate::contacts::address_book_get(state, arguments, caller),
@@ -275,7 +276,6 @@ fn handle_method(
         "Task/set" => crate::tasks::task_set(state, arguments),
         "Task/query" => crate::tasks::task_query(state, arguments),
         "Mailbox/changes"
-        | "Email/changes"
         | "Thread/changes"
         | "AddressBook/changes"
         | "ContactCard/changes"
@@ -293,12 +293,6 @@ fn handle_method(
             let mut response = match name {
                 "Mailbox/changes" => crate::setops::store_changes(
                     &account.mailboxes,
-                    request,
-                    page_size,
-                    unrecognized_state_shape,
-                ),
-                "Email/changes" => crate::setops::store_changes(
-                    &account.emails,
                     request,
                     page_size,
                     unrecognized_state_shape,
