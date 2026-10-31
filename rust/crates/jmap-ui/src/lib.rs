@@ -8,6 +8,7 @@
 //! cannot show:
 //!
 //! - a vacation autoresponder page in the account editor,
+//! - a server filters page in the account editor, for server-side Sieve,
 //! - scheduled send in the composer,
 //! - snooze in the message list,
 //! - an info bar with "Undo" after the delete of a calendar or an address
@@ -38,3 +39,4 @@ pub mod session_cache;
 pub mod snooze;
 pub mod undo_delete;
 pub mod vacation;
+pub mod widget;

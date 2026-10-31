@@ -7,14 +7,26 @@
 //! for each account, at most one active). Evolution has no equivalent and
 //! no backend hook; the pattern is [`crate::vacation`].
 //!
-//! [`rules`] and [`script`] are the pure model: a rule, independent of
-//! Sieve, and the generator and parser that turn a list of rules into
-//! managed Sieve script text and back. Both have no FFI and are
-//! unit-tested directly. [`io`] does the round trips over a connected
-//! [`jmap_client::Client`]; it runs on worker threads only. The widgets and
-//! the `EExtension` follow in later commits, the same way
-//! [`crate::vacation`] is laid out.
+//! The module is divided by what each part needs to run:
+//!
+//! - [`rules`] and [`script`] are the pure model: a rule, independent of
+//!   Sieve, and the generator and parser that turn a list of rules into
+//!   managed Sieve script text and back.
+//! - [`form`] is the staged state of the page: the scripts, the edits the
+//!   user made, which buttons are usable, and what one submit writes.
+//! - [`io`] does the round trips over a connected
+//!   [`jmap_client::Client`]. It runs on worker threads only.
+//! - [`page`] is the `GtkScrolledWindow` subclass that implements
+//!   `EMailConfigPage`.
+//! - [`extension`] is the `EExtension` on `EMailConfigNotebook`. It checks
+//!   the backend name of the account and adds the page.
+//!
+//! Only [`page`] and [`extension`] have FFI. Every decision the page shows
+//! belongs to [`form`], which has unit tests.
 
+pub mod extension;
+pub mod form;
 pub mod io;
+pub mod page;
 pub mod rules;
 pub mod script;

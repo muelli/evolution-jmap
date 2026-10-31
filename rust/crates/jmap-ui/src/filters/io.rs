@@ -47,7 +47,25 @@ pub fn load(link: &AccountLink) -> Result<Loaded, String> {
     })
 }
 
+/// Asks the server whether `text` is a valid Sieve script (RFC 9661
+/// Section 2.5), without writing anything. `Ok(None)` means it is valid;
+/// `Ok(Some(..))` carries what the server objects to. This is the "Check"
+/// button, the one action of the page that does not wait for OK.
+pub fn check(link: &AccountLink, text: &str) -> Result<Option<String>, String> {
+    let account = link.features.account_id.clone();
+    let uploaded = link
+        .call(|client| client.upload_blob_slice(&account, "application/sieve", text.as_bytes()))
+        .map_err(|error| link::describe(&error))?;
+    let validated = link
+        .call(|client| client.sieve_script_validate(&account, uploaded.blob_id.clone()))
+        .map_err(|error| link::describe(&error))?;
+    Ok(validated
+        .error
+        .map(|error| error.description.unwrap_or(error.error_type)))
+}
+
 /// A script a save creates or updates, before the server assigns it an id.
+#[derive(Debug)]
 pub enum ScriptWrite {
     /// A new script, keyed by a client-chosen creation key.
     Create {
@@ -60,6 +78,7 @@ pub enum ScriptWrite {
 }
 
 /// Which `ScriptWrite` of a [`SavePlan`] a save activates, if any.
+#[derive(Debug)]
 pub enum ActivationTarget {
     /// The script a `ScriptWrite::Create` of the same plan introduces.
     Created(String),
@@ -68,7 +87,7 @@ pub enum ActivationTarget {
 }
 
 /// Whether and what a save activates, the third step of D4's submit order.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub enum ActivationChange {
     /// Leave the account's active script as it is.
     #[default]
@@ -84,11 +103,17 @@ pub enum ActivationChange {
 /// every changed script first and write nothing on the first invalid one,
 /// then one `SieveScript/set` with every create, update and destroy, with
 /// the activation change in the same request.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct SavePlan {
     pub writes: Vec<ScriptWrite>,
     pub destroys: Vec<Id>,
     pub activation: ActivationChange,
+    /// True when the save must deactivate the account's active script in a
+    /// request of its own, before the writes. RFC 9661 Section 2.4 applies
+    /// `onSuccessDeactivateScript` after the creates, updates and destroys,
+    /// so a destroy of the active script in the same request still fails
+    /// with `sieveIsActive`.
+    pub deactivate_first: bool,
 }
 
 /// Writes `plan` to the server. On an invalid script, returns the server's
@@ -118,6 +143,13 @@ pub fn save(link: &AccountLink, plan: &SavePlan) -> Result<(), String> {
             return Err(format!("{name}: {detail}"));
         }
         blob_ids.push(uploaded.blob_id);
+    }
+
+    if plan.deactivate_first {
+        let request = SieveScriptSetRequest::new(SetRequest::<SieveScript>::new(account.clone()))
+            .deactivating();
+        link.call(|client| client.sieve_script_set(&request))
+            .map_err(|error| link::describe(&error))?;
     }
 
     let mut set = SetRequest::<SieveScript>::new(account.clone());
@@ -172,7 +204,7 @@ mod tests {
     use jmap_client::{Client, Credentials};
     use jmap_mock::MockServer;
 
-    use super::{ActivationChange, ActivationTarget, SavePlan, ScriptWrite, load, save};
+    use super::{ActivationChange, ActivationTarget, SavePlan, ScriptWrite, check, load, save};
     use crate::link::AccountLink;
     use crate::session_cache::AccountFeatures;
 
@@ -214,6 +246,7 @@ mod tests {
             }],
             destroys: Vec::new(),
             activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
+            deactivate_first: false,
         };
         assert_eq!(save(&link, &plan), Ok(()));
 
@@ -236,6 +269,7 @@ mod tests {
             }],
             destroys: Vec::new(),
             activation: ActivationChange::Keep,
+            deactivate_first: false,
         };
         save(&link, &plan).unwrap();
         let id = load(&link).unwrap().scripts[0].script.id.clone().unwrap();
@@ -248,6 +282,7 @@ mod tests {
             }],
             destroys: Vec::new(),
             activation: ActivationChange::Keep,
+            deactivate_first: false,
         };
         assert_eq!(save(&link, &update), Ok(()));
 
@@ -272,6 +307,7 @@ mod tests {
                 }],
                 destroys: Vec::new(),
                 activation: ActivationChange::Keep,
+                deactivate_first: false,
             },
         )
         .unwrap();
@@ -284,11 +320,63 @@ mod tests {
                     writes: Vec::new(),
                     destroys: vec![id],
                     activation: ActivationChange::Keep,
+                    deactivate_first: false,
                 },
             ),
             Ok(())
         );
 
+        assert!(load(&link).unwrap().scripts.is_empty());
+    }
+
+    #[test]
+    fn save_deactivates_before_it_destroys_the_active_script() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+        save(
+            &link,
+            &SavePlan {
+                writes: vec![ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "first".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
+                deactivate_first: false,
+            },
+        )
+        .unwrap();
+        let id = load(&link).unwrap().scripts[0].script.id.clone().unwrap();
+
+        // Without the separate deactivation the server refuses the destroy:
+        // RFC 9661 Section 2.4 runs `onSuccessDeactivateScript` last.
+        assert!(
+            save(
+                &link,
+                &SavePlan {
+                    writes: Vec::new(),
+                    destroys: vec![id.clone()],
+                    activation: ActivationChange::Deactivate,
+                    deactivate_first: false,
+                },
+            )
+            .is_err(),
+            "the active script must not be destroyable in one request"
+        );
+
+        assert_eq!(
+            save(
+                &link,
+                &SavePlan {
+                    writes: Vec::new(),
+                    destroys: vec![id],
+                    activation: ActivationChange::Keep,
+                    deactivate_first: true,
+                },
+            ),
+            Ok(())
+        );
         assert!(load(&link).unwrap().scripts.is_empty());
     }
 
@@ -307,12 +395,33 @@ mod tests {
                 }],
                 destroys: Vec::new(),
                 activation: ActivationChange::Keep,
+                deactivate_first: false,
             },
         )
         .unwrap_err();
 
         assert!(error.contains("broken"), "error names the script: {error}");
         assert!(load(&link).unwrap().scripts.is_empty());
+    }
+
+    #[test]
+    fn check_accepts_a_valid_script_and_writes_nothing() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+
+        assert_eq!(check(&link, "keep;\n"), Ok(None));
+
+        assert!(load(&link).unwrap().scripts.is_empty());
+    }
+
+    #[test]
+    fn check_reports_what_the_server_objects_to() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+
+        let answer = check(&link, "if true {\n").unwrap();
+
+        assert!(answer.is_some(), "the server must refuse an open block");
     }
 
     #[test]
@@ -342,6 +451,7 @@ mod tests {
                 }],
                 destroys: Vec::new(),
                 activation: ActivationChange::Keep,
+                deactivate_first: false,
             },
         )
         .unwrap();

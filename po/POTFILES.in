@@ -66,6 +66,8 @@ rust/crates/jmap-mail/src/envelope.rs
 rust/crates/jmap-mail/src/provider.rs
 rust/crates/jmap-mail/src/sasl.rs
 rust/crates/jmap-ui/src/external_photo/display_ext.rs
+rust/crates/jmap-ui/src/filters/form.rs
+rust/crates/jmap-ui/src/filters/page.rs
 rust/crates/jmap-ui/src/filters/rules.rs
 rust/crates/jmap-ui/src/link.rs
 rust/crates/jmap-ui/src/send_later/extension.rs
