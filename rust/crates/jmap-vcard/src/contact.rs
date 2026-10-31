@@ -984,7 +984,7 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         }
     }
 
-    if let Some(file_as) = card
+    let explicit_file_as = card
         .name
         .as_ref()
         .and_then(|n| n.extra.get("fileAs").or_else(|| n.extra.get("file_as")))
@@ -993,10 +993,22 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
+        .map(str::to_owned);
+    // Evolution's Contact List Editor shows only `E_CONTACT_FILE_AS` as a
+    // list's name. Give a group card its full name there too, or an
+    // imported list shows no name at all in that editor.
+    let file_as = explicit_file_as.or_else(|| {
+        states_group_kind(card.kind.as_deref())
+            .then(|| card.name.as_ref().and_then(|n| n.full.as_deref()))
+            .flatten()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    });
+    if let Some(file_as) = file_as {
         entries.push(
             VCardEntry::new(VCardProperty::Other("X-EVOLUTION-FILE-AS".to_owned()))
-                .with_value(file_as.to_owned()),
+                .with_value(file_as),
         );
     }
 
