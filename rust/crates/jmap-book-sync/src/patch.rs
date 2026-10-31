@@ -66,6 +66,10 @@
 //! - `keywords` is a set and goes back replaced whole, because a tag has no
 //!   key and no members. The save adds each tag that `CATEGORIES` could not
 //!   carry, so the save does not delete it (see `diff_keywords`).
+//! - `members` (a group card only) is keyed by the member's uid. The vCard
+//!   shows only a member already in the address book (see `states_member`),
+//!   so the save patches `members/<uid>` by that key and leaves a member the
+//!   vCard cannot show untouched (see `diff_members`).
 //! - The vCard states only some entries of each keyed map. These have no line:
 //!   a title of a `kind` other than `title` and `role`, an address with no
 //!   `ADR` field and no written-out form, an organisation with no name and no
@@ -89,13 +93,14 @@ use jmap_proto::contacts::{
     Link, Media, Name, Nickname, Note, OnlineService, OrgUnit, Organization, Relation, Title,
 };
 use jmap_vcard::{
-    address_label, anniversary_date, maps_context, maps_phone_feature, online_service_handle,
-    online_service_uri, restore_address_components, restore_name_components, same_photo,
-    same_service, states_a_point_in_time, states_address, states_address_component,
-    states_anniversary, states_assistant, states_calendar, states_context, states_email,
-    states_keyword, states_link, states_manager, states_media, states_name, states_name_component,
-    states_nickname, states_note, states_online_service, states_org_unit, states_organization,
-    states_phone, states_phone_feature, states_spouse, states_title, title_kind,
+    VENDOR_BARE_MEMBERS, VENDOR_MEMBER_DETAILS, address_label, anniversary_date, maps_context,
+    maps_phone_feature, online_service_handle, online_service_uri, restore_address_components,
+    restore_name_components, same_photo, same_service, states_a_point_in_time, states_address,
+    states_address_component, states_anniversary, states_assistant, states_calendar,
+    states_context, states_email, states_keyword, states_link, states_manager, states_media,
+    states_member, states_name, states_name_component, states_nickname, states_note,
+    states_online_service, states_org_unit, states_organization, states_phone,
+    states_phone_feature, states_spouse, states_title, title_kind,
 };
 use serde_json::{Map, Value, json};
 
@@ -155,6 +160,12 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
         edited.related_to.as_ref(),
     );
     diff_keywords(&mut patch, current, edited);
+    diff_members(
+        &mut patch,
+        current.members.as_ref(),
+        edited.members.as_ref(),
+    );
+    diff_member_vendor_extra(&mut patch, &current.extra, &edited.extra);
     patch
 }
 
@@ -349,6 +360,75 @@ fn diff_related_to(
                 }
             }
         }
+    }
+}
+
+/// Patches group membership (`members`). Only a group card has this property.
+///
+/// The vCard shows only a member already in the address book ([`states_member`]):
+/// an `EMAIL` destination line carries the member's `X-EVOLUTION-DEST-CONTACT-UID`.
+/// An edit adds or removes one such line, so the save patches `members/<uid>` by
+/// that key. A server-only member detail the vCard cannot show stays untouched.
+fn diff_members(
+    patch: &mut Map<String, Value>,
+    current: Option<&BTreeMap<String, bool>>,
+    edited: Option<&BTreeMap<String, bool>>,
+) {
+    let empty = BTreeMap::new();
+    let current = current.unwrap_or(&empty);
+    let edited = edited.unwrap_or(&empty);
+
+    let shown: BTreeSet<&String> = current
+        .iter()
+        .filter(|&(uid, &active)| states_member(uid, active))
+        .map(|(uid, _)| uid)
+        .collect();
+    let wanted: BTreeSet<&String> = edited
+        .iter()
+        .filter(|&(uid, &active)| states_member(uid, active))
+        .map(|(uid, _)| uid)
+        .collect();
+    if shown == wanted {
+        return;
+    }
+
+    // RFC 8620 §5.3: a card with no `members` has no path to patch into, so
+    // write the property whole.
+    if current.is_empty() {
+        if !wanted.is_empty() {
+            let whole: BTreeMap<&String, bool> = wanted.iter().map(|&uid| (uid, true)).collect();
+            patch.insert("members".to_owned(), json_of(&whole));
+        }
+        return;
+    }
+
+    for &uid in shown.difference(&wanted) {
+        patch.insert(format!("members/{}", escape(uid)), Value::Null);
+    }
+    for &uid in wanted.difference(&shown) {
+        patch.insert(format!("members/{}", escape(uid)), Value::Bool(true));
+    }
+}
+
+/// Patches the vendor contact-list extras (a destination the address book
+/// cannot show as a member, and a cached display name or email for a shown
+/// member). Neither has a vCard-visible key list to diff entry by entry
+/// (see `jmap-vcard`'s `read_group_email_entry`), so a change writes the
+/// whole vendor property. Without this, an edit that only adds or changes
+/// one of these never reaches the server: `diff_members` patches `members`
+/// alone, and these two properties live outside it in `extra`.
+fn diff_member_vendor_extra(
+    patch: &mut Map<String, Value>,
+    current: &BTreeMap<String, Value>,
+    edited: &BTreeMap<String, Value>,
+) {
+    for key in [VENDOR_BARE_MEMBERS, VENDOR_MEMBER_DETAILS] {
+        let current_value = current.get(key);
+        let edited_value = edited.get(key);
+        if current_value == edited_value {
+            continue;
+        }
+        patch.insert(key.to_owned(), edited_value.cloned().unwrap_or(Value::Null));
     }
 }
 
@@ -1387,6 +1467,150 @@ mod tests {
             json!({"manager": true, "assistant": true}),
             "{patch:?}"
         );
+    }
+
+    #[test]
+    fn adding_a_member_to_a_group_card_patches_it_in() {
+        let current: BTreeMap<String, bool> = [("a".to_owned(), true)].into();
+        let edited: BTreeMap<String, bool> =
+            [("a".to_owned(), true), ("b".to_owned(), true)].into();
+
+        let mut patch = Map::new();
+        diff_members(&mut patch, Some(&current), Some(&edited));
+
+        assert_eq!(
+            patch,
+            Map::from_iter([("members/b".to_owned(), json!(true))])
+        );
+    }
+
+    #[test]
+    fn removing_a_member_from_a_group_card_patches_it_out() {
+        let current: BTreeMap<String, bool> =
+            [("a".to_owned(), true), ("b".to_owned(), true)].into();
+        let edited: BTreeMap<String, bool> = [("a".to_owned(), true)].into();
+
+        let mut patch = Map::new();
+        diff_members(&mut patch, Some(&current), Some(&edited));
+
+        assert_eq!(
+            patch,
+            Map::from_iter([("members/b".to_owned(), Value::Null)])
+        );
+    }
+
+    #[test]
+    fn an_unchanged_membership_patches_nothing() {
+        let current: BTreeMap<String, bool> =
+            [("a".to_owned(), true), ("b".to_owned(), true)].into();
+        let edited = current.clone();
+
+        let mut patch = Map::new();
+        diff_members(&mut patch, Some(&current), Some(&edited));
+
+        assert!(patch.is_empty(), "{patch:?}");
+    }
+
+    /// A new group card with no `members` path yet to patch into (RFC 8620
+    /// §5.3) writes the whole property once.
+    #[test]
+    fn a_first_member_on_a_card_with_none_yet_writes_the_whole_property() {
+        let edited: BTreeMap<String, bool> = [("a".to_owned(), true)].into();
+
+        let mut patch = Map::new();
+        diff_members(&mut patch, None, Some(&edited));
+
+        assert_eq!(
+            patch,
+            Map::from_iter([("members".to_owned(), json!({"a": true}))])
+        );
+    }
+
+    /// Adding a bare member (a destination with no address-book member) on
+    /// an edit writes the whole vendor property, since it has no key to
+    /// patch into entry by entry.
+    #[test]
+    fn adding_a_bare_member_patches_the_whole_vendor_property() {
+        let current: BTreeMap<String, Value> = BTreeMap::new();
+        let edited: BTreeMap<String, Value> = [(
+            VENDOR_BARE_MEMBERS.to_owned(),
+            json!([{"email": "outsider@example.com"}]),
+        )]
+        .into();
+
+        let mut patch = Map::new();
+        diff_member_vendor_extra(&mut patch, &current, &edited);
+
+        assert_eq!(
+            patch,
+            Map::from_iter([(
+                VENDOR_BARE_MEMBERS.to_owned(),
+                json!([{"email": "outsider@example.com"}])
+            )])
+        );
+    }
+
+    /// Changing a member's cached display name writes the whole vendor
+    /// property, same reason as a bare member.
+    #[test]
+    fn changing_a_member_detail_patches_the_whole_vendor_property() {
+        let current: BTreeMap<String, Value> = [(
+            VENDOR_MEMBER_DETAILS.to_owned(),
+            json!({"a": {"name": "Old Name"}}),
+        )]
+        .into();
+        let edited: BTreeMap<String, Value> = [(
+            VENDOR_MEMBER_DETAILS.to_owned(),
+            json!({"a": {"name": "New Name"}}),
+        )]
+        .into();
+
+        let mut patch = Map::new();
+        diff_member_vendor_extra(&mut patch, &current, &edited);
+
+        assert_eq!(
+            patch,
+            Map::from_iter([(
+                VENDOR_MEMBER_DETAILS.to_owned(),
+                json!({"a": {"name": "New Name"}})
+            )])
+        );
+    }
+
+    /// Removing the last bare member clears the vendor property with `null`,
+    /// the RFC 8620 §5.3 default for an absent property.
+    #[test]
+    fn removing_the_last_bare_member_clears_the_vendor_property() {
+        let current: BTreeMap<String, Value> = [(
+            VENDOR_BARE_MEMBERS.to_owned(),
+            json!([{"email": "outsider@example.com"}]),
+        )]
+        .into();
+        let edited: BTreeMap<String, Value> = BTreeMap::new();
+
+        let mut patch = Map::new();
+        diff_member_vendor_extra(&mut patch, &current, &edited);
+
+        assert_eq!(
+            patch,
+            Map::from_iter([(VENDOR_BARE_MEMBERS.to_owned(), Value::Null)])
+        );
+    }
+
+    /// An unchanged vendor extra patches nothing.
+    #[test]
+    fn unchanged_member_vendor_extra_patches_nothing() {
+        let current: BTreeMap<String, Value> = [(
+            VENDOR_MEMBER_DETAILS.to_owned(),
+            json!({"a": {"name": "Same Name"}}),
+        )]
+        .into();
+        let edited = current.clone();
+
+        let mut patch = Map::new();
+        diff_member_vendor_extra(&mut patch, &current, &edited);
+
+        assert!(patch.is_empty(), "{patch:?}");
     }
 
     #[derive(Clone, serde::Serialize)]

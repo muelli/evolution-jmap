@@ -32,7 +32,7 @@
 //! not write.
 
 use std::cell::RefCell;
-use std::ffi::{CStr, c_char, c_int};
+use std::ffi::{CStr, c_int};
 use std::ptr;
 use std::sync::Arc;
 
@@ -55,8 +55,8 @@ use gio_sys::{
 };
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_new_literal, gboolean, gpointer};
 use gobject_sys::{
-    GObject, GObjectClass, GTypeInstance, g_object_get, g_object_ref, g_object_set, g_object_unref,
-    g_signal_connect_data, g_type_from_name,
+    GObject, GObjectClass, GTypeInstance, g_object_ref, g_object_unref, g_signal_connect_data,
+    g_type_from_name,
 };
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::error::cstring_lossy;
@@ -69,6 +69,7 @@ use crate::dispatch;
 use crate::link::{self, AccountLink, SendSource};
 use crate::vacation::form::VacationForm;
 use crate::vacation::io;
+use crate::widget::{get_bool, get_text, set_bool, set_text};
 
 const NAME: &CStr = c"JmapVacationPage";
 const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-vacation-page-state");
@@ -601,83 +602,5 @@ unsafe fn set_date(field: *mut GtkWidget, value: &str) {
             Some((year, month, day)) => e_date_edit_set_date(field.cast(), year, month, day),
             None => e_date_edit_set_time(field.cast(), -1),
         }
-    }
-}
-
-/// Reads the string property `text`. Both `GtkEntry` and `GtkTextBuffer`
-/// have this property, so the bindings do not need `GtkTextIter`.
-///
-/// # Safety
-///
-/// `object` must be a live GObject with a readable string `text` property.
-unsafe fn get_text(object: *mut GObject) -> String {
-    let mut value: *mut c_char = ptr::null_mut();
-    // SAFETY: per the contract. g_object_get copies the property value, and
-    // the NULL sentinel ends the varargs.
-    unsafe {
-        g_object_get(
-            object,
-            c"text".as_ptr(),
-            &mut value as *mut *mut c_char,
-            ptr::null::<c_char>(),
-        );
-    }
-    if value.is_null() {
-        return String::new();
-    }
-    // SAFETY: a NUL-terminated copy that this call owns. It is freed below.
-    let text = unsafe { CStr::from_ptr(value) }
-        .to_string_lossy()
-        .into_owned();
-    // SAFETY: the copy from g_object_get.
-    unsafe { glib_sys::g_free(value.cast()) };
-    text
-}
-
-/// # Safety
-///
-/// `object` must be a live GObject with a writable string `text` property.
-unsafe fn set_text(object: *mut GObject, text: &str) {
-    let text = cstring_lossy(text);
-    // SAFETY: per the contract. The property system copies the string.
-    unsafe {
-        g_object_set(
-            object,
-            c"text".as_ptr(),
-            text.as_ptr(),
-            ptr::null::<c_char>(),
-        );
-    }
-}
-
-/// # Safety
-///
-/// `object` must be a live GObject with a readable boolean `active` property.
-unsafe fn get_bool(object: *mut GObject) -> bool {
-    let mut value: gboolean = GFALSE;
-    // SAFETY: per the contract.
-    unsafe {
-        g_object_get(
-            object,
-            c"active".as_ptr(),
-            &mut value as *mut gboolean,
-            ptr::null::<c_char>(),
-        );
-    }
-    value != GFALSE
-}
-
-/// # Safety
-///
-/// `object` must be a live GObject with a writable boolean `active` property.
-unsafe fn set_bool(object: *mut GObject, active: bool) {
-    // SAFETY: per the contract.
-    unsafe {
-        g_object_set(
-            object,
-            c"active".as_ptr(),
-            if active { GTRUE } else { GFALSE },
-            ptr::null::<c_char>(),
-        );
     }
 }

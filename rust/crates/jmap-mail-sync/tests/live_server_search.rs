@@ -32,6 +32,7 @@ use jmap_proto::mail::{EmailQueryFilter, role};
 use jmap_proto::methods::Filter;
 use jmap_proto::session::CAPABILITY_MAIL;
 use jmap_test_support::{connect_for_write, unique_suffix};
+use std::time::{Duration, Instant};
 
 /// Imports a message with `subject` into `mailbox`.
 fn import(sync: &MailSync, mailbox: &jmap_proto::Id, subject: &str) -> jmap_proto::Id {
@@ -46,6 +47,30 @@ fn import(sync: &MailSync, mailbox: &jmap_proto::Id, subject: &str) -> jmap_prot
     );
     sync.import_message(mailbox, message.into_bytes(), &Keywords::default(), None)
         .expect("Email/import failed against the real server")
+}
+
+/// Runs `sync.search` in `mailbox` for `filter`, retrying for up to two
+/// seconds until `wanted` appears in the result. Some servers queue full-text
+/// indexing instead of indexing a message synchronously at import time, so a
+/// text filter right after `Email/import` can miss the message for a short
+/// window. Returns the last result once `wanted` appears or the deadline
+/// passes, so a genuine miss still fails the caller's own assertion.
+fn search_until(
+    sync: &MailSync,
+    mailbox: &jmap_proto::Id,
+    filter: Filter<EmailQueryFilter>,
+    wanted: &jmap_proto::Id,
+) -> Vec<jmap_proto::Id> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let found = sync
+            .search(mailbox, filter.clone())
+            .expect("Email/query failed against the real server");
+        if found.contains(wanted) || Instant::now() >= deadline {
+            return found;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Two messages in different folders have the same subject token. A search
@@ -84,12 +109,12 @@ fn searching_a_folder_finds_only_messages_filed_there_on_the_real_server() {
     let in_inbox = import(&sync, &inbox_id, &format!("{token} inbox copy"));
     let in_folder = import(&sync, &folder.id, &format!("{token} folder copy"));
 
-    let found_in_inbox = sync
-        .search(
-            &inbox_id,
-            Filter::condition(EmailQueryFilter::default().subject(token.clone())),
-        )
-        .expect("Email/query failed against the real server");
+    let found_in_inbox = search_until(
+        &sync,
+        &inbox_id,
+        Filter::condition(EmailQueryFilter::default().subject(token.clone())),
+        &in_inbox,
+    );
     assert!(
         found_in_inbox.contains(&in_inbox),
         "searching the Inbox for the shared token should find the message filed there"
@@ -99,12 +124,12 @@ fn searching_a_folder_finds_only_messages_filed_there_on_the_real_server() {
         "searching the Inbox for the shared token should not find the message filed in the other folder"
     );
 
-    let found_in_folder = sync
-        .search(
-            &folder.id,
-            Filter::condition(EmailQueryFilter::default().subject(token.clone())),
-        )
-        .expect("Email/query failed against the real server");
+    let found_in_folder = search_until(
+        &sync,
+        &folder.id,
+        Filter::condition(EmailQueryFilter::default().subject(token.clone())),
+        &in_folder,
+    );
     assert!(
         found_in_folder.contains(&in_folder),
         "searching the new folder for the shared token should find the message filed there"

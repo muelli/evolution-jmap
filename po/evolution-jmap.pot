@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-30 00:03+0000\n"
+"POT-Creation-Date: 2026-10-31 02:00+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -450,6 +450,382 @@ msgstr ""
 msgid "Load image"
 msgstr ""
 
+#: rust/crates/jmap-ui/src/filters/form.rs:34
+msgid "Give the script a name"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/form.rs:35
+msgid "Select a script first."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/form.rs:36
+msgid "A script name cannot contain a newline or NUL character"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/form.rs:37
+msgid "This name belongs to the vacation responder"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/form.rs:38
+msgid "Another script already has this name"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/form.rs:39
+msgid "This name is too long for this server"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/form.rs:40
+msgid "This server holds no more scripts. Remove one first."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/form.rs:42
+msgid ""
+"The vacation responder owns this script. Change it on the Vacation Responder "
+"page."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/form.rs:44
+msgid "Turn off the vacation responder to activate server filters."
+msgstr ""
+
+#. TRANSLATORS: %1$s is the name of the filter script.
+#: rust/crates/jmap-ui/src/filters/form.rs:46
+#, c-format
+msgid "%1$s: the script is too large for this server"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:90
+#: rust/crates/jmap-ui/src/vacation/page.rs:77
+msgid "Contacting the mail server…"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:91
+msgid "Your server does not offer server-side filters."
+msgstr ""
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/filters/page.rs:93
+#, c-format
+msgid "The filters could not be read: %1$s"
+msgstr ""
+
+#. TRANSLATORS: the Active column of the script list, for the one script
+#. the account runs. Every other row leaves the column empty.
+#: rust/crates/jmap-ui/src/filters/page.rs:96
+msgid "Yes"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the name of a filter script on the server.
+#: rust/crates/jmap-ui/src/filters/page.rs:98
+#, c-format
+msgid "%1$s (used by the Vacation Responder)"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:99
+msgid "New Filter Script"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:100
+msgid "Rename Filter Script"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:101
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:337
+msgid "_Name:"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:102
+msgid "Checking the script…"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:103
+msgid "The script is valid."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:109
+msgid "New Rule"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:110
+msgid "Edit Rule"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:111
+msgid "_Edit as text"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:112
+msgid "This script was changed outside Evolution. It shows as text."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:220
+msgid "Server Filters"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:265
+#: rust/crates/jmap-ui/src/filters/page.rs:313
+msgid "Name"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:266
+msgid "Active"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:278
+msgid "_Add"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:279
+msgid "_Rename"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:280
+msgid "Re_move"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:281
+msgid "A_ctivate"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:282
+msgid "_Deactivate"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:293
+msgid "_Script:"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:312
+msgid "Enabled"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:324
+msgid "A_dd"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:325
+msgid "_Edit"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:326
+msgid "Rem_ove"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:327
+msgid "Move _Up"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:328
+msgid "Move Do_wn"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:329
+msgid "E_nable"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:330
+msgid "Disa_ble"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:332
+msgid "C_heck"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:1411
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:428
+#: rust/crates/jmap-ui/src/send_later/extension.rs:828
+msgid "_Cancel"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:1414
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:431
+msgid "_OK"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:45
+msgid "Choose a folder for this action"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:47
+msgid "This account has no folder to file into"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:49
+msgid "Choose an action for this row"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:86
+msgid "From"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:87
+msgid "To"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:88
+msgid "Cc"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:89
+msgid "To or Cc"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:90
+msgid "Subject"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:91
+msgid "Other header"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:92
+msgid "Message size"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:147
+msgid "contains"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:148
+msgid "does not contain"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:149
+msgid "is"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:150
+msgid "matches"
+msgstr ""
+
+#. TRANSLATORS: the value beside this operator is a whole number of
+#. kilobytes.
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:153
+msgid "is more than (KB)"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:154
+msgid "is less than (KB)"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:182
+msgid "Move to folder"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:183
+msgid "Copy to folder"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:184
+msgid "Mark as read"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:185
+msgid "Flag the message"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:186
+msgid "Redirect to address"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:187
+msgid "Discard"
+msgstr ""
+
+#. TRANSLATORS: this completes "Match ... of the following".
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:314
+msgid "all"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:315
+msgid "any"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:338
+msgid "_Match:"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:339
+msgid "If the message matches:"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:340
+msgid "Then:"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:341
+msgid "Add _condition"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:342
+msgid "Add _action"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:343
+msgid "_Remove"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:344
+msgid "_Stop processing more rules"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:345
+msgid "Header name"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:719
+msgid "_Keep a copy"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:18
+msgid "Select a rule first."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:19
+msgid "This rule is already first."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:20
+msgid "This rule is already last."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:21
+msgid "Select a condition first."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:22
+msgid "Select an action first."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:89
+msgid "Add at least one action"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:91
+msgid "The value cannot contain a newline or NUL character"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:94
+msgid ""
+"A header name cannot contain a colon, space, control or non-ASCII character"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:96
+msgid "Size must be a whole number of kilobytes greater than zero"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:100
+msgid "'More than' and 'Less than' compare the message size only"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:102
+msgid "The address must contain exactly one '@'"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rules.rs:105
+msgid "Discard cannot be combined with Move to, Copy to or Redirect"
+msgstr ""
+
 #: rust/crates/jmap-ui/src/link.rs:52
 msgid ""
 "the server rejected the account's credentials — it may need to be signed in "
@@ -552,10 +928,6 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/send_later/extension.rs:824
 msgid "Send Later"
-msgstr ""
-
-#: rust/crates/jmap-ui/src/send_later/extension.rs:828
-msgid "_Cancel"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/send_later/extension.rs:833
@@ -700,40 +1072,36 @@ msgid ""
 "open"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:76
-msgid "Contacting the mail server…"
-msgstr ""
-
-#: rust/crates/jmap-ui/src/vacation/page.rs:77
+#: rust/crates/jmap-ui/src/vacation/page.rs:78
 msgid "This account’s server does not offer a vacation autoresponder."
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/vacation/page.rs:79
+#: rust/crates/jmap-ui/src/vacation/page.rs:80
 #, c-format
 msgid "The autoresponder could not be read: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:160
+#: rust/crates/jmap-ui/src/vacation/page.rs:161
 msgid "Vacation Responder"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:211
+#: rust/crates/jmap-ui/src/vacation/page.rs:212
 msgid "Send _automatic replies"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:228
+#: rust/crates/jmap-ui/src/vacation/page.rs:229
 msgid "_First day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:230
+#: rust/crates/jmap-ui/src/vacation/page.rs:231
 msgid "_Last day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:232
+#: rust/crates/jmap-ui/src/vacation/page.rs:233
 msgid "_Subject:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:235
+#: rust/crates/jmap-ui/src/vacation/page.rs:236
 msgid "_Message:"
 msgstr ""

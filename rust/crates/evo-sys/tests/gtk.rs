@@ -48,6 +48,21 @@ const CLASSES: &[(&str, unsafe extern "C" fn() -> GType)] = &[
     // list names it so the same once-guarded registration and name check
     // cover it.
     ("GtkTextBuffer", gtk_text_buffer_get_type),
+    // The script list of the Server Filters page. GtkTreeView is the only
+    // widget of these five; the other four are the model, its interface,
+    // the column, the renderer and the selection.
+    ("GtkTreeView", gtk_tree_view_get_type),
+    ("GtkListStore", gtk_list_store_get_type),
+    ("GtkTreeModel", gtk_tree_model_get_type),
+    ("GtkTreeViewColumn", gtk_tree_view_column_get_type),
+    ("GtkCellRenderer", gtk_cell_renderer_get_type),
+    ("GtkTreeSelection", gtk_tree_selection_get_type),
+    // The parent of the name dialog that Add and Rename open.
+    ("GtkWindow", gtk_window_get_type),
+    // The rule dialog's field, operator and action combos. GtkComboBoxText
+    // above is the class the dialog constructs; GtkComboBox is the base
+    // class whose `active` index the dialog reads and writes.
+    ("GtkComboBox", gtk_combo_box_get_type),
 ];
 
 /// This function registers the classes exactly once. On GTK 3, registering
@@ -131,10 +146,21 @@ fn the_casts_the_widget_calls_require_are_upcasts_gtk_agrees_with() {
     let widget = class("GtkWidget");
     let container = class("GtkContainer");
     for (name, gtype) in classes() {
-        if *name == "GtkTextBuffer" {
-            // GtkTextBuffer is the one plain GObject in this list. Code
-            // reaches it only through `gtk_text_view_get_buffer` and the
-            // `text` property.
+        if matches!(
+            *name,
+            // The entries of this list that are not widgets. Code reaches
+            // GtkTextBuffer through `gtk_text_view_get_buffer` and the
+            // `text` property. The four list types below are the model
+            // behind the script list, its column and renderer, and its
+            // selection: all of them plain GObjects or an interface, and
+            // all of them reached only from the GtkTreeView that owns them.
+            "GtkTextBuffer"
+                | "GtkListStore"
+                | "GtkTreeModel"
+                | "GtkTreeViewColumn"
+                | "GtkCellRenderer"
+                | "GtkTreeSelection"
+        ) {
             continue;
         }
         assert_eq!(
@@ -150,6 +176,14 @@ fn the_casts_the_widget_calls_require_are_upcasts_gtk_agrees_with() {
             "{name} is no longer a GtkContainer, so it is no longer a thing children are added to"
         );
     }
+    // The rule dialog constructs a GtkComboBoxText and reads its selected
+    // index with `gtk_combo_box_get_active`, which takes a GtkComboBox *.
+    // That one cast is the whole reason GtkComboBox is a handle here.
+    assert_eq!(
+        unsafe { g_type_is_a(class("GtkComboBoxText"), class("GtkComboBox")) },
+        GTRUE,
+        "GtkComboBoxText is no longer a GtkComboBox: the dialog's cast to read its active index is invalid"
+    );
 }
 
 /// The handles stay opaque handles. Nothing in this crate knows the layout
@@ -171,6 +205,11 @@ fn the_widget_handles_carry_no_layout() {
         "GtkComboBoxText is no longer opaque"
     );
     assert_eq!(
+        size_of::<GtkComboBox>(),
+        0,
+        "GtkComboBox is no longer opaque"
+    );
+    assert_eq!(
         size_of::<GtkTextView>(),
         0,
         "GtkTextView is no longer opaque"
@@ -186,6 +225,22 @@ fn the_widget_handles_carry_no_layout() {
         "GtkContainer is no longer opaque"
     );
     assert_eq!(size_of::<EDateEdit>(), 0, "EDateEdit is no longer opaque");
+    // The script list's own types. GtkTreeIter is the one name here that is
+    // a real struct in GTK, not a class. It must stay opaque: nothing in
+    // this workspace allocates one, and a generated layout would be a claim
+    // about a struct nobody here reads a field of.
+    for (name, size) in [
+        ("GtkTreeView", size_of::<GtkTreeView>()),
+        ("GtkTreeViewColumn", size_of::<GtkTreeViewColumn>()),
+        ("GtkCellRenderer", size_of::<GtkCellRenderer>()),
+        ("GtkTreeModel", size_of::<GtkTreeModel>()),
+        ("GtkListStore", size_of::<GtkListStore>()),
+        ("GtkTreeSelection", size_of::<GtkTreeSelection>()),
+        ("GtkTreePath", size_of::<GtkTreePath>()),
+        ("GtkTreeIter", size_of::<GtkTreeIter>()),
+    ] {
+        assert_eq!(size, 0, "{name} is no longer opaque");
+    }
 }
 
 /// Every call the page needs, named once. The important part of this test
@@ -272,6 +327,107 @@ fn every_widget_entry_point_this_crate_offers_resolves() {
             "e_date_edit_set_allow_no_date_set",
             e_date_edit_set_allow_no_date_set as *const (),
         ),
+        // The Server Filters page's script list, and the two text-view
+        // settings its editor needs.
+        ("gtk_list_store_newv", gtk_list_store_newv as *const ()),
+        ("gtk_list_store_clear", gtk_list_store_clear as *const ()),
+        (
+            "gtk_list_store_insert_with_valuesv",
+            gtk_list_store_insert_with_valuesv as *const (),
+        ),
+        (
+            "gtk_tree_view_new_with_model",
+            gtk_tree_view_new_with_model as *const (),
+        ),
+        (
+            "gtk_tree_view_append_column",
+            gtk_tree_view_append_column as *const (),
+        ),
+        (
+            "gtk_tree_view_get_selection",
+            gtk_tree_view_get_selection as *const (),
+        ),
+        (
+            "gtk_tree_view_set_headers_visible",
+            gtk_tree_view_set_headers_visible as *const (),
+        ),
+        (
+            "gtk_tree_view_set_cursor",
+            gtk_tree_view_set_cursor as *const (),
+        ),
+        (
+            "gtk_tree_view_column_new",
+            gtk_tree_view_column_new as *const (),
+        ),
+        (
+            "gtk_tree_view_column_set_title",
+            gtk_tree_view_column_set_title as *const (),
+        ),
+        (
+            "gtk_tree_view_column_set_expand",
+            gtk_tree_view_column_set_expand as *const (),
+        ),
+        (
+            "gtk_tree_view_column_pack_start",
+            gtk_tree_view_column_pack_start as *const (),
+        ),
+        (
+            "gtk_tree_view_column_add_attribute",
+            gtk_tree_view_column_add_attribute as *const (),
+        ),
+        (
+            "gtk_cell_renderer_text_new",
+            gtk_cell_renderer_text_new as *const (),
+        ),
+        (
+            "gtk_tree_selection_get_selected_rows",
+            gtk_tree_selection_get_selected_rows as *const (),
+        ),
+        (
+            "gtk_tree_selection_set_mode",
+            gtk_tree_selection_set_mode as *const (),
+        ),
+        (
+            "gtk_tree_path_new_from_indicesv",
+            gtk_tree_path_new_from_indicesv as *const (),
+        ),
+        (
+            "gtk_tree_path_get_indices_with_depth",
+            gtk_tree_path_get_indices_with_depth as *const (),
+        ),
+        ("gtk_tree_path_free", gtk_tree_path_free as *const ()),
+        (
+            "gtk_widget_set_size_request",
+            gtk_widget_set_size_request as *const (),
+        ),
+        (
+            "gtk_text_view_set_editable",
+            gtk_text_view_set_editable as *const (),
+        ),
+        (
+            "gtk_text_view_set_monospace",
+            gtk_text_view_set_monospace as *const (),
+        ),
+        (
+            "gtk_widget_get_toplevel",
+            gtk_widget_get_toplevel as *const (),
+        ),
+        // The rule dialog: the selected index of each combo, and the row
+        // removal that its Remove buttons do.
+        (
+            "gtk_combo_box_get_active",
+            gtk_combo_box_get_active as *const (),
+        ),
+        (
+            "gtk_combo_box_set_active",
+            gtk_combo_box_set_active as *const (),
+        ),
+        (
+            "gtk_combo_box_text_remove_all",
+            gtk_combo_box_text_remove_all as *const (),
+        ),
+        ("gtk_container_remove", gtk_container_remove as *const ()),
+        ("gtk_widget_get_parent", gtk_widget_get_parent as *const ()),
     ];
     for (name, address) in entry_points {
         assert!(!address.is_null(), "{name} resolved to NULL");

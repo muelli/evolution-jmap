@@ -361,6 +361,73 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_button_new_with_mnemonic",
     "gtk_button_get_type",
     "gtk_widget_show",
+    // The Server Filters page's script list. The list is a GtkTreeView over
+    // a GtkListStore of two text columns, Name and Active.
+    //
+    // Every call here avoids a caller-allocated `GtkTreeIter`. `_newv` takes
+    // an array of GTypes, `_insert_with_valuesv` takes arrays of column
+    // numbers and `GValue`s and accepts NULL for its iterator, and the
+    // selection is read as `GtkTreePath`s, not as an iterator. `GValue` and
+    // the `GList` of paths come from gobject-sys and glib-sys, which own
+    // those layouts. So this crate still generates no GTK struct layout
+    // (see `BLOCKED_GTK_TYPES`).
+    "gtk_list_store_newv",
+    "gtk_list_store_clear",
+    "gtk_list_store_insert_with_valuesv",
+    "gtk_tree_view_new_with_model",
+    "gtk_tree_view_append_column",
+    "gtk_tree_view_get_selection",
+    "gtk_tree_view_set_headers_visible",
+    "gtk_tree_view_set_cursor",
+    "gtk_tree_view_column_new",
+    "gtk_tree_view_column_set_title",
+    "gtk_tree_view_column_set_expand",
+    "gtk_tree_view_column_pack_start",
+    "gtk_tree_view_column_add_attribute",
+    "gtk_cell_renderer_text_new",
+    "gtk_tree_selection_get_selected_rows",
+    "gtk_tree_selection_set_mode",
+    "gtk_tree_path_new_from_indicesv",
+    "gtk_tree_path_get_indices_with_depth",
+    "gtk_tree_path_free",
+    // The list keeps a height of its own inside the page's scrolled window.
+    "gtk_widget_set_size_request",
+    // The text-mode editor: monospace, and read-only for a script the
+    // vacation responder owns.
+    "gtk_text_view_set_editable",
+    "gtk_text_view_set_monospace",
+    // The parent window of the name dialog that Add and Rename open.
+    "gtk_widget_get_toplevel",
+    // The rule dialog of the Server Filters page. Each combo is a
+    // GtkComboBoxText, built with the two calls above, and the dialog reads
+    // and writes which item is chosen as the `active` index of its
+    // GtkComboBox base class.
+    //
+    // These two calls, and not the `active` property, are what the dialog
+    // uses. `GtkComboBox:active` is a gint, while the `active` property of
+    // a GtkToggleButton (which `jmap-ui`'s widget helpers read and write)
+    // is a gboolean. One helper for both would pass the wrong type through
+    // the varargs of `g_object_get`.
+    "gtk_combo_box_get_active",
+    "gtk_combo_box_set_active",
+    // The operator combo of a condition row offers different items for the
+    // message size than for a header, so changing the field refills it.
+    "gtk_combo_box_text_remove_all",
+    // A condition row and an action row of the dialog each have a Remove
+    // button that takes the row out of the box that holds it. The handler
+    // reaches that row from the button it was pressed on.
+    "gtk_container_remove",
+    "gtk_widget_get_parent",
+    // This module never calls these. `tests/gtk.rs` uses them to confirm
+    // the opaque handles above really are these classes.
+    "gtk_tree_view_get_type",
+    "gtk_tree_view_column_get_type",
+    "gtk_cell_renderer_get_type",
+    "gtk_list_store_get_type",
+    "gtk_tree_model_get_type",
+    "gtk_tree_selection_get_type",
+    "gtk_window_get_type",
+    "gtk_combo_box_get_type",
 ];
 
 /// Types that already exist in eds-sys. This crate must not generate them a
@@ -588,6 +655,9 @@ const GTK_HANDLES: &[&str] = &[
     "GtkLabel",
     "GtkEntry",
     "GtkComboBoxText",
+    // The base class of GtkComboBoxText. The rule dialog constructs the
+    // text subclass and reads the chosen item from this class.
+    "GtkComboBox",
     "GtkTextView",
     "GtkTextBuffer",
     "GtkContainer",
@@ -606,6 +676,21 @@ const GTK_HANDLES: &[&str] = &[
     // `typedef GdkRectangle GtkAllocation` in the real header, not a class;
     // this crate never reads a field of it, only passes the pointer on.
     "GtkAllocation",
+    // The Server Filters page's script list, and the model behind it.
+    "GtkTreeView",
+    "GtkTreeViewColumn",
+    "GtkCellRenderer",
+    "GtkTreeModel",
+    "GtkListStore",
+    "GtkTreeSelection",
+    // A row of the model, as a path of indices. The calls that make and
+    // read one give and take a pointer, so this stays a handle too.
+    "GtkTreePath",
+    // The row cursor of the model. This is the one name here that is a
+    // real struct in GTK, not a class. It stays opaque because nothing in
+    // this workspace allocates one: the two calls that take it get NULL,
+    // and the selection is read through `GtkTreePath` instead.
+    "GtkTreeIter",
 ];
 
 fn main() {
@@ -728,6 +813,7 @@ fn main() {
     builder = builder
         .raw_line("pub type GtkAssistantPageType = ::std::os::raw::c_uint;")
         .raw_line("pub type GtkOrientation = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_ORIENTATION_HORIZONTAL: GtkOrientation = 0;")
         .raw_line("pub const GTK_ORIENTATION_VERTICAL: GtkOrientation = 1;")
         // `gtk_message_dialog_new`'s three enum arguments. This crate names
         // only the values the refusal dialog passes.
@@ -743,6 +829,11 @@ fn main() {
         .raw_line("pub const GTK_RESPONSE_CANCEL: ::std::os::raw::c_int = -6;")
         // The response that closes an alert in the info bar.
         .raw_line("pub const GTK_RESPONSE_CLOSE: ::std::os::raw::c_int = -7;")
+        // `gtk_tree_selection_set_mode`'s argument. The script list takes
+        // one row at a time, `GTK_SELECTION_BROWSE`, so a list with rows
+        // always has one selected.
+        .raw_line("pub type GtkSelectionMode = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_SELECTION_BROWSE: GtkSelectionMode = 2;")
         // `e_web_view_register_element_clicked`'s callback type. Bindgen
         // will not generate this on its own: its signature names
         // `GtkAllocation`, a blocklisted type, so bindgen drops the typedef

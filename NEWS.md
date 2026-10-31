@@ -5,6 +5,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # NEWS
 
+## Unreleased
+
+- Added a `Server Filters` page to the account editor for servers that
+  support JMAP Sieve filters. It lists and manages filter scripts, and
+  offers a rules list for one managed script so most users never need
+  to write Sieve by hand.
+
 ## 0.6.0 (2026-10-30)
 
 - Calendars and address books that another user shares are now shown

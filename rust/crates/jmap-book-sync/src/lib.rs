@@ -27,7 +27,7 @@ use jmap_client::{ChangeSet, Client};
 use jmap_object_sync::{ObjectKind, revision_of};
 use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
 use jmap_proto::{Id, State};
-use jmap_vcard::{card_to_vcard, vcard_to_card};
+use jmap_vcard::{VENDOR_MEMBER_DETAILS, card_to_vcard, states_group_kind, vcard_to_card};
 use serde_json::{Map, Value};
 
 pub use error::SyncError;
@@ -178,6 +178,7 @@ impl BookSync {
         existing_uid: Option<&str>,
     ) -> Result<ContactInfo, SyncError> {
         let mut card = vcard_to_card(vcard)?;
+        resolve_member_uids(&self.client, &self.account_id, &mut card);
         let Some(uid) = existing_uid else {
             card.id = None;
             card.address_book_ids = Some(BTreeMap::from([(self.address_book_id.clone(), true)]));
@@ -215,14 +216,20 @@ impl BookSync {
         // untouched `blobId` photo as edited.
         let resolved = resolve_inline_photos(&self.client, &self.account_id, &current);
         let mut patch = match base {
-            Some(base) => jmap_object_sync::patch_since::<Cards>(
-                vcard_to_card(base.vcard),
-                base.on_conflict,
-                &resolved,
-                &card,
-                uid,
-            )
-            .map_err(|_| SyncError::OutOfSync(uid.to_owned()))?,
+            Some(base) => {
+                let base_card = vcard_to_card(base.vcard).map(|mut base_card| {
+                    resolve_member_uids(&self.client, &self.account_id, &mut base_card);
+                    base_card
+                });
+                jmap_object_sync::patch_since::<Cards>(
+                    base_card,
+                    base.on_conflict,
+                    &resolved,
+                    &card,
+                    uid,
+                )
+                .map_err(|_| SyncError::OutOfSync(uid.to_owned()))?
+            }
             None => patch::diff(&resolved, &card),
         };
         if patch.is_empty() {
@@ -309,9 +316,12 @@ impl ContactInfo {
     ///
     /// `client` and `account_id` resolve a photo that names a `blob_id` (RFC
     /// 9610 section 2) into an inline `data:` URI; see [`resolve_inline_photos`].
+    /// They also give a group card's members the id EDS recognises; see
+    /// [`resolve_member_ids`].
     fn render(client: &Client, account_id: &Id, card: &ContactCard) -> Result<Self, SyncError> {
         let uid = jmap_object_sync::id_of::<Cards>(card)?.to_string();
         let card = resolve_inline_photos(client, account_id, card);
+        let card = resolve_member_ids(client, account_id, &card);
         let vcard = card_to_vcard(&card);
         Ok(Self {
             revision: revision_of(&vcard),
@@ -358,6 +368,106 @@ fn resolve_inline_photos(client: &Client, account_id: &Id, card: &ContactCard) -
         }
     }
     card
+}
+
+/// Give a group card's `members` the id EDS recognises for each member.
+///
+/// `ContactCard/set` keys `members` by a member's JSContact `uid` (RFC 9553
+/// section 2.1.8), but a vCard `UID` line, and so `X-EVOLUTION-DEST-CONTACT-UID`
+/// (see [`resolve_member_uids`]), names the JMAP id instead: [`card_to_vcard`]
+/// writes the id there, not the `uid`. This looks each member's id up by its
+/// `uid` so the rendered vCard can point EDS at the right cached contact.
+///
+/// A member whose `uid` the server holds no card for (it was renamed away, or
+/// it was deleted) is dropped: there is no id to give EDS for it. A later sync
+/// edit then saves a card with that member already gone.
+fn resolve_member_ids(client: &Client, account_id: &Id, card: &ContactCard) -> ContactCard {
+    let mut card = card.clone();
+    if !states_group_kind(card.kind.as_deref()) {
+        return card;
+    }
+    let Some(members) = card.members.take() else {
+        return card;
+    };
+    let mut resolved = BTreeMap::new();
+    let mut uid_to_id = BTreeMap::new();
+    for (uid, active) in members {
+        let filter = jmap_proto::contacts::ContactCardQueryFilter::default().uid(uid.clone());
+        if let Ok(ids) = client.contact_query_every_id(account_id, filter)
+            && let Some(id) = ids.into_iter().next()
+        {
+            uid_to_id.insert(uid, id.to_string());
+            resolved.insert(id.to_string(), active);
+        }
+    }
+    card.members = (!resolved.is_empty()).then_some(resolved);
+    rekey_member_details(&mut card, &uid_to_id);
+    card
+}
+
+/// Rewrites `VENDOR_MEMBER_DETAILS`'s keys with `map` (old key to new key), the
+/// same key change [`resolve_member_ids`]/[`resolve_member_uids`] give
+/// `members`. A member detail with no entry in `map` is dropped: it names a
+/// member that just left `members` for the same reason (see each caller).
+fn rekey_member_details(card: &mut ContactCard, map: &BTreeMap<String, String>) {
+    let Some(details) = card
+        .extra
+        .get(VENDOR_MEMBER_DETAILS)
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    let rekeyed: Map<String, Value> = details
+        .iter()
+        .filter_map(|(key, value)| map.get(key).map(|new_key| (new_key.clone(), value.clone())))
+        .collect();
+    if rekeyed.is_empty() {
+        card.extra.remove(VENDOR_MEMBER_DETAILS);
+    } else {
+        card.extra
+            .insert(VENDOR_MEMBER_DETAILS.to_owned(), Value::Object(rekeyed));
+    }
+}
+
+/// Give a group card's `members` the server's JSContact `uid` for each member,
+/// the other direction of [`resolve_member_ids`].
+///
+/// `card` comes straight from [`vcard_to_card`], so its `members` are keyed by
+/// the JMAP id that `X-EVOLUTION-DEST-CONTACT-UID` names. `ContactCard/set`
+/// refuses a `members` key that is not a card's `uid`, so this looks each
+/// member's `uid` up by its id before the save sends the card or a patch.
+///
+/// A member id the server no longer holds, or whose card has no `uid` at all,
+/// is dropped: there is no `uid` to send for it either way.
+fn resolve_member_uids(client: &Client, account_id: &Id, card: &mut ContactCard) {
+    if !states_group_kind(card.kind.as_deref()) {
+        return;
+    }
+    let Some(members) = card.members.take() else {
+        return;
+    };
+    let ids: Vec<Id> = members.keys().map(|id| Id::from(id.as_str())).collect();
+    let found = client
+        .contact_get(account_id, &ids)
+        .map(|response| response.list)
+        .unwrap_or_default();
+    let mut resolved = BTreeMap::new();
+    let mut id_to_uid = BTreeMap::new();
+    for stored in found {
+        let Some(id) = stored.id.as_ref() else {
+            continue;
+        };
+        let Some(active) = members.get(id.as_str()) else {
+            continue;
+        };
+        let Some(member_uid) = stored.uid else {
+            continue;
+        };
+        id_to_uid.insert(id.to_string(), member_uid.clone());
+        resolved.insert(member_uid, *active);
+    }
+    card.members = (!resolved.is_empty()).then_some(resolved);
+    rekey_member_details(card, &id_to_uid);
 }
 
 /// What to report for a save of `card` that the server refused with `error`.

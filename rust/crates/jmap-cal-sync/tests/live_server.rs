@@ -55,6 +55,17 @@ fn free_busy_of_the_calendar_owner_reflects_a_real_event_against_the_real_server
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
         return;
     };
+    if client
+        .session()
+        .principals_availability_capability()
+        .is_none()
+    {
+        eprintln!(
+            "the server does not advertise urn:ietf:params:jmap:principals:availability; \
+             skipping the free/busy test"
+        );
+        return;
+    }
     let account_id = client
         .primary_account(CAPABILITY_CALENDARS)
         .expect("the write-test account needs the calendars capability");

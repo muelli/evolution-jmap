@@ -2113,11 +2113,13 @@ fn blob_copy_within_the_same_real_account_copies_the_content() {
 
 /// A genuine `fromAccountId != accountId` copy was the first shape tried
 /// here, mirroring the two throwaway accounts every other cross-account test
-/// in this file uses. Real Stalwart rejected it outright: `Blob/copy` with a
-/// target account the caller does not own answers a `forbidden` method
-/// error ("You are not an owner of account ..."), while Cyrus answers
-/// `accountNotFound` (RFC 8620 §3.6.2), even though `jmap-mockd`'s
-/// own implementation allows it unconditionally (`blob_copy_between_two_
+/// in this file uses. Real Stalwart rejects it outright: `Blob/copy` with a
+/// target account the caller does not own answers a method error, same as
+/// Cyrus's `accountNotFound` (RFC 8620 §3.6.2). Stalwart 0.16 answered
+/// `forbidden` ("You are not an owner of account ..."); 1.0.1 answers
+/// `accountNotFound` instead, hiding the target account's existence more
+/// conservatively. `jmap-mockd`'s own implementation allows the copy
+/// unconditionally (`blob_copy_between_two_
 /// accounts_copies_the_content` in `blob_management.rs`): the mock never
 /// modeled an ownership check at all. Setting up ACL sharing between the two
 /// throwaway accounts so a real cross-account copy could succeed is out of
@@ -2164,11 +2166,7 @@ fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
         .expect_err("copying into an account this session does not own must be rejected");
     match error {
         jmap_client::Error::Method(method_error) => {
-            if is_cyrus_server(&from_client) {
-                assert_eq!(method_error.error_type, method::ACCOUNT_NOT_FOUND);
-            } else {
-                assert_eq!(method_error.error_type, method::FORBIDDEN);
-            }
+            assert_eq!(method_error.error_type, method::ACCOUNT_NOT_FOUND);
         }
         other => panic!("expected a Method error, got {other:?}"),
     }
@@ -5170,12 +5168,12 @@ fn calendar_event_notification_destroy_tolerates_server_dropped_id_through_the_r
     }
 }
 
-/// Tests that `Client::participant_identities` tolerates omitted `state` fields.
-/// Stalwart omits the required `state` property from `ParticipantIdentity/get` responses.
-/// Raw responses omit state and fail strict `GetResponse` deserialization.
+/// Tests that `ParticipantIdentity/get` includes the mandatory `state` field.
+/// Stalwart 1.0.1 fixed Finding 19 (0.16 omitted `state`, breaking strict
+/// `GetResponse` deserialization); Cyrus already included it.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
-fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api() {
+fn participant_identity_get_includes_state_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!(
             "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping participant identity test"
@@ -5201,51 +5199,42 @@ fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api(
         )
         .expect("raw ParticipantIdentity/get succeeds");
 
-    // 3. Inspect the mandatory state field:
-    if is_cyrus_server(&client) {
-        assert!(
-            raw_args.get("state").is_some(),
-            "Cyrus includes mandatory state field per RFC 8620 Section 5.1"
-        );
-        let strict_result: Result<GetResponse<ParticipantIdentity>, _> =
-            serde_json::from_value(raw_args);
-        assert!(
-            strict_result.is_ok(),
-            "GetResponse deserializes cleanly on Cyrus"
-        );
-    } else {
-        assert!(
-            raw_args.get("state").is_none(),
-            "live Stalwart ParticipantIdentity/get response must omit the state field (Finding 19), got: {raw_args:?}"
-        );
-        assert!(
-            raw_args.get("list").is_some(),
-            "live Stalwart ParticipantIdentity/get response must contain list"
-        );
+    // 3. The mandatory state field is present per RFC 8620 Section 5.1, on Stalwart
+    // 1.0.1 (Finding 19 is fixed) as well as on Cyrus:
+    assert!(
+        raw_args.get("state").is_some(),
+        "ParticipantIdentity/get response must include the mandatory state field, got: {raw_args:?}"
+    );
+    assert!(
+        raw_args.get("list").is_some(),
+        "ParticipantIdentity/get response must contain list"
+    );
 
-        // 4. Demonstrate that standard RFC 8620 GetResponse<ParticipantIdentity> fails
-        // deserialization due to the missing state field on Stalwart:
-        let strict_result: Result<GetResponse<ParticipantIdentity>, _> =
-            serde_json::from_value(raw_args);
-        match strict_result {
-            Err(err) => {
-                let msg = err.to_string();
-                assert!(
-                    msg.contains("missing field") && msg.contains("state"),
-                    "expected missing field `state` error, got: {msg}"
-                );
-            }
-            Ok(_) => panic!("expected strict GetResponse deserialization to fail on omitted state"),
-        }
-    }
+    // 4. Standard RFC 8620 GetResponse<ParticipantIdentity> deserializes cleanly:
+    let strict_result: Result<GetResponse<ParticipantIdentity>, _> =
+        serde_json::from_value(raw_args);
+    assert!(
+        strict_result.is_ok(),
+        "GetResponse must deserialize cleanly now that state is present: {strict_result:?}"
+    );
 }
 
 /// Tests resolving the current user principal when `currentUserPrincipalId` is the account identifier.
-/// Confirms that `current_user_principal` resolves the principal object.
+/// Confirms that `current_user_principal` resolves the principal object directly, with no
+/// account-id-to-principal-id mismatch to tolerate.
 /// Confirms that `principal_get` accepts the advertised account identifier.
+///
+/// An account-id mismatch (the advertised ID resolving to `notFound`, with the true
+/// principal under a different ID) used to reproduce here for Stalwart's built-in
+/// `admin` login (Finding 18). It never reproduced for a regular account, on any
+/// Stalwart version this project has tested, and `docs/manual-test-live-server.md`
+/// asks for a regular account, not `admin`, so this test exercises the regular-account
+/// path only. `Client::current_user_principal`'s mismatch-tolerance fallback (see
+/// `principal_get`'s doc comment) stays in the client for whichever server or login
+/// still needs it; it is just not this test's job to reproduce the admin-only case.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
-fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api() {
+fn current_user_principal_resolves_through_the_real_api() {
     let client = connect();
     let Ok(account_id) = client.primary_account(CAPABILITY_PRINCIPALS) else {
         eprintln!("server names no primary account for {CAPABILITY_PRINCIPALS}; skipping");
@@ -5266,47 +5255,8 @@ fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api
         "server advertises account ID as currentUserPrincipalId"
     );
 
-    if is_cyrus_server(&client) {
-        // On Cyrus, currentUserPrincipalId is the true principal ID, so raw Principal/get finds it directly.
-        let raw_args = client
-            .single_call(
-                &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS],
-                "Principal/get",
-                &json!({ "accountId": account_id, "ids": [account_id.as_str()] }),
-            )
-            .expect("raw Principal/get call succeeds");
-        let list = raw_args
-            .get("list")
-            .and_then(|v| v.as_array())
-            .expect("list present");
-        assert_eq!(list.len(), 1);
-
-        let principal = client
-            .current_user_principal(&account_id)
-            .expect("current_user_principal must succeed")
-            .expect("owner principal must be resolved");
-        assert!(principal.id.is_some(), "principal must have an ID");
-        assert_eq!(principal.id.as_ref(), Some(&account_id));
-        let expected_user =
-            env::var("JMAP_LIVE_SERVER_USER").unwrap_or_else(|_| "user1".to_string());
-        let expected_email = format!("{expected_user}@example.com");
-        assert_eq!(principal.email.as_deref(), Some(expected_email.as_str()));
-
-        let principal_id = client
-            .current_user_principal_id(&account_id)
-            .expect("current_user_principal_id must succeed")
-            .expect("owner principal ID must be resolved");
-        assert_eq!(principal_id, account_id);
-
-        let list_p = client
-            .principal_get(&account_id, std::slice::from_ref(&account_id))
-            .expect("principal_get with account ID must succeed on Cyrus");
-        assert_eq!(list_p.len(), 1);
-        assert_eq!(list_p[0].id.as_ref(), Some(&account_id));
-        return;
-    }
-
-    // 2. Direct raw Principal/get with the advertised ID reproduces the notFound response:
+    // 2. Direct raw Principal/get with the advertised ID resolves it with no fallback
+    // needed, on both server families:
     let raw_args = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS],
@@ -5314,60 +5264,53 @@ fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api
             &json!({ "accountId": account_id, "ids": [account_id.as_str()] }),
         )
         .expect("raw Principal/get call succeeds");
-    let not_found = raw_args
-        .get("notFound")
+    let list = raw_args
+        .get("list")
         .and_then(|v| v.as_array())
-        .expect("notFound array present in response");
-    assert!(
-        not_found
-            .iter()
-            .any(|v| v.as_str() == Some(account_id.as_str())),
-        "raw Principal/get with account ID must return notFound on live Stalwart"
+        .expect("list present in response");
+    assert_eq!(
+        list.len(),
+        1,
+        "Principal/get with the advertised account ID must resolve directly, got: {raw_args:?}"
     );
 
-    // 3. Client::current_user_principal tolerates the mismatch and resolves the true principal:
+    // 3. Client::current_user_principal resolves the same principal, with no mismatch
+    // to tolerate:
     let principal = client
         .current_user_principal(&account_id)
         .expect("current_user_principal must succeed")
         .expect("owner principal must be resolved");
-    assert!(principal.id.is_some(), "principal must have an ID");
-    assert_ne!(
-        principal.id.as_ref(),
-        Some(&account_id),
-        "resolved principal ID must be distinct from the account ID"
-    );
-    assert_eq!(principal.id.as_ref(), Some(&Id::new("b")));
-    assert_eq!(principal.name, "admin@example.internal");
-    assert_eq!(principal.email.as_deref(), Some("admin@example.internal"));
+    assert_eq!(principal.id.as_ref(), Some(&account_id));
+    if client.session().username.contains('@') {
+        assert_eq!(
+            principal.email.as_deref(),
+            Some(client.session().username.as_str())
+        );
+    }
 
-    // 4. Client::current_user_principal_id resolves the true principal ID:
+    // 4. Client::current_user_principal_id agrees:
     let principal_id = client
         .current_user_principal_id(&account_id)
         .expect("current_user_principal_id must succeed")
         .expect("owner principal ID must be resolved");
-    assert_eq!(principal_id, Id::new("b"));
+    assert_eq!(principal_id, account_id);
 
-    // 5. Client::principal_get with the advertised account ID tolerates the mismatch:
-    let list = client
+    // 5. Client::principal_get with the advertised account ID succeeds directly:
+    let list_p = client
         .principal_get(&account_id, std::slice::from_ref(&account_id))
-        .expect("principal_get with advertised ID must succeed via tolerance fallback");
-    assert_eq!(list.len(), 1);
-    assert_eq!(list[0].id.as_ref(), Some(&Id::new("b")));
-
-    // 6. Client::principal_get with the real principal ID succeeds directly:
-    let list_b = client
-        .principal_get(&account_id, &[Id::new("b")])
-        .expect("principal_get with real ID must succeed");
-    assert_eq!(list_b.len(), 1);
-    assert_eq!(list_b[0].id.as_ref(), Some(&Id::new("b")));
+        .expect("principal_get with the advertised ID must succeed directly");
+    assert_eq!(list_p.len(), 1);
+    assert_eq!(list_p[0].id.as_ref(), Some(&account_id));
 }
 
-/// Tests that `CalendarEvent/set` handles time zone property rejection cleanly.
-/// Stalwart rejects RFC 8984 section 4.7.2 `timeZones` properties with `invalidProperties`.
-/// Confirms that `Client::event_create` surfaces the `invalidProperties` error.
+/// Tests that `CalendarEvent/set` accepts an explicit `timeZones` property.
+/// Stalwart 1.0.1 accepts RFC 8984 section 4.7.2 `timeZones` definitions that
+/// 0.16.x rejected with `invalidProperties` (finding 13, fixed upstream).
+/// Confirms `Client::event_create` stores such an event cleanly, and that a
+/// later unfiltered get returns the submitted `timeZones` map intact.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
-fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
+fn calendar_event_set_accepts_timezones_property_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!("no live server configured or write credentials missing; skipping");
         return;
@@ -5387,8 +5330,7 @@ fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
         .id
         .expect("calendar must have an ID");
 
-    // 2. Direct raw CalendarEvent/set create with empty "timeZones": {} reproduces the
-    // invalidProperties rejection on live Stalwart:
+    // 2. Direct raw CalendarEvent/set create with empty "timeZones": {} succeeds:
     let raw_args = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
@@ -5406,29 +5348,26 @@ fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
             }),
         )
         .expect("raw CalendarEvent/set call succeeds on wire");
-    let not_created = raw_args
-        .get("notCreated")
+    let raw_created = raw_args
+        .get("created")
         .and_then(|v| v.as_object())
-        .expect("notCreated map present in response");
-    let error_obj = not_created
+        .expect("created map present in response")
         .get("probe_raw_tz")
-        .expect("probe_raw_tz present in notCreated");
-    assert_eq!(
-        error_obj.get("type").and_then(|v| v.as_str()),
-        Some("invalidProperties")
+        .expect("probe_raw_tz present in created");
+    let raw_created_id = Id::new(
+        raw_created
+            .get("id")
+            .and_then(|v| v.as_str())
+            .expect("created event has an id")
+            .to_string(),
     );
-    let props = error_obj
-        .get("properties")
-        .and_then(|v| v.as_array())
-        .expect("properties array present");
-    assert!(
-        props.iter().any(|p| p.as_str() == Some("timeZones")),
-        "properties array must name timeZones"
-    );
+    client
+        .event_destroy(&account_id, &raw_created_id)
+        .expect("event_destroy succeeds for the raw-probe event");
 
-    // 3. Client::event_create with time_zones set returns Error::Set cleanly:
+    // 3. Client::event_create with a non-empty time_zones map also succeeds:
     let mut event_with_tz = CalendarEvent::simple(
-        calendar_id.clone(),
+        calendar_id,
         "Probe Event With TimeZones",
         "2026-10-05T12:00:00",
         "PT1H",
@@ -5443,43 +5382,33 @@ fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
     );
     event_with_tz.time_zones = Some(tz_map);
 
-    let set_err = client
-        .event_create(&account_id, &event_with_tz)
-        .expect_err("event_create with time_zones must fail on Stalwart");
-    match set_err {
-        Error::Set(err) => {
-            assert_eq!(err.error_type, "invalidProperties");
-            if is_cyrus_server(&client) {
-                assert!(err.description.is_none());
-            } else {
-                assert_eq!(err.description.as_deref(), Some("Invalid property."));
-            }
-            assert_eq!(
-                err.properties.as_ref(),
-                Some(&vec!["timeZones".to_string()])
-            );
-        }
-        other => panic!("expected Error::Set with invalidProperties, got {other:?}"),
-    }
-
-    // 4. Client::event_create without time_zones succeeds cleanly:
-    let event_clean = CalendarEvent::simple(
-        calendar_id,
-        "Probe Event Without TimeZones",
-        "2026-10-05T12:00:00",
-        "PT1H",
-    );
     let created = client
-        .event_create(&account_id, &event_clean)
-        .expect("event_create without time_zones must succeed on Stalwart");
+        .event_create(&account_id, &event_with_tz)
+        .expect("event_create with time_zones must succeed on Stalwart 1.0.1");
     let created_id = created.id.expect("created event must have an ID");
+
+    // The server stores the submitted timeZones map and returns it intact:
+    let fetched = client
+        .event_get(&account_id, std::slice::from_ref(&created_id))
+        .expect("event_get succeeds")
+        .list;
+    let fetched_event = fetched.first().expect("fetched event present");
+    assert_eq!(
+        fetched_event.title.as_deref(),
+        Some("Probe Event With TimeZones")
+    );
+    assert_eq!(
+        fetched_event.time_zones.as_ref(),
+        event_with_tz.time_zones.as_ref(),
+        "server must round-trip the submitted timeZones map"
+    );
 
     // Clean up created event:
     client
         .event_destroy(&account_id, &created_id)
         .expect("event_destroy succeeds");
 
-    // 5. CalendarEvent/parse on an .ics blob with custom VTIMEZONE passes the server's
+    // 4. CalendarEvent/parse on an .ics blob with custom VTIMEZONE passes the server's
     // representation through intact to the client:
     let ics = "BEGIN:VCALENDAR\r\n\
 VERSION:2.0\r\n\
@@ -6138,8 +6067,8 @@ fn contact_card_online_service_without_uri_through_the_real_api() {
 /// 5. `notes`: `Author` object (`@type: "Author"`, `name`, `uri`) preserved on storage.
 /// 6. `schedulingAddresses`: `label` and `@type` preserved on storage.
 /// 7. `personalInfo`: `type` and `listAs` preserved on storage.
-/// 8. `Directory`: Stalwart accepts create and preserves `listAs`, but drops `label` upon
-///    storage (Finding 26).
+/// 8. `Directory`: Stalwart 1.0.1 preserves both `listAs` and `label` on storage (Finding 26
+///    is fixed; 0.16 dropped `label`).
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn contact_card_set_preserves_rfc9553_shapes_through_the_real_api() {
@@ -6357,7 +6286,8 @@ fn contact_card_set_preserves_rfc9553_shapes_through_the_real_api() {
     assert_eq!(fetched_info.personal_info_type.as_deref(), Some("craft"));
     assert_eq!(fetched_info.list_as, Some(2));
 
-    // Verify Directory: listAs is preserved; label is dropped by Stalwart (Finding 26)
+    // Verify Directory: label and listAs are both preserved on Stalwart 1.0.1 (Finding 26
+    // is fixed; 0.16 dropped label). Cyrus drops listAs instead.
     let fetched_dir = fetched_card
         .directories
         .as_ref()
@@ -6375,9 +6305,10 @@ fn contact_card_set_preserves_rfc9553_shapes_through_the_real_api() {
         );
     } else {
         assert_eq!(fetched_dir.list_as, Some(1));
-        assert!(
-            fetched_dir.label.is_none(),
-            "Stalwart drops Directory.label on storage (Finding 26)"
+        assert_eq!(
+            fetched_dir.label.as_deref(),
+            Some("Public Staff Directory"),
+            "Stalwart 1.0.1 preserves Directory.label on storage (Finding 26 is fixed)"
         );
     }
 
@@ -6637,12 +6568,12 @@ fn large_blob_upload_download_fidelity_rss_and_limits_through_the_real_api() {
     }
 }
 
-/// Tests that `CalendarEvent/set` silently drops `participants`.
-/// Stalwart accepts `participants` on create and update without error.
-/// Subsequent `CalendarEvent/get` calls return events without `participants`.
+/// Tests a participant with neither `calendarAddress` nor `sendTo` set.
+/// Stalwart 1.0.1 accepts it and keeps it on a later `CalendarEvent/get`.
+/// Cyrus still requires `calendarAddress` and rejects the create instead.
 #[test]
 #[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
-fn calendar_event_set_silently_drops_participants_through_the_real_api() {
+fn calendar_event_set_preserves_participants_without_calendar_address_through_the_real_api() {
     let Some(client) = connect_for_write() else {
         eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
         return;
@@ -6660,7 +6591,7 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         .expect("the server named the calendar");
 
     let suffix = unique_suffix();
-    let title = format!("agent-participants-drop-{suffix}");
+    let title = format!("agent-participants-no-addr-{suffix}");
     let mut event = CalendarEvent::simple(calendar_id, &title, "2026-12-01T09:00:00", "PT1H");
     let mut participants = BTreeMap::new();
     participants.insert(
@@ -6693,16 +6624,16 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         return;
     }
 
-    // 1. Create succeeds with no error, as if the participants were accepted:
+    // 1. Create succeeds with no error:
     let created = client
         .event_create(&account_id, &event)
         .expect("CalendarEvent/set create failed against the real server");
     let event_id = created.id.clone().expect("the server named the new event");
 
-    // 2. A fresh CalendarEvent/get, explicitly asking for participants, comes
-    // back with none at all: not an empty map, the property is
-    // simply absent from the object, exactly as jmap-cal-sync's own
-    // load_component would observe it:
+    // 2. A fresh CalendarEvent/get, explicitly asking for participants, keeps
+    // the participant (Finding 23's narrowed scope: only a participant
+    // carrying `sendTo` vanishes; one with neither `calendarAddress` nor
+    // `sendTo` round-trips intact on Stalwart 1.0.1):
     let raw_args = client
         .single_call(
             &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
@@ -6720,13 +6651,21 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         fetched.get("title").and_then(|v| v.as_str()),
         Some(title.as_str())
     );
-    assert!(
-        fetched.get("participants").is_none(),
-        "live Stalwart CalendarEvent/get must omit participants entirely after \
-         create silently dropped them (Finding 23), got: {fetched:?}"
+    let fetched_participant = fetched
+        .get("participants")
+        .and_then(|v| v.get("attendee-1"))
+        .unwrap_or_else(|| {
+            panic!(
+                "live Stalwart CalendarEvent/get must keep the participant intact, got: {fetched:?}"
+            )
+        });
+    assert_eq!(
+        fetched_participant.get("email").and_then(|v| v.as_str()),
+        Some("nobody@example.net")
     );
+    assert!(fetched_participant.get("calendarAddress").is_none());
 
-    // 3. Driving the client's own round-trip path confirms the same loss:
+    // 3. Driving the client's own round-trip path confirms the same kept data:
     let reloaded = client
         .event_get(&account_id, std::slice::from_ref(&event_id))
         .expect("CalendarEvent/get failed against the real server");
@@ -6734,11 +6673,14 @@ fn calendar_event_set_silently_drops_participants_through_the_real_api() {
         .list
         .first()
         .expect("CalendarEvent/get must return the just-created event");
-    assert!(
-        reloaded_event.participants.is_none()
-            || reloaded_event.participants.as_ref().unwrap().is_empty(),
-        "Client::event_get must observe the same participant loss, got: {:?}",
-        reloaded_event.participants
+    let reloaded_participant = reloaded_event
+        .participants
+        .as_ref()
+        .and_then(|participants| participants.get("attendee-1"))
+        .expect("Client::event_get must observe the same kept participant");
+    assert_eq!(
+        reloaded_participant.get("email").and_then(|v| v.as_str()),
+        Some("nobody@example.net")
     );
 
     client

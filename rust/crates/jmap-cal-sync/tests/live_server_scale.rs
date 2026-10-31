@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 
 use jmap_cal_sync::{CalSync, SyncError};
 use jmap_client::Error as ClientError;
+use jmap_proto::calendars::Calendar;
 use jmap_proto::session::CAPABILITY_CALENDARS;
 use jmap_test_support::{connect_for_write, env_count, unique_suffix};
 
@@ -166,18 +167,23 @@ fn a_real_sized_calendar_round_trips_through_the_real_server() {
     let account_id = client
         .primary_account(CAPABILITY_CALENDARS)
         .expect("the write-test account needs the calendars capability");
-    let calendar_id = client
-        .calendars(&account_id)
-        .unwrap()
-        .into_iter()
-        .next()
-        .expect("the write-test account needs a default calendar")
-        .id
-        .expect("the server named the calendar");
-
-    let sync = CalSync::new(client, account_id, calendar_id);
     let n = batch_size();
     let run = unique_suffix();
+    // A dedicated calendar, not the account's default one. The two tests in
+    // this file run concurrently under cargo's default test threading;
+    // `get_changes` is account-wide before `classify` narrows it to one
+    // calendar, so sharing a calendar would let one test's events show up as
+    // another test's changes.
+    let calendar_id = client
+        .calendar_create(
+            &account_id,
+            &Calendar::new(format!("agent-scale-main-{run}")),
+        )
+        .expect("Calendar/set create failed against the real server")
+        .id
+        .expect("the server named the new calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
 
     let import_start = Instant::now();
     let mut saved_uids = Vec::with_capacity(n);
@@ -264,18 +270,20 @@ fn deleting_from_a_real_sized_calendar_is_reported_correctly() {
     let account_id = client
         .primary_account(CAPABILITY_CALENDARS)
         .expect("the write-test account needs the calendars capability");
-    let calendar_id = client
-        .calendars(&account_id)
-        .unwrap()
-        .into_iter()
-        .next()
-        .expect("the write-test account needs a default calendar")
-        .id
-        .expect("the server named the calendar");
-
-    let sync = CalSync::new(client, account_id, calendar_id);
     let n = batch_size();
     let run = unique_suffix();
+    // A dedicated calendar, not the account's default one; see the same note
+    // in `a_real_sized_calendar_round_trips_through_the_real_server`.
+    let calendar_id = client
+        .calendar_create(
+            &account_id,
+            &Calendar::new(format!("agent-scale-del-{run}")),
+        )
+        .expect("Calendar/set create failed against the real server")
+        .id
+        .expect("the server named the new calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
 
     let import_start = Instant::now();
     let mut saved_uids = Vec::with_capacity(n);

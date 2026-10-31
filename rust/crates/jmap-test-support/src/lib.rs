@@ -111,11 +111,23 @@ pub fn connect_recipient_with_user() -> Option<(Client, String)> {
     LiveAccount::recipient().map(|account| (account.connect(), account.user))
 }
 
-/// Returns true if the server refused a method or a `/set` entry as `forbidden`.
+/// Returns true if the server refused a method or a `/set` entry because the
+/// caller lacks a grant: `forbidden` (RFC 8620 section 3.6.2/5.3), or
+/// `accountNotFound`/`accountNotSupportedByMethod`, the shape a server picks
+/// when it hides a not-yet-shared account's existence instead (Stalwart
+/// 1.0.1 answers this way; Stalwart 0.16 answered plain `forbidden` here).
 pub fn is_forbidden(error: &ClientError) -> bool {
+    const ACCOUNT_NOT_FOUND: &str = "accountNotFound";
+    const ACCOUNT_NOT_SUPPORTED_BY_METHOD: &str = "accountNotSupportedByMethod";
+    let is_forbidden_type = |error_type: &str| {
+        matches!(
+            error_type,
+            "forbidden" | ACCOUNT_NOT_FOUND | ACCOUNT_NOT_SUPPORTED_BY_METHOD
+        )
+    };
     match error {
-        ClientError::Method(method_error) => method_error.error_type == "forbidden",
-        ClientError::Set(set_error) => set_error.error_type == "forbidden",
+        ClientError::Method(method_error) => is_forbidden_type(&method_error.error_type),
+        ClientError::Set(set_error) => is_forbidden_type(&set_error.error_type),
         _ => false,
     }
 }
@@ -245,6 +257,16 @@ mod tests {
             status: 403,
             problem: None
         }));
+    }
+
+    #[test]
+    fn an_account_hidden_as_not_found_counts_as_forbidden_too() {
+        let method = |error_type: &str| ClientError::Method(MethodError::new(error_type));
+        let set = |error_type: &str| ClientError::Set(SetError::new(error_type));
+        assert!(is_forbidden(&method("accountNotFound")));
+        assert!(is_forbidden(&set("accountNotFound")));
+        assert!(is_forbidden(&method("accountNotSupportedByMethod")));
+        assert!(is_forbidden(&set("accountNotSupportedByMethod")));
     }
 
     #[test]

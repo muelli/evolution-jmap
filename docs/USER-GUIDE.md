@@ -111,6 +111,27 @@ You do not need to change existing accounts.
 
 Open the account settings. Look for the `Vacation Responder` page of the JMAP account. On this page, you can enable automatic replies. You can also set optional start and end dates, a subject and a message.
 
+### Server filters
+
+Open the account settings. Look for the `Server Filters` page of the JMAP account.
+
+This feature needs server support. If the server does not offer it, the page shows a message and stays empty.
+
+The top list shows every filter script on the server and which one is active. Use `Add`, `Rename`, `Remove`, `Activate` and `Deactivate` to manage scripts.
+
+Most users only need the rules list below it. It manages one script named `evolution-jmap`:
+
+- Use `Add` to create a rule. Pick a condition, such as `Subject contains`, and an action, such as `Move to`.
+- Use `Edit` to change a rule. Use `Remove` to delete it.
+- Use `Move Up` and `Move Down` to change the order rules run in.
+- Use `Enable` and `Disable` to turn a rule on or off without deleting it.
+
+Turn on `Edit as text` to write the script by hand instead of using the rules list. If a script was changed outside Evolution and no longer matches the rules list, the page shows it as text until it matches again.
+
+Use `Check` to test a script on the server before you save it.
+
+Changes take effect only when you click `OK` in the account editor.
+
 ### Scheduled send
 
 In the composer, open `File`, then `Send Later`. The menu offers these presets:

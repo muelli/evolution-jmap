@@ -139,9 +139,15 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
     // From an independent connection, another client changes the same
     // message's keywords on the real server.
     // This test's own local change never mentioned that label.
+    //
+    // The label is already lowercase: RFC 8621 Section 4.1.1 specifies
+    // keywords as lowercase, and a server may fold a mixed-case label to
+    // lowercase on the wire (confirmed on the Cyrus oracle container). A
+    // label that is already lowercase round-trips unchanged on any
+    // compliant server.
     let mover_client = connect_for_write().expect("the write-test account is still there");
     let mover_sync = MailSync::new(mover_client, account_id);
-    let labelled = Keywords::from_iter([String::from("Urgent")]);
+    let labelled = Keywords::from_iter([String::from("urgent")]);
     let change = KeywordChange::between(&Keywords::default(), &labelled);
     mover_sync
         .set_keywords(&uid, &change)
@@ -174,7 +180,7 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
             "the real delta overwrote the user's unsaved flag"
         );
         assert_ne!(
-            camel_message_info_get_user_flag(info, c"Urgent".as_ptr()),
+            camel_message_info_get_user_flag(info, c"urgent".as_ptr()),
             GFALSE,
             "the label the other client added over the real server never arrived"
         );
