@@ -46,6 +46,7 @@ fn help_lists_the_expanded_builder_mode_flags() {
         "--no-size-upload",
         "--sieve-extensions",
         "--contact-photo-data-uri-as-blob-id",
+        "--contact-create-omits-uid",
         "--session-via-redirect",
         "--download-via-redirect-to",
         "--reject-download-accept-json",

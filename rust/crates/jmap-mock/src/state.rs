@@ -44,6 +44,10 @@ pub struct ServerState {
     pub contact_photo_uses_file_uri: bool,
     /// Whether `ContactCard` photo `data:` URIs are served as `blobId` plus `mediaType`.
     pub contact_photo_data_uri_as_blob_id: bool,
+    /// Whether `ContactCard/set` leaves `uid` unset on a create that omits it,
+    /// instead of assigning one (RFC 9553 section 2.1.8 requires a server to
+    /// assign one; a real server was found not to).
+    pub contact_create_omits_uid: bool,
     /// Whether `CalendarEvent/get` rewrites link `href` values to a local `file:` URI.
     pub calendar_event_link_uses_file_uri: bool,
     /// Optional max ids per `Email/query` page. `None` returns all ids.
@@ -142,6 +146,7 @@ impl ServerState {
             email_get_includes_unrequested: false,
             contact_photo_uses_file_uri: false,
             contact_photo_data_uri_as_blob_id: false,
+            contact_create_omits_uid: false,
             calendar_event_link_uses_file_uri: false,
             query_page_size: None,
             query_never_terminates: false,

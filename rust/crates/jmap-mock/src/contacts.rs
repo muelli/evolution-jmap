@@ -357,6 +357,7 @@ fn is_photo_media(entry: &Media) -> bool {
 pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<ContactCard> = parse_arguments(arguments)?;
     let contact_photo_data_uri_as_blob_id = state.contact_photo_data_uri_as_blob_id;
+    let contact_create_omits_uid = state.contact_create_omits_uid;
     let max_contact_size = state.max_contact_size;
     let account = account_mut(state, &request.account_id)?;
     let known_uids = known_contact_uids(account);
@@ -405,7 +406,7 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
                 if card.version.is_none() {
                     card.version = Some("1.0".to_owned());
                 }
-                if card.uid.is_none() {
+                if card.uid.is_none() && !contact_create_omits_uid {
                     card.uid = Some(format!("urn:example:card:{}", id.as_str()));
                 }
                 validate_members_keys_are_known_uids(card, &known_uids)

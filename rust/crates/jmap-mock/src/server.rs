@@ -71,6 +71,8 @@ pub struct Faults {
     pub contact_photo_uses_file_uri: bool,
     /// Serve `ContactCard` photo `data:` URIs as `blobId` plus `mediaType`.
     pub contact_photo_data_uri_as_blob_id: bool,
+    /// Leave `uid` unset on a `ContactCard/set` create that omits it.
+    pub contact_create_omits_uid: bool,
     /// Rewrite `CalendarEvent/get` link `href` values to a local `file:` URI.
     pub calendar_event_link_uses_file_uri: bool,
     /// Keep paginated `Email/query` responses non-terminating.
@@ -225,6 +227,13 @@ impl MockServerBuilder {
     /// Serve `ContactCard` photo `data:` URIs as `blobId` plus `mediaType`.
     pub fn contact_photo_data_uri_as_blob_id(mut self) -> Self {
         self.faults.contact_photo_data_uri_as_blob_id = true;
+        self
+    }
+
+    /// Leave `uid` unset on a `ContactCard/set` create that omits it, modelling
+    /// a real server found not to assign one (RFC 9553 section 2.1.8).
+    pub fn contact_create_omits_uid(mut self) -> Self {
+        self.faults.contact_create_omits_uid = true;
         self
     }
 
@@ -473,6 +482,7 @@ impl MockServerBuilder {
         state.email_get_includes_unrequested = self.faults.email_get_includes_unrequested;
         state.contact_photo_uses_file_uri = self.faults.contact_photo_uses_file_uri;
         state.contact_photo_data_uri_as_blob_id = self.faults.contact_photo_data_uri_as_blob_id;
+        state.contact_create_omits_uid = self.faults.contact_create_omits_uid;
         state.calendar_event_link_uses_file_uri = self.faults.calendar_event_link_uses_file_uri;
         state.query_page_size = self.query_page_size;
         state.query_never_terminates = self.faults.query_never_terminates;
