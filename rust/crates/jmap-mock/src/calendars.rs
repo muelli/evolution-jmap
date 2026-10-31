@@ -89,13 +89,16 @@ fn calendar_rights_for(calendar: &Calendar, principal: &Id) -> Option<CalendarRi
     calendar.share_with.as_ref()?.get(principal).cloned()
 }
 
-/// Owners get calendars unchanged. Shared viewers get granted `myRights`.
+/// Owners get calendars unchanged. Shared viewers with `mayReadItems` get granted `myRights`.
 fn visible_calendar(calendar: &Calendar, is_owner: bool, caller: Option<&Id>) -> Option<Calendar> {
     if is_owner {
         return Some(calendar.clone());
     }
     let caller = caller.expect("is_owner is false only when caller is Some");
     let rights = calendar_rights_for(calendar, caller)?;
+    if rights.may_read_items != Some(true) {
+        return None;
+    }
     let mut visible = calendar.clone();
     visible.my_rights = Some(rights);
     Some(visible)
@@ -275,7 +278,11 @@ pub fn calendar_set(
     Ok(result)
 }
 
-pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+pub fn calendar_event_get(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
 
     // Enforce `maxObjectsInGet` like other `/get` handlers.
@@ -291,21 +298,51 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
 
     let calendar_event_link_uses_file_uri = state.calendar_event_link_uses_file_uri;
     let account = account_mut(state, &request.account_id)?;
+    let is_owner =
+        caller.is_none_or(|caller| account.current_user_principal_id.as_ref() == Some(caller));
     let own_addresses = crate::scheduling::own_addresses(account);
 
     let mut list = Vec::new();
     let mut not_found = Vec::new();
     match &request.ids {
-        None => list.extend(
-            account
-                .calendar_events
-                .iter()
-                .map(|(_, event)| event.clone()),
-        ),
+        None => {
+            for (_, event) in account.calendar_events.iter() {
+                if !is_owner {
+                    let caller_id = caller.expect("caller is Some for non-owner");
+                    if !readable_calendar_event(account, event, caller_id)
+                        || matches!(event.privacy.as_deref(), Some("secret"))
+                    {
+                        continue;
+                    }
+                }
+                let mut event = event.clone();
+                if !is_owner && matches!(event.privacy.as_deref(), Some("private")) {
+                    event.title = None;
+                    event.description = None;
+                }
+                list.push(event);
+            }
+        }
         Some(ids) => {
             for id in ids {
                 match account.calendar_events.get(id) {
-                    Some(event) => list.push(event.clone()),
+                    Some(event) => {
+                        if !is_owner {
+                            let caller_id = caller.expect("caller is Some for non-owner");
+                            if !readable_calendar_event(account, event, caller_id)
+                                || matches!(event.privacy.as_deref(), Some("secret"))
+                            {
+                                not_found.push(id.clone());
+                                continue;
+                            }
+                        }
+                        let mut event = event.clone();
+                        if !is_owner && matches!(event.privacy.as_deref(), Some("private")) {
+                            event.title = None;
+                            event.description = None;
+                        }
+                        list.push(event);
+                    }
                     None => not_found.push(id.clone()),
                 }
             }
@@ -325,6 +362,20 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
         &GetResponse::new(request.account_id, account.calendar_events.state(), list)
             .with_not_found(not_found),
     )
+}
+
+fn readable_calendar_event(account: &AccountState, event: &CalendarEvent, caller: &Id) -> bool {
+    let Some(calendar_ids) = &event.calendar_ids else {
+        return false;
+    };
+    calendar_ids.keys().any(|cal_id| {
+        account
+            .calendars
+            .get(cal_id)
+            .and_then(|cal| calendar_rights_for(cal, caller))
+            .and_then(|r| r.may_read_items)
+            .unwrap_or(false)
+    })
 }
 
 fn rewrite_event_link_href_to_file_scheme(event: &mut CalendarEvent) {
@@ -381,7 +432,7 @@ pub fn calendar_event_set(
             .with_description("unknown argument: sendSchedulingMessages"));
     }
     let send_scheduling_messages = request.send_scheduling_messages.unwrap_or(false);
-    let request = request.set;
+    let mut request = request.set;
     let account = account_mut(state, &request.account_id)?;
 
     // Keep pre-change events for notification recipients and scheduling deltas.
@@ -409,13 +460,123 @@ pub fn calendar_event_set(
         .filter_map(|(_, event)| event.uid.clone())
         .collect();
 
+    let is_owner =
+        caller.is_none_or(|caller| account.current_user_principal_id.as_ref() == Some(caller));
+    let mut forbidden_created: BTreeMap<String, SetError> = BTreeMap::new();
+    let mut forbidden_updated: BTreeMap<Id, SetError> = BTreeMap::new();
+    let mut forbidden_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
+
+    if !is_owner {
+        let caller_id = caller.expect("caller is Some for non-owner");
+        if let Some(create) = request.create.take() {
+            let mut allowed = BTreeMap::new();
+            for (cid, event) in create {
+                let has_write = event
+                    .calendar_ids
+                    .as_ref()
+                    .map(|cids| {
+                        !cids.is_empty()
+                            && cids.keys().all(|cal_id| {
+                                account
+                                    .calendars
+                                    .get(cal_id)
+                                    .and_then(|cal| calendar_rights_for(cal, caller_id))
+                                    .is_some_and(|r| {
+                                        r.may_write_all == Some(true)
+                                            || r.may_write_own == Some(true)
+                                    })
+                            })
+                    })
+                    .unwrap_or(false);
+                if has_write {
+                    allowed.insert(cid, event);
+                } else {
+                    forbidden_created.insert(
+                        cid,
+                        SetError::new(error::set::FORBIDDEN)
+                            .with_description("you do not have write access to this calendar"),
+                    );
+                }
+            }
+            request.create = (!allowed.is_empty()).then_some(allowed);
+        }
+
+        if let Some(update) = request.update.take() {
+            let mut allowed = BTreeMap::new();
+            for (id, patch) in update {
+                let has_write = account
+                    .calendar_events
+                    .get(&id)
+                    .and_then(|event| event.calendar_ids.as_ref())
+                    .map(|cids| {
+                        !cids.is_empty()
+                            && cids.keys().all(|cal_id| {
+                                account
+                                    .calendars
+                                    .get(cal_id)
+                                    .and_then(|cal| calendar_rights_for(cal, caller_id))
+                                    .is_some_and(|r| {
+                                        r.may_write_all == Some(true)
+                                            || r.may_write_own == Some(true)
+                                    })
+                            })
+                    })
+                    .unwrap_or(false);
+                if has_write {
+                    allowed.insert(id, patch);
+                } else {
+                    forbidden_updated.insert(
+                        id,
+                        SetError::new(error::set::FORBIDDEN)
+                            .with_description("you do not have write access to this calendar"),
+                    );
+                }
+            }
+            request.update = (!allowed.is_empty()).then_some(allowed);
+        }
+
+        if let Some(destroy) = request.destroy.take() {
+            let mut allowed = Vec::new();
+            for id in destroy {
+                let has_write = account
+                    .calendar_events
+                    .get(&id)
+                    .and_then(|event| event.calendar_ids.as_ref())
+                    .map(|cids| {
+                        !cids.is_empty()
+                            && cids.keys().all(|cal_id| {
+                                account
+                                    .calendars
+                                    .get(cal_id)
+                                    .and_then(|cal| calendar_rights_for(cal, caller_id))
+                                    .is_some_and(|r| {
+                                        r.may_write_all == Some(true)
+                                            || r.may_write_own == Some(true)
+                                    })
+                            })
+                    })
+                    .unwrap_or(false);
+                if has_write {
+                    allowed.push(id);
+                } else {
+                    forbidden_destroyed.insert(
+                        id,
+                        SetError::new(error::set::FORBIDDEN)
+                            .with_description("you do not have write access to this calendar"),
+                    );
+                }
+            }
+            request.destroy = (!allowed.is_empty()).then_some(allowed);
+        }
+    }
+
     let AccountState {
         calendars,
         calendar_events,
         ..
     } = account;
 
-    let response = simple_set_with_validation(
+    let mut response = simple_set_with_validation(
         calendar_events,
         request,
         |id, event| {
@@ -554,6 +715,25 @@ pub fn calendar_event_set(
         crate::scheduling::record_scheduling_messages(account, &changes);
     }
 
+    if !forbidden_created.is_empty() {
+        response
+            .not_created
+            .get_or_insert_with(BTreeMap::new)
+            .extend(forbidden_created);
+    }
+    if !forbidden_updated.is_empty() {
+        response
+            .not_updated
+            .get_or_insert_with(BTreeMap::new)
+            .extend(forbidden_updated);
+    }
+    if !forbidden_destroyed.is_empty() {
+        response
+            .not_destroyed
+            .get_or_insert_with(BTreeMap::new)
+            .extend(forbidden_destroyed);
+    }
+
     let mut result = to_result(&response)?;
 
     // RFC 8620 §5.3 terse mode keeps only `id` in each created event.
@@ -622,16 +802,29 @@ pub fn calendar_event_parse(
 pub fn calendar_event_query(
     state: &mut ServerState,
     arguments: Value,
+    caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
     let request: QueryRequest<CalendarEventQueryFilter> = parse_arguments(arguments)?;
     let paging = state.query_paging();
     let account = account_mut(state, &request.account_id)?;
+    let is_owner =
+        caller.is_none_or(|caller| account.current_user_principal_id.as_ref() == Some(caller));
 
     let filter = request.filter.unwrap_or_default();
     let mut matches: Vec<(&Id, &CalendarEvent)> = account
         .calendar_events
         .iter()
-        .filter(|(_, event)| event_matches(event, &filter))
+        .filter(|(_, event)| {
+            if !is_owner {
+                let caller_id = caller.expect("caller is Some for non-owner");
+                if !readable_calendar_event(account, event, caller_id)
+                    || matches!(event.privacy.as_deref(), Some("secret"))
+                {
+                    return false;
+                }
+            }
+            event_matches(event, &filter)
+        })
         .collect();
     matches.sort_by(|(_, a), (_, b)| a.start.cmp(&b.start));
 
@@ -953,6 +1146,17 @@ impl AccountState {
             .is_default(is_default)
             .is_subscribed(true);
         self.calendars.seed_with_id(id.clone(), calendar);
+        id
+    }
+
+    /// Seed a calendar event and return its id. Do not bump state.
+    pub fn seed_calendar_event(&mut self, mut event: CalendarEvent) -> Id {
+        let id = self.calendar_events.alloc_id();
+        event.id = Some(id.clone());
+        if event.uid.is_none() {
+            event.uid = Some(format!("urn:example:event:{}", id.as_str()));
+        }
+        self.calendar_events.seed_with_id(id.clone(), event);
         id
     }
 }

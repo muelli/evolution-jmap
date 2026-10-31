@@ -21,7 +21,7 @@ use serde_json::Value;
 #[cfg(feature = "parse")]
 use crate::dispatch::project_properties;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
-use crate::setops::{simple_set, simple_set_with_validation};
+use crate::setops::simple_set_with_validation;
 use crate::state::{AccountState, ServerState};
 
 const HOSTILE_CONTACT_PHOTO_URI: &str = "file:///home/victim/.ssh/id_ed25519";
@@ -100,6 +100,22 @@ fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Opti
     let mut visible = book.clone();
     visible.my_rights = Some(rights);
     Some(visible)
+}
+
+/// Reject undefined permissions in AddressBookRights (RFC 9610 §2).
+fn validate_address_book_share_with(
+    share_with: Option<&BTreeMap<Id, AddressBookRights>>,
+) -> Result<(), SetError> {
+    if let Some(map) = share_with {
+        for rights in map.values() {
+            if let Some(invalid_name) = rights.extra.keys().next() {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description(format!("Invalid permission \"{invalid_name}\"."))
+                    .with_properties(["shareWith"]));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `AddressBook/set` (RFC 9610 §2): create, update, and destroy books.
@@ -194,25 +210,35 @@ pub fn address_book_set(
         })
         .collect();
 
-    let mut response = simple_set(&mut account.address_books, request, |id, book| {
-        if book.id.is_some() {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description("id is set by the server and must not be given in a create"));
-        }
-        if book.name.is_empty() {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description("name must not be empty"));
-        }
-        if reject_collection_create {
-            return Err(SetError::new(error::set::FORBIDDEN)
-                .with_description("this mock is configured to refuse address book creates"));
-        }
-        book.id = Some(id.clone());
-        if default_unsubscribed && book.is_subscribed != Some(true) {
-            book.is_subscribed = Some(false);
-        }
-        Ok(())
-    })?;
+    let mut response = simple_set_with_validation(
+        &mut account.address_books,
+        request,
+        |id, book| {
+            if book.id.is_some() {
+                return Err(
+                    SetError::new(error::set::INVALID_PROPERTIES).with_description(
+                        "id is set by the server and must not be given in a create",
+                    ),
+                );
+            }
+            if book.name.is_empty() {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("name must not be empty"));
+            }
+            validate_address_book_share_with(book.share_with.as_ref())?;
+            if reject_collection_create {
+                return Err(SetError::new(error::set::FORBIDDEN)
+                    .with_description("this mock is configured to refuse address book creates"));
+            }
+            book.id = Some(id.clone());
+            if default_unsubscribed && book.is_subscribed != Some(true) {
+                book.is_subscribed = Some(false);
+            }
+            Ok(())
+        },
+        |_id, _before, patched| validate_address_book_share_with(patched.share_with.as_ref()),
+        |_id, _existing| Ok(()),
+    )?;
 
     if !forbidden_created.is_empty() {
         response

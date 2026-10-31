@@ -116,6 +116,8 @@ pub struct ServerState {
     pub sieve_vacation_script_name: String,
     /// Enable `TaskList/*` and `Task/*` methods and session capability output.
     pub tasks_enabled: bool,
+    /// Refuse `Principal/query` with forbidden, modeling Stalwart directory policy.
+    pub disable_principal_query: bool,
     /// Connected `/eventsource` subscribers for state-change delivery.
     pub event_source: EventSourceHub,
 }
@@ -184,6 +186,7 @@ impl ServerState {
             sieve_vacation_script: false,
             sieve_vacation_script_name: "vacation".to_owned(),
             tasks_enabled: false,
+            disable_principal_query: false,
             event_source: EventSourceHub::new(),
         }
     }

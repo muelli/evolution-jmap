@@ -87,6 +87,7 @@ use jmap_backend_core::trampoline::guard;
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 
 use crate::dispatch;
+use crate::hold::Hold;
 use crate::link::{self, AccountLink, SendSource};
 use crate::send_later::schedule::{self, Preset};
 use crate::send_later::submit;
@@ -843,6 +844,9 @@ unsafe fn activate_custom(composer: *mut GObject) {
     }) else {
         return;
     };
+    // The shell can destroy the composer while the dialog runs.
+    // SAFETY: the contract makes the composer live, on the main thread.
+    let composer_hold = unsafe { Hold::new(composer) };
 
     // SAFETY: the contract makes the composer window live. Each widget is new,
     // and the dialog owns it. The code destroys the dialog below.
@@ -882,6 +886,9 @@ unsafe fn activate_custom(composer: *mut GObject) {
     let Some(chosen) = picked else {
         return;
     };
+    if composer_hold.disposed() {
+        return;
+    }
 
     // SAFETY: no arguments; the code releases the object immediately.
     let now = unsafe {
@@ -1257,6 +1264,9 @@ unsafe fn refuse_send(composer: *mut GObject, text: String) {
             c"%s".as_ptr(),
             text.as_ptr(),
         );
+        // A destroy of the composer destroys the dialog, and the run then
+        // drops the last reference.
+        let _dialog = Hold::new(dialog.cast());
         gtk_dialog_run(dialog.cast());
         gtk_widget_destroy(dialog);
     }
@@ -1338,5 +1348,197 @@ mod tests {
             state.begin().is_some(),
             "the retry after a refusal was refused"
         );
+    }
+
+    mod modal {
+        use std::os::raw::{c_char, c_int};
+        use std::sync::Mutex;
+
+        use evo_sys::GtkWidget;
+        use glib_sys::{
+            G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, G_SOURCE_REMOVE, GList, GLogLevelFlags,
+            g_idle_add, g_list_free, g_log_set_default_handler, gboolean,
+        };
+        use gobject_sys::{g_object_set_data_full, g_type_check_instance_is_a, g_type_from_name};
+
+        use super::*;
+
+        unsafe extern "C" {
+            fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> gboolean;
+            fn gtk_window_new(kind: c_int) -> *mut GtkWidget;
+            fn gtk_window_list_toplevels() -> *mut GList;
+            fn gtk_dialog_response(dialog: *mut GtkWidget, response: c_int);
+        }
+
+        // Both tests share one GTK main thread, thus one lock serializes them.
+        static EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+        static SERIAL: Mutex<()> = Mutex::new(());
+
+        fn note(event: &'static str) {
+            EVENTS.lock().unwrap_or_else(|e| e.into_inner()).push(event);
+        }
+
+        unsafe extern "C" fn logged(
+            domain: *const c_char,
+            level: GLogLevelFlags,
+            message: *const c_char,
+            _data: gpointer,
+        ) {
+            // SAFETY: GLib passes NUL-terminated strings or NULL.
+            let (domain, message) = unsafe { (read_string(domain), read_string(message)) };
+            if level & (G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_WARNING) != 0 {
+                eprintln!("{domain:?}: {message:?}");
+                note("critical");
+            }
+        }
+
+        /// Runs `body` with a fresh event list and a note for each warning or
+        /// critical. A freed object or a wrong type shows as a critical.
+        fn observe(body: impl FnOnce()) -> Vec<&'static str> {
+            let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+            EVENTS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            // SAFETY: the handler only takes a lock.
+            let previous = unsafe { g_log_set_default_handler(Some(logged), ptr::null_mut()) };
+            body();
+            // SAFETY: restores the handler that was set before.
+            unsafe { g_log_set_default_handler(previous, ptr::null_mut()) };
+            EVENTS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+
+        fn display() -> bool {
+            // SAFETY: no arguments.
+            unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) != GFALSE }
+        }
+
+        unsafe extern "C" fn window_finalized(_data: gpointer) {
+            note("window finalized");
+        }
+
+        unsafe extern "C" fn dialog_finalized(_data: gpointer) {
+            note("dialog finalized");
+        }
+
+        /// Calls `visit` on every toplevel `GtkDialog`.
+        unsafe fn each_dialog(visit: impl Fn(*mut GObject)) {
+            // SAFETY: the list and its windows are live on this thread. The
+            // list is freed below; GTK owns the windows.
+            unsafe {
+                let dialog_type = g_type_from_name(c"GtkDialog".as_ptr());
+                let list = gtk_window_list_toplevels();
+                let mut node = list;
+                while !node.is_null() {
+                    let window = (*node).data;
+                    if g_type_check_instance_is_a(window.cast(), dialog_type) != GFALSE {
+                        visit(window.cast());
+                    }
+                    node = (*node).next;
+                }
+                g_list_free(list);
+            }
+        }
+
+        unsafe extern "C" fn close_window(window: gpointer) -> gboolean {
+            // SAFETY: the test window is live until this call destroys it.
+            unsafe { gtk_widget_destroy(window.cast()) };
+            note("window destroyed");
+            G_SOURCE_REMOVE
+        }
+
+        /// Probes the running dialog, then destroys its parent window.
+        unsafe extern "C" fn probe_and_close(window: gpointer) -> gboolean {
+            // SAFETY: the dialog runs, thus it is live; the probes end with it.
+            unsafe {
+                each_dialog(|dialog| {
+                    g_object_set_data_full(
+                        dialog,
+                        c"probe".as_ptr(),
+                        dialog.cast(),
+                        Some(dialog_finalized),
+                    );
+                });
+                close_window(window)
+            }
+        }
+
+        unsafe extern "C" fn answer_ok(_data: gpointer) -> gboolean {
+            // SAFETY: as in `each_dialog`.
+            unsafe {
+                each_dialog(|dialog| {
+                    note("dialog answered");
+                    gtk_dialog_response(dialog.cast(), GTK_RESPONSE_OK);
+                });
+            }
+            G_SOURCE_REMOVE
+        }
+
+        /// The shell destroys the composer while the Custom Time dialog runs,
+        /// then the user clicks Send Later. The composer must stay alive
+        /// until the action ends, and the action must not continue on it.
+        /// Needs a display; skips without one.
+        #[test]
+        fn destroying_the_composer_during_the_custom_time_dialog_stops_the_action() {
+            if !display() {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = jmap_mock::MockServer::builder()
+                .max_delayed_send(86_400)
+                .start();
+            let events = observe(|| {
+                // SAFETY: GTK stays on this thread. GTK owns the only
+                // reference to the window, as it does for a composer.
+                unsafe {
+                    let window: *mut GObject = gtk_window_new(0).cast();
+                    STATE.set(window, RefCell::new(linked_state(&server)));
+                    g_object_set_data_full(
+                        window,
+                        c"probe".as_ptr(),
+                        window.cast(),
+                        Some(window_finalized),
+                    );
+                    gtk_widget_show_all(window.cast());
+                    // Both run inside the nested main loop of the dialog, in order.
+                    g_idle_add(Some(close_window), window.cast());
+                    g_idle_add(Some(answer_ok), ptr::null_mut());
+                    activate_custom(window);
+                }
+                note("action returned");
+            });
+            assert_eq!(
+                events,
+                [
+                    "window destroyed",
+                    "dialog answered",
+                    "window finalized",
+                    "action returned"
+                ]
+            );
+        }
+
+        /// The shell destroys the composer while a refusal shows. The dialog
+        /// goes with its parent, and `gtk_dialog_run` then drops its own
+        /// reference. The final destroy must not touch a freed dialog. Needs
+        /// a display; skips without one.
+        #[test]
+        fn destroying_the_composer_during_a_refusal_keeps_the_dialog_until_its_destroy() {
+            if !display() {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let events = observe(|| {
+                // SAFETY: as above.
+                unsafe {
+                    let window: *mut GObject = gtk_window_new(0).cast();
+                    gtk_widget_show_all(window.cast());
+                    g_idle_add(Some(probe_and_close), window.cast());
+                    refuse_send(window, "refused".to_owned());
+                }
+                note("refusal returned");
+            });
+            assert_eq!(
+                events,
+                ["window destroyed", "dialog finalized", "refusal returned"]
+            );
+        }
     }
 }

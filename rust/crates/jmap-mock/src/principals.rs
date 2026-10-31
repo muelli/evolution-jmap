@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::Id;
-use jmap_proto::calendars::CalendarEvent;
+use jmap_proto::calendars::{CalendarEvent, CalendarRights};
 use jmap_proto::error::MethodError;
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};
 use jmap_proto::principals::{
@@ -27,9 +27,16 @@ const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 pub fn principal_get(
     state: &mut crate::state::ServerState,
     arguments: Value,
+    caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
-    let account = account_mut(state, &request.account_id)?;
+    let Some(account) = state.account(&request.account_id) else {
+        return Err(MethodError::new(
+            jmap_proto::error::method::ACCOUNT_NOT_FOUND,
+        ));
+    };
+    let account_id = request.account_id.clone();
+    let account_state = account.principals.state();
 
     let mut list = Vec::new();
     let mut not_found = Vec::new();
@@ -42,24 +49,95 @@ pub fn principal_get(
         ),
         Some(ids) => {
             for id in ids {
-                match account.principals.get(id) {
-                    Some(principal) => list.push(principal.clone()),
-                    None => not_found.push(id.clone()),
+                if let Some(principal) = account.principals.get(id) {
+                    list.push(principal.clone());
+                } else if account.current_user_principal_id.as_ref() == Some(id) {
+                    let p = account
+                        .principals
+                        .iter()
+                        .next()
+                        .map(|(_, p)| {
+                            let mut p = p.clone();
+                            p.id = Some(id.clone());
+                            p
+                        })
+                        .unwrap_or_else(|| {
+                            let mut p = Principal::new(&account.name);
+                            p.id = Some(id.clone());
+                            p.email = Some(account.name.clone());
+                            p.principal_type =
+                                Some(jmap_proto::principals::principal_type::INDIVIDUAL.to_owned());
+                            p
+                        });
+                    list.push(p);
+                } else if let Some(foreign) = find_foreign_principal(state, &account_id, caller, id)
+                {
+                    list.push(foreign);
+                } else {
+                    not_found.push(id.clone());
                 }
             }
         }
     }
 
-    to_result(
-        &GetResponse::new(request.account_id, account.principals.state(), list)
-            .with_not_found(not_found),
-    )
+    to_result(&GetResponse::new(account_id, account_state, list).with_not_found(not_found))
+}
+
+fn find_foreign_principal(
+    state: &crate::state::ServerState,
+    requesting_account_id: &Id,
+    caller: Option<&Id>,
+    target_id: &Id,
+) -> Option<Principal> {
+    for (acc_id, acc) in &state.accounts {
+        if acc_id == requesting_account_id {
+            continue;
+        }
+        let matches_principal = acc.current_user_principal_id.as_ref() == Some(target_id)
+            || acc.principals.contains(target_id);
+        if !matches_principal {
+            continue;
+        }
+
+        let is_visible = !acc.is_personal
+            || caller.is_some_and(|c| {
+                acc.current_user_principal_id.as_ref() == Some(c)
+                    || acc
+                        .mailboxes
+                        .iter()
+                        .any(|(_, m)| m.share_with.as_ref().is_some_and(|s| s.contains_key(c)))
+                    || acc
+                        .calendars
+                        .iter()
+                        .any(|(_, cal)| cal.share_with.as_ref().is_some_and(|s| s.contains_key(c)))
+                    || acc
+                        .address_books
+                        .iter()
+                        .any(|(_, b)| b.share_with.as_ref().is_some_and(|s| s.contains_key(c)))
+            });
+
+        if is_visible {
+            if let Some(p) = acc.principals.get(target_id) {
+                return Some(p.clone());
+            }
+            let mut p = Principal::new(&acc.name);
+            p.id = Some(target_id.clone());
+            p.email = Some(acc.name.clone());
+            p.principal_type = Some(jmap_proto::principals::principal_type::INDIVIDUAL.to_owned());
+            return Some(p);
+        }
+    }
+    None
 }
 
 pub fn principal_query(
     state: &mut crate::state::ServerState,
     arguments: Value,
 ) -> Result<Value, MethodError> {
+    if state.disable_principal_query {
+        return Err(MethodError::new("forbidden")
+            .with_description("The administrator has disabled directory queries."));
+    }
     let request: QueryRequest<PrincipalQueryFilter> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
 
@@ -92,23 +170,83 @@ pub fn principal_query(
 pub fn principal_get_availability(
     state: &mut crate::state::ServerState,
     arguments: Value,
+    caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
     let request: GetAvailabilityRequest = parse_arguments(arguments)?;
-    let account = account_mut(state, &request.account_id)?;
+    let Some(requesting_account) = state.account(&request.account_id) else {
+        return Err(MethodError::new(
+            jmap_proto::error::method::ACCOUNT_NOT_FOUND,
+        ));
+    };
+    let caller = caller.or(requesting_account.current_user_principal_id.as_ref());
 
-    let allowed = account
+    let target = state.accounts.iter().find(|(_, acc)| {
+        acc.current_user_principal_id.as_ref() == Some(&request.id)
+            || acc.principals.contains(&request.id)
+    });
+
+    let Some((target_account_id, target_account)) = target else {
+        return Err(MethodError::new("notFound"));
+    };
+
+    if target_account
         .principals
         .get(&request.id)
-        .is_some_and(may_get_availability);
-    if !allowed {
+        .is_some_and(|p| !may_get_availability(p))
+    {
         return Err(MethodError::new("notFound"));
     }
 
-    let mut list: Vec<BusyPeriod> = account
-        .calendar_events
-        .iter()
-        .filter_map(|(_, event)| busy_period_for(event, &request))
-        .collect();
+    let is_owner = match caller {
+        Some(c) => match &target_account.current_user_principal_id {
+            Some(owner_id) => c == owner_id,
+            None => target_account_id == &request.account_id,
+        },
+        None => target_account_id == &request.account_id,
+    };
+
+    let mut list: Vec<BusyPeriod> = Vec::new();
+
+    if is_owner {
+        for (_, event) in target_account.calendar_events.iter() {
+            if let Some(period) = busy_period_for(event, &request, true) {
+                list.push(period);
+            }
+        }
+    } else if let Some(caller_id) = caller {
+        let granted_calendars: BTreeMap<&Id, &CalendarRights> = target_account
+            .calendars
+            .iter()
+            .filter_map(|(cal_id, cal)| {
+                let rights = cal.share_with.as_ref()?.get(caller_id)?;
+                let has_fb =
+                    rights.may_read_free_busy == Some(true) || rights.may_read_items == Some(true);
+                has_fb.then_some((cal_id, rights))
+            })
+            .collect();
+
+        if granted_calendars.is_empty() {
+            return to_result(&GetAvailabilityResponse::new(Vec::new()));
+        }
+
+        for (_, event) in target_account.calendar_events.iter() {
+            let Some(cal_ids) = &event.calendar_ids else {
+                continue;
+            };
+            let matching_rights = cal_ids.keys().find_map(|cid| granted_calendars.get(cid));
+            let Some(rights) = matching_rights else {
+                continue;
+            };
+
+            let can_read_items = rights.may_read_items == Some(true);
+            if let Some(period) = busy_period_for(event, &request, can_read_items) {
+                list.push(period);
+            }
+        }
+    } else {
+        return to_result(&GetAvailabilityResponse::new(Vec::new()));
+    }
+
     list.sort_by(|a, b| a.utc_start.cmp(&b.utc_start));
 
     to_result(&GetAvailabilityResponse::new(list))
@@ -125,14 +263,22 @@ fn may_get_availability(principal: &Principal) -> bool {
 }
 
 /// Build one `BusyPeriod` for an event.
-/// Return `None` when the event is not busy in the request window.
-fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> Option<BusyPeriod> {
+/// Return `None` when the event is not busy in the request window or is secret.
+fn busy_period_for(
+    event: &CalendarEvent,
+    request: &GetAvailabilityRequest,
+    can_read_items: bool,
+) -> Option<BusyPeriod> {
     if matches!(event.status.as_deref(), Some("cancelled")) {
         return None;
     }
     // RFC 8984 section 4.4.2 sets default `freeBusyStatus` to `busy`.
     // Only explicit `free` excludes an event here.
     if matches!(event.free_busy_status.as_deref(), Some("free")) {
+        return None;
+    }
+    // RFC 8984 section 4.4.3: secret events are completely hidden from availability.
+    if matches!(event.privacy.as_deref(), Some("secret")) {
         return None;
     }
     let start = event.start.as_deref()?;
@@ -149,8 +295,15 @@ fn busy_period_for(event: &CalendarEvent, request: &GetAvailabilityRequest) -> O
         "confirmed"
     };
     let mut period = BusyPeriod::new(format!("{start}Z"), format!("{end}Z"), busy_status);
-    if request.show_details {
-        period = period.with_event(event.clone());
+    if request.show_details && can_read_items {
+        if matches!(event.privacy.as_deref(), Some("private")) {
+            let mut redacted = event.clone();
+            redacted.title = None;
+            redacted.description = None;
+            period = period.with_event(redacted);
+        } else {
+            period = period.with_event(event.clone());
+        }
     }
     Some(period)
 }
