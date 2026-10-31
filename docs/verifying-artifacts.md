@@ -126,8 +126,9 @@ grype sbom:evolution-jmap-*.cdx.json
 osv-scanner --sbom=evolution-jmap-*.cdx.json
 ```
 
-The SBOM is reproducible: its timestamp is `SOURCE_DATE_EPOCH` and it has no
-random serial number. The crates are exact `pkg:cargo` Package-URLs. The
+The SBOM is reproducible: its timestamp is `SOURCE_DATE_EPOCH` and its
+`serialNumber` is derived from the version tag, not random. The crates are
+exact `pkg:cargo` Package-URLs. The
 system libraries are `pkg:deb/ubuntu` Package-URLs, one for each package in
 the `Depends` of the `.deb`. Each one has the version that was installed on
 the build runner when the release workflow built the `.deb`. `ci/sbom.sh`
