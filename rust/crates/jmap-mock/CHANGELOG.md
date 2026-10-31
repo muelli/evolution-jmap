@@ -23,6 +23,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `MockServer::builder().contact_create_omits_uid()` and `jmap-mockd
   --contact-create-omits-uid`: leave `ContactCard/set`'s `uid` unset on a create
   that omits it, modelling a real server found not to assign one.
+- Principal and delegation support: `Principal/get` across shared accounts,
+  `--disable-principal-query` (and `MockServerBuilder::disable_principal_query`)
+  matching Stalwart directory policy, `shareWith` with `mayReadFreeBusy` visibility
+  rules on calendars and address books, and `Principal/getAvailability`.
 
 ## [0.5.0] - 2026-10-24
 

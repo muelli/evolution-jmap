@@ -365,9 +365,9 @@ fn handle_method(
         }
         "Calendar/get" => crate::calendars::calendar_get(state, arguments, caller),
         "Calendar/set" => crate::calendars::calendar_set(state, arguments, caller),
-        "CalendarEvent/get" => crate::calendars::calendar_event_get(state, arguments),
+        "CalendarEvent/get" => crate::calendars::calendar_event_get(state, arguments, caller),
         "CalendarEvent/set" => crate::calendars::calendar_event_set(state, arguments, caller),
-        "CalendarEvent/query" => crate::calendars::calendar_event_query(state, arguments),
+        "CalendarEvent/query" => crate::calendars::calendar_event_query(state, arguments, caller),
         "CalendarEvent/parse" => crate::calendars::calendar_event_parse(state, arguments),
         "CalendarEventNotification/get" => {
             crate::calendars::calendar_event_notification_get(state, arguments, caller)
@@ -380,10 +380,10 @@ fn handle_method(
         }
         "ParticipantIdentity/get" => crate::calendars::participant_identity_get(state, arguments),
         "ParticipantIdentity/set" => crate::calendars::participant_identity_set(state, arguments),
-        "Principal/get" => crate::principals::principal_get(state, arguments),
+        "Principal/get" => crate::principals::principal_get(state, arguments, caller),
         "Principal/query" => crate::principals::principal_query(state, arguments),
         "Principal/getAvailability" => {
-            crate::principals::principal_get_availability(state, arguments)
+            crate::principals::principal_get_availability(state, arguments, caller)
         }
         "ShareNotification/get" => {
             crate::principals::share_notification_get(state, arguments, caller)

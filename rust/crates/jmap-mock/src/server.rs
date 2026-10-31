@@ -105,6 +105,8 @@ pub struct Faults {
     pub reject_collection_create: bool,
     /// Advertise the Cyrus mail extension and accept `Email.snoozed`.
     pub snooze_extension: bool,
+    /// Refuse `Principal/query` with `forbidden`, modeling Stalwart directory policy.
+    pub disable_principal_query: bool,
 }
 
 pub struct MockServerBuilder {
@@ -467,6 +469,12 @@ impl MockServerBuilder {
         self
     }
 
+    /// Refuse `Principal/query` with `forbidden`, modeling Stalwart directory policy.
+    pub fn disable_principal_query(mut self) -> Self {
+        self.faults.disable_principal_query = true;
+        self
+    }
+
     /// Bind localhost and serve requests in a background thread.
     pub fn start(self) -> MockServer {
         let mut state = ServerState::new();
@@ -514,6 +522,7 @@ impl MockServerBuilder {
         state.sieve_extensions = self.sieve_extensions;
         state.sieve_vacation_script = self.sieve_vacation_script;
         state.tasks_enabled = self.tasks_enabled;
+        state.disable_principal_query = self.faults.disable_principal_query;
         if !self.tasks_enabled {
             state
                 .omitted_capabilities

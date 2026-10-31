@@ -289,6 +289,9 @@ fn main() {
             "--tasks" => {
                 builder = builder.tasks();
             }
+            "--disable-principal-query" => {
+                builder = builder.disable_principal_query();
+            }
             "--seed" => {
                 let path = next_argument(&mut arguments, "--seed needs a JSON file path");
                 seed_path = Some(path);
@@ -417,11 +420,21 @@ fn seed_shared_account_data(state: &mut jmap_mock::ServerState) {
 
     if let Some(account) = state.account_mut(&Id::from("A1")) {
         account.current_user_principal_id = Some(grantee_principal_id.clone());
+        let mut grantee_principal = jmap_proto::principals::Principal::new("Grantee");
+        grantee_principal.email = Some("grantee@example.test".to_owned());
+        account.seed_principal(grantee_principal);
     }
 
     let shared = state.add_account("A2", "owner@example.test");
     shared.is_personal = false;
-    shared.current_user_principal_id = Some(owner_principal_id);
+    shared.current_user_principal_id = Some(owner_principal_id.clone());
+
+    let mut owner_principal = jmap_proto::principals::Principal::new("Owner");
+    owner_principal.email = Some("owner@example.test".to_owned());
+    shared.principals.seed_with_id(
+        owner_principal_id.clone(),
+        owner_principal.with_id(owner_principal_id.clone()),
+    );
 
     let read_only_mailbox_id =
         shared.seed_mailbox("Shared Read Only", Some(jmap_proto::mail::role::INBOX));
@@ -463,6 +476,14 @@ fn seed_shared_account_data(state: &mut jmap_mock::ServerState) {
             CalendarRights::read_only(),
         )]));
     }
+
+    let mut event = CalendarEvent::default();
+    event.title = Some("Shared Calendar Event".to_owned());
+    event.start = Some("2026-08-01T10:00:00".to_owned());
+    event.duration = Some("PT1H".to_owned());
+    event.calendar_ids = Some(BTreeMap::from([(shared_calendar_id.clone(), true)]));
+    event.privacy = Some("public".to_owned());
+    shared.seed_calendar_event(event);
 
     shared.seed_email(EmailSeed::new(
         read_only_mailbox_id.clone(),
@@ -624,7 +645,7 @@ fn usage(error: &str) -> ! {
          [--terse-submission-create] [--terse-contact-create] [--max-contact-size N] \
          [--new-collections-default-unsubscribed] [--terse-calendar-event-create] [--without-scheduling] \
          [--terse-collection-create] [--id-omitting-collection-create] [--reject-collection-create] \
-         [--max-delayed-send N] [--snooze-extension] [--sieve-vacation-script] [--tasks] [--share] [--seed PATH]"
+         [--max-delayed-send N] [--snooze-extension] [--sieve-vacation-script] [--tasks] [--disable-principal-query] [--share] [--seed PATH]"
     );
     std::process::exit(if error.is_empty() { 0 } else { 2 });
 }
