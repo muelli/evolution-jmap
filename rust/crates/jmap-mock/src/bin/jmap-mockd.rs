@@ -292,6 +292,15 @@ fn main() {
             "--disable-principal-query" => {
                 builder = builder.disable_principal_query();
             }
+            "--hostile" => {
+                let scenario_name =
+                    next_argument(&mut arguments, "--hostile needs a scenario name");
+                let scenario: jmap_mock::HostileScenario =
+                    scenario_name.parse().unwrap_or_else(|_| {
+                        usage(&format!("unknown hostile scenario: {scenario_name}"))
+                    });
+                builder = builder.hostile(scenario);
+            }
             "--seed" => {
                 let path = next_argument(&mut arguments, "--seed needs a JSON file path");
                 seed_path = Some(path);
@@ -645,7 +654,8 @@ fn usage(error: &str) -> ! {
          [--terse-submission-create] [--terse-contact-create] [--max-contact-size N] \
          [--new-collections-default-unsubscribed] [--terse-calendar-event-create] [--without-scheduling] \
          [--terse-collection-create] [--id-omitting-collection-create] [--reject-collection-create] \
-         [--max-delayed-send N] [--snooze-extension] [--sieve-vacation-script] [--tasks] [--disable-principal-query] [--share] [--seed PATH]"
+         [--max-delayed-send N] [--snooze-extension] [--sieve-vacation-script] [--tasks] [--disable-principal-query] [--share] [--seed PATH] \
+         [--hostile SCENARIO]"
     );
     std::process::exit(if error.is_empty() { 0 } else { 2 });
 }

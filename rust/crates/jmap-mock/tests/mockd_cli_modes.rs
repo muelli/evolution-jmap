@@ -65,6 +65,7 @@ fn help_lists_the_expanded_builder_mode_flags() {
         "--tasks",
         "--share",
         "--seed",
+        "--hostile",
     ] {
         assert!(
             stderr.contains(flag),

@@ -15,6 +15,7 @@ mod calendars;
 mod contacts;
 mod dispatch;
 mod eventsource;
+pub mod hostile;
 mod mail;
 mod message;
 mod patch;
@@ -28,6 +29,7 @@ mod state;
 mod tasks;
 mod time;
 
+pub use hostile::HostileScenario;
 pub use mail::EmailSeed;
 pub use server::{
     DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME, DEFAULT_CALLS_IN_REQUEST, DEFAULT_OBJECTS_IN_GET,

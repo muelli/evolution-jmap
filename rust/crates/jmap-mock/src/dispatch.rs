@@ -22,6 +22,26 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
     // Count each HTTP request, including requests rejected before parsing.
     state.api_requests += 1;
 
+    if state.has_hostile(crate::hostile::HostileScenario::ReplayedResponse)
+        && let Some((status, cached)) = &state.cached_replayed_response
+    {
+        return (*status, cached.clone());
+    }
+
+    if state.has_hostile(crate::hostile::HostileScenario::OversizedResponse) {
+        let mut padding = String::with_capacity(10_500_000);
+        for _ in 0..10_500 {
+            padding.push_str(&"x".repeat(1000));
+        }
+        let problem = serde_json::json!({
+            "sessionState": "1",
+            "methodResponses": [
+                ["Core/echo", {"padding": padding}, "c1"]
+            ]
+        });
+        return (200, problem);
+    }
+
     // RFC 8620 §2: reject requests over `maxSizeRequest` before parsing method calls.
     if let Some(limit) = state.size_request
         && body.len() as u64 > limit
@@ -95,9 +115,46 @@ pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> 
         state.event_source.broadcast(&change);
     }
 
-    let response = Response::new(state.session_state()).with_method_responses(responses);
+    if state.has_hostile(crate::hostile::HostileScenario::WrongMethodCallId) {
+        for resp in &mut responses {
+            resp.call_id = "wrong_call_id_999".to_owned();
+        }
+    } else if state.has_hostile(crate::hostile::HostileScenario::DuplicateMethodCallId) {
+        if responses.len() >= 2 {
+            let dup_id = responses[0].call_id.clone();
+            for resp in &mut responses {
+                resp.call_id = dup_id.clone();
+            }
+        } else if let Some(first) = responses.first().cloned() {
+            responses.push(first);
+        }
+    }
+
+    if state.has_hostile(crate::hostile::HostileScenario::OutOfOrderResponses) {
+        responses.reverse();
+    }
+
+    let session_state = if state.has_hostile(crate::hostile::HostileScenario::StateBackwards) {
+        let count = state.hostile_state_calls;
+        state.hostile_state_calls += 1;
+        match count {
+            0 => jmap_proto::State::new("9999"),
+            1 => jmap_proto::State::new("5000"),
+            _ => jmap_proto::State::new("10"),
+        }
+    } else {
+        state.session_state()
+    };
+
+    let response = Response::new(session_state).with_method_responses(responses);
 
     let response_value = serde_json::to_value(&response).expect("response serializes");
+
+    if state.has_hostile(crate::hostile::HostileScenario::ReplayedResponse)
+        && state.cached_replayed_response.is_none()
+    {
+        state.cached_replayed_response = Some((200, response_value.clone()));
+    }
     println!(
         "<-- 200 OK\n{}\n",
         serde_json::to_string_pretty(&response_value).unwrap_or_default()

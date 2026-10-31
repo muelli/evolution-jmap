@@ -27,6 +27,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `--disable-principal-query` (and `MockServerBuilder::disable_principal_query`)
   matching Stalwart directory policy, `shareWith` with `mayReadFreeBusy` visibility
   rules on calendars and address books, and `Principal/getAvailability`.
+- Hostile server scenarios via `jmap-mockd --hostile <scenario>` and
+  `MockServerBuilder::hostile`: `oversized-response`, `deep-json`,
+  `numbers-out-of-range`, `dangerous-ids`, `blob-size-mismatch`,
+  `session-urls-file`, `session-urls-other-origin`, `redirect-other-origin`,
+  `wrong-method-call-id`, `duplicate-method-call-id`, `out-of-order-responses`,
+  `replayed-response`, `state-backwards`, and `eventsource-unknown`.
 
 ## [0.5.0] - 2026-10-24
 

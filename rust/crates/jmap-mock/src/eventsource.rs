@@ -53,11 +53,13 @@ fn parse_params(query: &str) -> EventSourceParams {
 /// Subscribe this request and stream events on one dedicated thread.
 pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex<ServerState>) {
     let params = parse_params(query);
-    let receiver = state
-        .lock()
-        .expect("mock state lock")
-        .event_source
-        .subscribe(params.types.clone());
+    let (receiver, hostile_unknown) = {
+        let mut state = state.lock().expect("mock state lock");
+        (
+            state.event_source.subscribe(params.types.clone()),
+            state.has_hostile(crate::hostile::HostileScenario::EventsourceUnknown),
+        )
+    };
     std::thread::spawn(move || {
         let mut writer = request.into_writer();
         let head = "HTTP/1.1 200 OK\r\n\
@@ -73,6 +75,7 @@ pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex
             &receiver,
             params.ping_interval,
             params.close_after_state,
+            hostile_unknown,
         );
     });
 }
@@ -83,7 +86,18 @@ fn stream_events(
     receiver: &Receiver<Vec<u8>>,
     ping_interval: Option<Duration>,
     close_after_state: bool,
+    hostile_unknown: bool,
 ) {
+    if hostile_unknown {
+        let event = b"event: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"unknown-account-XYZ\":{\"UnknownType123\":\"state-999\",\"SuperMaliciousType\":\"state-888\"}}}\n\n";
+        if write_chunk(writer, event).is_err() {
+            return;
+        }
+        if close_after_state {
+            let _ = end_chunked_body(writer);
+            return;
+        }
+    }
     loop {
         let pushed = match ping_interval {
             Some(interval) => match receiver.recv_timeout(interval) {

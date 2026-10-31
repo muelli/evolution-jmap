@@ -107,6 +107,8 @@ pub struct Faults {
     pub snooze_extension: bool,
     /// Refuse `Principal/query` with `forbidden`, modeling Stalwart directory policy.
     pub disable_principal_query: bool,
+    /// Active hostile scenarios.
+    pub hostile_scenarios: BTreeSet<crate::hostile::HostileScenario>,
 }
 
 pub struct MockServerBuilder {
@@ -475,6 +477,12 @@ impl MockServerBuilder {
         self
     }
 
+    /// Enable one hostile server scenario for adversarial testing.
+    pub fn hostile(mut self, scenario: crate::hostile::HostileScenario) -> Self {
+        self.faults.hostile_scenarios.insert(scenario);
+        self
+    }
+
     /// Bind localhost and serve requests in a background thread.
     pub fn start(self) -> MockServer {
         let mut state = ServerState::new();
@@ -523,6 +531,7 @@ impl MockServerBuilder {
         state.sieve_vacation_script = self.sieve_vacation_script;
         state.tasks_enabled = self.tasks_enabled;
         state.disable_principal_query = self.faults.disable_principal_query;
+        state.hostile_scenarios = self.faults.hostile_scenarios.clone();
         if !self.tasks_enabled {
             state
                 .omitted_capabilities
@@ -907,6 +916,20 @@ fn handle_request(
     let path = url.split('?').next().unwrap_or(&url).to_owned();
     let method = request.method().clone();
 
+    let has_redirect = state
+        .lock()
+        .expect("mock state lock")
+        .has_hostile(crate::hostile::HostileScenario::RedirectOtherOrigin);
+    if has_redirect && path == "/jmap" {
+        let location = "https://evil.example.com/jmap";
+        let response = tiny_http::Response::empty(307).with_header(
+            tiny_http::Header::from_bytes(&b"Location"[..], location.as_bytes())
+                .expect("location header"),
+        );
+        let _ = request.respond(response);
+        return;
+    }
+
     match (method, path.as_str()) {
         (tiny_http::Method::Get, "/.well-known/jmap") => {
             let state = state.lock().expect("mock state lock");
@@ -922,6 +945,32 @@ fn handle_request(
             crate::eventsource::spawn_and_respond(request, query, state);
         }
         (tiny_http::Method::Post, "/jmap") => {
+            let (has_deep_json, has_numbers) = {
+                let s = state.lock().expect("mock state lock");
+                (
+                    s.has_hostile(crate::hostile::HostileScenario::DeepJson),
+                    s.has_hostile(crate::hostile::HostileScenario::NumbersOutOfRange),
+                )
+            };
+            if has_deep_json {
+                let mut raw = String::with_capacity(30000);
+                raw.push_str(r#"{"sessionState":"1","methodResponses":[["Core/echo",{"depth":"#);
+                for _ in 0..10_000 {
+                    raw.push('[');
+                }
+                raw.push_str("42");
+                for _ in 0..10_000 {
+                    raw.push(']');
+                }
+                raw.push_str(r#"},"c1"]]}"#);
+                respond_raw(request, 200, b"application/json", raw.into_bytes());
+                return;
+            }
+            if has_numbers {
+                let raw = br#"{"sessionState":"1","methodResponses":[["Email/query",{"accountId":"A1","queryState":"q1","canCalculateChanges":false,"position":-1,"negativeCount":-42,"total":99999999999999999999999999999999,"ids":[]},"c1"]]}"#;
+                respond_raw(request, 200, b"application/json", raw.to_vec());
+                return;
+            }
             let mut body = Vec::new();
             if request.as_reader().read_to_end(&mut body).is_err() {
                 respond_json(request, 400, &json!({"detail": "unreadable body"}));
@@ -982,7 +1031,9 @@ fn handle_request(
                 return;
             };
             let blob_id = account.add_blob(content_type.clone(), data);
+            let is_mismatch = state.has_hostile(crate::hostile::HostileScenario::BlobSizeMismatch);
             drop(state);
+            let reported_size = if is_mismatch { 1_000_000 } else { size };
             respond_json(
                 request,
                 201,
@@ -990,7 +1041,7 @@ fn handle_request(
                     "accountId": account_id,
                     "blobId": blob_id,
                     "type": content_type,
-                    "size": size,
+                    "size": reported_size,
                 }),
             );
         }
@@ -1036,26 +1087,31 @@ fn handle_request(
                 );
                 return;
             };
-            let state = state.lock().expect("mock state lock");
-            let blob = state
-                .account(&jmap_proto::Id::new(*account_id))
-                .and_then(|account| account.blobs.get(&jmap_proto::Id::new(*blob_id)));
-            match blob {
-                Some(blob) => {
-                    let response = tiny_http::Response::from_data(blob.data.clone())
+            let (blob_info, is_mismatch) = {
+                let state = state.lock().expect("mock state lock");
+                (
+                    state
+                        .account(&jmap_proto::Id::new(*account_id))
+                        .and_then(|account| account.blobs.get(&jmap_proto::Id::new(*blob_id)))
+                        .map(|blob| (blob.data.clone(), blob.content_type.clone())),
+                    state.has_hostile(crate::hostile::HostileScenario::BlobSizeMismatch),
+                )
+            };
+            match blob_info {
+                Some((data, content_type)) => {
+                    let served_data = if is_mismatch { b"short".to_vec() } else { data };
+                    let response = tiny_http::Response::from_data(served_data)
                         .with_status_code(200)
                         .with_header(
                             tiny_http::Header::from_bytes(
                                 &b"Content-Type"[..],
-                                blob.content_type.as_bytes(),
+                                content_type.as_bytes(),
                             )
                             .expect("content type header"),
                         );
-                    drop(state);
                     let _ = request.respond(response);
                 }
                 None => {
-                    drop(state);
                     respond_json(
                         request,
                         404,
@@ -1113,6 +1169,16 @@ fn respond_json(request: tiny_http::Request, status: u16, body: &Value) {
                 .expect("static header"),
         );
     // Ignore response write errors. The client can close first.
+    let _ = request.respond(response);
+}
+
+fn respond_raw(request: tiny_http::Request, status: u16, content_type: &[u8], body: Vec<u8>) {
+    let response = tiny_http::Response::from_data(body)
+        .with_status_code(status)
+        .with_header(
+            tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type)
+                .expect("content type header"),
+        );
     let _ = request.respond(response);
 }
 
@@ -1305,17 +1371,45 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
     let username = first_account
         .map(|(_, account)| account.name.clone())
         .unwrap_or_default();
-    Session::new(
+
+    let (api_url, download_url, upload_url, event_source_url) =
+        if state.has_hostile(crate::hostile::HostileScenario::SessionUrlsOtherOrigin) {
+            (
+                "https://evil.example.com/jmap".to_owned(),
+                "https://evil.example.com/download/{accountId}/{blobId}/{name}".to_owned(),
+                "https://evil.example.com/upload/{accountId}".to_owned(),
+                Some("https://evil.example.com/eventsource".to_owned()),
+            )
+        } else if state.has_hostile(crate::hostile::HostileScenario::SessionUrlsFile) {
+            (
+                "file:///dev/null".to_owned(),
+                "file:///etc/passwd".to_owned(),
+                "file:///tmp/evil".to_owned(),
+                Some("file:///dev/zero".to_owned()),
+            )
+        } else {
+            (
+                format!("{advertised}/jmap"),
+                format!("{advertised}/download/{{accountId}}/{{blobId}}/{{name}}"),
+                format!("{advertised}/upload/{{accountId}}"),
+                Some(format!("{advertised}/eventsource")),
+            )
+        };
+
+    let mut session = Session::new(
         username,
-        format!("{advertised}/jmap"),
-        format!("{advertised}/download/{{accountId}}/{{blobId}}/{{name}}"),
-        format!("{advertised}/upload/{{accountId}}"),
+        api_url,
+        download_url,
+        upload_url,
         state.session_state(),
     )
-    .with_event_source_url(format!("{advertised}/eventsource"))
     .with_capabilities(capabilities)
     .with_primary_accounts(primary_accounts)
-    .with_accounts(accounts)
+    .with_accounts(accounts);
+    if let Some(event_source_url) = event_source_url {
+        session = session.with_event_source_url(event_source_url);
+    }
+    session
 }
 
 #[cfg(test)]

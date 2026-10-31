@@ -852,6 +852,7 @@ pub fn email_query(
     let page_size = state.query_page_size;
     let hides_limit = state.query_hides_limit;
     let query_never_terminates = state.query_never_terminates;
+    let dangerous_ids = state.has_hostile(crate::hostile::HostileScenario::DangerousIds);
     let account = account_mut(state, &request.account_id)?;
     let is_owner = account_is_owner(account, caller);
     if !is_owner {
@@ -910,7 +911,15 @@ pub fn email_query(
     let position = request.position.max(0) as usize;
     let asked = request.limit.unwrap_or(u64::MAX);
     let never_terminates = query_never_terminates && !matches.is_empty();
-    let ids: Vec<Id> = if never_terminates {
+    let ids: Vec<Id> = if dangerous_ids {
+        vec![
+            Id::new("../../etc/passwd"),
+            Id::new("../evil/path"),
+            Id::new("id/with/slash"),
+            Id::new("id\0with_nul"),
+            Id::new("id\x01\x1fcontrol"),
+        ]
+    } else if never_terminates {
         // Broken-server mode repeats a non-empty page and ignores `position`.
         matches
             .iter()
