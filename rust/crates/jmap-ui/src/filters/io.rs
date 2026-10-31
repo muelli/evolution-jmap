@@ -4,12 +4,16 @@
 //! The round trips of the Server Filters page, over the [`crate::link`]
 //! connection. The calls block, so use them on worker threads only.
 
+use std::collections::BTreeMap;
+
 use jmap_client::sieve::{SieveCapability, SieveScript, SieveScriptSetRequest};
 use jmap_client::{expect_created, expect_destroyed, expect_updated};
 use jmap_proto::Id;
+use jmap_proto::mail::Mailbox;
 use jmap_proto::methods::SetRequest;
 use serde_json::json;
 
+use crate::filters::rules::Folder;
 use crate::link::{self, AccountLink};
 
 /// One script the server holds, with its Sieve source already downloaded.
@@ -24,10 +28,15 @@ pub struct Loaded {
     /// shows "Your server does not offer server-side filters." instead.
     pub capability: Option<SieveCapability>,
     pub scripts: Vec<LoadedScript>,
+    /// Every mailbox of the account, for the folder combo of the rule
+    /// dialog. Empty when the server offers no Sieve: the page shows
+    /// nothing to put a folder in.
+    pub folders: Vec<Folder>,
 }
 
-/// Loads the account's Sieve capability and every script it holds, with text
-/// (`SieveScript/get` plus one blob download per script).
+/// Loads the account's Sieve capability, every script it holds with its
+/// text, and the mailboxes a rule can file into (`SieveScript/get`, one
+/// blob download per script, and `Mailbox/get`).
 pub fn load(link: &AccountLink) -> Result<Loaded, String> {
     let account = link.features.account_id.clone();
     let capability = link.client.sieve_capability(&account);
@@ -41,9 +50,15 @@ pub fn load(link: &AccountLink) -> Result<Loaded, String> {
             .map_err(|error| link::describe(&error))?;
         loaded.push(LoadedScript { script, text });
     }
+    let folders = if capability.is_some() {
+        folders(link)?
+    } else {
+        Vec::new()
+    };
     Ok(Loaded {
         capability,
         scripts: loaded,
+        folders,
     })
 }
 
@@ -62,6 +77,62 @@ pub fn check(link: &AccountLink, text: &str) -> Result<Option<String>, String> {
     Ok(validated
         .error
         .map(|error| error.description.unwrap_or(error.error_type)))
+}
+
+/// The separator between the names of a mailbox and its parent in the
+/// `fileinto` argument of a generated rule.
+///
+/// Both servers tested deliver with "/" and with no other separator; see
+/// decision D7 of the plan this page follows.
+const FOLDER_SEPARATOR: &str = "/";
+
+/// How far up a parent chain this module walks before it gives up. A
+/// mailbox tree is a few levels deep, so a longer chain means the server
+/// answered with a cycle. The page still has to finish.
+const MAX_FOLDER_DEPTH: usize = 64;
+
+/// Every mailbox of the account, as the rule dialog's folder combo offers
+/// it: the JMAP id for `fileinto :mailboxid`, and the full path for plain
+/// `fileinto`. The list is sorted by path.
+pub fn folders(link: &AccountLink) -> Result<Vec<Folder>, String> {
+    let account = link.features.account_id.clone();
+    let answer = link
+        .call(|client| client.mailbox_get(&account))
+        .map_err(|error| link::describe(&error))?;
+    let by_id: BTreeMap<&Id, &Mailbox> = answer
+        .list
+        .iter()
+        .filter_map(|mailbox| mailbox.id.as_ref().map(|id| (id, mailbox)))
+        .collect();
+    let mut folders: Vec<Folder> = by_id
+        .iter()
+        .map(|(id, mailbox)| Folder {
+            id: id.to_string(),
+            name: folder_path(mailbox, &by_id),
+        })
+        .collect();
+    folders.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(folders)
+}
+
+/// The path of `mailbox`: its own name, with the name of each parent in
+/// front of it.
+///
+/// A parent the answer does not hold ends the walk, so the mailbox keeps
+/// the part of its path that is known. A cycle ends it the same way, after
+/// [`MAX_FOLDER_DEPTH`] steps.
+fn folder_path(mailbox: &Mailbox, by_id: &BTreeMap<&Id, &Mailbox>) -> String {
+    let mut names = vec![mailbox.name.as_str()];
+    let mut parent = mailbox.parent_id.as_ref();
+    for _ in 0..MAX_FOLDER_DEPTH {
+        let Some(found) = parent.and_then(|id| by_id.get(id)) else {
+            break;
+        };
+        names.push(found.name.as_str());
+        parent = found.parent_id.as_ref();
+    }
+    names.reverse();
+    names.join(FOLDER_SEPARATOR)
 }
 
 /// A script a save creates or updates, before the server assigns it an id.
@@ -204,9 +275,107 @@ mod tests {
     use jmap_client::{Client, Credentials};
     use jmap_mock::MockServer;
 
-    use super::{ActivationChange, ActivationTarget, SavePlan, ScriptWrite, check, load, save};
+    use jmap_proto::Id;
+
+    use super::{
+        ActivationChange, ActivationTarget, SavePlan, ScriptWrite, check, folders, load, save,
+    };
     use crate::link::AccountLink;
     use crate::session_cache::AccountFeatures;
+
+    #[test]
+    fn folders_lists_every_mailbox_by_its_full_path() {
+        let server = MockServer::builder().start();
+        let (inbox, child, grandchild, top) = {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&server.account_id()).unwrap();
+            let inbox = account.seed_mailbox("Inbox", Some("inbox"));
+            let child = account.seed_child_mailbox("Invoices", None, &inbox);
+            let grandchild = account.seed_child_mailbox("2026", None, &child);
+            let top = account.seed_mailbox("Archive", None);
+            (inbox, child, grandchild, top)
+        };
+
+        let folders = folders(&link_to(&server)).unwrap();
+
+        let by_id = |id: &Id| {
+            folders
+                .iter()
+                .find(|folder| folder.id == id.to_string())
+                .map(|folder| folder.name.clone())
+        };
+        assert_eq!(by_id(&inbox).as_deref(), Some("Inbox"));
+        assert_eq!(by_id(&child).as_deref(), Some("Inbox/Invoices"));
+        assert_eq!(by_id(&grandchild).as_deref(), Some("Inbox/Invoices/2026"));
+        assert_eq!(by_id(&top).as_deref(), Some("Archive"));
+    }
+
+    #[test]
+    fn folders_are_sorted_by_path_so_the_combo_reads_in_order() {
+        let server = MockServer::builder().start();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&server.account_id()).unwrap();
+            let inbox = account.seed_mailbox("Inbox", Some("inbox"));
+            account.seed_mailbox("Archive", None);
+            account.seed_child_mailbox("Invoices", None, &inbox);
+        }
+
+        let folders = folders(&link_to(&server)).unwrap();
+
+        let names: Vec<&str> = folders.iter().map(|folder| folder.name.as_str()).collect();
+        assert_eq!(names, ["Archive", "Inbox", "Inbox/Invoices"]);
+    }
+
+    #[test]
+    fn a_mailbox_whose_parent_is_not_in_the_answer_keeps_its_own_name() {
+        let server = MockServer::builder().start();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&server.account_id()).unwrap();
+            account.seed_child_mailbox("Orphan", None, &Id::new("no-such-mailbox"));
+        }
+
+        let folders = folders(&link_to(&server)).unwrap();
+
+        let names: Vec<&str> = folders.iter().map(|folder| folder.name.as_str()).collect();
+        assert_eq!(names, ["Orphan"]);
+    }
+
+    #[test]
+    fn a_parent_cycle_does_not_hang_the_page() {
+        let server = MockServer::builder().start();
+        let (first, second) = {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&server.account_id()).unwrap();
+            let first = account.seed_mailbox("One", None);
+            let second = account.seed_child_mailbox("Two", None, &first);
+            // A server that answers with a cycle is broken, but the page
+            // must still finish and show something.
+            account
+                .mailboxes
+                .get_mut(&first)
+                .unwrap()
+                .parent_id
+                .replace(second.clone());
+            (first, second)
+        };
+
+        let folders = folders(&link_to(&server)).unwrap();
+
+        assert_eq!(folders.len(), 2);
+        for id in [first, second] {
+            let folder = folders
+                .iter()
+                .find(|folder| folder.id == id.to_string())
+                .expect("every mailbox is offered");
+            assert!(!folder.name.is_empty());
+        }
+    }
 
     fn link_to(server: &MockServer) -> AccountLink {
         let client = Client::connect(server.origin(), Credentials::none()).unwrap();

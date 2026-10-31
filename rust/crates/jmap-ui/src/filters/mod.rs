@@ -15,8 +15,12 @@
 //! - [`form`] is the staged state of the page: the scripts, the edits the
 //!   user made, which buttons are usable, and what one submit writes.
 //! - [`rule_form`] is the staged state of rules mode: the managed script's
-//!   rule list and one rule's own editing dialog. No widget reads it yet;
-//!   `page.rs` and `rule_dialog.rs` wire it up in a later step.
+//!   rule list and one rule's own editing dialog. [`rule_dialog`] reads and
+//!   writes the second of those; `page.rs` takes up the first in a later
+//!   step.
+//! - [`rule_dialog`] is the modal dialog that edits one rule. Its own pure
+//!   half decides what each combo offers and how an index maps back to the
+//!   model.
 //! - [`io`] does the round trips over a connected
 //!   [`jmap_client::Client`]. It runs on worker threads only.
 //! - [`page`] is the `GtkScrolledWindow` subclass that implements
@@ -24,13 +28,15 @@
 //! - [`extension`] is the `EExtension` on `EMailConfigNotebook`. It checks
 //!   the backend name of the account and adds the page.
 //!
-//! Only [`page`] and [`extension`] have FFI. Every decision the page shows
-//! belongs to [`form`], which has unit tests.
+//! Only [`page`], [`extension`] and the second half of [`rule_dialog`] have
+//! FFI. Every decision those widgets show belongs to [`form`] or to the
+//! pure half of [`rule_dialog`], both of which have unit tests.
 
 pub mod extension;
 pub mod form;
 pub mod io;
 pub mod page;
+pub mod rule_dialog;
 pub mod rule_form;
 pub mod rules;
 pub mod script;

@@ -17,6 +17,7 @@ use jmap_proto::Id;
 use jmap_proto::sieve::SieveCapability;
 
 use crate::filters::io::{ActivationChange, ActivationTarget, Loaded, SavePlan, ScriptWrite};
+use crate::filters::rules::Folder;
 
 /// The names under which a server keeps the script of its own vacation
 /// responder: `vacation` on Stalwart, the capability URN on Cyrus. A script
@@ -101,6 +102,9 @@ pub struct FiltersForm {
     max_number_scripts: Option<u64>,
     max_size_script_name: Option<u64>,
     next_key: u32,
+    /// Every mailbox of the account, for the folder combo of the rule
+    /// dialog.
+    folders: Vec<Folder>,
 }
 
 impl FiltersForm {
@@ -108,6 +112,7 @@ impl FiltersForm {
     pub fn from_loaded(loaded: Loaded) -> Self {
         let mut form = Self {
             offered: loaded.capability.is_some(),
+            folders: loaded.folders,
             ..Self::default()
         };
         if let Some(capability) = &loaded.capability {
@@ -141,6 +146,11 @@ impl FiltersForm {
 
     pub fn entries(&self) -> &[ScriptEntry] {
         &self.entries
+    }
+
+    /// The mailboxes a rule can file into, as the load found them.
+    pub fn folders(&self) -> &[Folder] {
+        &self.folders
     }
 
     pub fn selected(&self) -> Option<usize> {
@@ -416,6 +426,7 @@ mod tests {
         Loaded {
             capability: Some(SieveCapability::new(1024).with_max_number_scripts(3)),
             scripts,
+            folders: Vec::new(),
         }
     }
 
@@ -437,6 +448,7 @@ mod tests {
         let form = FiltersForm::from_loaded(Loaded {
             capability: None,
             scripts: Vec::new(),
+            folders: Vec::new(),
         });
 
         assert!(!form.offered());
@@ -499,6 +511,7 @@ mod tests {
                 serde_json::json!(8),
             )]))),
             scripts: Vec::new(),
+            folders: Vec::new(),
         });
 
         assert_eq!(form.add("123456789"), Err(NAME_TOO_LONG));
@@ -657,6 +670,7 @@ mod tests {
         let mut form = FiltersForm::from_loaded(Loaded {
             capability: Some(SieveCapability::new(16)),
             scripts: vec![script("a", "work", false)],
+            folders: Vec::new(),
         });
 
         form.set_text(0, &"#".repeat(17)).unwrap();

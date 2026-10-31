@@ -398,6 +398,26 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_text_view_set_monospace",
     // The parent window of the name dialog that Add and Rename open.
     "gtk_widget_get_toplevel",
+    // The rule dialog of the Server Filters page. Each combo is a
+    // GtkComboBoxText, built with the two calls above, and the dialog reads
+    // and writes which item is chosen as the `active` index of its
+    // GtkComboBox base class.
+    //
+    // These two calls, and not the `active` property, are what the dialog
+    // uses. `GtkComboBox:active` is a gint, while the `active` property of
+    // a GtkToggleButton (which `jmap-ui`'s widget helpers read and write)
+    // is a gboolean. One helper for both would pass the wrong type through
+    // the varargs of `g_object_get`.
+    "gtk_combo_box_get_active",
+    "gtk_combo_box_set_active",
+    // The operator combo of a condition row offers different items for the
+    // message size than for a header, so changing the field refills it.
+    "gtk_combo_box_text_remove_all",
+    // A condition row and an action row of the dialog each have a Remove
+    // button that takes the row out of the box that holds it. The handler
+    // reaches that row from the button it was pressed on.
+    "gtk_container_remove",
+    "gtk_widget_get_parent",
     // This module never calls these. `tests/gtk.rs` uses them to confirm
     // the opaque handles above really are these classes.
     "gtk_tree_view_get_type",
@@ -407,6 +427,7 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_tree_model_get_type",
     "gtk_tree_selection_get_type",
     "gtk_window_get_type",
+    "gtk_combo_box_get_type",
 ];
 
 /// Types that already exist in eds-sys. This crate must not generate them a
@@ -634,6 +655,9 @@ const GTK_HANDLES: &[&str] = &[
     "GtkLabel",
     "GtkEntry",
     "GtkComboBoxText",
+    // The base class of GtkComboBoxText. The rule dialog constructs the
+    // text subclass and reads the chosen item from this class.
+    "GtkComboBox",
     "GtkTextView",
     "GtkTextBuffer",
     "GtkContainer",

@@ -59,6 +59,10 @@ const CLASSES: &[(&str, unsafe extern "C" fn() -> GType)] = &[
     ("GtkTreeSelection", gtk_tree_selection_get_type),
     // The parent of the name dialog that Add and Rename open.
     ("GtkWindow", gtk_window_get_type),
+    // The rule dialog's field, operator and action combos. GtkComboBoxText
+    // above is the class the dialog constructs; GtkComboBox is the base
+    // class whose `active` index the dialog reads and writes.
+    ("GtkComboBox", gtk_combo_box_get_type),
 ];
 
 /// This function registers the classes exactly once. On GTK 3, registering
@@ -172,6 +176,14 @@ fn the_casts_the_widget_calls_require_are_upcasts_gtk_agrees_with() {
             "{name} is no longer a GtkContainer, so it is no longer a thing children are added to"
         );
     }
+    // The rule dialog constructs a GtkComboBoxText and reads its selected
+    // index with `gtk_combo_box_get_active`, which takes a GtkComboBox *.
+    // That one cast is the whole reason GtkComboBox is a handle here.
+    assert_eq!(
+        unsafe { g_type_is_a(class("GtkComboBoxText"), class("GtkComboBox")) },
+        GTRUE,
+        "GtkComboBoxText is no longer a GtkComboBox: the dialog's cast to read its active index is invalid"
+    );
 }
 
 /// The handles stay opaque handles. Nothing in this crate knows the layout
@@ -191,6 +203,11 @@ fn the_widget_handles_carry_no_layout() {
         size_of::<GtkComboBoxText>(),
         0,
         "GtkComboBoxText is no longer opaque"
+    );
+    assert_eq!(
+        size_of::<GtkComboBox>(),
+        0,
+        "GtkComboBox is no longer opaque"
     );
     assert_eq!(
         size_of::<GtkTextView>(),
@@ -395,6 +412,22 @@ fn every_widget_entry_point_this_crate_offers_resolves() {
             "gtk_widget_get_toplevel",
             gtk_widget_get_toplevel as *const (),
         ),
+        // The rule dialog: the selected index of each combo, and the row
+        // removal that its Remove buttons do.
+        (
+            "gtk_combo_box_get_active",
+            gtk_combo_box_get_active as *const (),
+        ),
+        (
+            "gtk_combo_box_set_active",
+            gtk_combo_box_set_active as *const (),
+        ),
+        (
+            "gtk_combo_box_text_remove_all",
+            gtk_combo_box_text_remove_all as *const (),
+        ),
+        ("gtk_container_remove", gtk_container_remove as *const ()),
+        ("gtk_widget_get_parent", gtk_widget_get_parent as *const ()),
     ];
     for (name, address) in entry_points {
         assert!(!address.is_null(), "{name} resolved to NULL");
