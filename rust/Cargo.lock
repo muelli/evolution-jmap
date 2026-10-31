@@ -308,6 +308,7 @@ dependencies = [
  "evolution-jmap-test-support",
  "evolution-jmap-tracing-capture",
  "evolution-jmap-vcard",
+ "getrandom 0.3.4",
  "proptest",
  "serde",
  "serde_json",

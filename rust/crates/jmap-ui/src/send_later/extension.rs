@@ -130,11 +130,33 @@ struct SendState {
     /// Protects against a slow fetch after a From change: only the newest
     /// fetch applies.
     generation: u64,
+    /// True from a click until the server answers. A second click in this
+    /// time must not stage and submit a second copy.
+    in_flight: bool,
     /// The action of the submenu. Its sensitivity and tooltip are the visible
     /// part of the gate.
     menu_action: MenuAction,
     /// The group that holds the preset actions, used to update their labels.
     action_group: MenuActionGroup,
+}
+
+impl SendState {
+    /// The account and the hold limit of the server for one click. Returns
+    /// `None` without a link or while a send is in flight.
+    fn begin(&mut self) -> Option<(Arc<AccountLink>, u64)> {
+        if self.in_flight {
+            return None;
+        }
+        let link = self.link.clone()?;
+        let max_hold = link.features.max_hold?;
+        self.in_flight = true;
+        Some((link, max_hold))
+    }
+
+    /// Allows the next click after a refused send.
+    fn end(&mut self) {
+        self.in_flight = false;
+    }
 }
 
 static GENERATIONS: AtomicU64 = AtomicU64::new(1);
@@ -429,6 +451,7 @@ unsafe fn constructed(extension: *mut EExtension) {
         let state = RefCell::new(SendState {
             link: None,
             generation: 0,
+            in_flight: false,
             menu_action,
             action_group,
         });
@@ -811,9 +834,13 @@ unsafe fn refresh_labels(action_group: MenuActionGroup) {
 unsafe fn activate_custom(composer: *mut GObject) {
     // The server sets the limit, thus the dialog is not necessary without a
     // link.
-    let Some(max_hold) = (unsafe { state(composer) })
-        .and_then(|state| state.borrow().link.as_ref()?.features.max_hold)
-    else {
+    let Some(max_hold) = (unsafe { state(composer) }).and_then(|state| {
+        let state = state.borrow();
+        if state.in_flight {
+            return None;
+        }
+        state.link.as_ref()?.features.max_hold
+    }) else {
         return;
     };
 
@@ -990,17 +1017,16 @@ unsafe fn activate(composer: *mut GObject, preset: Preset) {
 ///
 /// `composer` must be a live decorated composer, on the main loop.
 unsafe fn schedule_hold(composer: *mut GObject, hold: u64) {
-    let Some((link, max_hold)) = (unsafe { state(composer) }).and_then(|state| {
-        let state = state.borrow();
-        let link = state.link.clone()?;
-        let max_hold = link.features.max_hold?;
-        Some((link, max_hold))
-    }) else {
-        return; // A race let a click through the insensitive menu.
+    let Some((link, max_hold)) =
+        (unsafe { state(composer) }).and_then(|state| state.borrow_mut().begin())
+    else {
+        // A race let a click through the insensitive menu, or a send is
+        // already in flight.
+        return;
     };
     if hold > max_hold {
         // SAFETY: the contract of this function makes the composer live.
-        unsafe { refuse_send(composer, translate(TOO_FAR)) };
+        unsafe { refuse_scheduled(composer, translate(TOO_FAR)) };
         return;
     }
 
@@ -1051,7 +1077,7 @@ unsafe extern "C" fn got_message(
                     g_error_free(error);
                     why
                 };
-                refuse_send(composer, translate_with(REFUSED, &[&why]));
+                refuse_scheduled(composer, translate_with(REFUSED, &[&why]));
                 return;
             }
             strip_evolution_headers(message);
@@ -1074,7 +1100,7 @@ unsafe extern "C" fn got_message(
                     why
                 };
                 // SAFETY: the GIO source_object is a live composer window.
-                unsafe { refuse_send(composer, translate_with(REFUSED, &[&why])) };
+                unsafe { refuse_scheduled(composer, translate_with(REFUSED, &[&why])) };
                 return;
             }
         };
@@ -1082,7 +1108,7 @@ unsafe extern "C" fn got_message(
             Ok(envelope) => envelope,
             Err(why) => {
                 // SAFETY: as above.
-                unsafe { refuse_send(composer, translate(why)) };
+                unsafe { refuse_scheduled(composer, translate(why)) };
                 return;
             }
         };
@@ -1097,7 +1123,7 @@ unsafe extern "C" fn got_message(
                 unsafe { gtk_widget_destroy(composer.cast()) };
             }
             // SAFETY: as above; the window is still alive and shown.
-            Err(why) => unsafe { refuse_send(composer, translate_with(REFUSED, &[&why])) },
+            Err(why) => unsafe { refuse_scheduled(composer, translate_with(REFUSED, &[&why])) },
         };
         // SAFETY: the GIO source_object is a live composer window.
         unsafe { dispatch::spawn_for(composer, work, finish) };
@@ -1196,6 +1222,22 @@ unsafe fn first_address(list: *mut CamelInternetAddress) -> Option<String> {
     }
 }
 
+/// Ends the send in flight, then shows `text` as [`refuse_send`] does. The
+/// user can click again after this.
+///
+/// # Safety
+///
+/// `composer` must be a live composer window, on the main loop.
+unsafe fn refuse_scheduled(composer: *mut GObject, text: String) {
+    // SAFETY: per the contract. The borrow ends before the dialog runs.
+    unsafe {
+        if let Some(state) = state(composer) {
+            state.borrow_mut().end();
+        }
+        refuse_send(composer, text);
+    }
+}
+
 /// Shows a modal explanation on the composer. The composer stays open.
 ///
 /// # Safety
@@ -1251,5 +1293,50 @@ mod tests {
             assert!(ui.contains(&attribute), "{attribute} is not in {ui}");
         }
         assert!(ui.contains("action='jmap-send-later-menu'"), "{ui}");
+    }
+
+    /// A [`SendState`] with a link to a mock that offers the hold.
+    fn linked_state(server: &jmap_mock::MockServer) -> SendState {
+        let client =
+            jmap_client::Client::connect(server.origin(), jmap_client::Credentials::none())
+                .unwrap();
+        let features = crate::session_cache::AccountFeatures::from_session(client.session())
+            .expect("a mail account");
+        SendState {
+            link: Some(Arc::new(AccountLink::without_refresh(client, features))),
+            generation: 0,
+            in_flight: false,
+            menu_action: ptr::null_mut(),
+            action_group: ptr::null_mut(),
+        }
+    }
+
+    #[test]
+    fn a_second_click_while_a_send_is_in_flight_starts_nothing() {
+        let server = jmap_mock::MockServer::builder()
+            .max_delayed_send(86_400)
+            .start();
+        let mut state = linked_state(&server);
+
+        let first = state.begin();
+        assert_eq!(first.map(|(_, max_hold)| max_hold), Some(86_400));
+        // The first send is still uploading: a second click must not stage
+        // and submit a second copy.
+        assert!(state.begin().is_none(), "a second send started");
+    }
+
+    #[test]
+    fn a_refused_send_allows_the_next_click() {
+        let server = jmap_mock::MockServer::builder()
+            .max_delayed_send(86_400)
+            .start();
+        let mut state = linked_state(&server);
+
+        assert!(state.begin().is_some());
+        state.end();
+        assert!(
+            state.begin().is_some(),
+            "the retry after a refusal was refused"
+        );
     }
 }

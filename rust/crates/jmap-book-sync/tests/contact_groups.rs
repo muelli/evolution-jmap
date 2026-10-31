@@ -224,3 +224,38 @@ fn adding_a_bare_member_on_an_edit_reaches_the_server() {
         "the bare member reaches the server on an edit, not only on create: {stored:?}"
     );
 }
+
+/// A real server (Stalwart 1.0.1) was found to leave `uid` unset on a
+/// `ContactCard/set` create that omits it, against RFC 9553 section 2.1.8's
+/// "the server MUST set uid" requirement. `jmap_mock::MockServer::builder()
+/// .contact_create_omits_uid()` models that server. `save_contact` must not
+/// depend on the server assigning a `uid`: without one, a card can never be
+/// named as a group member (`members` is keyed by `uid`), and a save silently
+/// drops the member instead of failing loudly.
+#[test]
+fn a_contact_list_keeps_its_members_when_the_server_never_assigns_a_uid() {
+    let fixture = Fixture::start_with(jmap_mock::MockServer::builder().contact_create_omits_uid());
+    let sync = fixture.sync();
+
+    let member = sync
+        .save_contact(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera Oldenburg\r\nEND:VCARD\r\n",
+            None,
+        )
+        .unwrap();
+    assert!(
+        fixture.card(&Id::from(member.uid.as_str())).uid.is_some(),
+        "save_contact must give the member a uid itself when the server does not"
+    );
+
+    let created = sync
+        .save_contact(&group_vcard("Book Club", &[&member.uid]), None)
+        .unwrap();
+    let stored = fixture.card(&Id::from(created.uid.as_str()));
+    assert_eq!(
+        member_keys(&stored).len(),
+        1,
+        "the member should still be in the group even though the server never \
+         assigned its uid: {stored:?}"
+    );
+}

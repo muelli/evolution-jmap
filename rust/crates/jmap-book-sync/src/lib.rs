@@ -181,6 +181,9 @@ impl BookSync {
         resolve_member_uids(&self.client, &self.account_id, &mut card);
         let Some(uid) = existing_uid else {
             card.id = None;
+            if card.uid.is_none() {
+                card.uid = Some(new_uid());
+            }
             card.address_book_ids = Some(BTreeMap::from([(self.address_book_id.clone(), true)]));
             let account_id = self.account_id().to_string();
             let address_book_id = self.address_book_id().to_string();
@@ -309,6 +312,31 @@ impl BookSync {
             .next()
             .ok_or_else(|| SyncError::NotFound(uid.to_owned()))
     }
+}
+
+/// A fresh JSContact `uid` (RFC 9553 section 2.1.8): a random UUID (RFC 4122),
+/// as text.
+///
+/// RFC 9553 says the server sets this value when a create omits it. A server
+/// is not required to, and at least one real server never does (see
+/// `resolve_member_uids`'s need for it): without a `uid`, a card can never be
+/// named as a group member, since `ContactCard/set` keys `members` by `uid`.
+/// Setting it here makes every create self-sufficient instead of depending on
+/// server behaviour this project cannot control.
+fn new_uid() -> String {
+    let mut octets = [0u8; 16];
+    getrandom::fill(&mut octets).expect("the operating system's random source is unavailable");
+    octets[6] = (octets[6] & 0x0f) | 0x40;
+    octets[8] = (octets[8] & 0x3f) | 0x80;
+    let hex = |range: &[u8]| range.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    format!(
+        "{}-{}-{}-{}-{}",
+        hex(&octets[0..4]),
+        hex(&octets[4..6]),
+        hex(&octets[6..8]),
+        hex(&octets[8..10]),
+        hex(&octets[10..16]),
+    )
 }
 
 impl ContactInfo {

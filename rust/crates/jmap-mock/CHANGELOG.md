@@ -20,6 +20,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a `MockServer` instance.
 - `ci/package-check.sh` to verify `cargo package`, unpacked tarball build and tests,
   and rustdoc with warnings denied.
+- `MockServer::builder().contact_create_omits_uid()` and `jmap-mockd
+  --contact-create-omits-uid`: leave `ContactCard/set`'s `uid` unset on a create
+  that omits it, modelling a real server found not to assign one.
 
 ## [0.5.0] - 2026-10-24
 
