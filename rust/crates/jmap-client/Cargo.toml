@@ -28,7 +28,7 @@ transport-ureq = ["dep:ureq"]
 live-server = []
 
 [dependencies]
-evolution-jmap-proto = { path = "../jmap-proto", version = "0.6.0" }
+evolution-jmap-proto = { path = "../jmap-proto", version = "0.6.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ureq = { workspace = true, optional = true }

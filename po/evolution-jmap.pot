@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-31 02:00+0000\n"
+"POT-Creation-Date: 2026-10-31 08:20+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -450,48 +450,54 @@ msgstr ""
 msgid "Load image"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:34
+#: rust/crates/jmap-ui/src/filters/form.rs:36
 msgid "Give the script a name"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:35
+#: rust/crates/jmap-ui/src/filters/form.rs:37
 msgid "Select a script first."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:36
+#: rust/crates/jmap-ui/src/filters/form.rs:38
 msgid "A script name cannot contain a newline or NUL character"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:37
+#: rust/crates/jmap-ui/src/filters/form.rs:39
 msgid "This name belongs to the vacation responder"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:38
+#: rust/crates/jmap-ui/src/filters/form.rs:40
 msgid "Another script already has this name"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:39
+#: rust/crates/jmap-ui/src/filters/form.rs:41
 msgid "This name is too long for this server"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:40
+#: rust/crates/jmap-ui/src/filters/form.rs:42
 msgid "This server holds no more scripts. Remove one first."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:42
+#: rust/crates/jmap-ui/src/filters/form.rs:44
 msgid ""
 "The vacation responder owns this script. Change it on the Vacation Responder "
 "page."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:44
+#: rust/crates/jmap-ui/src/filters/form.rs:46
 msgid "Turn off the vacation responder to activate server filters."
 msgstr ""
 
 #. TRANSLATORS: %1$s is the name of the filter script.
-#: rust/crates/jmap-ui/src/filters/form.rs:46
+#: rust/crates/jmap-ui/src/filters/form.rs:48
 #, c-format
 msgid "%1$s: the script is too large for this server"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/io.rs:189
+msgid ""
+"The filters on the server changed after this page loaded them. Close the "
+"account editor, open it again and make the change again."
 msgstr ""
 
 #: rust/crates/jmap-ui/src/filters/page.rs:90

@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `Client::sieve_scripts_with_state`, which also returns the `SieveScript/get` state, for an `ifInState` guard on a later `SieveScript/set` (RFC 8620 Section 5.3).
+- `Error::is_state_mismatch`, also for the failed part of an `Error::SetPartiallyApplied`.
+
 ### Changed
 - `Client::upload_blob`: planned breaking change to take borrowed data (`&[u8]`) instead of owned `Vec<u8>` at the next breaking release. Callers can use `Client::upload_blob_slice` in the meantime.
 

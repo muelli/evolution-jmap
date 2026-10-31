@@ -1,3 +1,15 @@
+evolution-jmap (0.6.1) unstable; urgency=medium
+
+  * Added a Server Filters page to the account editor for servers that
+    support JMAP Sieve filters. It lists and manages filter scripts, and
+    offers a rules list for one managed script so most users never need
+    to write Sieve by hand. If another program changes the filters while
+    the page is open, the page does not overwrite that change.
+  * This release replaces 0.6.0, whose release build failed before
+    publishing. See the v0.6.1 tag message for detail.
+
+ -- Tobias Mueller <muelli@cryptobitch.de>  Sat, 31 Oct 2026 08:53:46 +0000
+
 evolution-jmap (0.6.0) unstable; urgency=medium
 
   * Calendars and address books that another user shares are now shown as

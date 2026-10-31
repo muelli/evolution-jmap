@@ -885,3 +885,33 @@ fn sieve_helpers_round_trip_against_live_stalwart() {
 fn sieve_helpers_round_trip_against_live_cyrus() {
     exercise_sieve_helpers_on_live_server("Cyrus");
 }
+
+/// Verifies that the state of `SieveScript/get` guards a later `/set`
+/// (RFC 8620 Section 5.3 `ifInState`): it passes while nothing changed, and
+/// fails with `stateMismatch` after another write.
+#[test]
+fn sieve_scripts_with_state_returns_the_state_a_guarded_set_needs() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let (scripts, state) = client.sieve_scripts_with_state(&account_id).unwrap();
+    assert!(scripts.is_empty());
+
+    let blob = client
+        .upload_blob_slice(&account_id, "application/sieve", b"keep;\n")
+        .unwrap()
+        .blob_id;
+    let create = |key: &str| {
+        jmap_proto::sieve::SieveScriptSetRequest::new(
+            jmap_proto::methods::SetRequest::<SieveScript>::new(account_id.clone())
+                .if_in_state(state.clone())
+                .create(key, SieveScript::new(key, blob.clone())),
+        )
+    };
+    client.sieve_script_set(&create("first")).unwrap();
+
+    let error = client.sieve_script_set(&create("second")).unwrap_err();
+    assert!(error.is_state_mismatch(), "{error}");
+    assert_eq!(client.sieve_scripts(&account_id).unwrap().len(), 1);
+}

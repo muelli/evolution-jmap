@@ -5,14 +5,17 @@
 //! connection. The calls block, so use them on worker threads only.
 
 use std::collections::BTreeMap;
+use std::ffi::CStr;
 
+use jmap_backend_core::i18n::{N_, translate};
 use jmap_client::sieve::{SieveCapability, SieveScript, SieveScriptSetRequest};
 use jmap_client::{expect_created, expect_destroyed, expect_updated};
-use jmap_proto::Id;
 use jmap_proto::mail::Mailbox;
 use jmap_proto::methods::SetRequest;
+use jmap_proto::{Id, State};
 use serde_json::json;
 
+use crate::filters::form::is_vacation_script;
 use crate::filters::rules::Folder;
 use crate::link::{self, AccountLink};
 
@@ -32,6 +35,9 @@ pub struct Loaded {
     /// dialog. Empty when the server offers no Sieve: the page shows
     /// nothing to put a folder in.
     pub folders: Vec<Folder>,
+    /// The `state` of the `SieveScript/get` answer. A save sends it as
+    /// `ifInState`, so that it does not overwrite a change of another client.
+    pub state: State,
 }
 
 /// Loads the account's Sieve capability, every script it holds with its
@@ -40,8 +46,8 @@ pub struct Loaded {
 pub fn load(link: &AccountLink) -> Result<Loaded, String> {
     let account = link.features.account_id.clone();
     let capability = link.client.sieve_capability(&account);
-    let scripts = link
-        .call(|client| client.sieve_scripts(&account))
+    let (scripts, state) = link
+        .call(|client| client.sieve_scripts_with_state(&account))
         .map_err(|error| link::describe(&error))?;
     let mut loaded = Vec::with_capacity(scripts.len());
     for script in scripts {
@@ -59,6 +65,7 @@ pub fn load(link: &AccountLink) -> Result<Loaded, String> {
         capability,
         scripts: loaded,
         folders,
+        state,
     })
 }
 
@@ -135,6 +142,53 @@ fn folder_path(mailbox: &Mailbox, by_id: &BTreeMap<&Id, &Mailbox>) -> String {
     names.join(FOLDER_SEPARATOR)
 }
 
+/// The scripts a save depends on, as the page loaded them. After a
+/// `stateMismatch`, the save compares this with the server again.
+///
+/// The vacation responder's script is not part of it. The Vacation
+/// Responder page writes it in the same submit, before this page.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Baseline {
+    /// Id, name and blob id of every other script, sorted by id.
+    scripts: Vec<(Id, String, Id)>,
+    /// The active script, the vacation responder's script included.
+    active: Option<Id>,
+}
+
+impl Baseline {
+    /// The baseline of `scripts`, as `SieveScript/get` returns them.
+    pub fn of<'a>(scripts: impl IntoIterator<Item = &'a SieveScript>) -> Self {
+        let mut baseline = Self::default();
+        for script in scripts {
+            let Some(id) = &script.id else {
+                continue;
+            };
+            if script.is_active {
+                baseline.active = Some(id.clone());
+            }
+            if !is_vacation_script(&script.name) {
+                baseline
+                    .scripts
+                    .push((id.clone(), script.name.clone(), script.blob_id.clone()));
+            }
+        }
+        baseline.scripts.sort();
+        baseline
+    }
+}
+
+impl Loaded {
+    /// The [`Baseline`] of this load.
+    pub fn baseline(&self) -> Baseline {
+        Baseline::of(self.scripts.iter().map(|loaded| &loaded.script))
+    }
+}
+
+/// The answer to a save after another client changed the scripts.
+pub const SCRIPTS_CHANGED: &CStr = N_(
+    c"The filters on the server changed after this page loaded them. Close the account editor, open it again and make the change again.",
+);
+
 /// A script a save creates or updates, before the server assigns it an id.
 #[derive(Debug)]
 pub enum ScriptWrite {
@@ -185,6 +239,12 @@ pub struct SavePlan {
     /// so a destroy of the active script in the same request still fails
     /// with `sieveIsActive`.
     pub deactivate_first: bool,
+    /// The script state that the page loaded. Every `SieveScript/set` of the
+    /// save sends it as `ifInState` (RFC 8620 Section 5.3).
+    pub if_in_state: Option<State>,
+    /// The scripts at `if_in_state`, to retry a save once after a
+    /// `stateMismatch` that changed nothing the save depends on.
+    pub baseline: Baseline,
 }
 
 /// Writes `plan` to the server. On an invalid script, returns the server's
@@ -216,15 +276,38 @@ pub fn save(link: &AccountLink, plan: &SavePlan) -> Result<(), String> {
         blob_ids.push(uploaded.blob_id);
     }
 
+    match write(link, plan, &blob_ids, plan.if_in_state.clone()) {
+        Err(error) if error.is_state_mismatch() => {
+            let state = rebase(link, plan).map_err(|error| link::describe(&error))?;
+            let Some(state) = state else {
+                return Err(translate(SCRIPTS_CHANGED));
+            };
+            write(link, plan, &blob_ids, Some(state)).map_err(|error| refused(&error))
+        }
+        other => other.map_err(|error| refused(&error)),
+    }
+}
+
+/// Sends the `SieveScript/set` requests of `plan`, guarded by `state`.
+fn write(
+    link: &AccountLink,
+    plan: &SavePlan,
+    blob_ids: &[Id],
+    mut state: Option<State>,
+) -> Result<(), jmap_client::Error> {
+    let account = link.features.account_id.clone();
     if plan.deactivate_first {
-        let request = SieveScriptSetRequest::new(SetRequest::<SieveScript>::new(account.clone()))
+        let request = SieveScriptSetRequest::new(guarded(SetRequest::new(account.clone()), &state))
             .deactivating();
-        link.call(|client| client.sieve_script_set(&request))
-            .map_err(|error| link::describe(&error))?;
+        let response = link.call(|client| client.sieve_script_set(&request))?;
+        // This request changed the state. The next one checks the new state.
+        if state.is_some() {
+            state = response.new_state;
+        }
     }
 
-    let mut set = SetRequest::<SieveScript>::new(account.clone());
-    for (write, blob_id) in plan.writes.iter().zip(&blob_ids) {
+    let mut set = guarded(SetRequest::<SieveScript>::new(account), &state);
+    for (write, blob_id) in plan.writes.iter().zip(blob_ids) {
         match write {
             ScriptWrite::Create { key, name, .. } => {
                 set = set.create(key.clone(), SieveScript::new(name.clone(), blob_id.clone()));
@@ -249,25 +332,57 @@ pub fn save(link: &AccountLink, plan: &SavePlan) -> Result<(), String> {
         ActivationChange::Deactivate => request.deactivating(),
     };
 
-    let response = link
-        .call(|client| client.sieve_script_set(&request))
-        .map_err(|error| link::describe(&error))?;
+    let response = link.call(|client| client.sieve_script_set(&request))?;
 
     for write in &plan.writes {
         match write {
             ScriptWrite::Create { key, .. } => {
-                expect_created(&response, key).map_err(|error| link::describe(&error))?;
+                expect_created(&response, key)?;
             }
             ScriptWrite::Update { id, .. } => {
-                expect_updated(&response, id).map_err(|error| link::describe(&error))?;
+                expect_updated(&response, id)?;
             }
         }
     }
     for id in &plan.destroys {
-        expect_destroyed(&response, id).map_err(|error| link::describe(&error))?;
+        expect_destroyed(&response, id)?;
     }
 
     Ok(())
+}
+
+/// The current state, if the change that moved it leaves `plan` valid.
+/// `None` means that the save must stop.
+///
+/// The plan stays valid when no script other than the vacation responder's
+/// changed. If the active script changed, it also must not touch activation:
+/// a deactivation would then turn off a script the user did not select.
+fn rebase(link: &AccountLink, plan: &SavePlan) -> Result<Option<State>, jmap_client::Error> {
+    let account = &link.features.account_id;
+    let (scripts, state) = link.call(|client| client.sieve_scripts_with_state(account))?;
+    let now = Baseline::of(&scripts);
+    let touches_activation =
+        plan.deactivate_first || !matches!(plan.activation, ActivationChange::Keep);
+    let valid = now.scripts == plan.baseline.scripts
+        && (now.active == plan.baseline.active || !touches_activation);
+    Ok(valid.then_some(state))
+}
+
+/// Adds `ifInState` to `set` when the save knows the state.
+fn guarded(set: SetRequest<SieveScript>, state: &Option<State>) -> SetRequest<SieveScript> {
+    match state {
+        Some(state) => set.if_in_state(state.clone()),
+        None => set,
+    }
+}
+
+/// The message for a refused `SieveScript/set`.
+fn refused(error: &jmap_client::Error) -> String {
+    if error.is_state_mismatch() {
+        translate(SCRIPTS_CHANGED)
+    } else {
+        link::describe(error)
+    }
 }
 
 #[cfg(test)]
@@ -278,7 +393,8 @@ mod tests {
     use jmap_proto::Id;
 
     use super::{
-        ActivationChange, ActivationTarget, SavePlan, ScriptWrite, check, folders, load, save,
+        ActivationChange, ActivationTarget, Baseline, SCRIPTS_CHANGED, SavePlan, ScriptWrite,
+        check, folders, load, save, translate,
     };
     use crate::link::AccountLink;
     use crate::session_cache::AccountFeatures;
@@ -416,6 +532,8 @@ mod tests {
             destroys: Vec::new(),
             activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
             deactivate_first: false,
+            if_in_state: None,
+            baseline: Baseline::default(),
         };
         assert_eq!(save(&link, &plan), Ok(()));
 
@@ -439,6 +557,8 @@ mod tests {
             destroys: Vec::new(),
             activation: ActivationChange::Keep,
             deactivate_first: false,
+            if_in_state: None,
+            baseline: Baseline::default(),
         };
         save(&link, &plan).unwrap();
         let id = load(&link).unwrap().scripts[0].script.id.clone().unwrap();
@@ -452,6 +572,8 @@ mod tests {
             destroys: Vec::new(),
             activation: ActivationChange::Keep,
             deactivate_first: false,
+            if_in_state: None,
+            baseline: Baseline::default(),
         };
         assert_eq!(save(&link, &update), Ok(()));
 
@@ -477,6 +599,8 @@ mod tests {
                 destroys: Vec::new(),
                 activation: ActivationChange::Keep,
                 deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
             },
         )
         .unwrap();
@@ -490,6 +614,8 @@ mod tests {
                     destroys: vec![id],
                     activation: ActivationChange::Keep,
                     deactivate_first: false,
+                    if_in_state: None,
+                    baseline: Baseline::default(),
                 },
             ),
             Ok(())
@@ -513,6 +639,8 @@ mod tests {
                 destroys: Vec::new(),
                 activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
                 deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
             },
         )
         .unwrap();
@@ -528,6 +656,8 @@ mod tests {
                     destroys: vec![id.clone()],
                     activation: ActivationChange::Deactivate,
                     deactivate_first: false,
+                    if_in_state: None,
+                    baseline: Baseline::default(),
                 },
             )
             .is_err(),
@@ -542,11 +672,209 @@ mod tests {
                     destroys: vec![id],
                     activation: ActivationChange::Keep,
                     deactivate_first: true,
+                    if_in_state: None,
+                    baseline: Baseline::default(),
                 },
             ),
             Ok(())
         );
         assert!(load(&link).unwrap().scripts.is_empty());
+    }
+
+    /// Creates one script, active or not, and returns its id.
+    fn seed_script(link: &AccountLink, text: &str, active: bool) -> Id {
+        let activation = if active {
+            ActivationChange::Activate(ActivationTarget::Created("new".to_owned()))
+        } else {
+            ActivationChange::Keep
+        };
+        save(
+            link,
+            &SavePlan {
+                writes: vec![ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "first".to_owned(),
+                    text: text.to_owned(),
+                }],
+                activation,
+                ..SavePlan::default()
+            },
+        )
+        .unwrap();
+        load(link).unwrap().scripts[0].script.id.clone().unwrap()
+    }
+
+    /// Writes `text` into script `id` without a state check, as a second
+    /// client (another mail program, the server's web interface) does.
+    fn edit_elsewhere(link: &AccountLink, id: &Id, text: &str) {
+        let plan = SavePlan {
+            writes: vec![ScriptWrite::Update {
+                id: id.clone(),
+                name: "first".to_owned(),
+                text: text.to_owned(),
+            }],
+            ..SavePlan::default()
+        };
+        save(link, &plan).unwrap();
+    }
+
+    #[test]
+    fn save_does_not_overwrite_a_change_made_elsewhere_after_the_load() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+        let id = seed_script(&link, "keep;\n", false);
+        let loaded = load(&link).unwrap();
+
+        edit_elsewhere(&link, &id, "discard;\n");
+        let error = save(
+            &link,
+            &SavePlan {
+                writes: vec![ScriptWrite::Update {
+                    id: id.clone(),
+                    name: "first".to_owned(),
+                    text: "stop;\n".to_owned(),
+                }],
+                baseline: loaded.baseline(),
+                if_in_state: Some(loaded.state),
+                ..SavePlan::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, translate(SCRIPTS_CHANGED));
+        assert_eq!(load(&link).unwrap().scripts[0].text, "discard;\n");
+    }
+
+    #[test]
+    fn a_stale_save_does_not_deactivate_the_active_script_either() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+        let id = seed_script(&link, "keep;\n", true);
+        let loaded = load(&link).unwrap();
+
+        edit_elsewhere(&link, &id, "discard;\n");
+        let error = save(
+            &link,
+            &SavePlan {
+                destroys: vec![id],
+                deactivate_first: true,
+                baseline: loaded.baseline(),
+                if_in_state: Some(loaded.state),
+                ..SavePlan::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, translate(SCRIPTS_CHANGED));
+        let after = load(&link).unwrap();
+        assert_eq!(after.scripts.len(), 1);
+        assert!(
+            after.scripts[0].script.is_active,
+            "the separate deactivation must check the state too"
+        );
+    }
+
+    #[test]
+    fn a_fresh_state_carries_through_the_separate_deactivation() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+        let id = seed_script(&link, "keep;\n", true);
+        let loaded = load(&link).unwrap();
+
+        // The deactivation changes the state, so the request after it must
+        // use the new state, not the state of the load.
+        let saved = save(
+            &link,
+            &SavePlan {
+                destroys: vec![id],
+                deactivate_first: true,
+                baseline: loaded.baseline(),
+                if_in_state: Some(loaded.state),
+                ..SavePlan::default()
+            },
+        );
+
+        assert_eq!(saved, Ok(()));
+        assert!(load(&link).unwrap().scripts.is_empty());
+    }
+
+    /// Turns the vacation responder on. On a server that keeps it as a Sieve
+    /// script, this changes the script state and activates that script.
+    fn enable_vacation(link: &AccountLink) {
+        link.call(|client| {
+            client.vacation_response_update(
+                &link.features.account_id,
+                serde_json::json!({"isEnabled": true}),
+            )
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_vacation_change_in_the_same_submit_does_not_refuse_a_text_edit() {
+        let server = MockServer::builder().sieve_vacation_script().start();
+        let link = link_to(&server);
+        let id = seed_script(&link, "keep;\n", false);
+        let loaded = load(&link).unwrap();
+
+        // The Vacation Responder page submits before this page.
+        enable_vacation(&link);
+        let saved = save(
+            &link,
+            &SavePlan {
+                writes: vec![ScriptWrite::Update {
+                    id: id.clone(),
+                    name: "first".to_owned(),
+                    text: "stop;\n".to_owned(),
+                }],
+                if_in_state: Some(loaded.state.clone()),
+                baseline: loaded.baseline(),
+                ..SavePlan::default()
+            },
+        );
+
+        assert_eq!(saved, Ok(()));
+        let after = load(&link).unwrap();
+        let script = after
+            .scripts
+            .iter()
+            .find(|script| script.script.id.as_ref() == Some(&id))
+            .unwrap();
+        assert_eq!(script.text, "stop;\n");
+    }
+
+    #[test]
+    fn a_vacation_change_still_refuses_a_save_that_depends_on_the_active_script() {
+        let server = MockServer::builder().sieve_vacation_script().start();
+        let link = link_to(&server);
+        let id = seed_script(&link, "keep;\n", true);
+        let loaded = load(&link).unwrap();
+
+        // Vacation takes the active slot. A separate deactivation would now
+        // turn off the vacation responder, not the script of the plan.
+        enable_vacation(&link);
+        let error = save(
+            &link,
+            &SavePlan {
+                destroys: vec![id],
+                deactivate_first: true,
+                if_in_state: Some(loaded.state.clone()),
+                baseline: loaded.baseline(),
+                ..SavePlan::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, translate(SCRIPTS_CHANGED));
+        let after = load(&link).unwrap();
+        let active: Vec<&str> = after
+            .scripts
+            .iter()
+            .filter(|script| script.script.is_active)
+            .map(|script| script.script.name.as_str())
+            .collect();
+        assert_eq!(active, ["vacation"]);
+        assert_eq!(after.scripts.len(), 2, "nothing is destroyed");
     }
 
     #[test]
@@ -565,6 +893,8 @@ mod tests {
                 destroys: Vec::new(),
                 activation: ActivationChange::Keep,
                 deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
             },
         )
         .unwrap_err();
@@ -621,6 +951,8 @@ mod tests {
                 destroys: Vec::new(),
                 activation: ActivationChange::Keep,
                 deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
             },
         )
         .unwrap();
