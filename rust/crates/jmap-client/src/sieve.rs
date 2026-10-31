@@ -8,7 +8,6 @@
 
 use serde_json::Value;
 
-use jmap_proto::Id;
 use jmap_proto::error::{SetError, set};
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -18,6 +17,7 @@ pub use jmap_proto::sieve::{
     SieveCapability, SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest,
     SieveScriptValidateRequest, SieveScriptValidateResponse, sieve_set_error,
 };
+use jmap_proto::{Id, State};
 
 use crate::client::Client;
 use crate::error::Error;
@@ -202,13 +202,22 @@ impl Client {
     }
     /// Fetch all Sieve scripts (`SieveScript/get` with `ids: null`).
     pub fn sieve_scripts(&self, account_id: &Id) -> Result<Vec<SieveScript>, Error> {
+        Ok(self.sieve_scripts_with_state(account_id)?.0)
+    }
+
+    /// Fetch all Sieve scripts and the `state` of the answer. Pass that state
+    /// as `ifInState` to a later `SieveScript/set` (RFC 8620 Section 5.3).
+    pub fn sieve_scripts_with_state(
+        &self,
+        account_id: &Id,
+    ) -> Result<(Vec<SieveScript>, State), Error> {
         let arguments = self.single_call(
             USING,
             "SieveScript/get",
             &GetRequest::all(account_id.clone()),
         )?;
         let response: GetResponse<SieveScript> = serde_json::from_value(arguments)?;
-        Ok(response.list)
+        Ok((response.list, response.state))
     }
 
     /// Create a Sieve script; returns the stored script (with server-set id).

@@ -112,6 +112,16 @@ impl Error {
         )
     }
 
+    /// Return true if a `/set` failed its `ifInState` check (RFC 8620 Section 5.3).
+    /// For [`Error::SetPartiallyApplied`], the error of the failed part decides.
+    pub fn is_state_mismatch(&self) -> bool {
+        match self {
+            Self::Method(error) => error.error_type == jmap_proto::error::method::STATE_MISMATCH,
+            Self::SetPartiallyApplied { cause, .. } => cause.is_state_mismatch(),
+            _ => false,
+        }
+    }
+
     /// Return true if the server rejected the request with HTTP 401.
     ///
     /// Indicates an expired or invalid bearer token.
@@ -513,6 +523,19 @@ mod tests {
             committed: Box::new(jmap_proto::methods::SetResponse::new("a", "s")),
             cause: Box::new(cause),
         }
+    }
+
+    #[test]
+    fn a_state_mismatch_is_reported_also_from_a_partial_set() {
+        let mismatch = || Error::Method(jmap_proto::error::MethodError::new("stateMismatch"));
+        assert!(mismatch().is_state_mismatch());
+        assert!(partially_applied(mismatch()).is_state_mismatch());
+        assert!(
+            !Error::Method(jmap_proto::error::MethodError::new(
+                "cannotCalculateChanges"
+            ))
+            .is_state_mismatch()
+        );
     }
 
     #[test]
