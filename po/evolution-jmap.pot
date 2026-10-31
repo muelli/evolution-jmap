@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-31 00:02+0000\n"
+"POT-Creation-Date: 2026-10-31 00:34+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -458,126 +458,126 @@ msgstr ""
 msgid "Select a script first."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:35
+#: rust/crates/jmap-ui/src/filters/form.rs:34
 msgid "A script name cannot contain a newline or NUL character"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:36
+#: rust/crates/jmap-ui/src/filters/form.rs:35
 msgid "This name belongs to the vacation responder"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:37
+#: rust/crates/jmap-ui/src/filters/form.rs:36
 msgid "Another script already has this name"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:38
+#: rust/crates/jmap-ui/src/filters/form.rs:37
 msgid "This name is too long for this server"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:39
+#: rust/crates/jmap-ui/src/filters/form.rs:38
 msgid "This server holds no more scripts. Remove one first."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:41
+#: rust/crates/jmap-ui/src/filters/form.rs:40
 msgid ""
 "The vacation responder owns this script. Change it on the Vacation Responder "
 "page."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/form.rs:43
+#: rust/crates/jmap-ui/src/filters/form.rs:42
 msgid "Turn off the vacation responder to activate server filters."
 msgstr ""
 
 #. TRANSLATORS: %1$s is the name of the filter script.
-#: rust/crates/jmap-ui/src/filters/form.rs:45
+#: rust/crates/jmap-ui/src/filters/form.rs:44
 #, c-format
 msgid "%1$s: the script is too large for this server"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:85
+#: rust/crates/jmap-ui/src/filters/page.rs:86
 #: rust/crates/jmap-ui/src/vacation/page.rs:77
 msgid "Contacting the mail server…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:86
+#: rust/crates/jmap-ui/src/filters/page.rs:87
 msgid "Your server does not offer server-side filters."
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/filters/page.rs:88
+#: rust/crates/jmap-ui/src/filters/page.rs:89
 #, c-format
 msgid "The filters could not be read: %1$s"
 msgstr ""
 
 #. TRANSLATORS: the Active column of the script list, for the one script
 #. the account runs. Every other row leaves the column empty.
-#: rust/crates/jmap-ui/src/filters/page.rs:91
+#: rust/crates/jmap-ui/src/filters/page.rs:92
 msgid "Yes"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the name of a filter script on the server.
-#: rust/crates/jmap-ui/src/filters/page.rs:93
+#: rust/crates/jmap-ui/src/filters/page.rs:94
 #, c-format
 msgid "%1$s (used by the Vacation Responder)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:94
+#: rust/crates/jmap-ui/src/filters/page.rs:95
 msgid "New Filter Script"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:95
+#: rust/crates/jmap-ui/src/filters/page.rs:96
 msgid "Rename Filter Script"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:96
+#: rust/crates/jmap-ui/src/filters/page.rs:97
 msgid "_Name:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:97
+#: rust/crates/jmap-ui/src/filters/page.rs:98
 msgid "Checking the script…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:98
+#: rust/crates/jmap-ui/src/filters/page.rs:99
 msgid "The script is valid."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:187
+#: rust/crates/jmap-ui/src/filters/page.rs:188
 msgid "Server Filters"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:232
+#: rust/crates/jmap-ui/src/filters/page.rs:233
 msgid "Name"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:233
+#: rust/crates/jmap-ui/src/filters/page.rs:234
 msgid "Active"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:245
+#: rust/crates/jmap-ui/src/filters/page.rs:246
 msgid "_Add"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:246
+#: rust/crates/jmap-ui/src/filters/page.rs:247
 msgid "_Rename"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:247
+#: rust/crates/jmap-ui/src/filters/page.rs:248
 msgid "Re_move"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:248
+#: rust/crates/jmap-ui/src/filters/page.rs:249
 msgid "A_ctivate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:249
+#: rust/crates/jmap-ui/src/filters/page.rs:250
 msgid "_Deactivate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:255
+#: rust/crates/jmap-ui/src/filters/page.rs:256
 msgid "_Script:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:262
+#: rust/crates/jmap-ui/src/filters/page.rs:263
 msgid "C_heck"
 msgstr ""
 
@@ -588,6 +588,26 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/filters/page.rs:846
 msgid "_OK"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:18
+msgid "Select a rule first."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:19
+msgid "This rule is already first."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:20
+msgid "This rule is already last."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:21
+msgid "Select a condition first."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_form.rs:22
+msgid "Select an action first."
 msgstr ""
 
 #: rust/crates/jmap-ui/src/filters/rules.rs:86
