@@ -205,8 +205,9 @@ unsafe extern "C" fn on_load_clicked(
             return;
         }
         let url = url.to_owned();
-        let work = move || fetch::fetch_external_photo(&url);
-        let finish = |owner: *mut GObject, outcome: Result<fetch::Photo, String>| {
+        let fetched = url.clone();
+        let work = move || fetch::fetch_external_photo(&fetched);
+        let finish = move |owner: *mut GObject, outcome: Result<fetch::Photo, String>| {
             let photo = match outcome {
                 Ok(photo) => photo,
                 Err(message) => {
@@ -219,7 +220,7 @@ unsafe extern "C" fn on_load_clicked(
                 photo.media_type,
                 BASE64.encode(photo.bytes)
             );
-            let Ok(script) = CString::new(script::loaded_script(&data_uri)) else {
+            let Ok(script) = CString::new(script::loaded_script(&url, &data_uri)) else {
                 return;
             };
             // SAFETY: `owner` is the live `EWebView` that `spawn_for`'s weak

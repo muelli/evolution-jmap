@@ -88,20 +88,29 @@ def setup(cards):
 
 
 class PhotoServer:
-    """An http server for PHOTO_URL that counts the requests."""
+    """An http server for PHOTO_URL that counts the requests.
 
-    def __init__(self):
+    A request for a path in `held` waits until `release` is set. The path
+    goes into `answered` when its response is written.
+    """
+
+    def __init__(self, held=()):
         image = png()
         requests = self.requests = []
+        answered = self.answered = []
+        release = self.release = threading.Event()
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):  # noqa: N802
                 requests.append(self.path)
+                if self.path in held:
+                    release.wait(60)
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
                 self.send_header("Content-Length", str(len(image)))
                 self.end_headers()
                 self.wfile.write(image)
+                answered.append(self.path)
 
             def log_message(self, *_):
                 pass
