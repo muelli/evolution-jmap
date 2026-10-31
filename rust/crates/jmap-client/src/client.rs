@@ -246,6 +246,7 @@ impl ClientBuilder {
             session_url,
             session: None,
             next_call_id: AtomicU64::new(0),
+            last_session_state: std::sync::Mutex::new(None),
             rebase_origin: self.rebase_urls_to_origin.then_some(origin),
             rebase_note: None,
             max_rate_limit_retries: self.max_rate_limit_retries,
@@ -277,6 +278,7 @@ pub struct Client {
     session_url: String,
     session: Option<Session>,
     next_call_id: AtomicU64,
+    last_session_state: std::sync::Mutex<Option<jmap_proto::State>>,
     rebase_origin: Option<String>,
     // Records download URL origin rewrites.
     rebase_note: Option<String>,
@@ -373,6 +375,9 @@ impl Client {
                      credentials only over TLS, to loopback, or to the configured origin"
                 )));
             }
+        }
+        if let Ok(mut last_state) = self.last_session_state.lock() {
+            *last_state = Some(session.state.clone());
         }
         self.session = Some(session);
         Ok(())
@@ -546,7 +551,9 @@ impl Client {
             match self.execute(HttpMethod::Post, &api_url, Some(&body)) {
                 Ok(response) => {
                     tracing::trace!(body = %String::from_utf8_lossy(&response.body), "JMAP response body");
-                    return Ok(serde_json::from_slice(&response.body)?);
+                    let parsed: Response = serde_json::from_slice(&response.body)?;
+                    self.validate_response(request, &parsed)?;
+                    return Ok(parsed);
                 }
                 Err(Error::Http {
                     status: 429,
@@ -577,6 +584,77 @@ impl Client {
                 Err(err) => return Err(err),
             }
         }
+    }
+
+    /// Validate server response envelope against request invocations and session state (RFC 8620 §3.4).
+    fn validate_response(&self, request: &Request, response: &Response) -> Result<(), Error> {
+        self.validate_session_state(&response.session_state)?;
+        self.validate_method_responses(request, response)?;
+        Ok(())
+    }
+
+    /// Reject session state that regresses backwards numerically.
+    fn validate_session_state(&self, response_state: &jmap_proto::State) -> Result<(), Error> {
+        let mut last_state = self
+            .last_session_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(prev) = &*last_state
+            && let (Ok(curr_num), Ok(prev_num)) = (
+                response_state.as_str().parse::<u64>(),
+                prev.as_str().parse::<u64>(),
+            )
+            && curr_num < prev_num
+        {
+            return Err(Error::Protocol(format!(
+                "session state regressed backwards: {curr_num} < {prev_num}"
+            )));
+        }
+        *last_state = Some(response_state.clone());
+        Ok(())
+    }
+
+    /// Validate method response call IDs against request method calls per RFC 8620 §3.4.
+    ///
+    /// Rejects responses with unknown call IDs, duplicate call IDs, or out-of-order responses.
+    fn validate_method_responses(
+        &self,
+        request: &Request,
+        response: &Response,
+    ) -> Result<(), Error> {
+        let req_calls = &request.method_calls;
+        let resp_calls = &response.method_responses;
+
+        let req_ids: Vec<&str> = req_calls.iter().map(|c| c.call_id.as_str()).collect();
+        for resp in resp_calls {
+            if !req_ids.contains(&resp.call_id.as_str()) {
+                return Err(Error::Protocol(format!(
+                    "unexpected method response call id {} not in request",
+                    resp.call_id
+                )));
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        for resp in resp_calls {
+            if !seen.insert(resp.call_id.as_str()) {
+                return Err(Error::Protocol(format!(
+                    "duplicate method response call id {}",
+                    resp.call_id
+                )));
+            }
+        }
+
+        for (req, resp) in req_calls.iter().zip(resp_calls) {
+            if req.call_id != resp.call_id {
+                return Err(Error::Protocol(format!(
+                    "method responses out of order: expected {}, got {}",
+                    req.call_id, resp.call_id
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     /// Execute a single method call and return the response arguments.
@@ -927,7 +1005,11 @@ impl Client {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
         {
-            headers.push(("Authorization".to_owned(), authorization.clone()));
+            let is_same_origin = crate::url::same_origin(&self.session_url, url);
+            let is_secure = crate::url::on_tls(url) || crate::url::is_loopback(url);
+            if is_same_origin && is_secure {
+                headers.push(("Authorization".to_owned(), authorization.clone()));
+            }
         }
 
         crate::transport::set_observed_retry_after(None);

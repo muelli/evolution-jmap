@@ -23815,8 +23815,16 @@ fn evolution_contact_list_golden_fixture_roundtrips_group_members_and_bare_addre
     assert_eq!(card_to_vcard(&reparsed), emitted);
 }
 
+/// Evolution's Contact List Editor reads only `E_CONTACT_FILE_AS` for a
+/// list's name field, never `E_CONTACT_FULL_NAME` (unlike its Contact
+/// Editor, which reads both). A group card with no stated `fileAs` still
+/// needs an `X-EVOLUTION-FILE-AS` line, carrying its full name, or the
+/// editor shows the list as unnamed. Round-tripping that line back then
+/// gives `name.extra["fileAs"]` the same text: Evolution's own save path
+/// already keeps the two in sync for a list, so this is not a new
+/// divergence from EDS's own behavior.
 #[test]
-fn pure_jscontact_group_card_from_server_roundtrips_with_empty_extra() {
+fn pure_jscontact_group_card_from_server_gets_a_synthesized_file_as() {
     let mut card = ContactCard::default();
     card.id = Some("group-server-1".into());
     card.uid = Some("urn:uuid:99999999-8888-4777-8666-555555555555".to_owned());
@@ -23843,13 +23851,18 @@ fn pure_jscontact_group_card_from_server_roundtrips_with_empty_extra() {
     let unfolded_vcard = unfolded(&vcard);
     assert!(unfolded_vcard.contains("X-EVOLUTION-LIST:TRUE\r\n"));
     assert!(!unfolded_vcard.contains("X-EVOLUTION-LIST-SHOW-ADDRESSES"));
+    assert!(unfolded_vcard.contains("X-EVOLUTION-FILE-AS:Server Group\r\n"));
     assert!(unfolded_vcard.contains(
         "EMAIL;X-EVOLUTION-DEST-CONTACT-UID=\"urn:uuid:11111111-2222-4333-8444-555555555555\":urn:uuid:11111111-2222-4333-8444-555555555555\r\n"
     ));
 
     let back = vcard_to_card(&vcard).expect("parse server group vcard");
-    assert_eq!(back, card);
-    assert!(back.extra.is_empty());
+    let mut expected = card.clone();
+    expected.name.as_mut().expect("name").extra = BTreeMap::from([(
+        "fileAs".to_owned(),
+        Value::String("Server Group".to_owned()),
+    )]);
+    assert_eq!(back, expected);
 }
 
 #[test]
@@ -23903,8 +23916,16 @@ fn group_card_parses_eds_angle_address_destinations_without_explicit_dest_email_
     );
 
     let emitted = card_to_vcard(&card);
+    // The input had no `X-EVOLUTION-FILE-AS`, so re-emitting synthesizes one
+    // from the full name (see `pure_jscontact_group_card_from_server_gets_a_synthesized_file_as`),
+    // and a reparse then carries it as `fileAs`.
     let back = vcard_to_card(&emitted).expect("reparse emitted angle address list");
-    assert_eq!(back, card);
+    let mut expected = card.clone();
+    expected.name.as_mut().expect("name").extra = BTreeMap::from([(
+        "fileAs".to_owned(),
+        Value::String("Angle Address List".to_owned()),
+    )]);
+    assert_eq!(back, expected);
 }
 
 #[test]

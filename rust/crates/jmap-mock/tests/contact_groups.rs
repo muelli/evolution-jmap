@@ -285,6 +285,60 @@ fn group_cards_roundtrip_through_set_get_query_and_changes() {
     assert_eq!(not_updated["type"], "invalidProperties");
 }
 
+/// `jmap-book-sync::resolve_member_ids` looks up each group member's id by
+/// its uid with a `uid` filter (see RFC 9610 section 4.1); it keeps only the
+/// first id the query returns. A mock that ignores the `uid` filter and
+/// matches every card makes that lookup pick the wrong member whenever an
+/// address book holds more than one other card, silently merging a group's
+/// members into one.
+#[test]
+fn contact_card_query_filters_by_uid() {
+    let server = MockServer::builder().start();
+    let book_id = ensure_address_book_id(&server);
+    let uid_one = "urn:uuid:11111111-1111-1111-1111-111111111111";
+    let uid_two = "urn:uuid:22222222-2222-2222-2222-222222222222";
+
+    let id_one = create_card(
+        &server,
+        json!({
+            "addressBookIds": address_book_ids(&book_id),
+            "uid": uid_one,
+            "name": {"full": "Member One"}
+        }),
+    );
+    create_card(
+        &server,
+        json!({
+            "addressBookIds": address_book_ids(&book_id),
+            "uid": uid_two,
+            "name": {"full": "Member Two"}
+        }),
+    );
+
+    let query_response = api(
+        &server,
+        json!({
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:contacts"],
+            "methodCalls": [[
+                "ContactCard/query",
+                {
+                    "accountId": ACCOUNT_ID,
+                    "filter": {"uid": uid_one}
+                },
+                "q1"
+            ]],
+        }),
+    );
+    let ids = query_response["methodResponses"][0][1]["ids"]
+        .as_array()
+        .expect("uid query ids");
+    assert_eq!(
+        ids,
+        &vec![Value::String(id_one)],
+        "a uid filter should match only the card with that uid: {query_response:#}"
+    );
+}
+
 #[cfg(feature = "parse")]
 #[test]
 fn contact_card_parse_projects_group_kind_and_members() {

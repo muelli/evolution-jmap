@@ -166,7 +166,7 @@ pub fn split_http_scheme(url: &str) -> Option<(bool, &str)> {
 }
 
 /// Whether `url` uses TLS.
-fn on_tls(url: &str) -> bool {
+pub(crate) fn on_tls(url: &str) -> bool {
     split_http_scheme(url).is_some_and(|(tls, _)| tls)
 }
 

@@ -14,6 +14,7 @@
 //! [`BookSync`]: jmap_book_sync::BookSync
 
 pub mod backend;
+pub mod capabilities;
 pub mod connect;
 pub mod factory;
 pub mod marshal;
