@@ -191,15 +191,42 @@ impl Client {
     ///
     /// Returns the singleton vacation response object.
     pub fn vacation_response_get(&self, account_id: &Id) -> Result<VacationResponse, Error> {
+        Ok(self.vacation_response_get_with_state(account_id)?.0)
+    }
+
+    /// Fetch the vacation responder and the `state` of the answer. Pass that
+    /// state as `ifInState` to a later `VacationResponse/set` (RFC 8620
+    /// Section 5.3), so a save does not overwrite a change made elsewhere
+    /// after the page loaded.
+    pub fn vacation_response_get_with_state(
+        &self,
+        account_id: &Id,
+    ) -> Result<(VacationResponse, State), Error> {
         let arguments = self.single_call(
             &[CAPABILITY_CORE, CAPABILITY_VACATION_RESPONSE],
             "VacationResponse/get",
             &GetRequest::all(account_id.clone()),
         )?;
         let response: GetResponse<VacationResponse> = serde_json::from_value(arguments)?;
-        response.list.into_iter().next().ok_or_else(|| {
+        let state = response.state;
+        let vacation = response.list.into_iter().next().ok_or_else(|| {
             Error::Protocol("server answered VacationResponse/get with no singleton".to_owned())
-        })
+        })?;
+        Ok((vacation, state))
+    }
+
+    /// Change the vacation responder (`VacationResponse/set`, RFC 8621
+    /// Section 8.1).
+    pub fn vacation_response_set(
+        &self,
+        request: &SetRequest<VacationResponse>,
+    ) -> Result<SetResponse<VacationResponse>, Error> {
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_VACATION_RESPONSE],
+            "VacationResponse/set",
+            request,
+        )?;
+        Ok(serde_json::from_value(arguments)?)
     }
 
     /// Change the vacation responder (`VacationResponse/set` update: RFC
@@ -209,12 +236,7 @@ impl Client {
         let id: Id = "singleton".into();
         let request =
             SetRequest::<VacationResponse>::new(account_id.clone()).update(id.clone(), patch);
-        let arguments = self.single_call(
-            &[CAPABILITY_CORE, CAPABILITY_VACATION_RESPONSE],
-            "VacationResponse/set",
-            &request,
-        )?;
-        let response: SetResponse<VacationResponse> = serde_json::from_value(arguments)?;
+        let response = self.vacation_response_set(&request)?;
         expect_updated(&response, &id)
     }
 

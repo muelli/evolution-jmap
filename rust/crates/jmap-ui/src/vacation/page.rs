@@ -64,6 +64,7 @@ use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::object_data::ObjectData;
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, TypeSizes};
 use jmap_backend_core::trampoline::{guard, log_critical};
+use jmap_proto::State;
 
 use crate::dispatch;
 use crate::link::{self, AccountLink, SendSource};
@@ -85,6 +86,9 @@ const LOAD_FAILED: &CStr = N_(c"The autoresponder could not be read: %1$s");
 struct UiState {
     link: Option<Arc<AccountLink>>,
     baseline: Option<VacationForm>,
+    /// The `state` of the load's `VacationResponse/get`, sent as `ifInState`
+    /// on save so that it does not overwrite a change of another program.
+    state: Option<State>,
     enabled: *mut GtkWidget,
     from_date: *mut GtkWidget,
     to_date: *mut GtkWidget,
@@ -251,6 +255,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         let ui = RefCell::new(UiState {
             link: None,
             baseline: None,
+            state: None,
             enabled,
             from_date,
             to_date,
@@ -321,8 +326,9 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
         // SAFETY: the reference from `create` keeps the source alive for all
         // of this closure.
         let outcome = unsafe { link::connect_account(source.as_ptr()) }.and_then(|link| {
-            let response = io::load(&link)?;
-            Ok((Arc::new(link), VacationForm::from_response(&response)))
+            let loaded = io::load(&link)?;
+            let form = VacationForm::from_response(&loaded.response);
+            Ok((Arc::new(link), form, loaded.state))
         });
         drop(source);
         outcome
@@ -346,13 +352,13 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
 /// `page` must be the live page of the load.
 unsafe fn apply_outcome(
     page: *mut GObject,
-    outcome: Result<(Arc<AccountLink>, VacationForm), String>,
+    outcome: Result<(Arc<AccountLink>, VacationForm, State), String>,
 ) {
     let Some(cell) = (unsafe { state(page) }) else {
         return;
     };
     match outcome {
-        Ok((link, form)) if link.features.vacation => {
+        Ok((link, form, load_state)) if link.features.vacation => {
             // Copy the widget pointers in a short borrow, and release it
             // before a widget call. `set_bool` on `enabled` emits `"toggled"`
             // synchronously when the value changes (an enabled responder does
@@ -386,6 +392,7 @@ unsafe fn apply_outcome(
             let mut ui = cell.borrow_mut();
             ui.baseline = Some(form);
             ui.link = Some(link);
+            ui.state = Some(load_state);
         }
         Ok(_) => {
             let text = cstring_lossy(&translate(NOT_OFFERED));
@@ -408,6 +415,7 @@ unsafe fn apply_outcome(
 struct SubmitJob {
     link: Arc<AccountLink>,
     patch: serde_json::Value,
+    if_in_state: Option<State>,
 }
 
 unsafe extern "C" fn drop_job(data: gpointer) {
@@ -426,7 +434,7 @@ unsafe extern "C" fn submit_thread(
     guard("JmapVacationPage::submit_thread", (), || {
         // SAFETY: `submit` attached the job. This is a borrow; the task frees it.
         let job = unsafe { &*task_data.cast::<SubmitJob>() };
-        match io::save(&job.link, job.patch.clone()) {
+        match io::save(&job.link, job.patch.clone(), job.if_in_state.clone()) {
             // SAFETY: `task` is the live task of this thread function.
             Ok(()) => unsafe { g_task_return_boolean(task, GTRUE) },
             Err(message) => {
@@ -469,7 +477,7 @@ unsafe extern "C" fn submit(
             if ui.baseline.as_ref() == Some(&form) {
                 return None; // no changes: nothing to write
             }
-            Some((link, form))
+            Some((link, form, ui.state.clone()))
         });
 
         match job {
@@ -480,7 +488,7 @@ unsafe extern "C" fn submit(
                     g_object_unref(task.cast());
                 }
             }
-            Some((link, form)) => match form.patch() {
+            Some((link, form, if_in_state)) => match form.patch() {
                 Err(reason) => {
                     let text = cstring_lossy(&translate(reason));
                     // SAFETY: as above. The task gets the ownership of the error.
@@ -491,7 +499,11 @@ unsafe extern "C" fn submit(
                     }
                 }
                 Ok(patch) => {
-                    let job = Box::new(SubmitJob { link, patch });
+                    let job = Box::new(SubmitJob {
+                        link,
+                        patch,
+                        if_in_state,
+                    });
                     // SAFETY: the task is live and gets the ownership of the
                     // data (drop_job). run_in_thread keeps its own reference,
                     // so this releases the local reference.
