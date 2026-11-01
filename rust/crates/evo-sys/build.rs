@@ -349,6 +349,9 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // `_get` lets a test confirm the value without a display.
     "gtk_container_set_border_width",
     "gtk_container_get_border_width",
+    // GNOME HIG wants 6px between related rows in a box. `_get` lets a
+    // test confirm a box's spacing without a display.
+    "gtk_box_get_spacing",
     // One `activate` handler serves the whole submenu. It asks the action
     // which item fired. Labels are re-filled per gate, found back from the
     // group by name.

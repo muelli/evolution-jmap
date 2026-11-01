@@ -449,12 +449,12 @@ unsafe fn build_rule_dialog(
         set_combo(combine, index_of(&COMBINE_CHOICES, draft.combine));
 
         section_label(content, CONDITIONS_LABEL);
-        let conditions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
+        let conditions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_box_pack_start(content.cast(), conditions, GFALSE, GFALSE, 0);
         add_row_button(dialog, content, ADD_CONDITION, on_add_condition);
 
         section_label(content, ACTIONS_LABEL);
-        let actions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
+        let actions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_box_pack_start(content.cast(), actions, GFALSE, GFALSE, 0);
         add_row_button(dialog, content, ADD_ACTION, on_add_action);
 
@@ -1138,7 +1138,9 @@ fn index_of<T: PartialEq>(items: &[T], item: T) -> Option<usize> {
 mod tests {
     use std::os::raw::c_char;
 
-    use evo_sys::{gtk_container_get_border_width, gtk_window_get_default_widget};
+    use evo_sys::{
+        gtk_box_get_spacing, gtk_container_get_border_width, gtk_window_get_default_widget,
+    };
     use glib_sys::gboolean;
     use gobject_sys::g_object_get;
 
@@ -1217,6 +1219,44 @@ mod tests {
                 gtk_container_get_border_width(content_area.cast()),
                 12,
                 "the content area has no HIG margin: content touches the dialog's edges"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(window);
+        }
+    }
+
+    /// GNOME HIG: 6px between related rows in a box, the same spacing the
+    /// rest of this dialog uses. Needs a display; skips without one.
+    #[test]
+    fn the_condition_and_action_rows_use_the_dialogs_spacing() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain toplevel window stands in for the live page;
+        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+        // via `parent_on`. Both widgets are destroyed before returning.
+        unsafe {
+            let window = gtk_window_new(0);
+            let draft = RuleDraft::new();
+            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+
+            let cell = state(dialog.cast()).unwrap();
+            let (conditions, actions) = {
+                let state = cell.borrow();
+                (state.conditions, state.actions)
+            };
+            assert_eq!(
+                gtk_box_get_spacing(conditions.cast()),
+                6,
+                "the conditions row box uses a different spacing than the rest of the dialog"
+            );
+            assert_eq!(
+                gtk_box_get_spacing(actions.cast()),
+                6,
+                "the actions row box uses a different spacing than the rest of the dialog"
             );
 
             gtk_widget_destroy(dialog);
