@@ -225,3 +225,86 @@ fn seed_file_populates_accounts_mailboxes_emails_cards_and_events() {
 
     let _ = fs::remove_file(path);
 }
+
+#[test]
+fn seed_file_email_can_carry_an_attachment() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Helen Httpphoto\r\n\
+        PHOTO;VALUE=uri:http://127.0.0.1:8091/photo.png\r\nEND:VCARD\r\n";
+    let seed = json!({
+        "accounts": [
+            {
+                "id": "A1",
+                "name": "seeded@example.test",
+                "mailboxes": [
+                    {"id": "M100", "name": "Inbox", "role": "inbox"}
+                ],
+                "emails": [
+                    {
+                        "mailboxId": "M100",
+                        "from": {"name": "Sender", "email": "sender@example.test"},
+                        "subject": "A vCard",
+                        "textBody": "see attached",
+                        "receivedAt": "2026-01-02T03:04:05Z",
+                        "attachments": [
+                            {"name": "contact.vcf", "contentType": "text/vcard", "content": vcard}
+                        ]
+                    }
+                ]
+            }
+        ]
+    });
+    let path = std::env::temp_dir().join(format!(
+        "jmap-mockd-seed-attachment-{}-{}.json",
+        std::process::id(),
+        nonce
+    ));
+    fs::write(
+        &path,
+        serde_json::to_vec(&seed).expect("serialize seed document"),
+    )
+    .expect("write seed file");
+
+    let path_arg = path.to_string_lossy().into_owned();
+    let mockd = Mockd::spawn(&["--seed", &path_arg]);
+
+    let ids = api(
+        &mockd,
+        json!({
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [["Email/query", {"accountId": "A1"}, "e1"]],
+        }),
+    );
+    let email_id = ids["methodResponses"][0][1]["ids"][0]
+        .as_str()
+        .expect("one seeded email")
+        .to_owned();
+
+    let got = api(
+        &mockd,
+        json!({
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [[
+                "Email/get",
+                {"accountId": "A1", "ids": [email_id], "properties": ["attachments"]},
+                "e2"
+            ]],
+        }),
+    );
+    let attachments = &got["methodResponses"][0][1]["list"][0]["attachments"];
+    assert_eq!(attachments[0]["type"], json!("text/vcard"));
+    assert_eq!(attachments[0]["name"], json!("contact.vcf"));
+    let blob_id = attachments[0]["blobId"]
+        .as_str()
+        .expect("an attachment blobId");
+
+    let (status, _, body) =
+        mockd.request("GET", &format!("/download/A1/{blob_id}/contact.vcf"), b"");
+    assert!(status.contains("200"), "{status}");
+    assert_eq!(body, vcard);
+
+    let _ = fs::remove_file(path);
+}
