@@ -1,3 +1,37 @@
+evolution-jmap (0.6.5) unstable; urgency=medium
+
+  * The Server Filters page no longer scrolls sideways. A long error
+    message or a long Sieve line now wraps instead of making the page
+    wider than the window.
+  * A rate-limited request now shows a plain sentence that tells you how
+    long to wait. Before, it showed a raw technical message.
+  * Contact groups (mailing lists) from the server now show their name
+    and members correctly in the Contact List Editor.
+  * Fixed a contact id that could clash with the server's own id on some
+    servers, including Stalwart 1.0. The clash could make a new contact
+    invisible to a group or to later changes.
+  * Fixed a new contact or calendar event that could stay invisible until
+    a full resync, when another program on the same account made a
+    change at nearly the same time.
+  * Saving the Vacation Responder, a Server Filters script, a contact, or
+    a calendar event no longer risks silently overwriting a change
+    another program made at the same time. The save now detects the
+    conflict and handles it the normal way.
+  * Fixed two fast clicks on a snooze option, or on Send Later, sending
+    the action twice.
+  * Fixed a crash that could happen when the composer, the Server
+    Filters page, or the Undo notice was closed while one of its own
+    dialogs was still open.
+  * Fixed a fetched contact photo that could briefly show in the wrong
+    contact.
+  * Hardened the JMAP client against a hostile or broken server. It now
+    rejects a response it did not ask for, a duplicate or out-of-order
+    response, a replayed response, and a session state that goes
+    backward. It no longer sends your credentials to a server response
+    that redirects to another origin.
+
+ -- Tobias Mueller <muelli@cryptobitch.de>  Sun, 01 Nov 2026 06:15:36 +0000
+
 evolution-jmap (0.6.1) unstable; urgency=medium
 
   * Added a Server Filters page to the account editor for servers that

@@ -32,7 +32,37 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `numbers-out-of-range`, `dangerous-ids`, `blob-size-mismatch`,
   `session-urls-file`, `session-urls-other-origin`, `redirect-other-origin`,
   `wrong-method-call-id`, `duplicate-method-call-id`, `out-of-order-responses`,
-  `replayed-response`, `state-backwards`, and `eventsource-unknown`.
+  `replayed-response`, `state-backwards`, and `eventsource-unknown`. (`b67c05d6`)
+- Earlier, narrower hostile flags, each a single fault rather than a named
+  scenario: `--well-known-redirect-to` (`8804d6b0`), `--changes-never-terminates`
+  (`4e76e8e6`), `--advertise-origin` (`70cedc1d`), `--email-get-includes-
+  unrequested` and `--query-never-terminates` (`2581e459`), `--shared-account-
+  name-copies-user` (`d845d749`), `--contact-photo-uses-file-uri` (`e205cd14`),
+  and `--calendar-event-link-uses-file-uri` (`46dfa405`).
+- `--sieve-validate-long-error` to model a server that rejects an oversized
+  Sieve script on `SieveScript/validate` for test coverage. (`164d97e3`)
+- Opt-in `Task` and `TaskList` methods, and `--sieve-vacation-script` to seed a
+  vacation responder script. (`855cc44c`)
+- Sieve realism modes: `--no-sieve`, `--sieve-extensions`, `--snooze-extension`,
+  `--no-size-upload`, and `--without-primary-accounts`. (`56085ba6`)
+- Shared account mode and collection-level share rights checks for
+  `Calendar`/`AddressBook` methods. (`bfc68a06`)
+- Shared-mail rights checks for `Email` methods. (`54a33b97`)
+- `ContactCard` group member support (`contacts/create`, `addressbookIds`
+  membership). (`ef282762`)
+- Contact photos with a `data:` URI are now served back as a `blobId`, like a
+  real server. (`9244847d`)
+
+### Fixed
+- `ContactCard/query` now honors a `uid` filter; previously every card
+  matched regardless of the filter, so a group with more than one other
+  member resolved every member to the same wrong id. (`8d2db27f`)
+- `query_hides_limit` now also hides the limit of an `Email/query` page, not
+  only contact and calendar event queries. (`f0aef04e`)
+- Sieve statement checks no longer reject an unrecognized but
+  well-formed statement. (`064dae1f`)
+- `SieveScript/set` no longer rejects an unknown blob id outright, matching a
+  real server's tolerance. (`98e18eab`)
 
 ## [0.5.0] - 2026-10-24
 
