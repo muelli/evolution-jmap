@@ -26,6 +26,7 @@ use std::cell::RefCell;
 use std::ffi::{CStr, c_int};
 use std::ptr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use eds_sys::ESource;
 use evo_sys::{
@@ -170,6 +171,27 @@ struct UiState {
     rule_down: *mut GtkWidget,
     rule_enable: *mut GtkWidget,
     rule_disable: *mut GtkWidget,
+    /// The generation of the last Check click. A reply tagged with any other
+    /// generation is stale and must not overwrite the status label.
+    check_generation: u64,
+}
+
+/// A fresh generation for one Check click, process-wide so it never repeats.
+static CHECK_GENERATIONS: AtomicU64 = AtomicU64::new(0);
+
+impl UiState {
+    /// Marks a new Check in flight. Returns the generation to tag its reply
+    /// with.
+    fn begin_check(&mut self) -> u64 {
+        self.check_generation = CHECK_GENERATIONS.fetch_add(1, Ordering::SeqCst);
+        self.check_generation
+    }
+
+    /// True if `generation` is the latest Check this page started. A click
+    /// started after it makes this one stale.
+    fn check_is_current(&self, generation: u64) -> bool {
+        self.check_generation == generation
+    }
 }
 
 /// The qdata of the page, while the page is alive.
@@ -435,6 +457,7 @@ unsafe fn build_widgets(page: *mut GObject) {
                 rule_down,
                 rule_enable,
                 rule_disable,
+                check_generation: 0,
             }),
         );
     }
@@ -1504,15 +1527,20 @@ unsafe extern "C" fn on_check(_button: *mut GObject, page: gpointer) {
         let Some(job) = job else {
             return refuse(cell, NO_SCRIPT_SELECTED);
         };
+        let generation = cell.borrow_mut().begin_check();
         // SAFETY: the widgets are live, and no borrow is held.
         unsafe { set_status(cell, &translate(CHECKING)) };
 
         let work = move || io::check(&job.link, &job.text);
-        let finish = |page: *mut GObject, answer: Result<Option<String>, String>| {
+        let finish = move |page: *mut GObject, answer: Result<Option<String>, String>| {
             // SAFETY: `with_strong` gives the live page.
             let Some(cell) = (unsafe { state(page) }) else {
                 return;
             };
+            // A newer Check started after this one: its answer is stale.
+            if !cell.borrow().check_is_current(generation) {
+                return;
+            }
             let text = match answer {
                 Ok(None) => translate(SCRIPT_VALID),
                 Ok(Some(detail)) | Err(detail) => detail,
@@ -1728,6 +1756,61 @@ mod tests {
     #[test]
     fn deactivate_and_rule_add_keep_different_mnemonics() {
         assert_ne!(mnemonic(DEACTIVATE_LABEL), mnemonic(RULE_ADD_LABEL));
+    }
+
+    /// A fresh [`UiState`], not tied to any real widget.
+    fn fresh_state() -> UiState {
+        UiState {
+            link: None,
+            form: FiltersForm::default(),
+            showing: None,
+            rules: None,
+            force_text: false,
+            syncing: false,
+            store: ptr::null_mut(),
+            view: ptr::null_mut(),
+            source_label: ptr::null_mut(),
+            source_view: ptr::null_mut(),
+            buffer: ptr::null_mut(),
+            status: ptr::null_mut(),
+            add: ptr::null_mut(),
+            rename: ptr::null_mut(),
+            remove: ptr::null_mut(),
+            activate: ptr::null_mut(),
+            deactivate: ptr::null_mut(),
+            check: ptr::null_mut(),
+            edit_as_text: ptr::null_mut(),
+            rules_box: ptr::null_mut(),
+            rules_store: ptr::null_mut(),
+            rules_view: ptr::null_mut(),
+            rule_add: ptr::null_mut(),
+            rule_edit: ptr::null_mut(),
+            rule_remove: ptr::null_mut(),
+            rule_up: ptr::null_mut(),
+            rule_down: ptr::null_mut(),
+            rule_enable: ptr::null_mut(),
+            rule_disable: ptr::null_mut(),
+            check_generation: 0,
+        }
+    }
+
+    /// Two Check clicks before the first answers: the first click's reply
+    /// must not overwrite the second click's, once it lands later.
+    #[test]
+    fn a_stale_check_answer_is_not_current() {
+        let mut state = fresh_state();
+
+        let first = state.begin_check();
+        let second = state.begin_check();
+
+        assert!(
+            !state.check_is_current(first),
+            "a stale Check answer looked current"
+        );
+        assert!(
+            state.check_is_current(second),
+            "the latest Check answer was rejected"
+        );
     }
 
     /// The shell destroys the account editor while the name dialog of Add
