@@ -952,6 +952,23 @@ fn isolate_if_bidi(text: &str) -> Cow<'_, str> {
     }
 }
 
+/// An addr-spec, with any `<`, `>` or `,` replaced.
+///
+/// `camel_internet_address_format_address` quotes a display name that
+/// contains one of these characters, but always inserts the addr-spec raw
+/// into `<%s>` with no quoting at all. A hostile server's address containing
+/// one of them would close the angle bracket early and open a second,
+/// forged address in the same From/To/Cc summary cell that filters and
+/// vfolders read. U+FFFD keeps the entry visibly broken and single, the
+/// same treatment `c_string` gives a NUL, CR or LF.
+fn safe_addr_spec(email: &str) -> Cow<'_, str> {
+    if email.contains(['<', '>', ',']) {
+        Cow::Owned(email.replace(['<', '>', ','], "\u{fffd}"))
+    } else {
+        Cow::Borrowed(email)
+    }
+}
+
 /// One address header, as the single string that the Camel summary keeps.
 ///
 /// The function uses `CamelInternetAddress` and does not join the parts here.
@@ -975,7 +992,7 @@ fn address_list(addresses: &[EmailAddress]) -> Option<String> {
                 .name
                 .as_deref()
                 .map(|name| c_string(&isolate_if_bidi(name)));
-            let email = c_string(&entry.email);
+            let email = c_string(&safe_addr_spec(&entry.email));
             camel_internet_address_add(
                 address.as_ptr(),
                 name.as_ref().map_or(ptr::null(), |name| name.as_ptr()),
