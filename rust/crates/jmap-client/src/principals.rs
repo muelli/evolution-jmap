@@ -5,8 +5,10 @@
 //!
 //! Resolves email addresses and names to principal identifiers and capabilities.
 
-use jmap_proto::Id;
-use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};
+use jmap_proto::methods::{
+    ChangesResponse, GetRequest, GetResponse, QueryChangesRequest, QueryChangesResponse,
+    QueryRequest, QueryResponse, SetRequest, SetResponse,
+};
 use jmap_proto::principals::{
     BusyPeriod, GetAvailabilityRequest, GetAvailabilityResponse, Principal, PrincipalQueryFilter,
     ShareNotification, ShareNotificationQueryFilter,
@@ -16,6 +18,7 @@ use jmap_proto::session::{
     CAPABILITY_PRINCIPALS_AVAILABILITY,
 };
 use jmap_proto::state::UtcDate;
+use jmap_proto::{Id, State};
 
 use crate::client::Client;
 use crate::error::Error;
@@ -193,6 +196,33 @@ impl Client {
         Ok(response.ids)
     }
 
+    /// Request incremental changes for principals (`Principal/changes`, RFC 9670 §2.2).
+    pub fn principal_changes(
+        &self,
+        account_id: &Id,
+        since_state: &State,
+    ) -> Result<ChangesResponse, Error> {
+        self.changes(account_id, "Principal", since_state)
+    }
+
+    /// Modify principals (`Principal/set`, RFC 9670 §2.3).
+    pub fn principal_set(
+        &self,
+        request: &SetRequest<Principal>,
+    ) -> Result<SetResponse<Principal>, Error> {
+        let arguments = self.single_call(USING, "Principal/set", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// Query incremental changes for principals (`Principal/queryChanges`, RFC 9670 §2.5).
+    pub fn principal_query_changes(
+        &self,
+        request: &QueryChangesRequest<PrincipalQueryFilter>,
+    ) -> Result<QueryChangesResponse, Error> {
+        let arguments = self.single_call(USING, "Principal/queryChanges", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
     /// Fetch all share notifications visible to this account (RFC 9670 Section 4).
     pub fn share_notifications(&self, account_id: &Id) -> Result<Vec<ShareNotification>, Error> {
         let arguments = self.single_call(
@@ -202,6 +232,50 @@ impl Client {
         )?;
         let response: GetResponse<ShareNotification> = serde_json::from_value(arguments)?;
         Ok(response.list)
+    }
+
+    /// Fetch share notifications by identifier (`ShareNotification/get` with `ids`, RFC 9670 §3.1).
+    pub fn share_notification_get(
+        &self,
+        account_id: &Id,
+        ids: &[Id],
+    ) -> Result<Vec<ShareNotification>, Error> {
+        let request = GetRequest::ids(account_id.clone(), ids.to_vec());
+        let arguments = self.single_call(USING, "ShareNotification/get", &request)?;
+        let response: GetResponse<ShareNotification> = serde_json::from_value(arguments)?;
+        Ok(response.list)
+    }
+
+    /// Request incremental changes for share notifications (`ShareNotification/changes`, RFC 9670 §3.2).
+    pub fn share_notification_changes(
+        &self,
+        account_id: &Id,
+        since_state: &State,
+    ) -> Result<ChangesResponse, Error> {
+        self.changes(account_id, "ShareNotification", since_state)
+    }
+
+    /// Dismiss or modify share notifications (`ShareNotification/set`, RFC 9670 §3.3).
+    pub fn share_notification_set(
+        &self,
+        request: &SetRequest<ShareNotification>,
+    ) -> Result<SetResponse<ShareNotification>, Error> {
+        let arguments = self.single_call(USING, "ShareNotification/set", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// Dismiss a share notification by destroying it (`ShareNotification/set`, RFC 9670 §3.3).
+    pub fn share_notification_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
+        let mut request = SetRequest::new(account_id.clone());
+        request.destroy = Some(vec![id.clone()]);
+        let response = self.share_notification_set(&request)?;
+        if response.destroyed.as_ref().is_some_and(|d| d.contains(id)) {
+            Ok(())
+        } else if let Some(error) = response.not_destroyed.as_ref().and_then(|nd| nd.get(id)) {
+            Err(Error::Set(error.clone()))
+        } else {
+            Ok(())
+        }
     }
 
     /// Resolve `ShareNotification` ids matching `filter`
@@ -215,6 +289,15 @@ impl Client {
         let arguments = self.single_call(USING, "ShareNotification/query", &request)?;
         let response: QueryResponse = serde_json::from_value(arguments)?;
         Ok(response.ids)
+    }
+
+    /// Query incremental changes for share notifications (`ShareNotification/queryChanges`, RFC 9670 §3.5).
+    pub fn share_notification_query_changes(
+        &self,
+        request: &QueryChangesRequest<ShareNotificationQueryFilter>,
+    ) -> Result<QueryChangesResponse, Error> {
+        let arguments = self.single_call(USING, "ShareNotification/queryChanges", request)?;
+        Ok(serde_json::from_value(arguments)?)
     }
 
     /// Fetch principal availability (`Principal/getAvailability`, draft-ietf-jmap-calendars Section 2.2).

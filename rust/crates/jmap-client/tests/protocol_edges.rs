@@ -197,3 +197,96 @@ fn contact_cards_fetches_all_with_ids_null() {
 
     let _ = client.contact_cards(&account_id);
 }
+
+#[test]
+fn principal_changes_dispatches_with_principals_capability() {
+    use jmap_client::Error;
+    use jmap_proto::State;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let res = client.changes(&account_id, "Principal", &State::new("s1"));
+    assert!(
+        !matches!(res, Err(Error::Protocol(msg)) if msg.contains("no known capability")),
+        "Principal must be recognized as a valid data type with Principals capability"
+    );
+
+    let _ = client.principal_changes(&account_id, &State::new("s1"));
+}
+
+#[test]
+fn share_notification_changes_dispatches_with_principals_capability() {
+    use jmap_client::Error;
+    use jmap_proto::State;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let res = client.changes(&account_id, "ShareNotification", &State::new("s1"));
+    assert!(
+        !matches!(res, Err(Error::Protocol(msg)) if msg.contains("no known capability")),
+        "ShareNotification must be recognized as a valid data type with Principals capability"
+    );
+
+    let _ = client.share_notification_changes(&account_id, &State::new("s1"));
+}
+
+#[test]
+fn principal_set_dispatches_with_principals_capability() {
+    use jmap_proto::methods::SetRequest;
+    use jmap_proto::principals::Principal;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let request = SetRequest::<Principal>::new(account_id);
+    let _ = client.principal_set(&request);
+}
+
+#[test]
+fn principal_query_changes_dispatches_with_principals_capability() {
+    use jmap_proto::methods::QueryChangesRequest;
+    use jmap_proto::principals::PrincipalQueryFilter;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let request = QueryChangesRequest::<PrincipalQueryFilter>::new(account_id, "qs1");
+    let _ = client.principal_query_changes(&request);
+}
+
+#[test]
+fn share_notification_get_and_set_dispatches_with_principals_capability() {
+    use jmap_proto::Id;
+    use jmap_proto::methods::SetRequest;
+    use jmap_proto::principals::ShareNotification;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let _ = client.share_notification_get(&account_id, &[Id::new("sn1")]);
+
+    let set = SetRequest::<ShareNotification>::new(account_id.clone());
+    let _ = client.share_notification_set(&set);
+
+    let _ = client.share_notification_destroy(&account_id, &Id::new("sn1"));
+}
+
+#[test]
+fn share_notification_query_changes_dispatches_with_principals_capability() {
+    use jmap_proto::methods::QueryChangesRequest;
+    use jmap_proto::principals::ShareNotificationQueryFilter;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let request = QueryChangesRequest::<ShareNotificationQueryFilter>::new(account_id, "qs1");
+    let _ = client.share_notification_query_changes(&request);
+}
