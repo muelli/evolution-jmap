@@ -147,3 +147,53 @@ fn email_copy_dispatches_with_mail_capability() {
         CopyRequest::<Email>::new(account_id.clone(), account_id).copy_object("c1", Email::new());
     let _ = client.email_copy(&request);
 }
+
+#[test]
+fn contact_copy_dispatches_with_contacts_capability() {
+    use jmap_proto::contacts::ContactCard;
+    use jmap_proto::methods::CopyRequest;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let request = CopyRequest::<ContactCard>::new(account_id.clone(), account_id)
+        .copy_object("c1", ContactCard::new());
+    let _ = client.contact_copy(&request);
+}
+
+#[test]
+fn contact_query_changes_dispatches_with_contacts_capability() {
+    use jmap_proto::contacts::ContactCardQueryFilter;
+    use jmap_proto::methods::QueryChangesRequest;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let request = QueryChangesRequest::<ContactCardQueryFilter>::new(account_id, "qs1");
+    let _ = client.contact_query_changes(&request);
+}
+
+#[test]
+fn address_book_set_custom_dispatches_with_contacts_capability() {
+    use jmap_proto::contacts::{AddressBook, AddressBookSetRequest};
+    use jmap_proto::methods::SetRequest;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let set = SetRequest::<AddressBook>::new(account_id.clone());
+    let request = AddressBookSetRequest::new(set).with_on_destroy_remove_contents(true);
+    let _ = client.address_book_set_custom(&request);
+}
+
+#[test]
+fn contact_cards_fetches_all_with_ids_null() {
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let _ = client.contact_cards(&account_id);
+}

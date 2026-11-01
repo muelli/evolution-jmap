@@ -372,6 +372,33 @@ fn an_address_list_is_formatted_the_way_camel_formats_one() {
     }
 }
 
+/// `camel_internet_address_format_address` quotes a display name that
+/// contains `<`, `>` or `,`, but never the addr-spec: it always inserts the
+/// addr-spec raw into `<%s>`. A server-supplied address containing one of
+/// those characters would otherwise close the angle bracket early and open a
+/// second, forged address in the same From/To/Cc summary cell that filters
+/// and vfolders read.
+#[test]
+fn a_hostile_addr_spec_does_not_forge_a_second_address() {
+    let mut message = row("Em0006b");
+    message.from = vec![EmailAddress::new(
+        Some("Ann"),
+        "ann@example.com>, \"Helpdesk\" <evil@attacker.example",
+    )];
+    let info = info_of(&message);
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        let from = column(camel_message_info_get_from(info)).unwrap();
+        assert_eq!(
+            from.matches('<').count(),
+            1,
+            "a single address must format as a single angle-bracketed pair, got {from:?}"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
 /// A header the message did not carry leaves the column unset, not empty.
 /// Camel writes the summary to a database and reads it back. There, an empty
 /// string means a `Cc:` header that was present but blank.
