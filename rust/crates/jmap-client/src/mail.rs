@@ -13,8 +13,8 @@ use jmap_proto::mail::{
     SearchSnippetGetRequest, SearchSnippetGetResponse, Thread, VacationResponse,
 };
 use jmap_proto::methods::{
-    Comparator, Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest,
-    SetResponse, UploadResponse,
+    Comparator, CopyRequest, CopyResponse, Filter, GetRequest, GetResponse, QueryRequest,
+    QueryResponse, SetRequest, SetResponse, UploadResponse,
 };
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
@@ -424,6 +424,13 @@ impl Client {
         let request = SetRequest::<Email>::new(account_id.clone()).destroy(id.clone());
         let response = self.email_set(&request)?;
         expect_destroyed(&response, id)
+    }
+
+    /// Copy emails between accounts (`Email/copy`, RFC 8621 §4.7).
+    pub fn email_copy(&self, request: &CopyRequest<Email>) -> Result<CopyResponse<Email>, Error> {
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/copy", request)?;
+        Ok(serde_json::from_value(arguments)?)
     }
 
     /// Put a message into the store from bytes already uploaded

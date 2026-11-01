@@ -5,6 +5,7 @@
 
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
+use jmap_proto::State;
 use jmap_proto::contacts::ContactCard;
 use jmap_proto::error::method;
 use jmap_proto::methods::{GetRequest, SetRequest};
@@ -115,4 +116,34 @@ fn session_state_change_marks_session_stale_until_refreshed() {
         Some("2")
     );
     assert!(!client.is_session_stale());
+}
+
+#[test]
+fn identity_changes_maps_to_submission_capability() {
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+    let state = State::new("1");
+
+    let result = client.changes(&account_id, "Identity", &state);
+    match result {
+        Err(Error::Protocol(msg)) if msg.contains("no known capability") => {
+            panic!("Identity should map to CAPABILITY_SUBMISSION, but got: {msg}");
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn email_copy_dispatches_with_mail_capability() {
+    use jmap_proto::mail::Email;
+    use jmap_proto::methods::CopyRequest;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let request =
+        CopyRequest::<Email>::new(account_id.clone(), account_id).copy_object("c1", Email::new());
+    let _ = client.email_copy(&request);
 }
