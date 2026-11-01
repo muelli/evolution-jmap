@@ -217,18 +217,23 @@ fn count(count: u32) -> i32 {
     i32::try_from(count).unwrap_or(i32::MAX)
 }
 
-/// A Rust string as a C string, with any NUL rewritten.
+/// A Rust string as a C string, with any NUL, CR or LF rewritten.
 ///
-/// A JMAP string is a JSON string, so a mailbox name can contain a NUL even
-/// though RFC 8621 §2 forbids it. Passing the bytes through would truncate the
-/// name there — `Work\0Secret` displayed as `Work`, sitting next to the real
-/// `Work` and indistinguishable from it. U+FFFD keeps the name distinct and
-/// visibly broken, and it cannot fail, which is what lets the build above have
-/// no error path and therefore no half-built forest to clean up.
+/// A JMAP string is a JSON string, so a mailbox name, subject or display name
+/// can carry a NUL even though RFC 8621 §2 forbids it, or a bare CR or LF.
+/// Passing a NUL through would truncate the name there: `Work\0Secret`
+/// displayed as `Work`, sitting next to the real `Work` and indistinguishable
+/// from it. Passing a CR or LF through would let a malicious subject or
+/// address name plant a second, forged-looking header line inside a
+/// one-line Camel summary field: neither `camel_mime_message_set_subject`
+/// nor `camel_address_format` strips either character. U+FFFD keeps the
+/// string distinct and visibly broken in both cases, and it cannot fail,
+/// which is what lets the build above have no error path and therefore no
+/// half-built forest to clean up.
 pub(crate) fn c_string(text: &str) -> CString {
-    match CString::new(text) {
-        Ok(string) => string,
-        Err(_) => CString::new(text.replace('\0', "\u{fffd}"))
-            .expect("a string with every NUL replaced has no NUL left"),
+    if text.contains(['\0', '\r', '\n']) {
+        return CString::new(text.replace(['\0', '\r', '\n'], "\u{fffd}"))
+            .expect("every NUL, CR and LF replaced leaves no NUL");
     }
+    CString::new(text).expect("checked for NUL above")
 }

@@ -549,6 +549,38 @@ fn ordinary_text_is_not_wrapped_in_an_isolate() {
     }
 }
 
+/// A JMAP string can carry a bare CR or LF just as easily as a NUL. Camel's
+/// own formatters do not strip either: handing the raw bytes through would
+/// let a malicious subject or display name plant a second, forged-looking
+/// header line inside a message-list cell (`"Hi\r\nBcc: evil@example.com"`).
+/// So this code replaces CR and LF with U+FFFD before the row reaches Camel,
+/// the same treatment the NUL byte already gets.
+#[test]
+fn a_crlf_in_a_subject_or_address_does_not_forge_a_header_line() {
+    let mut message = row("Em0014");
+    message.subject = Some("Hi\r\nBcc: evil@example.com".to_owned());
+    message.from = vec![EmailAddress::new(
+        Some("Ann\r\nBcc: evil@example.com"),
+        "ann@example.com",
+    )];
+    let info = info_of(&message);
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        let subject = column(camel_message_info_get_subject(info)).unwrap();
+        assert!(!subject.contains('\r') && !subject.contains('\n'));
+        assert_eq!(subject, "Hi\u{fffd}\u{fffd}Bcc: evil@example.com");
+
+        let from = column(camel_message_info_get_from(info)).unwrap();
+        assert!(!from.contains('\r') && !from.contains('\n'));
+        assert_eq!(
+            from,
+            "Ann\u{fffd}\u{fffd}Bcc: evil@example.com <ann@example.com>"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
 /// The keywords the row remembers the server holding. This is a fourth
 /// column, and the only one that is neither a copy nor a computation. It is
 /// what this provider knows, and Camel has no field for it.
