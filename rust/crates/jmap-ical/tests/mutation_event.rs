@@ -235,3 +235,20 @@ fn date_time_digits_rejects_overlong_date_components() {
         "9-digit date must not convert to local date-time"
     );
 }
+
+#[test]
+fn to_nday_parses_multi_digit_ordinals() {
+    // RFC 5545 Section 3.3.10 / RFC 8984 Section 4.3.3:
+    // BYDAY tokens may have 3-digit ordinals (e.g. 100th occurrence in yearly rule).
+    let pos = jmap_ical::event::to_nday("100MO");
+    assert_eq!(pos.day, "mo");
+    assert_eq!(pos.nth_of_period, Some(100));
+
+    let neg = jmap_ical::event::to_nday("-100SU");
+    assert_eq!(neg.day, "su");
+    assert_eq!(neg.nth_of_period, Some(-100));
+
+    let explicit_plus = jmap_ical::event::to_nday("+53TU");
+    assert_eq!(explicit_plus.day, "tu");
+    assert_eq!(explicit_plus.nth_of_period, Some(53));
+}
