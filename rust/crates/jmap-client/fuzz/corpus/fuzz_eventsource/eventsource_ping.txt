@@ -1,0 +1,5 @@
+: ping
+
+event: state
+data: {"@type":"StateChange","changed":{}}
+

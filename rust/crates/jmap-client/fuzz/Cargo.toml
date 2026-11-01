@@ -32,3 +32,10 @@ path = "fuzz_targets/fuzz_client_response.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_eventsource"
+path = "fuzz_targets/fuzz_eventsource.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,4 @@
+event: state
+data: {"@type":"StateChange","changed":{"acc1":{"Mailbox":"s1","Email":"s2"}}}
+id: 1
+
