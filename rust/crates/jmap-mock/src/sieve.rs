@@ -21,6 +21,19 @@ use crate::state::{AccountState, ServerState};
 const VACATION_SCRIPT_CONTENT_TYPE: &str = "application/sieve";
 const VACATION_SCRIPT_BODY: &str = "keep;\n";
 
+/// A marker a Sieve script can contain to make `SieveScript/validate` answer
+/// with [`LONG_ERROR_DETAIL`] instead of really validating it, when
+/// `--sieve-validate-long-error` is set. A script with no trigger text
+/// validates as usual. This lets a GUI scenario reproduce a very long
+/// server refusal without typing one.
+const LONG_ERROR_TRIGGER: &str = "trigger-long-error";
+/// A refusal text the shape of a real rate-limit answer: long, and with no
+/// early line break, for a GUI scenario that checks the Server Filters page
+/// wraps a long status instead of scrolling the whole page sideways.
+const LONG_ERROR_DETAIL: &str = "rate limit exceeded (HTTP 429 / limit) on upload, retry \
+after 265s: you have exceeded the number of requests this account may make in the current \
+time window. Wait for the window to reset, or ask an administrator to raise the limit.";
+
 #[derive(Clone)]
 struct SieveSettings {
     max_size_script: u64,
@@ -394,6 +407,7 @@ pub fn sieve_script_validate(
     arguments: Value,
 ) -> Result<Value, MethodError> {
     let settings = SieveSettings::from_state(state);
+    let long_error = state.sieve_validate_long_error;
 
     let request: SieveScriptValidateRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
@@ -402,6 +416,13 @@ pub fn sieve_script_validate(
         return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
             .with_description("blobId is not a known blob"));
     };
+
+    if long_error && String::from_utf8_lossy(&blob.data).contains(LONG_ERROR_TRIGGER) {
+        return to_result(&SieveScriptValidateResponse::invalid(
+            request.account_id.clone(),
+            SetError::new(sieve_set_error::INVALID_SIEVE).with_description(LONG_ERROR_DETAIL),
+        ));
+    }
 
     match validate_sieve_blob(&blob.data, &settings) {
         Ok(()) => to_result(&SieveScriptValidateResponse::valid(

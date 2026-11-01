@@ -135,6 +135,7 @@ pub struct MockServerBuilder {
     sieve_max_size_script_name: u64,
     sieve_extensions: Vec<String>,
     sieve_vacation_script: bool,
+    sieve_validate_long_error: bool,
     tasks_enabled: bool,
     faults: Faults,
 }
@@ -471,6 +472,14 @@ impl MockServerBuilder {
         self
     }
 
+    /// Answer `SieveScript/validate` with a long canned refusal for a script
+    /// that contains the text "trigger-long-error", instead of really
+    /// validating it. A script with no trigger text validates as usual.
+    pub fn sieve_validate_long_error(mut self) -> Self {
+        self.sieve_validate_long_error = true;
+        self
+    }
+
     /// Refuse `Principal/query` with `forbidden`, modeling Stalwart directory policy.
     pub fn disable_principal_query(mut self) -> Self {
         self.faults.disable_principal_query = true;
@@ -529,6 +538,7 @@ impl MockServerBuilder {
         state.sieve_max_size_script_name = self.sieve_max_size_script_name;
         state.sieve_extensions = self.sieve_extensions;
         state.sieve_vacation_script = self.sieve_vacation_script;
+        state.sieve_validate_long_error = self.sieve_validate_long_error;
         state.tasks_enabled = self.tasks_enabled;
         state.disable_principal_query = self.faults.disable_principal_query;
         state.hostile_scenarios = self.faults.hostile_scenarios.clone();
@@ -615,6 +625,7 @@ impl MockServer {
                 "vacation".to_owned(),
             ],
             sieve_vacation_script: false,
+            sieve_validate_long_error: false,
             tasks_enabled: false,
             faults: Faults::default(),
         }

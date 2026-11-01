@@ -12,6 +12,8 @@
    Check. The page shows the server's refusal, not "The script is valid.".
 5. With the vacation responder on, its script shows as protected: the page
    marks its row and disables the buttons that would change it.
+6. A very long server refusal from Check still leaves every script list
+   button inside the dialog, not scrolled off to the side.
 """
 
 import json
@@ -57,6 +59,17 @@ INVOICES_FOLDER = "Invoices"
 INVALID_TEXT = 'fileinto "Nonexistent";'
 SCRIPT_VALID = "The script is valid."
 CHECKING = "Checking the script…"
+
+# With --sieve-validate-long-error, a script containing this marker makes
+# Check answer with LONG_ERROR_DETAIL below instead of really validating it.
+# Typing stays short; the refusal itself is the long part under test.
+LONG_ERROR_TRIGGER = "trigger-long-error"
+LONG_INVALID_TEXT = f"# {LONG_ERROR_TRIGGER}"
+LONG_ERROR_DETAIL = (
+    "rate limit exceeded (HTTP 429 / limit) on upload, retry "
+    "after 265s: you have exceeded the number of requests this account may make in the current "
+    "time window. Wait for the window to reset, or ask an administrator to raise the limit."
+)
 
 
 # JMAP helpers. The shared `Jmap` class has no blob upload/download: these
@@ -228,6 +241,22 @@ def select_script(editor, name):
 def close_with_ok(editor):
     click_button(editor, "OK")
     wait_for(lambda: window(EDITOR) is None, "the account editor closes")
+
+
+def assert_inside(node, container, label):
+    """Raise unless `node`'s on-screen extents sit fully inside `container`'s.
+
+    A button scrolled off the side of a `GtkScrolledWindow` is still
+    `STATE_SHOWING` over AT-SPI (it is mapped, just not in view), so this
+    checks the actual screen position instead.
+    """
+    inner = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    outer = container.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    if inner.x < outer.x or inner.x + inner.width > outer.x + outer.width:
+        raise ScenarioFailure(
+            f"{label} is outside the dialog: button x {inner.x}..{inner.x + inner.width}, "
+            f"dialog x {outer.x}..{outer.x + outer.width}"
+        )
 
 
 def close_with_cancel(editor):
@@ -405,10 +434,39 @@ def run():
     say("page: the vacation script is protected and its buttons are disabled")
     close_with_cancel(editor)
 
+    # 6. A very long refusal from Check still leaves every button inside the
+    # dialog: the status label and the script view wrap instead of growing
+    # the page sideways.
+    editor = open_page()
+    loaded(editor)
+    select_script(editor, LEGACY_NAME)
+    source_view = wait_for(
+        lambda: text_field(editor, LEGACY_TEXT), f"the text view showing {LEGACY_TEXT!r}"
+    )
+    set_text(source_view, LONG_INVALID_TEXT)
+    check = wait_for(lambda: find(editor, "push button", "Check", showing=True), "Check button")
+    do_action(check)
+    message = wait_for(
+        lambda: (lambda text: text if text not in ("", CHECKING, SCRIPT_VALID) else None)(
+            status_text(editor)
+        ),
+        "a refusal after Check",
+    )
+    if message != LONG_ERROR_DETAIL:
+        raise ScenarioFailure(f"expected the long canned refusal, got: {message!r}")
+    screenshot("check-long-error")
+    for name in ("Add", "Rename", "Remove", "Activate", "Deactivate", "Check"):
+        button = wait_for(
+            lambda name=name: find(editor, "push button", name, showing=True), f"{name!r} button"
+        )
+        assert_inside(button, editor, f"the {name!r} button")
+    say("page: a long Check refusal keeps every script list button inside the dialog")
+    close_with_cancel(editor)
+
     if any(is_showing(node) for node in descendants(evolution(), "alert", max_depth=2)):
         screenshot("unexpected-alert")
         raise ScenarioFailure("Evolution shows an alert")
     expect_no_errors()
 
 
-main(setup, run, mock_args=("--sieve-vacation-script",))
+main(setup, run, mock_args=("--sieve-vacation-script", "--sieve-validate-long-error"))

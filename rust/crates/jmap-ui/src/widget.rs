@@ -6,10 +6,11 @@
 //! `GtkEntry` and `GtkTextBuffer` both have a string `text` property, and
 //! `GtkToggleButton` has a boolean `active` property. The property system
 //! copies the value, so no `GtkTextIter` and no widget struct crosses the
-//! FFI boundary. The account-editor pages of this crate share these four
-//! calls.
+//! FFI boundary. The account-editor pages of this crate share these calls,
+//! plus two more that take the property name directly, for a label or text
+//! view whose wrapping or scrolling property is not `active`.
 
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_int};
 use std::ptr;
 
 use glib_sys::{GFALSE, GTRUE, gboolean};
@@ -96,4 +97,36 @@ pub unsafe fn set_bool(object: *mut GObject, active: bool) {
 /// `gboolean` for a Rust `bool`, for the many GTK setters that take one.
 pub fn flag(value: bool) -> gboolean {
     if value { GTRUE } else { GFALSE }
+}
+
+/// Pango's `wrap-mode` value that breaks a line with no space, read by
+/// `GtkLabel`'s `wrap-mode` property (`pango-layout.h`: WORD = 0, CHAR = 1,
+/// WORD_CHAR = 2). A plain integer, so this needs no new FFI type.
+pub const PANGO_WRAP_WORD_CHAR: c_int = 2;
+
+/// Sets a named boolean property, for a widget whose property is not
+/// `active`.
+///
+/// # Safety
+///
+/// `object` must be a live GObject with a writable boolean property `name`.
+pub unsafe fn set_bool_named(object: *mut GObject, name: &CStr, value: bool) {
+    // SAFETY: per the contract. The property system copies the value.
+    unsafe {
+        g_object_set(object, name.as_ptr(), flag(value), ptr::null::<c_char>());
+    }
+}
+
+/// Sets a named enum property to a plain C integer value, such as
+/// `wrap-mode` or `hscrollbar-policy`. No enum type crosses the FFI
+/// boundary: the caller passes the header's own integer constant.
+///
+/// # Safety
+///
+/// `object` must be a live GObject with a writable enum property `name`.
+pub unsafe fn set_enum_named(object: *mut GObject, name: &CStr, value: c_int) {
+    // SAFETY: per the contract.
+    unsafe {
+        g_object_set(object, name.as_ptr(), value, ptr::null::<c_char>());
+    }
 }

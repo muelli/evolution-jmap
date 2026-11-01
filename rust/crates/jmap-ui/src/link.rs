@@ -54,6 +54,9 @@ pub fn describe(error: &jmap_client::Error) -> String {
         jmap_client::Error::Http { status: 403, .. } => {
             translate(c"the server refused: this account is not allowed to do that")
         }
+        jmap_client::Error::Http { status: 429, .. } | jmap_client::Error::RateLimited { .. } => {
+            describe_rate_limit(error)
+        }
         jmap_client::Error::Transport(detail) => translate_with(
             // TRANSLATORS: %1$s is the network error the transport reported.
             c"the server could not be reached: %1$s",
@@ -77,6 +80,27 @@ pub fn describe(error: &jmap_client::Error) -> String {
             &[requested, followed],
         ),
         other => other.to_string(),
+    }
+}
+
+/// The sentence for a rate-limited request: the wait time first, as a
+/// sentence a user can act on, then the server's own reason in full. The
+/// `Display` text already names the wait once, in a log-shaped form; this
+/// keeps the whole text rather than trying to strip that out, so no detail
+/// of a server's reason is ever cut.
+fn describe_rate_limit(error: &jmap_client::Error) -> String {
+    let detail = error.to_string();
+    match error.rate_limit_retry_after() {
+        Some(wait) => translate_with(
+            // TRANSLATORS: %1$s is the number of seconds to wait; %2$s is what the mail server said.
+            c"the server is busy. Wait %1$s seconds, then try again: %2$s",
+            &[&wait.as_secs().to_string(), &detail],
+        ),
+        None => translate_with(
+            // TRANSLATORS: %1$s is what the mail server said.
+            c"the server is busy. Try again later: %1$s",
+            &[&detail],
+        ),
     }
 }
 
@@ -319,6 +343,8 @@ fn gerror_message(error: *mut GError) -> String {
 
 #[cfg(test)]
 mod describe_tests {
+    use std::collections::BTreeMap;
+
     use jmap_client::Error;
 
     use super::describe;
@@ -348,6 +374,60 @@ mod describe_tests {
             "expected a redirect explanation, not the raw Display text or a \
              sign-in prompt (signing in again cannot fix a dropped redirect \
              header), got: {message}"
+        );
+    }
+
+    #[test]
+    fn a_429_with_no_retry_after_still_reads_as_a_sentence() {
+        let error = Error::Http {
+            status: 429,
+            problem: None,
+        };
+        let message = describe(&error);
+        assert!(
+            message.contains("busy") && message.contains("Try again"),
+            "expected a sentence, not the raw Display text, got: {message}"
+        );
+    }
+
+    #[test]
+    fn a_429_with_a_retry_after_reads_the_wait_as_a_sentence() {
+        let error = Error::Http {
+            status: 429,
+            problem: Some(
+                jmap_proto::error::RequestError::new("urn:ietf:params:jmap:error:limit")
+                    .with_detail("too many uploads")
+                    .with_extra(BTreeMap::from([(
+                        "retryAfter".to_owned(),
+                        serde_json::json!(265),
+                    )])),
+            ),
+        };
+        let message = describe(&error);
+        assert!(
+            message.contains("265") && message.contains("try again"),
+            "expected a sentence with the wait in it, got: {message}"
+        );
+    }
+
+    #[test]
+    fn a_rate_limited_error_keeps_the_servers_own_text_in_full() {
+        let error = Error::RateLimited {
+            retry_after: Some(std::time::Duration::from_secs(265)),
+            method: Some("upload".into()),
+            problem: Some(
+                jmap_proto::error::RequestError::new("urn:ietf:params:jmap:error:limit")
+                    .with_detail("You have exceeded the rate limit for this account"),
+            ),
+        };
+        let message = describe(&error);
+        assert!(
+            message.contains("265"),
+            "expected the wait in seconds, got: {message}"
+        );
+        assert!(
+            message.contains("You have exceeded the rate limit for this account"),
+            "expected the server's own detail kept in full, got: {message}"
         );
     }
 }

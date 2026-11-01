@@ -114,6 +114,10 @@ pub struct ServerState {
     pub sieve_vacation_script: bool,
     /// Name of the server-managed vacation Sieve script.
     pub sieve_vacation_script_name: String,
+    /// Answer `SieveScript/validate` with a long canned refusal for a script
+    /// that contains the trigger text, instead of really validating it. Lets
+    /// a GUI scenario reproduce a very long server refusal.
+    pub sieve_validate_long_error: bool,
     /// Enable `TaskList/*` and `Task/*` methods and session capability output.
     pub tasks_enabled: bool,
     /// Refuse `Principal/query` with forbidden, modeling Stalwart directory policy.
@@ -191,6 +195,7 @@ impl ServerState {
             ],
             sieve_vacation_script: false,
             sieve_vacation_script_name: "vacation".to_owned(),
+            sieve_validate_long_error: false,
             tasks_enabled: false,
             disable_principal_query: false,
             hostile_scenarios: BTreeSet::new(),
