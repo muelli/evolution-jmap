@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Client::sieve_scripts_with_state`, which also returns the `SieveScript/get` state, for an `ifInState` guard on a later `SieveScript/set` (RFC 8620 Section 5.3).
 - `Error::is_state_mismatch`, also for the failed part of an `Error::SetPartiallyApplied`.
 - `Client::vacation_response_get_with_state` and `Client::vacation_response_set`, for the same `ifInState` guard on a `VacationResponse/set`.
+- `Client::calendar_event_state`, alongside the existing `Client::contact_state`, so a listing sync can read the state before its query instead of after. (`8549e224`)
+- Response validation against the request and prior session state: an unexpected,
+  duplicate, or out-of-order method call id, a replayed response, or a `sessionState`
+  that regresses are now rejected, and the `Authorization` header is withheld from a
+  foreign origin or an insecure scheme. (`bf2bfaf2`)
+- `eventsource::parse_response_head`, `parse_stream`, and `parse_chunked_stream`, exposed for fuzzing the `EventSource` stream parser. (`c61599d4`)
 
 ### Changed
 - `Client::upload_blob`: planned breaking change to take borrowed data (`&[u8]`) instead of owned `Vec<u8>` at the next breaking release. Callers can use `Client::upload_blob_slice` in the meantime.
