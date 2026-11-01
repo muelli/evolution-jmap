@@ -123,6 +123,10 @@ const EDIT_AS_TEXT_LABEL: &CStr = N_(c"_Edit as text");
 // Mnemonic on "t", not "E": "_Edit as text" is shown at the same time and
 // already owns Alt+E.
 const RULE_EDIT_LABEL: &CStr = N_(c"Edi_t");
+// Mnemonic on "i", not "D": the rules list's "A_dd" button is shown at the
+// same time and already owns Alt+D.
+const DEACTIVATE_LABEL: &CStr = N_(c"Deact_ivate");
+const RULE_ADD_LABEL: &CStr = N_(c"A_dd");
 const EXTERNAL_EDIT: &CStr = N_(c"This script was changed outside Evolution. It shows as text.");
 
 /// All page state, in a box as qdata. It holds the widget pointers (main
@@ -299,7 +303,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         let rename = add_button(page, buttons, N_(c"_Rename"), on_rename);
         let remove = add_button(page, buttons, N_(c"Re_move"), on_remove);
         let activate = add_button(page, buttons, N_(c"A_ctivate"), on_activate);
-        let deactivate = add_button(page, buttons, N_(c"_Deactivate"), on_deactivate);
+        let deactivate = add_button(page, buttons, DEACTIVATE_LABEL, on_deactivate);
 
         // Only the managed script offers rules mode; every other script
         // shows this unchecked and insensitive.
@@ -342,7 +346,7 @@ unsafe fn build_widgets(page: *mut GObject) {
 
         let rule_buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_box_pack_start(rules_box.cast(), rule_buttons, GFALSE, GFALSE, 0);
-        let rule_add = add_button(page, rule_buttons, N_(c"A_dd"), on_rule_add);
+        let rule_add = add_button(page, rule_buttons, RULE_ADD_LABEL, on_rule_add);
         let rule_edit = add_button(page, rule_buttons, RULE_EDIT_LABEL, on_rule_edit);
         let rule_remove = add_button(page, rule_buttons, N_(c"Rem_ove"), on_rule_remove);
         let rule_up = add_button(page, rule_buttons, N_(c"Move _Up"), on_rule_up);
@@ -1712,6 +1716,18 @@ mod tests {
     #[test]
     fn rule_edit_and_edit_as_text_keep_different_mnemonics() {
         assert_ne!(mnemonic(RULE_EDIT_LABEL), mnemonic(EDIT_AS_TEXT_LABEL));
+    }
+
+    /// "Deactivate" and the rules list's "Add" button can show at the same
+    /// time: deactivate is sensitive whenever the selected script is active,
+    /// and the rules box (which holds rule add) shows whenever the selected
+    /// script is the managed one and parses, regardless of active state. An
+    /// active, managed, parseable script shows both at once. Two controls
+    /// in the same window cannot share a mnemonic letter, or Alt+D opens
+    /// only one of them and the other needs a mouse.
+    #[test]
+    fn deactivate_and_rule_add_keep_different_mnemonics() {
+        assert_ne!(mnemonic(DEACTIVATE_LABEL), mnemonic(RULE_ADD_LABEL));
     }
 
     /// The shell destroys the account editor while the name dialog of Add
