@@ -6,6 +6,8 @@
 // Each test binary compiles this module separately and uses a subset of it.
 #![allow(dead_code)]
 
+pub mod race;
+
 use std::collections::BTreeMap;
 
 use jmap_book_sync::BookSync;
@@ -54,7 +56,13 @@ impl Fixture {
 
     /// A [`BookSync`] over the "Personal" book.
     pub fn sync(&self) -> BookSync {
-        BookSync::new(self.client(), self.account_id.clone(), self.ours.clone())
+        self.sync_with(self.client())
+    }
+
+    /// A [`BookSync`] over the "Personal" book, using `client` instead of a
+    /// plain connection. Lets a test gate the client's transport.
+    pub fn sync_with(&self, client: Client) -> BookSync {
+        BookSync::new(client, self.account_id.clone(), self.ours.clone())
     }
 
     /// Create a card directly, bypassing the code under test.

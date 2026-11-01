@@ -27,15 +27,17 @@ pub mod patch;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use jmap_client::{ChangeSet, Client};
+use jmap_client::{ChangeSet, Client, expect_updated};
 use jmap_ical::{
     event_to_ical, ical_to_event, maps_recurrence_rule, maps_time_zone, prune_time_zones,
     unstateable_until,
 };
 use jmap_object_sync::{ObjectKind, revision_of};
 use jmap_proto::calendars::{
-    CalendarEvent, CalendarEventQueryFilter, RecurrenceRule, calendar_event_set_error,
+    CalendarEvent, CalendarEventQueryFilter, CalendarEventSetRequest, RecurrenceRule,
+    calendar_event_set_error,
 };
+use jmap_proto::methods::SetRequest;
 use jmap_proto::{Id, State};
 use serde_json::{Map, Value};
 
@@ -529,17 +531,42 @@ impl CalSync {
             return self.load_component(&id);
         };
 
-        let current = self.fetch(uid)?;
+        self.write_update(uid, base, &event, itip, schedule, true)
+    }
+
+    /// Computes and sends the update for `uid`, guarded by `ifInState`.
+    ///
+    /// An event both the user and another client changed inside the same
+    /// round trip is a real conflict that the state read at [`Self::fetch`]
+    /// alone cannot see (A2-2 of the race/TOCTOU audit): the patch, the
+    /// `Itip::Received` organizer check and the conflict check it runs are
+    /// only as fresh as that one read. `ifInState` turns a change that landed
+    /// in that window into a `stateMismatch` instead of a silent overwrite.
+    /// On a mismatch this refetches and recomputes the patch once, the same
+    /// shape as the Server Filters page's `save`
+    /// (`jmap-ui/src/filters/io.rs`): a conflict that was invisible at the
+    /// first read is real against the fresh copy, and `on_conflict` decides
+    /// it as it would have from the start.
+    fn write_update(
+        &self,
+        uid: &str,
+        base: Option<Base<'_>>,
+        event: &CalendarEvent,
+        itip: Itip,
+        default_schedule: bool,
+        retry: bool,
+    ) -> Result<ComponentInfo, SyncError> {
+        let (current, state) = self.fetch_with_state(uid)?;
         let mut patch = match base {
             Some(base) => jmap_object_sync::patch_since::<Events>(
                 ical_to_event(base.icalendar),
                 base.on_conflict,
                 &current,
-                &event,
+                event,
                 uid,
             )
             .map_err(|_| SyncError::OutOfSync(uid.to_owned()))?,
-            None => patch::diff(&current, &event),
+            None => patch::diff(&current, event),
         };
         let schedule = match itip {
             Itip::Received { reply } => {
@@ -555,7 +582,7 @@ impl CalSync {
                     reply && self.server_schedules && !own.is_empty()
                 }
             }
-            Itip::Send | Itip::Suppress => schedule,
+            Itip::Send | Itip::Suppress => default_schedule,
         };
         if patch.is_empty() {
             return ComponentInfo::render(&current);
@@ -569,22 +596,33 @@ impl CalSync {
             schedule,
             "updating calendar event"
         );
-        if let Err(error) = self.client.event_update_with_scheduling(
-            &self.account_id,
-            &Id::from(uid),
-            Value::Object(patch),
-            schedule,
-        ) {
-            tracing::warn!(
-                account_id,
-                calendar_id,
-                uid,
-                %error,
-                "calendar event update failed"
-            );
-            return Err(refused(error, schedule, Some(&event)));
+        let set = SetRequest::<CalendarEvent>::new(self.account_id.clone())
+            .update(Id::from(uid), Value::Object(patch))
+            .if_in_state(state);
+        let mut request = CalendarEventSetRequest::new(set);
+        if schedule {
+            request = request.send_scheduling_messages(true);
         }
-        self.load_component(uid)
+        let outcome = self
+            .client
+            .event_set(&request)
+            .and_then(|response| expect_updated(&response, &Id::from(uid)));
+        match outcome {
+            Ok(()) => self.load_component(uid),
+            Err(error) if retry && error.is_state_mismatch() => {
+                self.write_update(uid, base, event, itip, default_schedule, false)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    account_id,
+                    calendar_id,
+                    uid,
+                    %error,
+                    "calendar event update failed"
+                );
+                Err(refused(error, schedule, Some(event)))
+            }
+        }
     }
 
     /// The calendar addresses of this account's participant identities, in lower case.
@@ -682,15 +720,22 @@ impl CalSync {
     }
 
     fn fetch(&self, uid: &str) -> Result<CalendarEvent, SyncError> {
+        self.fetch_with_state(uid).map(|(event, _state)| event)
+    }
+
+    /// As [`Self::fetch`], with the `state` the `CalendarEvent/get` answered.
+    fn fetch_with_state(&self, uid: &str) -> Result<(CalendarEvent, State), SyncError> {
         let id = Id::from(uid);
         let response = self
             .client
             .event_get(&self.account_id, std::slice::from_ref(&id))?;
-        response
+        let state = response.state.clone();
+        let event = response
             .list
             .into_iter()
             .next()
-            .ok_or_else(|| SyncError::NotFound(uid.to_owned()))
+            .ok_or_else(|| SyncError::NotFound(uid.to_owned()))?;
+        Ok((event, state))
     }
 }
 

@@ -7,6 +7,8 @@
 // Each test binary compiles this module separately and uses a subset of it.
 #![allow(dead_code)]
 
+pub mod race;
+
 use std::collections::BTreeMap;
 
 use jmap_cal_sync::CalSync;
@@ -55,7 +57,13 @@ impl Fixture {
 
     /// Returns a [`CalSync`] for the "Personal" calendar.
     pub fn sync(&self) -> CalSync {
-        CalSync::new(self.client(), self.account_id.clone(), self.ours.clone())
+        self.sync_with(self.client())
+    }
+
+    /// As [`Fixture::sync`], using `client` instead of a plain connection.
+    /// Lets a test gate the client's transport.
+    pub fn sync_with(&self, client: Client) -> CalSync {
+        CalSync::new(client, self.account_id.clone(), self.ours.clone())
     }
 
     /// Creates an event directly, without the code under test.
