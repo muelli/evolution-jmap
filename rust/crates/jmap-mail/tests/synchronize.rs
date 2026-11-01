@@ -612,7 +612,7 @@ fn a_row_whose_uid_is_not_text_stays_queued() {
     // call it is passed to. `info` is a fresh row this scope owns, until it
     // hands the row to the summary, which takes its own reference.
     let info = unsafe {
-        let info = new_message_info(&blank_message("placeholder"));
+        let info = new_message_info(summary, &blank_message("placeholder"));
         camel_message_info_set_uid(info, raw_uid.as_ptr());
         camel_folder_summary_add(summary, info, GTRUE);
         // Nothing here can ever send this change. See the doc comment above.

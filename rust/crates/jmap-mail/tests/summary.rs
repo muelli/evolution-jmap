@@ -39,7 +39,8 @@ use eds_sys::{
     camel_folder_summary_get_unread_count, camel_folder_summary_header_load,
     camel_folder_summary_load, camel_folder_summary_save, camel_folder_summary_set_flags,
     camel_message_info_clone, camel_message_info_get_flags, camel_message_info_get_subject,
-    camel_message_info_get_uid, camel_message_info_get_user_flag, camel_message_info_set_flags,
+    camel_message_info_get_uid, camel_message_info_get_user_flag, camel_message_info_ref_summary,
+    camel_message_info_set_flags,
 };
 use glib_sys::{GError, GFALSE, GTRUE, gboolean};
 use gobject_sys::{
@@ -204,6 +205,34 @@ fn a_listing_becomes_the_folders_rows() {
             uids(summary),
             BTreeSet::from(["M1001".to_owned(), "M1002".to_owned()])
         );
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A row that does not know its own summary cannot tell Camel about a later
+/// flag change: `camel_message_info_update_summary_and_folder` reads the
+/// back-pointer first and does nothing at all when it is NULL, so the
+/// unread/junk counts never move and the folder never emits `changed`. Camel
+/// sets the pointer only as a construct property, so a row must be built
+/// with its summary from the start.
+#[test]
+fn a_listed_row_knows_the_summary_that_holds_it() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live, and so is the summary borrowed from it.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, &[message("M1001")]);
+
+        let info = row(summary, "M1001").expect("the row this test just listed");
+        let owner = camel_message_info_ref_summary(info);
+        assert_eq!(
+            owner, summary,
+            "the row does not point back to the summary that holds it"
+        );
+        g_object_unref(owner.cast());
+        g_object_unref(info.cast());
         g_object_unref(folder.cast());
     }
 }
