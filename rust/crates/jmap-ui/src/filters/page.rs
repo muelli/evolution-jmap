@@ -36,7 +36,8 @@ use evo_sys::{
     GtkWidget, GtkWindow, e_mail_config_page_get_type, gtk_box_new, gtk_box_pack_start,
     gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new, gtk_check_button_new_with_mnemonic,
     gtk_container_add, gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new,
-    gtk_dialog_run, gtk_entry_new, gtk_label_new, gtk_label_new_with_mnemonic,
+    gtk_dialog_run, gtk_dialog_set_default_response, gtk_entry_new,
+    gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
     gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
     gtk_list_store_insert_with_valuesv, gtk_list_store_newv, gtk_scrolled_window_get_type,
     gtk_text_view_get_buffer, gtk_text_view_new, gtk_text_view_set_editable,
@@ -1452,15 +1453,22 @@ fn refuse(cell: &RefCell<UiState>, reason: &CStr) {
     unsafe { set_status(cell, &translate(reason)) };
 }
 
-/// Asks for a script name in a modal dialog. `None` means the user
-/// cancelled.
+/// Builds the name dialog, unshown and not yet run. Returns the dialog and
+/// its name entry.
+///
+/// Split out from [`ask_for_name`] so a test can check the dialog's
+/// keyboard behaviour without running its nested main loop.
 ///
 /// # Safety
 ///
 /// `page` must be the live page, on the main thread.
-unsafe fn ask_for_name(page: *mut GObject, title: &'static CStr, initial: &str) -> Option<String> {
-    // SAFETY: the page is live, per the contract. Every widget is new, the
-    // dialog owns it, and this function destroys the dialog.
+unsafe fn build_name_dialog(
+    page: *mut GObject,
+    title: &'static CStr,
+    initial: &str,
+) -> (*mut GtkWidget, *mut GtkWidget) {
+    // SAFETY: the page is live, per the contract. Every widget is new, and
+    // the caller owns the returned dialog.
     unsafe {
         let dialog = gtk_dialog_new();
         gtk_window_set_title(dialog.cast(), translate_static(title));
@@ -1480,16 +1488,37 @@ unsafe fn ask_for_name(page: *mut GObject, title: &'static CStr, initial: &str) 
             GTK_RESPONSE_CANCEL,
         );
         gtk_dialog_add_button(dialog.cast(), translate_static(N_(c"_OK")), GTK_RESPONSE_OK);
+        // The OK button answers Enter too, as GNOME HIG expects of a
+        // single-field dialog: a default response for the dialog, and the
+        // entry forwards Enter to it.
+        gtk_dialog_set_default_response(dialog.cast(), GTK_RESPONSE_OK);
 
         let row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         let label = gtk_label_new_with_mnemonic(translate_static(NAME_LABEL));
         let entry = gtk_entry_new();
         set_text(entry.cast(), initial);
+        gtk_entry_set_activates_default(entry.cast(), GTRUE);
         gtk_label_set_mnemonic_widget(label.cast(), entry);
         gtk_box_pack_start(row.cast(), label, GFALSE, GFALSE, 0);
         gtk_widget_set_hexpand(entry, GTRUE);
         gtk_box_pack_start(row.cast(), entry, GTRUE, GTRUE, 0);
         gtk_container_add(gtk_dialog_get_content_area(dialog.cast()).cast(), row);
+
+        (dialog, entry)
+    }
+}
+
+/// Asks for a script name in a modal dialog. `None` means the user
+/// cancelled.
+///
+/// # Safety
+///
+/// `page` must be the live page, on the main thread.
+unsafe fn ask_for_name(page: *mut GObject, title: &'static CStr, initial: &str) -> Option<String> {
+    // SAFETY: the page is live, per the contract. The dialog owns its
+    // entry, and this function destroys the dialog.
+    unsafe {
+        let (dialog, entry) = build_name_dialog(page, title, initial);
         gtk_widget_show_all(dialog);
 
         let response = gtk_dialog_run(dialog.cast());
@@ -1678,8 +1707,9 @@ mod tests {
     use std::os::raw::c_char;
     use std::sync::Mutex;
 
+    use evo_sys::gtk_window_get_default_widget;
     use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free};
-    use gobject_sys::{g_object_new_with_properties, g_object_set_data_full};
+    use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
     use jmap_backend_core::subclass::register_static;
 
     use super::*;
@@ -1771,6 +1801,44 @@ mod tests {
     fn dialog_opening_buttons_show_an_ellipsis() {
         for label in [ADD_LABEL, RENAME_LABEL, RULE_ADD_LABEL, RULE_EDIT_LABEL] {
             assert!(label.to_str().unwrap().ends_with('…'), "{label:?}");
+        }
+    }
+
+    /// GNOME HIG: every flow works with the keyboard only. The name dialog
+    /// has one field, so Enter after typing it should confirm, the same as
+    /// clicking OK. Needs a display; skips without one.
+    #[test]
+    fn the_name_dialog_lets_enter_confirm_it() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain toplevel window stands in for the live page;
+        // `build_name_dialog` only passes it to `gtk_widget_get_toplevel`.
+        // Both widgets are destroyed before returning.
+        unsafe {
+            let window = gtk_window_new(0);
+            let (dialog, entry) = build_name_dialog(window.cast(), c"Test", "x");
+
+            assert!(
+                !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                "the dialog has no default response: Enter would do nothing"
+            );
+            let mut activates_default: gboolean = GFALSE;
+            g_object_get(
+                entry.cast(),
+                c"activates-default".as_ptr(),
+                &mut activates_default as *mut gboolean,
+                ptr::null::<c_char>(),
+            );
+            assert_ne!(
+                activates_default, GFALSE,
+                "the name entry does not activate the default: Enter would do nothing"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(window);
         }
     }
 

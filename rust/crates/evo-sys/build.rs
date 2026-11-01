@@ -398,6 +398,12 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_text_view_set_monospace",
     // The parent window of the name dialog that Add and Rename open.
     "gtk_widget_get_toplevel",
+    // The name dialog's OK button answers Enter too: a default response for
+    // the dialog, and the entry that forwards Enter to it.
+    "gtk_dialog_set_default_response",
+    "gtk_entry_set_activates_default",
+    // `jmap-ui`'s test reads the default widget back to confirm one is set.
+    "gtk_window_get_default_widget",
     // The rule dialog of the Server Filters page. Each combo is a
     // GtkComboBoxText, built with the two calls above, and the dialog reads
     // and writes which item is chosen as the `active` index of its
