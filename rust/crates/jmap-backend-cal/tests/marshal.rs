@@ -128,6 +128,51 @@ fn an_info_list_carries_one_node_per_event_in_order() {
     }
 }
 
+#[test]
+fn an_info_list_with_interior_nul_does_not_truncate_icalendar_payload() {
+    let ical_with_nul = "BEGIN:VCALENDAR\r\n\
+                         VERSION:2.0\r\n\
+                         PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+                         BEGIN:VEVENT\r\n\
+                         UID:K1\r\n\
+                         SUMMARY:Standup\0Secret\r\n\
+                         DTSTART:20260810T070000Z\r\n\
+                         END:VEVENT\r\n\
+                         END:VCALENDAR\r\n";
+    let infos = [info("K1", "r1", ical_with_nul)];
+    let list = marshal::info_list(&infos);
+
+    unsafe {
+        let (_, _, object, extra) = nth_info(list, 0);
+        let object_str = object.expect("object must be present");
+        let extra_str = extra.expect("extra must be present");
+        assert!(
+            object_str.contains("END:VCALENDAR"),
+            "object must not be truncated: {object_str}"
+        );
+        assert!(
+            object_str.contains("Standup\u{fffd}Secret"),
+            "object must contain replaced NUL: {object_str}"
+        );
+        assert!(
+            extra_str.contains("END:VCALENDAR"),
+            "extra must not be truncated: {extra_str}"
+        );
+        assert!(
+            extra_str.contains("Standup\u{fffd}Secret"),
+            "extra must contain replaced NUL: {extra_str}"
+        );
+        let c_obj = CString::new(object_str).unwrap();
+        let comp = i_cal_component_new_from_string(c_obj.as_ptr());
+        assert!(
+            !comp.is_null(),
+            "calendar component must parse successfully in libical"
+        );
+        g_object_unref(comp.cast());
+        glib_sys::g_slist_free_full(list, Some(e_cal_meta_backend_info_free));
+    }
+}
+
 /// EDS represents an empty object list as a NULL list.
 #[test]
 fn an_empty_list_is_null() {

@@ -4,7 +4,7 @@
 //! Marshaling between Rust types and `EBookMetaBackend` C representations.
 //! Allocates with GLib and transfers ownership to callers per EDS contracts.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::ptr;
 
 use eds_sys::compat::e_vcard_to_string_vcard_30;
@@ -14,10 +14,18 @@ use eds_sys::{
 };
 use glib_sys::{GSList, g_free, g_slist_prepend, gchar};
 use gobject_sys::g_object_unref;
-use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::marshal::{dup_string, read_string};
 
 use jmap_book_sync::{ContactInfo, edit_base};
+
+/// Replaces interior NUL bytes with U+FFFD so C strings do not truncate payloads.
+fn c_string(text: &str) -> CString {
+    match CString::new(text) {
+        Ok(string) => string,
+        Err(_) => CString::new(text.replace('\0', "\u{fffd}"))
+            .expect("a string with every NUL replaced has no NUL left"),
+    }
+}
 
 /// Wraps `infos` as an allocated `GSList` of `EBookMetaBackendInfo`. The extra of
 /// each node is its vCard: EDS stores it with the contact as the base of an edit.
@@ -26,10 +34,10 @@ pub fn info_list(infos: &[ContactInfo]) -> *mut GSList {
     let mut list = ptr::null_mut();
     // Prepending is O(1); iterate in reverse order to preserve input sequence.
     for info in infos.iter().rev() {
-        let uid = cstring_lossy(&info.uid);
-        let revision = cstring_lossy(&info.revision);
-        let object = cstring_lossy(&stamped(info));
-        let extra = cstring_lossy(&info.vcard);
+        let uid = c_string(&info.uid);
+        let revision = c_string(&info.revision);
+        let object = c_string(&stamped(info));
+        let extra = c_string(&info.vcard);
         // SAFETY: Pointers are valid for the call, which copies them.
         let node = unsafe {
             e_book_meta_backend_info_new(
@@ -79,7 +87,7 @@ pub unsafe fn keep_versions(list: *mut GSList, cached: impl Fn(*const gchar) -> 
 pub fn removed_info_list(uids: &[String]) -> *mut GSList {
     let mut list = ptr::null_mut();
     for uid in uids.iter().rev() {
-        let uid = cstring_lossy(uid);
+        let uid = c_string(uid);
         // SAFETY: `uid` is valid for the call, which copies it; NULL is allowed for other fields.
         let node = unsafe {
             e_book_meta_backend_info_new(uid.as_ptr(), ptr::null(), ptr::null(), ptr::null())
@@ -95,7 +103,7 @@ pub fn contact_from_vcard(vcard: &str) -> *mut EContact {
     if !looks_like_vcard(vcard) {
         return ptr::null_mut();
     }
-    let text = cstring_lossy(vcard);
+    let text = c_string(vcard);
     // SAFETY: `text` is a valid NUL-terminated string for the duration of the call.
     unsafe { e_contact_new_from_vcard(text.as_ptr()) }
 }
