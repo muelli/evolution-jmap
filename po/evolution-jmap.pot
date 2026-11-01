@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-31 21:12+0000\n"
+"POT-Creation-Date: 2026-11-01 02:13+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -114,7 +114,7 @@ msgstr ""
 
 #: rust/crates/jmap-backend-core/src/oauth2.rs:721
 #: rust/crates/jmap-backend-core/src/oauth2.rs:850
-#: rust/crates/jmap-ui/src/link.rs:309 rust/crates/jmap-ui/src/link.rs:314
+#: rust/crates/jmap-ui/src/link.rs:333 rust/crates/jmap-ui/src/link.rs:338
 #: rust/crates/jmap-ui/src/send_later/extension.rs:1080
 #: rust/crates/jmap-ui/src/send_later/extension.rs:1083
 #: rust/crates/jmap-ui/src/send_later/extension.rs:1105
@@ -500,150 +500,150 @@ msgid ""
 "account editor, open it again and make the change again."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:91
+#: rust/crates/jmap-ui/src/filters/page.rs:101
 #: rust/crates/jmap-ui/src/vacation/page.rs:78
 msgid "Contacting the mail server…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:92
+#: rust/crates/jmap-ui/src/filters/page.rs:102
 msgid "Your server does not offer server-side filters."
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/filters/page.rs:94
+#: rust/crates/jmap-ui/src/filters/page.rs:104
 #, c-format
 msgid "The filters could not be read: %1$s"
 msgstr ""
 
 #. TRANSLATORS: the Active column of the script list, for the one script
 #. the account runs. Every other row leaves the column empty.
-#: rust/crates/jmap-ui/src/filters/page.rs:97
+#: rust/crates/jmap-ui/src/filters/page.rs:107
 msgid "Yes"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the name of a filter script on the server.
-#: rust/crates/jmap-ui/src/filters/page.rs:99
+#: rust/crates/jmap-ui/src/filters/page.rs:109
 #, c-format
 msgid "%1$s (used by the Vacation Responder)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:100
+#: rust/crates/jmap-ui/src/filters/page.rs:110
 msgid "New Filter Script"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:101
+#: rust/crates/jmap-ui/src/filters/page.rs:111
 msgid "Rename Filter Script"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:102
+#: rust/crates/jmap-ui/src/filters/page.rs:112
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:337
 msgid "_Name:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:103
+#: rust/crates/jmap-ui/src/filters/page.rs:113
 msgid "Checking the script…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:104
+#: rust/crates/jmap-ui/src/filters/page.rs:114
 msgid "The script is valid."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:110
+#: rust/crates/jmap-ui/src/filters/page.rs:120
 msgid "New Rule"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:111
+#: rust/crates/jmap-ui/src/filters/page.rs:121
 msgid "Edit Rule"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:112
+#: rust/crates/jmap-ui/src/filters/page.rs:122
 msgid "_Edit as text"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:113
+#: rust/crates/jmap-ui/src/filters/page.rs:123
 msgid "This script was changed outside Evolution. It shows as text."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:221
+#: rust/crates/jmap-ui/src/filters/page.rs:231
 msgid "Server Filters"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:266
-#: rust/crates/jmap-ui/src/filters/page.rs:314
+#: rust/crates/jmap-ui/src/filters/page.rs:282
+#: rust/crates/jmap-ui/src/filters/page.rs:331
 msgid "Name"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:267
+#: rust/crates/jmap-ui/src/filters/page.rs:283
 msgid "Active"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:279
+#: rust/crates/jmap-ui/src/filters/page.rs:295
 msgid "_Add"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:280
+#: rust/crates/jmap-ui/src/filters/page.rs:296
 msgid "_Rename"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:281
+#: rust/crates/jmap-ui/src/filters/page.rs:297
 msgid "Re_move"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:282
+#: rust/crates/jmap-ui/src/filters/page.rs:298
 msgid "A_ctivate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:283
+#: rust/crates/jmap-ui/src/filters/page.rs:299
 msgid "_Deactivate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:294
+#: rust/crates/jmap-ui/src/filters/page.rs:311
 msgid "_Script:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:313
+#: rust/crates/jmap-ui/src/filters/page.rs:330
 msgid "Enabled"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:325
+#: rust/crates/jmap-ui/src/filters/page.rs:342
 msgid "A_dd"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:326
+#: rust/crates/jmap-ui/src/filters/page.rs:343
 msgid "_Edit"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:327
+#: rust/crates/jmap-ui/src/filters/page.rs:344
 msgid "Rem_ove"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:328
+#: rust/crates/jmap-ui/src/filters/page.rs:345
 msgid "Move _Up"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:329
+#: rust/crates/jmap-ui/src/filters/page.rs:346
 msgid "Move Do_wn"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:330
+#: rust/crates/jmap-ui/src/filters/page.rs:347
 msgid "E_nable"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:331
+#: rust/crates/jmap-ui/src/filters/page.rs:348
 msgid "Disa_ble"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:333
+#: rust/crates/jmap-ui/src/filters/page.rs:350
 msgid "C_heck"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:1427
+#: rust/crates/jmap-ui/src/filters/page.rs:1444
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:428
 #: rust/crates/jmap-ui/src/send_later/extension.rs:859
 msgid "_Cancel"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:1430
+#: rust/crates/jmap-ui/src/filters/page.rs:1447
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:431
 msgid "_OK"
 msgstr ""
@@ -843,27 +843,39 @@ msgid "the server refused: this account is not allowed to do that"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the network error the transport reported.
-#: rust/crates/jmap-ui/src/link.rs:59
+#: rust/crates/jmap-ui/src/link.rs:62
 #, c-format
 msgid "the server could not be reached: %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/link.rs:68
+#: rust/crates/jmap-ui/src/link.rs:71
 #, c-format
 msgid "the server rejected the change: %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s and %2$s are the URLs the server redirected
 #. between; they differ in host.
-#: rust/crates/jmap-ui/src/link.rs:76
+#: rust/crates/jmap-ui/src/link.rs:79
 #, c-format
 msgid ""
 "the server at %1$s redirected to %2$s, a different host, so its credentials "
 "were not sent there — check the account's host setting"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/link.rs:237
+#. TRANSLATORS: %1$s is the number of seconds to wait; %2$s is what the mail server said.
+#: rust/crates/jmap-ui/src/link.rs:96
+#, c-format
+msgid "the server is busy. Wait %1$s seconds, then try again: %2$s"
+msgstr ""
+
+#. TRANSLATORS: %1$s is what the mail server said.
+#: rust/crates/jmap-ui/src/link.rs:101
+#, c-format
+msgid "the server is busy. Try again later: %1$s"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/link.rs:261
 msgid "the session document names no usable mail account"
 msgstr ""
 
@@ -1058,12 +1070,12 @@ msgid ""
 "this message closes."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:240
+#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:241
 msgid "_Undo"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason from the registry.
-#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:314
+#: rust/crates/jmap-ui/src/undo_delete/shell_ext.rs:317
 #, c-format
 msgid "The delete could not be undone: %1$s"
 msgstr ""
@@ -1098,22 +1110,22 @@ msgstr ""
 msgid "Vacation Responder"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:216
+#: rust/crates/jmap-ui/src/vacation/page.rs:218
 msgid "Send _automatic replies"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:233
+#: rust/crates/jmap-ui/src/vacation/page.rs:235
 msgid "_First day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:235
+#: rust/crates/jmap-ui/src/vacation/page.rs:237
 msgid "_Last day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:237
+#: rust/crates/jmap-ui/src/vacation/page.rs:239
 msgid "_Subject:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:240
+#: rust/crates/jmap-ui/src/vacation/page.rs:242
 msgid "_Message:"
 msgstr ""
