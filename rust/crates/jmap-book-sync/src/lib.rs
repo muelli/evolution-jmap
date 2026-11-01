@@ -129,7 +129,16 @@ impl BookSync {
 
     /// Every card in this address book, with the state of that listing
     /// (`list_existing_sync`).
+    ///
+    /// The state comes from a `ContactCard/get` with no ids, asked before the
+    /// query (the same shape `jmap-mail-sync`'s mailbox listing uses, and for
+    /// the same reason). The query and the id fetch below are two round
+    /// trips, and a card created between them would otherwise carry a state
+    /// from after itself and never be reported by a later `get_changes`.
+    /// Reading the state first costs one more round trip, but the only risk
+    /// of an earlier state is a repeated, harmless lookup on the next delta.
     pub fn list_existing(&self) -> Result<(State, Vec<ContactInfo>), SyncError> {
+        let state = self.client.contact_state(&self.account_id)?;
         let ids = self.client.contact_query_every_id(
             &self.account_id,
             ContactCardQueryFilter::in_address_book(self.address_book_id.clone()),
@@ -140,7 +149,7 @@ impl BookSync {
             .iter()
             .map(|card| ContactInfo::render(&self.client, &self.account_id, card))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok((response.state, contacts))
+        Ok((state, contacts))
     }
 
     /// One card by identifier (`load_contact_sync`).

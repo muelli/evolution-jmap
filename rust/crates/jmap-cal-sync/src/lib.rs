@@ -309,7 +309,16 @@ impl CalSync {
     /// No time range applies. `ECalMetaBackend` keeps a full local cache and
     /// answers range queries from it, so a range here would hide events and not
     /// decrease work.
+    ///
+    /// The state comes from a `CalendarEvent/get` with no ids, asked before
+    /// the query (the same shape `jmap-mail-sync`'s mailbox listing uses, and
+    /// for the same reason). The query and the id fetch below are two round
+    /// trips, and an event created between them would otherwise carry a state
+    /// from after itself and never be reported by a later `get_changes`.
+    /// Reading the state first costs one more round trip, but the only risk
+    /// of an earlier state is a repeated, harmless lookup on the next delta.
     pub fn list_existing(&self) -> Result<(State, Vec<ComponentInfo>), SyncError> {
+        let state = self.client.calendar_event_state(&self.account_id)?;
         let ids = self.client.event_query_every_id(
             &self.account_id,
             CalendarEventQueryFilter::in_calendar(self.calendar_id.clone()),
@@ -320,7 +329,7 @@ impl CalSync {
             .iter()
             .map(ComponentInfo::render)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok((response.state, events))
+        Ok((state, events))
     }
 
     /// Returns one event by identifier (`load_component_sync`).

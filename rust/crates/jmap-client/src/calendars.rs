@@ -108,6 +108,11 @@ impl Client {
         )
     }
 
+    /// Fetch the current `CalendarEvent` state string.
+    pub fn calendar_event_state(&self, account_id: &Id) -> Result<jmap_proto::State, Error> {
+        Ok(self.event_get(account_id, &[])?.state)
+    }
+
     /// Apply a patch to a calendar event (RFC 8620 PatchObject).
     pub fn event_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         self.event_update_with_scheduling(account_id, id, patch, false)
