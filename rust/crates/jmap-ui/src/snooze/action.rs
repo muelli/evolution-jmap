@@ -74,15 +74,15 @@ use crate::session_cache;
 
 const STATE: ObjectData<RefCell<SnoozeState>> = ObjectData::new(c"jmap-snooze-state");
 
-const NOT_JMAP: &CStr = N_(c"The folder does not belong to a JMAP account");
+const NOT_JMAP: &CStr = N_(c"The folder does not belong to a JMAP account.");
 const CHECKING: &CStr = N_(c"Checking whether the account’s server offers snooze…");
-const NOT_OFFERED: &CStr = N_(c"The account’s server does not offer snooze");
+const NOT_OFFERED: &CStr = N_(c"The account’s server does not offer snooze.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const NOT_REACHED: &CStr = N_(c"The account’s server could not be asked: %1$s");
-const OFFERED: &CStr = N_(c"The server hides the message until then and wakes it in the inbox");
+const OFFERED: &CStr = N_(c"The server hides the message until then and wakes it in the inbox.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const SNOOZE_FAILED: &CStr = N_(c"The message could not be snoozed: %1$s");
-const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time");
+const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time.");
 
 /// The action of the submenu, for the menu layer that is compiled in.
 #[cfg(not(evolution_eui_manager))]
@@ -813,6 +813,19 @@ mod tests {
     fn next_monday_lands_on_a_monday() {
         let from_tuesday = lands_from((2026, 10, 20, 10), super::NEXT_MONDAY);
         assert_eq!(from_tuesday, (26, 1, 9, 0));
+    }
+
+    #[test]
+    fn status_messages_are_full_sentences() {
+        for message in [
+            super::NOT_JMAP,
+            super::NOT_OFFERED,
+            super::OFFERED,
+            super::NO_CLOCK,
+        ] {
+            let text = message.to_str().unwrap();
+            assert!(text.ends_with('.'), "{text:?} should end with a period");
+        }
     }
 
     /// A link to `server` and the ids of `count` messages in its inbox.

@@ -25,11 +25,11 @@ pub struct VacationForm {
 }
 
 /// The message for a date that is not valid.
-pub const BAD_DATE: &CStr = N_(c"Dates take the form YYYY-MM-DD; leave one empty for no limit");
+pub const BAD_DATE: &CStr = N_(c"Dates take the form YYYY-MM-DD; leave one empty for no limit.");
 
 /// The message for a last day that is before the first day.
 pub const BACKWARDS: &CStr =
-    N_(c"The last day is before the first day — swap them, or clear one to leave it open");
+    N_(c"The last day is before the first day — swap them, or clear one to leave it open.");
 
 impl VacationForm {
     /// Converts the server object to widget values. A missing date becomes an
@@ -133,6 +133,14 @@ fn nullable(text: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validation_errors_are_full_sentences() {
+        for error in [BAD_DATE, BACKWARDS] {
+            let text = error.to_str().unwrap();
+            assert!(text.ends_with('.'), "{text:?} should end with a period");
+        }
+    }
 
     #[test]
     fn a_response_becomes_widget_values_and_back() {

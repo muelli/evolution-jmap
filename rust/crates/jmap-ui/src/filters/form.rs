@@ -33,19 +33,19 @@ pub fn is_vacation_script(name: &str) -> bool {
     VACATION_SCRIPT_NAMES.contains(&name)
 }
 
-pub const NAME_EMPTY: &CStr = N_(c"Give the script a name");
+pub const NAME_EMPTY: &CStr = N_(c"Give the script a name.");
 pub const NO_SCRIPT_SELECTED: &CStr = N_(c"Select a script first.");
-pub const NAME_BAD_CHARS: &CStr = N_(c"A script name cannot contain a newline or NUL character");
-pub const NAME_RESERVED: &CStr = N_(c"This name belongs to the vacation responder");
-pub const NAME_TAKEN: &CStr = N_(c"Another script already has this name");
-pub const NAME_TOO_LONG: &CStr = N_(c"This name is too long for this server");
+pub const NAME_BAD_CHARS: &CStr = N_(c"A script name cannot contain a newline or NUL character.");
+pub const NAME_RESERVED: &CStr = N_(c"This name belongs to the vacation responder.");
+pub const NAME_TAKEN: &CStr = N_(c"Another script already has this name.");
+pub const NAME_TOO_LONG: &CStr = N_(c"This name is too long for this server.");
 pub const TOO_MANY_SCRIPTS: &CStr = N_(c"This server holds no more scripts. Remove one first.");
 pub const SCRIPT_PROTECTED: &CStr =
     N_(c"The vacation responder owns this script. Change it on the Vacation Responder page.");
 pub const VACATION_ACTIVE: &CStr =
     N_(c"Turn off the vacation responder to activate server filters.");
 // TRANSLATORS: %1$s is the name of the filter script.
-pub const SCRIPT_TOO_LARGE: &CStr = N_(c"%1$s: the script is too large for this server");
+pub const SCRIPT_TOO_LARGE: &CStr = N_(c"%1$s: the script is too large for this server.");
 
 /// The Sieve a new script starts with. `keep;` is core Sieve (RFC 5228
 /// Section 4.1) and keeps the message, which is what the server does anyway.
@@ -468,6 +468,25 @@ mod tests {
 
     fn form(scripts: Vec<LoadedScript>) -> FiltersForm {
         FiltersForm::from_loaded(loaded(scripts))
+    }
+
+    #[test]
+    fn validation_errors_are_full_sentences() {
+        for error in [
+            NAME_EMPTY,
+            NO_SCRIPT_SELECTED,
+            NAME_BAD_CHARS,
+            NAME_RESERVED,
+            NAME_TAKEN,
+            NAME_TOO_LONG,
+            TOO_MANY_SCRIPTS,
+            SCRIPT_PROTECTED,
+            VACATION_ACTIVE,
+            SCRIPT_TOO_LARGE,
+        ] {
+            let text = error.to_str().unwrap();
+            assert!(text.ends_with('.'), "{text:?} should end with a period");
+        }
     }
 
     #[test]

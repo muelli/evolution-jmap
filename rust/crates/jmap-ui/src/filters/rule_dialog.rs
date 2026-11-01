@@ -42,11 +42,11 @@ use crate::filters::rules::{Action, Combine, Condition, Field, Folder, Op, Rule}
 use crate::widget::{flag, get_bool, get_text, set_bool, set_text};
 
 /// The error when an action that files a message has no folder chosen.
-pub const NO_FOLDER_CHOSEN: &CStr = N_(c"Choose a folder for this action");
+pub const NO_FOLDER_CHOSEN: &CStr = N_(c"Choose a folder for this action.");
 /// The error when the account holds no folder the rule could file into.
-pub const NO_FOLDER_AT_ALL: &CStr = N_(c"This account has no folder to file into");
+pub const NO_FOLDER_AT_ALL: &CStr = N_(c"This account has no folder to file into.");
 /// The error when a row of the dialog shows no action yet.
-pub const NO_ACTION_CHOSEN: &CStr = N_(c"Choose an action for this row");
+pub const NO_ACTION_CHOSEN: &CStr = N_(c"Choose an action for this row.");
 
 /// One item of the field combo, in the order the combo lists them.
 ///
@@ -1130,6 +1130,14 @@ mod tests {
     fn add_row_buttons_use_header_capitalization() {
         assert!(is_header_case(ADD_CONDITION), "{ADD_CONDITION:?}");
         assert!(is_header_case(ADD_ACTION), "{ADD_ACTION:?}");
+    }
+
+    #[test]
+    fn status_errors_are_full_sentences() {
+        for error in [NO_FOLDER_CHOSEN, NO_FOLDER_AT_ALL, NO_ACTION_CHOSEN] {
+            let text = error.to_str().unwrap();
+            assert!(text.ends_with('.'), "{text:?} should end with a period");
+        }
     }
 
     #[test]
