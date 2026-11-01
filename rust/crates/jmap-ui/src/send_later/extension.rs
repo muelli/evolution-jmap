@@ -50,7 +50,7 @@ use eds_sys::{
 use evo_sys::{
     E_COMPOSER_HEADER_FROM, EHTMLEditor, EMsgComposer, GTK_BUTTONS_CLOSE,
     GTK_DIALOG_DESTROY_WITH_PARENT, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_RESPONSE_CANCEL,
-    GTK_RESPONSE_OK, GtkWidget, GtkWindow, e_composer_header_get_registry,
+    GTK_RESPONSE_CLOSE, GTK_RESPONSE_OK, GtkWidget, GtkWindow, e_composer_header_get_registry,
     e_composer_header_table_dup_identity_uid, e_composer_header_table_get_header,
     e_date_edit_get_entry, e_date_edit_get_time, e_date_edit_new, e_date_edit_set_show_time,
     e_date_edit_set_time, e_html_editor_get_ui_manager, e_msg_composer_get_editor,
@@ -1270,16 +1270,14 @@ unsafe fn refuse_scheduled(composer: *mut GObject, text: String) {
     }
 }
 
-/// Shows a modal explanation on the composer. The composer stays open.
+/// Builds the modal explanation dialog `refuse_send` runs, without running it.
 ///
 /// # Safety
 ///
 /// `composer` must be a live composer window, on the main loop.
-unsafe fn refuse_send(composer: *mut GObject, text: String) {
-    let text = CString::new(text).unwrap_or_default();
-    // SAFETY: the contract makes the window live. The code runs and destroys
-    // the dialog before it returns. The "%s" format stops printf from parsing
-    // the text.
+unsafe fn build_refusal_dialog(composer: *mut GObject, text: &CStr) -> *mut GtkWidget {
+    // SAFETY: the contract makes the window live. The "%s" format stops
+    // printf from parsing the text.
     unsafe {
         let dialog = gtk_message_dialog_new(
             composer.cast::<GtkWindow>(),
@@ -1289,6 +1287,23 @@ unsafe fn refuse_send(composer: *mut GObject, text: String) {
             c"%s".as_ptr(),
             text.as_ptr(),
         );
+        // Close answers Enter too: a default response for the dialog.
+        gtk_dialog_set_default_response(dialog.cast(), GTK_RESPONSE_CLOSE);
+        dialog
+    }
+}
+
+/// Shows a modal explanation on the composer. The composer stays open.
+///
+/// # Safety
+///
+/// `composer` must be a live composer window, on the main loop.
+unsafe fn refuse_send(composer: *mut GObject, text: String) {
+    let text = CString::new(text).unwrap_or_default();
+    // SAFETY: the contract makes the window live. The code runs and destroys
+    // the dialog before it returns.
+    unsafe {
+        let dialog = build_refusal_dialog(composer, &text);
         // A destroy of the composer destroys the dialog, and the run then
         // drops the last reference.
         let _dialog = Hold::new(dialog.cast());
@@ -1622,6 +1637,34 @@ mod tests {
                 events,
                 ["window destroyed", "dialog finalized", "refusal returned"]
             );
+        }
+
+        /// GNOME HIG: every flow works with the keyboard only. The refusal
+        /// dialog has one button (Close), so Enter should dismiss it. Needs
+        /// a display; skips without one.
+        #[test]
+        fn the_refusal_dialog_lets_enter_confirm_it() {
+            if !display() {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain toplevel window stands in for the live
+            // composer; `build_refusal_dialog` only passes it to
+            // `gtk_window_set_transient_for`. Both widgets are destroyed
+            // before returning.
+            unsafe {
+                let window: *mut GObject = gtk_window_new(0).cast();
+                let text = CString::new("refused").unwrap();
+                let dialog = build_refusal_dialog(window, &text);
+
+                assert!(
+                    !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                    "the dialog has no default response: Enter would do nothing"
+                );
+
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window.cast());
+            }
         }
     }
 }
