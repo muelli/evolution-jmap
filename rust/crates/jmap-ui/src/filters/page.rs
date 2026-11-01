@@ -35,9 +35,9 @@ use evo_sys::{
     GtkCellRenderer, GtkListStore, GtkTextBuffer, GtkTreeModel, GtkTreePath, GtkTreeSelection,
     GtkWidget, GtkWindow, e_mail_config_page_get_type, gtk_box_new, gtk_box_pack_start,
     gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new, gtk_check_button_new_with_mnemonic,
-    gtk_container_add, gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new,
-    gtk_dialog_run, gtk_dialog_set_default_response, gtk_entry_new,
-    gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
+    gtk_container_add, gtk_container_set_border_width, gtk_dialog_add_button,
+    gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response,
+    gtk_entry_new, gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
     gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
     gtk_list_store_insert_with_valuesv, gtk_list_store_newv, gtk_scrolled_window_get_type,
     gtk_text_view_get_buffer, gtk_text_view_new, gtk_text_view_set_editable,
@@ -1502,7 +1502,10 @@ unsafe fn build_name_dialog(
         gtk_box_pack_start(row.cast(), label, GFALSE, GFALSE, 0);
         gtk_widget_set_hexpand(entry, GTRUE);
         gtk_box_pack_start(row.cast(), entry, GTRUE, GTRUE, 0);
-        gtk_container_add(gtk_dialog_get_content_area(dialog.cast()).cast(), row);
+        let content_area = gtk_dialog_get_content_area(dialog.cast());
+        // GNOME HIG: 12px between a dialog's content and its edges.
+        gtk_container_set_border_width(content_area.cast(), 12);
+        gtk_container_add(content_area.cast(), row);
 
         (dialog, entry)
     }
@@ -1707,7 +1710,7 @@ mod tests {
     use std::os::raw::c_char;
     use std::sync::Mutex;
 
-    use evo_sys::gtk_window_get_default_widget;
+    use evo_sys::{gtk_container_get_border_width, gtk_window_get_default_widget};
     use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free};
     use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
     use jmap_backend_core::subclass::register_static;
@@ -1835,6 +1838,34 @@ mod tests {
             assert_ne!(
                 activates_default, GFALSE,
                 "the name entry does not activate the default: Enter would do nothing"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(window);
+        }
+    }
+
+    /// GNOME HIG: 12px between a dialog's content and its edges. Needs a
+    /// display; skips without one.
+    #[test]
+    fn the_name_dialog_has_a_hig_content_margin() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain toplevel window stands in for the live page;
+        // `build_name_dialog` only passes it to `gtk_widget_get_toplevel`.
+        // Both widgets are destroyed before returning.
+        unsafe {
+            let window = gtk_window_new(0);
+            let (dialog, _entry) = build_name_dialog(window.cast(), c"Test", "x");
+
+            let content_area = gtk_dialog_get_content_area(dialog.cast());
+            assert_eq!(
+                gtk_container_get_border_width(content_area.cast()),
+                12,
+                "the content area has no HIG margin: content touches the dialog's edges"
             );
 
             gtk_widget_destroy(dialog);

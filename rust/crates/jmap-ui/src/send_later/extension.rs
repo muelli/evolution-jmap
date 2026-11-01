@@ -55,10 +55,10 @@ use evo_sys::{
     e_date_edit_get_entry, e_date_edit_get_time, e_date_edit_new, e_date_edit_set_show_time,
     e_date_edit_set_time, e_html_editor_get_ui_manager, e_msg_composer_get_editor,
     e_msg_composer_get_header_table, e_msg_composer_get_message, e_msg_composer_get_message_finish,
-    e_msg_composer_get_type, gtk_container_add, gtk_dialog_add_button, gtk_dialog_get_content_area,
-    gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response,
-    gtk_entry_set_activates_default, gtk_message_dialog_new, gtk_widget_destroy,
-    gtk_widget_show_all, gtk_window_set_title, gtk_window_set_transient_for,
+    e_msg_composer_get_type, gtk_container_add, gtk_container_set_border_width,
+    gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run,
+    gtk_dialog_set_default_response, gtk_entry_set_activates_default, gtk_message_dialog_new,
+    gtk_widget_destroy, gtk_widget_show_all, gtk_window_set_title, gtk_window_set_transient_for,
 };
 #[cfg(evolution_eui_manager)]
 use evo_sys::{
@@ -865,7 +865,10 @@ unsafe fn build_custom_time_dialog(composer: *mut GObject) -> (*mut GtkWidget, *
             e_date_edit_set_time(field.cast(), glib_sys::g_date_time_to_unix(now) + 3600);
             glib_sys::g_date_time_unref(now);
         }
-        gtk_container_add(gtk_dialog_get_content_area(dialog.cast()).cast(), field);
+        let content_area = gtk_dialog_get_content_area(dialog.cast());
+        // GNOME HIG: 12px between a dialog's content and its edges.
+        gtk_container_set_border_width(content_area.cast(), 12);
+        gtk_container_add(content_area.cast(), field);
 
         (dialog, field)
     }
@@ -1411,7 +1414,7 @@ mod tests {
         use std::os::raw::{c_char, c_int};
         use std::sync::Mutex;
 
-        use evo_sys::gtk_window_get_default_widget;
+        use evo_sys::{gtk_container_get_border_width, gtk_window_get_default_widget};
         use glib_sys::{
             G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, G_SOURCE_REMOVE, GList, GLogLevelFlags,
             g_idle_add, g_list_free, g_log_set_default_handler, gboolean,
@@ -1606,6 +1609,31 @@ mod tests {
                 assert_ne!(
                     activates_default, GFALSE,
                     "the field's entry does not activate the default: Enter would do nothing"
+                );
+
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window.cast());
+            }
+        }
+
+        /// GNOME HIG: 12px between a dialog's content and its edges. Needs
+        /// a display; skips without one.
+        #[test]
+        fn the_custom_time_dialog_has_a_hig_content_margin() {
+            if !display() {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: as above.
+            unsafe {
+                let window: *mut GObject = gtk_window_new(0).cast();
+                let (dialog, _field) = build_custom_time_dialog(window);
+
+                let content_area = gtk_dialog_get_content_area(dialog.cast());
+                assert_eq!(
+                    gtk_container_get_border_width(content_area.cast()),
+                    12,
+                    "the content area has no HIG margin: content touches the dialog's edges"
                 );
 
                 gtk_widget_destroy(dialog);

@@ -343,6 +343,12 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_dialog_get_content_area",
     "gtk_window_set_title",
     "gtk_window_set_transient_for",
+    // GNOME HIG wants 12px between a dialog's content and its edges. The
+    // custom-time, name, and rule dialogs (all three built by hand rather
+    // than from a stock GtkMessageDialog) apply it to their content area.
+    // `_get` lets a test confirm the value without a display.
+    "gtk_container_set_border_width",
+    "gtk_container_get_border_width",
     // One `activate` handler serves the whole submenu. It asks the action
     // which item fired. Labels are re-filled per gate, found back from the
     // group by name.
