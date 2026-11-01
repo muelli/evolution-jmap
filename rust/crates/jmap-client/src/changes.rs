@@ -30,7 +30,7 @@ impl Client {
             "Calendar" | "CalendarEvent" | "ParticipantIdentity" | "CalendarEventNotification" => {
                 CAPABILITY_CALENDARS
             }
-            "EmailSubmission" => CAPABILITY_SUBMISSION,
+            "EmailSubmission" | "Identity" => CAPABILITY_SUBMISSION,
             other => {
                 return Err(Error::Protocol(format!(
                     "no known capability for data type {other}"

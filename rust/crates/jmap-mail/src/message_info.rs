@@ -79,6 +79,7 @@
 //! as the keywords column does. The summary does not yet use it to group
 //! messages into threads.
 
+use std::borrow::Cow;
 use std::ffi::CStr;
 use std::ptr;
 use std::sync::Mutex;
@@ -577,7 +578,7 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
             set_string(
                 info,
                 camel_message_info_set_subject,
-                message.subject.as_deref(),
+                message.subject.as_deref().map(isolate_if_bidi).as_deref(),
             );
             set_string(
                 info,
@@ -901,6 +902,32 @@ fn message_flags(word: CamelMessageFlags) -> MessageFlags {
     flags
 }
 
+/// True if `text` carries an explicit Unicode bidirectional control: an
+/// embedding, an override or an isolate.
+fn has_bidi_control(text: &str) -> bool {
+    text.chars()
+        .any(|c| matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+}
+
+/// Wraps `text` in a directional isolate (FSI U+2068 ... PDI U+2069) if it
+/// carries a bidi control, so an unpaired override cannot reach past this
+/// text into whatever the caller shows beside it.
+///
+/// RFC 8621 lets a subject or a display name be any Unicode string, so a
+/// hostile server can send one with an override and no closing mark.
+/// Evolution's message list shows that text next to other columns in the
+/// same row. Unicode's isolate rule (TR9) stops an unpaired override at the
+/// nearest enclosing isolate, so wrapping the text in one keeps the change of
+/// direction inside it. Ordinary text has no control to contain, so it comes
+/// back unchanged.
+fn isolate_if_bidi(text: &str) -> Cow<'_, str> {
+    if has_bidi_control(text) {
+        Cow::Owned(format!("\u{2068}{text}\u{2069}"))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
 /// One address header, as the single string that the Camel summary keeps.
 ///
 /// The function uses `CamelInternetAddress` and does not join the parts here.
@@ -920,7 +947,10 @@ fn address_list(addresses: &[EmailAddress]) -> Option<String> {
     unsafe {
         let address = Owned::from_raw(camel_internet_address_new())?;
         for entry in addresses {
-            let name = entry.name.as_deref().map(c_string);
+            let name = entry
+                .name
+                .as_deref()
+                .map(|name| c_string(&isolate_if_bidi(name)));
             let email = c_string(&entry.email);
             camel_internet_address_add(
                 address.as_ptr(),
