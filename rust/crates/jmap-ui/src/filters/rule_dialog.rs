@@ -22,9 +22,9 @@ use evo_sys::{
     GtkWidget, GtkWindow, gtk_box_new, gtk_box_pack_start, gtk_button_new_with_mnemonic,
     gtk_check_button_new_with_mnemonic, gtk_combo_box_get_active, gtk_combo_box_set_active,
     gtk_combo_box_text_append, gtk_combo_box_text_new, gtk_combo_box_text_remove_all,
-    gtk_container_add, gtk_container_remove, gtk_dialog_add_button, gtk_dialog_get_content_area,
-    gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response, gtk_entry_new,
-    gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
+    gtk_container_add, gtk_container_remove, gtk_container_set_border_width, gtk_dialog_add_button,
+    gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response,
+    gtk_entry_new, gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
     gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_widget_destroy,
     gtk_widget_get_parent, gtk_widget_get_toplevel, gtk_widget_set_hexpand,
     gtk_widget_set_sensitive, gtk_widget_set_tooltip_text, gtk_widget_set_visible,
@@ -431,7 +431,10 @@ unsafe fn build_rule_dialog(
         gtk_dialog_set_default_response(dialog.cast(), GTK_RESPONSE_OK);
 
         let content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-        gtk_container_add(gtk_dialog_get_content_area(dialog.cast()).cast(), content);
+        let content_area = gtk_dialog_get_content_area(dialog.cast());
+        // GNOME HIG: 12px between a dialog's content and its edges.
+        gtk_container_set_border_width(content_area.cast(), 12);
+        gtk_container_add(content_area.cast(), content);
 
         let top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         gtk_box_pack_start(content.cast(), top, GFALSE, GFALSE, 0);
@@ -1135,7 +1138,7 @@ fn index_of<T: PartialEq>(items: &[T], item: T) -> Option<usize> {
 mod tests {
     use std::os::raw::c_char;
 
-    use evo_sys::gtk_window_get_default_widget;
+    use evo_sys::{gtk_container_get_border_width, gtk_window_get_default_widget};
     use glib_sys::gboolean;
     use gobject_sys::g_object_get;
 
@@ -1185,6 +1188,35 @@ mod tests {
             assert_ne!(
                 activates_default, GFALSE,
                 "the name entry does not activate the default: Enter would do nothing"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(window);
+        }
+    }
+
+    /// GNOME HIG: 12px between a dialog's content and its edges. Needs a
+    /// display; skips without one.
+    #[test]
+    fn the_rule_dialog_has_a_hig_content_margin() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain toplevel window stands in for the live page;
+        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+        // via `parent_on`. Both widgets are destroyed before returning.
+        unsafe {
+            let window = gtk_window_new(0);
+            let draft = RuleDraft::new();
+            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+
+            let content_area = gtk_dialog_get_content_area(dialog.cast());
+            assert_eq!(
+                gtk_container_get_border_width(content_area.cast()),
+                12,
+                "the content area has no HIG margin: content touches the dialog's edges"
             );
 
             gtk_widget_destroy(dialog);
