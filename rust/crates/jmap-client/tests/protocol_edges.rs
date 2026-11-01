@@ -75,3 +75,44 @@ fn backreference_to_failed_call_errors() {
     let error: jmap_proto::error::MethodError = second.parse().unwrap();
     assert_eq!(error.error_type, method::INVALID_RESULT_REFERENCE);
 }
+
+#[test]
+fn session_state_change_marks_session_stale_until_refreshed() {
+    let server = MockServer::builder().start();
+    let mut client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    assert_eq!(client.session().state.as_str(), "1");
+    assert_eq!(
+        client.last_session_state().as_ref().map(|s| s.as_str()),
+        Some("1")
+    );
+    assert!(!client.is_session_stale());
+
+    // Advance session state on the server.
+    {
+        let s = server.state();
+        let mut state = s.lock().unwrap();
+        state.session_state = 2;
+    }
+
+    // Call Core/echo. The server response returns sessionState "2".
+    let echo_resp = client.echo(json!({"hello": "world"})).unwrap();
+    assert_eq!(echo_resp["hello"], "world");
+
+    // The cached session object still has the old state, so is_session_stale is now true.
+    assert_eq!(client.session().state.as_str(), "1");
+    assert_eq!(
+        client.last_session_state().as_ref().map(|s| s.as_str()),
+        Some("2")
+    );
+    assert!(client.is_session_stale());
+
+    // After refreshing the session per RFC 8620 Section 2, is_session_stale returns false.
+    client.refresh_session().unwrap();
+    assert_eq!(client.session().state.as_str(), "2");
+    assert_eq!(
+        client.last_session_state().as_ref().map(|s| s.as_str()),
+        Some("2")
+    );
+    assert!(!client.is_session_stale());
+}

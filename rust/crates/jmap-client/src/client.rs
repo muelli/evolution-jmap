@@ -383,6 +383,30 @@ impl Client {
         Ok(())
     }
 
+    /// Returns true if the server returned a `sessionState` that differs
+    /// from the cached session object's `state` (RFC 8620 §2).
+    ///
+    /// When true, callers should call [`Client::refresh_session`] to
+    /// obtain updated accounts, capabilities, and endpoints.
+    pub fn is_session_stale(&self) -> bool {
+        let last_state = self
+            .last_session_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match (&*last_state, &self.session) {
+            (Some(last), Some(session)) => last != &session.state,
+            _ => false,
+        }
+    }
+
+    /// The most recent `sessionState` returned by the server, if any.
+    pub fn last_session_state(&self) -> Option<jmap_proto::State> {
+        self.last_session_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// Return the notification message when URL rebasing modified the origin.
     pub fn rebase_note(&self) -> Option<&str> {
         self.rebase_note.as_deref()
