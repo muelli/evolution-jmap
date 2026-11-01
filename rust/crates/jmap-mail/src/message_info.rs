@@ -544,16 +544,40 @@ fn guard_row<T>(
 /// It is never NULL in practice: `g_object_new` on a concrete type does not
 /// fail. But the function returns the pointer as the Camel functions do, not as
 /// a reference, because its only caller gives it directly to a summary.
-pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
+///
+/// # Safety
+///
+/// `summary` must point at a live `CamelFolderSummary`.
+pub unsafe fn new_message_info(
+    summary: *mut CamelFolderSummary,
+    message: &MessageSummary,
+) -> *mut CamelMessageInfo {
     // Construct the row directly, not through `camel_message_info_new`. That
-    // function reads the type from a *summary*, and there is no summary here:
-    // the row is built before it is added. The summary that gets the row
-    // declares this same type ([`crate::summary`]), so the two answers agree.
+    // function reads the type from a *summary*, which this function also takes,
+    // for a different reason: `summary` is Camel's own construct-only property
+    // (`camel_message_info_new` sets it the same way). Without it, the row's
+    // back-pointer to its summary stays NULL forever: Camel has no setter for
+    // it after construction, and `camel_folder_summary_add` does not fill it
+    // in either. A row with no back-pointer cannot tell its summary about a
+    // later flag change: `camel_message_info_update_summary_and_folder` reads
+    // the pointer first and does nothing at all when it is NULL, so a flag the
+    // user sets afterwards never updates the folder's unread/junk counts and
+    // never fires `CamelFolder`'s `changed` signal. The type this module
+    // registers ([`crate::summary`]) is always the summary's own type, so
+    // passing `summary` here does not change which subclass `g_object_new`
+    // builds.
     //
-    // SAFETY: a variadic construct call on a registered type, with NULL for the
-    // first property name: a row has no construct properties.
-    let info = unsafe { g_object_new(message_info_type(), ptr::null::<gchar>()) }
-        .cast::<CamelMessageInfo>();
+    // SAFETY: a variadic construct call on a registered type, with `summary`
+    // live by this function's contract and `"summary"` its real property name.
+    let info = unsafe {
+        g_object_new(
+            message_info_type(),
+            c"summary".as_ptr(),
+            summary,
+            ptr::null::<gchar>(),
+        )
+    }
+    .cast::<CamelMessageInfo>();
     if info.is_null() {
         return info;
     }
@@ -598,7 +622,7 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
             set_string(
                 info,
                 camel_message_info_set_preview,
-                message.preview.as_deref(),
+                message.preview.as_deref().map(isolate_if_bidi).as_deref(),
             );
 
             camel_message_info_set_size(info, message.size);

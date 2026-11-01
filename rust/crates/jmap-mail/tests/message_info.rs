@@ -70,8 +70,12 @@ fn row(uid: &str) -> MessageSummary {
 }
 
 /// The message info for one row, owned by the caller.
+///
+/// No real summary: these tests check the row's own columns, not its
+/// back-pointer (`tests/summary.rs` covers that with a real one).
 fn info_of(message: &MessageSummary) -> *mut CamelMessageInfo {
-    let info = new_message_info(message);
+    // SAFETY: NULL is a valid summary: Camel's own setter tolerates it.
+    let info = unsafe { new_message_info(ptr::null_mut(), message) };
     assert!(!info.is_null(), "no message info for {}", message.uid);
     info
 }
@@ -520,6 +524,26 @@ fn a_bidi_override_does_not_escape_its_own_column() {
         assert_eq!(
             column(camel_message_info_get_from(info)).as_deref(),
             Some("\u{2068}Eve \u{202e}evil\u{2069} <eve@example.com>")
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+/// The server's preview snippet shows next to the subject and sender in the
+/// same message list row, the same as the two columns above. An unpaired
+/// directional override in the preview can otherwise change the reading
+/// direction of the columns beside it, so this needs the same isolate.
+#[test]
+fn a_bidi_override_in_the_preview_does_not_escape_its_own_column() {
+    let mut message = row("Em0014");
+    message.preview = Some("Click \u{202e}desolc\u{202c} here".to_owned());
+    let info = info_of(&message);
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        assert_eq!(
+            column(camel_message_info_get_preview(info)).as_deref(),
+            Some("\u{2068}Click \u{202e}desolc\u{202c} here\u{2069}")
         );
         g_object_unref(info.cast());
     }

@@ -851,7 +851,7 @@ unsafe fn apply_message(
         // the summary is missing. For that second case, the recovery is to
         // build the row again from the listing, which the code below does.
 
-        let Some(info) = Owned::from_raw(new_message_info(message)) else {
+        let Some(info) = Owned::from_raw(new_message_info(summary, message)) else {
             return false;
         };
         // `force_keep_uid` is TRUE because the uid is the JMAP `Email` id. It is
