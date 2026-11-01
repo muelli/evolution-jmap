@@ -50,14 +50,15 @@ use eds_sys::{
 use evo_sys::{
     E_COMPOSER_HEADER_FROM, EHTMLEditor, EMsgComposer, GTK_BUTTONS_CLOSE,
     GTK_DIALOG_DESTROY_WITH_PARENT, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_RESPONSE_CANCEL,
-    GTK_RESPONSE_OK, GtkWindow, e_composer_header_get_registry,
+    GTK_RESPONSE_OK, GtkWidget, GtkWindow, e_composer_header_get_registry,
     e_composer_header_table_dup_identity_uid, e_composer_header_table_get_header,
-    e_date_edit_get_time, e_date_edit_new, e_date_edit_set_show_time, e_date_edit_set_time,
-    e_html_editor_get_ui_manager, e_msg_composer_get_editor, e_msg_composer_get_header_table,
-    e_msg_composer_get_message, e_msg_composer_get_message_finish, e_msg_composer_get_type,
-    gtk_container_add, gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new,
-    gtk_dialog_run, gtk_message_dialog_new, gtk_widget_destroy, gtk_widget_show_all,
-    gtk_window_set_title, gtk_window_set_transient_for,
+    e_date_edit_get_entry, e_date_edit_get_time, e_date_edit_new, e_date_edit_set_show_time,
+    e_date_edit_set_time, e_html_editor_get_ui_manager, e_msg_composer_get_editor,
+    e_msg_composer_get_header_table, e_msg_composer_get_message, e_msg_composer_get_message_finish,
+    e_msg_composer_get_type, gtk_container_add, gtk_dialog_add_button, gtk_dialog_get_content_area,
+    gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response,
+    gtk_entry_set_activates_default, gtk_message_dialog_new, gtk_widget_destroy,
+    gtk_widget_show_all, gtk_window_set_title, gtk_window_set_transient_for,
 };
 #[cfg(evolution_eui_manager)]
 use evo_sys::{
@@ -822,6 +823,54 @@ unsafe fn refresh_labels(action_group: MenuActionGroup) {
     }
 }
 
+/// Builds the custom-time dialog, unshown and not yet run. Returns the
+/// dialog and its `EDateEdit` field.
+///
+/// Split out from [`activate_custom`] so a test can check the dialog's
+/// keyboard behaviour without running its nested main loop.
+///
+/// # Safety
+///
+/// `composer` must be a live decorated composer, on the main thread.
+unsafe fn build_custom_time_dialog(composer: *mut GObject) -> (*mut GtkWidget, *mut GtkWidget) {
+    // SAFETY: the contract makes the composer window live, per the caller.
+    // Every widget is new, and the caller owns the returned dialog.
+    unsafe {
+        let dialog = gtk_dialog_new();
+        gtk_window_set_title(dialog.cast(), translate_static(N_(c"Send Later")));
+        gtk_window_set_transient_for(dialog.cast(), composer.cast::<GtkWindow>());
+        gtk_dialog_add_button(
+            dialog.cast(),
+            translate_static(N_(c"_Cancel")),
+            GTK_RESPONSE_CANCEL,
+        );
+        gtk_dialog_add_button(
+            dialog.cast(),
+            translate_static(N_(c"_Send Later")),
+            GTK_RESPONSE_OK,
+        );
+        // The Send Later button answers Enter too, as GNOME HIG expects of a
+        // single-field dialog: a default response for the dialog, and the
+        // field's entry forwards Enter to it.
+        gtk_dialog_set_default_response(dialog.cast(), GTK_RESPONSE_OK);
+
+        let field = e_date_edit_new();
+        // Show the time part too: a send time needs a time of day.
+        e_date_edit_set_show_time(field.cast(), GTRUE);
+        gtk_entry_set_activates_default(e_date_edit_get_entry(field.cast()).cast(), GTRUE);
+        // Start one hour ahead, not at "now". "Now" is already in the past
+        // when the user reads it.
+        let now = glib_sys::g_date_time_new_now_local();
+        if !now.is_null() {
+            e_date_edit_set_time(field.cast(), glib_sys::g_date_time_to_unix(now) + 3600);
+            glib_sys::g_date_time_unref(now);
+        }
+        gtk_container_add(gtk_dialog_get_content_area(dialog.cast()).cast(), field);
+
+        (dialog, field)
+    }
+}
+
 /// The *Custom Time…* item: ask for a moment, then schedule the message for
 /// it.
 ///
@@ -848,34 +897,10 @@ unsafe fn activate_custom(composer: *mut GObject) {
     // SAFETY: the contract makes the composer live, on the main thread.
     let composer_hold = unsafe { Hold::new(composer) };
 
-    // SAFETY: the contract makes the composer window live. Each widget is new,
-    // and the dialog owns it. The code destroys the dialog below.
+    // SAFETY: the contract makes the composer window live. The dialog owns
+    // its field, and this function destroys the dialog.
     let picked = unsafe {
-        let dialog = gtk_dialog_new();
-        gtk_window_set_title(dialog.cast(), translate_static(N_(c"Send Later")));
-        gtk_window_set_transient_for(dialog.cast(), composer.cast::<GtkWindow>());
-        gtk_dialog_add_button(
-            dialog.cast(),
-            translate_static(N_(c"_Cancel")),
-            GTK_RESPONSE_CANCEL,
-        );
-        gtk_dialog_add_button(
-            dialog.cast(),
-            translate_static(N_(c"_Send Later")),
-            GTK_RESPONSE_OK,
-        );
-
-        let field = e_date_edit_new();
-        // Show the time part too: a send time needs a time of day.
-        e_date_edit_set_show_time(field.cast(), GTRUE);
-        // Start one hour ahead, not at "now". "Now" is already in the past
-        // when the user reads it.
-        let now = glib_sys::g_date_time_new_now_local();
-        if !now.is_null() {
-            e_date_edit_set_time(field.cast(), glib_sys::g_date_time_to_unix(now) + 3600);
-            glib_sys::g_date_time_unref(now);
-        }
-        gtk_container_add(gtk_dialog_get_content_area(dialog.cast()).cast(), field);
+        let (dialog, field) = build_custom_time_dialog(composer);
         gtk_widget_show_all(dialog);
 
         let response = gtk_dialog_run(dialog.cast());
@@ -1371,12 +1396,14 @@ mod tests {
         use std::os::raw::{c_char, c_int};
         use std::sync::Mutex;
 
-        use evo_sys::GtkWidget;
+        use evo_sys::gtk_window_get_default_widget;
         use glib_sys::{
             G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, G_SOURCE_REMOVE, GList, GLogLevelFlags,
             g_idle_add, g_list_free, g_log_set_default_handler, gboolean,
         };
-        use gobject_sys::{g_object_set_data_full, g_type_check_instance_is_a, g_type_from_name};
+        use gobject_sys::{
+            g_object_get, g_object_set_data_full, g_type_check_instance_is_a, g_type_from_name,
+        };
 
         use super::*;
 
@@ -1530,6 +1557,45 @@ mod tests {
                     "action returned"
                 ]
             );
+        }
+
+        /// GNOME HIG: every flow works with the keyboard only. The
+        /// custom-time dialog has one field, so Enter after typing or
+        /// picking a time should confirm, the same as clicking Send Later.
+        /// Needs a display; skips without one.
+        #[test]
+        fn the_custom_time_dialog_lets_enter_confirm_it() {
+            if !display() {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain toplevel window stands in for the live
+            // composer; `build_custom_time_dialog` only passes it to
+            // `gtk_window_set_transient_for`. Both widgets are destroyed
+            // before returning.
+            unsafe {
+                let window: *mut GObject = gtk_window_new(0).cast();
+                let (dialog, field) = build_custom_time_dialog(window);
+
+                assert!(
+                    !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                    "the dialog has no default response: Enter would do nothing"
+                );
+                let mut activates_default: gboolean = GFALSE;
+                g_object_get(
+                    e_date_edit_get_entry(field.cast()).cast(),
+                    c"activates-default".as_ptr(),
+                    &mut activates_default as *mut gboolean,
+                    ptr::null::<c_char>(),
+                );
+                assert_ne!(
+                    activates_default, GFALSE,
+                    "the field's entry does not activate the default: Enter would do nothing"
+                );
+
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window.cast());
+            }
         }
 
         /// The shell destroys the composer while a refusal shows. The dialog
