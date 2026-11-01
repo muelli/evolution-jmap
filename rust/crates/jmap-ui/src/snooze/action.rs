@@ -101,6 +101,25 @@ struct SnoozeState {
     /// The service uid of the capability fetch that is in progress.
     /// It prevents a new fetch for the same account on each `update-actions`.
     pending: Option<String>,
+    /// True from a click until the worker answers. A second click in this
+    /// time must not send a second snooze for the same selection.
+    busy: bool,
+}
+
+impl SnoozeState {
+    /// Marks a snooze in flight. Returns `false` while one is already running.
+    fn begin(&mut self) -> bool {
+        if self.busy {
+            return false;
+        }
+        self.busy = true;
+        true
+    }
+
+    /// Allows the next click.
+    fn end(&mut self) {
+        self.busy = false;
+    }
 }
 
 /// The [`SnoozeState`] of the owner, while the owner is alive.
@@ -267,6 +286,7 @@ pub(crate) unsafe fn install(
         reader,
         menu_action,
         pending: None,
+        busy: false,
     });
     // SAFETY: `owner` is live; the ownership of the state goes to the object data.
     unsafe {
@@ -349,6 +369,7 @@ pub(crate) unsafe fn install(
         reader,
         menu_action,
         pending: None,
+        busy: false,
     });
     // SAFETY: `owner` is live; the ownership of the state goes to the object data.
     // `menu_action` is a borrowed reference from the group of the manager
@@ -674,15 +695,26 @@ unsafe fn activate(owner: *mut GObject, preset: Preset) {
     // SAFETY: this gives the reference from `connect_source_of` to the wrapper.
     let source = unsafe { SendSource::adopt(source) };
 
+    if !cell.borrow_mut().begin() {
+        // A snooze from an earlier click is still on its worker thread.
+        return;
+    }
+
     let work = move || {
         // SAFETY: the worker owns the reference from `connect_source_of`.
         let outcome = unsafe { link::connect_account(source.as_ptr()) };
         drop(source);
         outcome.and_then(|link| snooze_all(&link, &uids, &until))
     };
-    let finish = |_owner: *mut GObject, outcome: Result<usize, String>| match outcome {
-        Ok(count) => tracing::debug!(count, "messages snoozed"),
-        Err(message) => warn_dialog(translate_with(SNOOZE_FAILED, &[&message])),
+    let finish = |owner: *mut GObject, outcome: Result<usize, String>| {
+        // SAFETY: `with_strong` gives the live owner.
+        if let Some(cell) = unsafe { state(owner) } {
+            cell.borrow_mut().end();
+        }
+        match outcome {
+            Ok(count) => tracing::debug!(count, "messages snoozed"),
+            Err(message) => warn_dialog(translate_with(SNOOZE_FAILED, &[&message])),
+        }
     };
     // SAFETY: the owner is live per the contract of this function.
     unsafe { dispatch::spawn_for(owner, work, finish) };
@@ -853,5 +885,34 @@ mod tests {
 
         assert!(snooze_all(&link, &uids, UNTIL).is_err());
         assert_eq!(mailboxes_of(&server, &uids), before);
+    }
+
+    /// A fresh [`SnoozeState`], not tied to any real reader or menu action.
+    fn fresh_state() -> super::SnoozeState {
+        super::SnoozeState {
+            reader: std::ptr::null_mut(),
+            menu_action: std::ptr::null_mut(),
+            pending: None,
+            busy: false,
+        }
+    }
+
+    #[test]
+    fn a_second_click_while_a_snooze_is_in_flight_starts_nothing() {
+        let mut state = fresh_state();
+
+        assert!(state.begin(), "the first click did not start");
+        // The first snooze is still on its worker thread: a second click
+        // must not send a second `Email/set` for the same selection.
+        assert!(!state.begin(), "a second click started a second snooze");
+    }
+
+    #[test]
+    fn a_finished_snooze_allows_the_next_click() {
+        let mut state = fresh_state();
+
+        assert!(state.begin());
+        state.end();
+        assert!(state.begin(), "the retry after a finish was refused");
     }
 }
