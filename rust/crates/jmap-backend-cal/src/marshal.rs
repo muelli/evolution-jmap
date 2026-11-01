@@ -4,7 +4,7 @@
 //! Marshaling between Rust types and `ECalMetaBackend` C representations.
 //! Allocates with GLib and transfers ownership to callers per EDS contracts.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::ptr;
 use std::sync::{Mutex, PoisonError};
 
@@ -26,11 +26,19 @@ use glib_sys::{
     GSList, g_date_time_format, g_date_time_new_from_unix_utc, g_date_time_unref, g_free,
     g_slist_prepend, gchar,
 };
-use jmap_backend_core::error::cstring_lossy;
 pub use jmap_backend_core::marshal::take_string;
 use jmap_backend_core::marshal::{dup_string, extension_if_present, read_string};
 use jmap_backend_core::owned::Owned;
 use jmap_cal_sync::{ComponentInfo, FreeBusy, edit_base};
+
+/// Replaces interior NUL bytes with U+FFFD so C strings do not truncate payloads.
+fn c_string(text: &str) -> CString {
+    match CString::new(text) {
+        Ok(string) => string,
+        Err(_) => CString::new(text.replace('\0', "\u{fffd}"))
+            .expect("a string with every NUL replaced has no NUL left"),
+    }
+}
 
 /// The event a save is about, extracted from instances passed by EDS.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,10 +56,10 @@ pub fn info_list(infos: &[ComponentInfo]) -> *mut GSList {
     let mut list = ptr::null_mut();
     // Prepending is O(1); iterate in reverse order to preserve input sequence.
     for info in infos.iter().rev() {
-        let uid = cstring_lossy(&info.uid);
-        let revision = cstring_lossy(&info.revision);
-        let object = cstring_lossy(&icalendar_with_time_zones(&stamped(info)));
-        let extra = cstring_lossy(&info.icalendar);
+        let uid = c_string(&info.uid);
+        let revision = c_string(&info.revision);
+        let object = c_string(&icalendar_with_time_zones(&stamped(info)));
+        let extra = c_string(&info.icalendar);
         // SAFETY: The four pointers are valid NUL-terminated strings copied by EDS.
         let node = unsafe {
             e_cal_meta_backend_info_new(
@@ -101,7 +109,7 @@ pub unsafe fn keep_versions(list: *mut GSList, cached: impl Fn(*const gchar) -> 
 pub fn removed_info_list(uids: &[String]) -> *mut GSList {
     let mut list = ptr::null_mut();
     for uid in uids.iter().rev() {
-        let uid = cstring_lossy(uid);
+        let uid = c_string(uid);
         // SAFETY: `uid` is valid for the call, which copies it; NULL allowed for remaining fields.
         let node = unsafe {
             e_cal_meta_backend_info_new(uid.as_ptr(), ptr::null(), ptr::null(), ptr::null())
@@ -114,7 +122,7 @@ pub fn removed_info_list(uids: &[String]) -> *mut GSList {
 
 /// Parses an iCalendar string into an `ICalComponent`, or NULL if invalid or not containing an event.
 pub fn component_from_ical(icalendar: &str) -> *mut ICalComponent {
-    let text = cstring_lossy(icalendar);
+    let text = c_string(icalendar);
     // SAFETY: `text` is valid NUL-terminated string; caller receives owned reference via `into_raw`.
     let component = unsafe { Owned::from_raw(i_cal_component_new_from_string(text.as_ptr())) };
     let Some(component) = component else {
@@ -132,7 +140,7 @@ pub fn component_from_ical(icalendar: &str) -> *mut ICalComponent {
 
 /// Adds `VTIMEZONE` definitions to `icalendar` for all referenced timezones, or returns original text.
 pub fn icalendar_with_time_zones(icalendar: &str) -> String {
-    let text = cstring_lossy(icalendar);
+    let text = c_string(icalendar);
     // SAFETY: `text` is valid for the call; `Owned` drops the component on exit.
     unsafe {
         let Some(calendar) = Owned::from_raw(i_cal_component_new_from_string(text.as_ptr())) else {
@@ -336,7 +344,7 @@ unsafe fn take_referenced_time_zones(
     let mut defined = false;
     // SAFETY: Caller guarantees valid components.
     for tzid in unsafe { referenced_tzids(components) } {
-        let name = cstring_lossy(&tzid);
+        let name = c_string(&tzid);
         // SAFETY: Lookups borrow timezone references; definitions are cloned and taken into calendar.
         unsafe {
             if defines_time_zone(calendar, name.as_ptr()) {

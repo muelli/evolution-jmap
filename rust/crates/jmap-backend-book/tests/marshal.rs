@@ -65,6 +65,39 @@ fn an_info_list_carries_one_node_per_contact_in_order() {
     }
 }
 
+#[test]
+fn an_info_list_with_interior_nul_does_not_truncate_vcard_payload() {
+    let vcard_with_nul = "BEGIN:VCARD\r\n\
+                          VERSION:3.0\r\n\
+                          FN:Alice\0Secret\r\n\
+                          EMAIL:alice@example.com\r\n\
+                          END:VCARD\r\n";
+    let infos = [info("K1", "r1", vcard_with_nul)];
+    let list = marshal::info_list(&infos);
+
+    unsafe {
+        let (_, _, object, extra) = nth_info(list, 0);
+        assert!(
+            object.contains("END:VCARD"),
+            "object must not be truncated: {object}"
+        );
+        assert!(
+            object.contains("Alice\u{fffd}Secret"),
+            "object must contain replaced NUL: {object}"
+        );
+        let extra_str = extra.expect("extra must be present");
+        assert!(
+            extra_str.contains("END:VCARD"),
+            "extra must not be truncated: {extra_str}"
+        );
+        assert!(
+            extra_str.contains("Alice\u{fffd}Secret"),
+            "extra must contain replaced NUL: {extra_str}"
+        );
+        g_slist_free_full(list, Some(e_book_meta_backend_info_free));
+    }
+}
+
 /// A refresh keeps the cached versions after the new one, for an editor that is still open.
 #[test]
 fn keep_versions_adds_the_cached_extra_to_each_node_that_has_one() {

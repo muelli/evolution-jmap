@@ -120,6 +120,9 @@ const RULE_COLUMN_NAME: c_int = 1;
 const ADD_RULE_TITLE: &CStr = N_(c"New Rule");
 const EDIT_RULE_TITLE: &CStr = N_(c"Edit Rule");
 const EDIT_AS_TEXT_LABEL: &CStr = N_(c"_Edit as text");
+// Mnemonic on "t", not "E": "_Edit as text" is shown at the same time and
+// already owns Alt+E.
+const RULE_EDIT_LABEL: &CStr = N_(c"Edi_t");
 const EXTERNAL_EDIT: &CStr = N_(c"This script was changed outside Evolution. It shows as text.");
 
 /// All page state, in a box as qdata. It holds the widget pointers (main
@@ -340,7 +343,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         let rule_buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_box_pack_start(rules_box.cast(), rule_buttons, GFALSE, GFALSE, 0);
         let rule_add = add_button(page, rule_buttons, N_(c"A_dd"), on_rule_add);
-        let rule_edit = add_button(page, rule_buttons, N_(c"_Edit"), on_rule_edit);
+        let rule_edit = add_button(page, rule_buttons, RULE_EDIT_LABEL, on_rule_edit);
         let rule_remove = add_button(page, rule_buttons, N_(c"Rem_ove"), on_rule_remove);
         let rule_up = add_button(page, rule_buttons, N_(c"Move _Up"), on_rule_up);
         let rule_down = add_button(page, rule_buttons, N_(c"Move Do_wn"), on_rule_down);
@@ -1686,6 +1689,29 @@ mod tests {
             g_list_free(list);
         }
         G_SOURCE_REMOVE
+    }
+
+    /// The mnemonic underscore marks one letter per label. Panics if a
+    /// label has none, which would be a test bug, not a product one.
+    fn mnemonic(label: &CStr) -> char {
+        let text = label.to_str().unwrap();
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            if c == '_' {
+                return chars.next().unwrap().to_ascii_lowercase();
+            }
+        }
+        panic!("no mnemonic in {text:?}");
+    }
+
+    /// The rules list's "_Edit" button and the "_Edit as text" checkbox can
+    /// show at the same time: `want_rules` (which shows the rules box) only
+    /// holds when `is_managed` (which shows the checkbox) also holds. Two
+    /// controls in the same window cannot share a mnemonic letter, or
+    /// Alt+E opens only one of them and the other needs a mouse.
+    #[test]
+    fn rule_edit_and_edit_as_text_keep_different_mnemonics() {
+        assert_ne!(mnemonic(RULE_EDIT_LABEL), mnemonic(EDIT_AS_TEXT_LABEL));
     }
 
     /// The shell destroys the account editor while the name dialog of Add

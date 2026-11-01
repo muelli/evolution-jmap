@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-01 02:13+0000\n"
+"POT-Creation-Date: 2026-11-01 09:34+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -560,90 +560,90 @@ msgstr ""
 msgid "_Edit as text"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:123
+#: rust/crates/jmap-ui/src/filters/page.rs:125
+msgid "Edi_t"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:126
 msgid "This script was changed outside Evolution. It shows as text."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:231
+#: rust/crates/jmap-ui/src/filters/page.rs:234
 msgid "Server Filters"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:282
-#: rust/crates/jmap-ui/src/filters/page.rs:331
+#: rust/crates/jmap-ui/src/filters/page.rs:285
+#: rust/crates/jmap-ui/src/filters/page.rs:334
 msgid "Name"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:283
+#: rust/crates/jmap-ui/src/filters/page.rs:286
 msgid "Active"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:295
+#: rust/crates/jmap-ui/src/filters/page.rs:298
 msgid "_Add"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:296
+#: rust/crates/jmap-ui/src/filters/page.rs:299
 msgid "_Rename"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:297
+#: rust/crates/jmap-ui/src/filters/page.rs:300
 msgid "Re_move"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:298
+#: rust/crates/jmap-ui/src/filters/page.rs:301
 msgid "A_ctivate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:299
+#: rust/crates/jmap-ui/src/filters/page.rs:302
 msgid "_Deactivate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:311
+#: rust/crates/jmap-ui/src/filters/page.rs:314
 msgid "_Script:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:330
+#: rust/crates/jmap-ui/src/filters/page.rs:333
 msgid "Enabled"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:342
+#: rust/crates/jmap-ui/src/filters/page.rs:345
 msgid "A_dd"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:343
-msgid "_Edit"
-msgstr ""
-
-#: rust/crates/jmap-ui/src/filters/page.rs:344
+#: rust/crates/jmap-ui/src/filters/page.rs:347
 msgid "Rem_ove"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:345
+#: rust/crates/jmap-ui/src/filters/page.rs:348
 msgid "Move _Up"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:346
+#: rust/crates/jmap-ui/src/filters/page.rs:349
 msgid "Move Do_wn"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:347
+#: rust/crates/jmap-ui/src/filters/page.rs:350
 msgid "E_nable"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:348
+#: rust/crates/jmap-ui/src/filters/page.rs:351
 msgid "Disa_ble"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:350
+#: rust/crates/jmap-ui/src/filters/page.rs:353
 msgid "C_heck"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:1444
+#: rust/crates/jmap-ui/src/filters/page.rs:1447
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:428
 #: rust/crates/jmap-ui/src/send_later/extension.rs:859
 msgid "_Cancel"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:1447
+#: rust/crates/jmap-ui/src/filters/page.rs:1450
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:431
 msgid "_OK"
 msgstr ""
@@ -1011,24 +1011,24 @@ msgstr ""
 msgid "The message could not be snoozed: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:127
+#: rust/crates/jmap-ui/src/snooze/action.rs:146
 msgid "For One _Hour"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:130
+#: rust/crates/jmap-ui/src/snooze/action.rs:149
 msgid "Until _Tomorrow Morning"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:135
+#: rust/crates/jmap-ui/src/snooze/action.rs:154
 msgid "Until Next _Monday Morning"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:226
-#: rust/crates/jmap-ui/src/snooze/action.rs:306
+#: rust/crates/jmap-ui/src/snooze/action.rs:245
+#: rust/crates/jmap-ui/src/snooze/action.rs:326
 msgid "S_nooze"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:705
+#: rust/crates/jmap-ui/src/snooze/action.rs:737
 msgid "the server named no id for the snoozed mailbox"
 msgstr ""
 
