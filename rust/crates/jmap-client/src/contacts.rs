@@ -5,11 +5,12 @@
 
 use jmap_proto::Id;
 use jmap_proto::contacts::{
-    AddressBook, ContactCard, ContactCardParseRequest, ContactCardParseResponse,
-    ContactCardQueryFilter,
+    AddressBook, AddressBookSetRequest, ContactCard, ContactCardParseRequest,
+    ContactCardParseResponse, ContactCardQueryFilter,
 };
 use jmap_proto::methods::{
-    GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+    CopyRequest, CopyResponse, GetRequest, GetResponse, QueryChangesRequest, QueryChangesResponse,
+    QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
 use jmap_proto::session::{CAPABILITY_CONTACTS, CAPABILITY_CORE};
 use serde_json::Value;
@@ -81,6 +82,15 @@ impl Client {
         self.set_chunked(&self.contacts_using(), "AddressBook/set", request)
     }
 
+    /// Modify address books with custom options (`AddressBook/set`, RFC 9610 Section 2.3).
+    pub fn address_book_set_custom(
+        &self,
+        request: &AddressBookSetRequest,
+    ) -> Result<SetResponse<AddressBook>, Error> {
+        let arguments = self.single_call(&self.contacts_using(), "AddressBook/set", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
     /// Create a contact card.
     ///
     /// Returns the stored card with server-assigned properties such as `id` and `uid`.
@@ -93,6 +103,17 @@ impl Client {
             SetRequest::<ContactCard>::new(account_id.clone()).create("new", card.clone());
         let response = self.contact_set(&request)?;
         expect_created(&response, "new")
+    }
+
+    /// Fetch all contact cards in an account (`ContactCard/get` with `ids: null`, RFC 9610 §3.1).
+    pub fn contact_cards(&self, account_id: &Id) -> Result<Vec<ContactCard>, Error> {
+        let arguments = self.single_call(
+            &self.contacts_using(),
+            "ContactCard/get",
+            &GetRequest::all(account_id.clone()),
+        )?;
+        let response: GetResponse<ContactCard> = serde_json::from_value(arguments)?;
+        Ok(response.list)
     }
 
     /// Fetch contact cards by identifier.
@@ -188,6 +209,25 @@ impl Client {
     ) -> Result<SetResponse<ContactCard>, Error> {
         self.set_chunked(&self.contacts_using(), "ContactCard/set", request)
     }
+
+    /// Copy contact cards between accounts (`ContactCard/copy`, RFC 9610 Section 3.6).
+    pub fn contact_copy(
+        &self,
+        request: &CopyRequest<ContactCard>,
+    ) -> Result<CopyResponse<ContactCard>, Error> {
+        let arguments = self.single_call(&self.contacts_using(), "ContactCard/copy", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// Query changes for contact cards (`ContactCard/queryChanges`, RFC 9610 Section 3.4).
+    pub fn contact_query_changes(
+        &self,
+        request: &QueryChangesRequest<ContactCardQueryFilter>,
+    ) -> Result<QueryChangesResponse, Error> {
+        let arguments =
+            self.single_call(&self.contacts_using(), "ContactCard/queryChanges", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
 }
 
 /// Normalize array-wrapped parse results from servers such as Stalwart.
@@ -211,11 +251,21 @@ pub(crate) fn demote_multi_element_parsed_blobs(arguments: &mut Value) {
                 unrepresentable_ids.push(id.clone());
             }
         } else if let Value::Object(item_obj) = val
-            && item_obj.get("@type").and_then(Value::as_str) == Some("Group")
+            && matches!(
+                item_obj.get("@type").and_then(Value::as_str),
+                Some("Group") | Some("CardGroup")
+            )
         {
             if let Some(Value::Array(entries)) = item_obj.get_mut("entries") {
                 if entries.len() == 1 {
                     *val = entries.pop().expect("len checked above");
+                } else {
+                    unrepresentable_ids.push(id.clone());
+                }
+            } else if let Some(Value::Object(cards)) = item_obj.get_mut("cards") {
+                if cards.len() == 1 {
+                    let single_card = cards.values().next().expect("len checked above").clone();
+                    *val = single_card;
                 } else {
                     unrepresentable_ids.push(id.clone());
                 }
@@ -238,5 +288,43 @@ pub(crate) fn demote_multi_element_parsed_blobs(arguments: &mut Value) {
             }
         };
         not_parsable.extend(unrepresentable_ids.into_iter().map(Value::String));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn demote_multi_element_parsed_blobs_unwraps_rfc9553_cardgroup() {
+        let mut response = json!({
+            "accountId": "a1",
+            "parsed": {
+                "b1": {
+                    "@type": "CardGroup",
+                    "cards": {
+                        "c1": {
+                            "@type": "Card",
+                            "name": {"full": "Alice"}
+                        }
+                    }
+                },
+                "b2": {
+                    "@type": "CardGroup",
+                    "cards": {
+                        "c1": {"@type": "Card", "name": {"full": "Bob"}},
+                        "c2": {"@type": "Card", "name": {"full": "Charlie"}}
+                    }
+                }
+            }
+        });
+
+        demote_multi_element_parsed_blobs(&mut response);
+
+        assert_eq!(response["parsed"]["b1"]["@type"], "Card");
+        assert_eq!(response["parsed"]["b1"]["name"]["full"], "Alice");
+        assert!(response["parsed"].get("b2").is_none());
+        assert_eq!(response["notParsable"], json!(["b2"]));
     }
 }
