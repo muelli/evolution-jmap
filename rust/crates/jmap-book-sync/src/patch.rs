@@ -952,6 +952,13 @@ fn diff_online_services(
             // comes back as `user`, and a member comparison sees an edit.
             let handle = online_service_handle(new);
             if online_service_handle(old) != handle {
+                // RFC 9553 §2.3.2 requires at least one of `uri` or `user`.
+                // A cleared handle leaves neither, so remove the entry
+                // instead of writing both fields null.
+                if handle.is_none() {
+                    patch.insert(path.to_owned(), Value::Null);
+                    return;
+                }
                 // Write the rename on its source member. An entry with only a
                 // URI gets a new URI with the same scheme.
                 let rebuilt = match (&old.user, handle) {
@@ -1993,5 +2000,29 @@ mod tests {
         let merged = merge_units(Some(&current), Some(&edited));
 
         assert_eq!(merged.as_deref(), Some(&current[..]));
+    }
+
+    /// RFC 9553 §2.3.2 requires at least one of `uri` or `user` on an
+    /// `onlineServices` entry. Clearing both must remove the entry, not
+    /// write a patch that leaves both null.
+    #[test]
+    fn clearing_both_handle_fields_removes_the_online_service_entry() {
+        let current: BTreeMap<String, OnlineService> = [(
+            "s1".to_owned(),
+            OnlineService::new()
+                .with_service("Matrix")
+                .with_user("@alice:example.com")
+                .with_uri("matrix:@alice:example.com"),
+        )]
+        .into();
+        let edited: BTreeMap<String, OnlineService> =
+            [("s1".to_owned(), OnlineService::new().with_service("Matrix"))].into();
+
+        let mut patch = Map::new();
+        diff_online_services(&mut patch, Some(&current), Some(&edited));
+
+        assert_eq!(patch.get("onlineServices/s1"), Some(&Value::Null));
+        assert_eq!(patch.get("onlineServices/s1/user"), None);
+        assert_eq!(patch.get("onlineServices/s1/uri"), None);
     }
 }
