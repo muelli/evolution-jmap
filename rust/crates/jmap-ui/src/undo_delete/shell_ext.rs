@@ -44,6 +44,7 @@ use jmap_backend_core::trampoline::guard;
 use jmap_backend_core::weak::WeakBackend;
 use jmap_collection_sync::ChildKind;
 
+use crate::hold::Hold;
 use crate::undo_delete::notice::{Deleted, Notice, undo, view_kind};
 
 /// The Undo of a deferred delete in the calendar and contacts views.
@@ -275,12 +276,17 @@ unsafe extern "C" fn on_undo_clicked(_button: *mut GObject, data: gpointer) {
         // SAFETY: the handler owns the data until the button is finalized.
         let data = &*data.cast::<UndoData>();
         undo(data.source);
-        // The callback owns the new reference to the content.
+        // SAFETY: `data.content` is a live GObject, held strongly by `data`
+        // itself for the full life of this call.
+        let written = Box::new(WrittenContent {
+            content: data.content,
+            hold: Hold::new(data.content),
+        });
         e_source_write(
             data.source,
             ptr::null_mut(),
             Some(on_written),
-            g_object_ref(data.content).cast(),
+            Box::into_raw(written).cast(),
         );
         data.alert.with_strong(|alert| {
             // SAFETY: a strong reference for the call.
@@ -289,18 +295,40 @@ unsafe extern "C" fn on_undo_clicked(_button: *mut GObject, data: gpointer) {
     });
 }
 
+/// The content of a pending "source written" callback, plus a hold that
+/// detects a destroy of its window while the write is in flight.
+struct WrittenContent {
+    /// Same object as `hold` holds. Using it as an `EAlertSink` is only
+    /// correct while `hold` is not disposed.
+    content: *mut GObject,
+    hold: Hold,
+}
+
+/// Builds the alert text for a failed undo write, unless the shell destroyed
+/// the content's window while the write was in flight: then there is nothing
+/// left to show it in.
+fn written_outcome(reason: &str, hold: &Hold) -> Option<String> {
+    tracing::warn!("the undo of a collection delete was not saved: {reason}");
+    if hold.disposed() {
+        return None;
+    }
+    Some(translate_with(
+        // TRANSLATORS: %1$s is the reason from the registry.
+        c"The delete could not be undone: %1$s",
+        &[reason],
+    ))
+}
+
 /// Shows an error in the content if the registry refused the undo.
 ///
 /// # Safety
 ///
-/// GIO calls this with the source of the write. `content` is a reference that
-/// this function owns.
-unsafe extern "C" fn on_written(
-    source: *mut GObject,
-    result: *mut GAsyncResult,
-    content: gpointer,
-) {
+/// GIO calls this once with the source of the write and the [`WrittenContent`]
+/// that `on_undo_clicked` boxed.
+unsafe extern "C" fn on_written(source: *mut GObject, result: *mut GAsyncResult, data: gpointer) {
     guard("JmapUndoDeleteShellExtension::written", (), || unsafe {
+        // SAFETY: `on_undo_clicked` boxed this for exactly this call.
+        let written = Box::from_raw(data.cast::<WrittenContent>());
         let mut error: *mut GError = ptr::null_mut();
         if e_source_write_finish(source.cast(), result, &mut error) == GFALSE {
             let reason = if error.is_null() {
@@ -308,20 +336,18 @@ unsafe extern "C" fn on_written(
             } else {
                 read_string((*error).message).unwrap_or_default()
             };
-            tracing::warn!("the undo of a collection delete was not saved: {reason}");
-            let text = translate_with(
-                // TRANSLATORS: %1$s is the reason from the registry.
-                c"The delete could not be undone: %1$s",
-                &[&reason],
-            );
-            if let Ok(text) = CString::new(text) {
+            // The shell can destroy the content's window while the write
+            // runs; then there is no window left to show the alert in.
+            if let Some(text) = written_outcome(&reason, &written.hold)
+                && let Ok(text) = CString::new(text)
+            {
                 let alert = e_alert_new(
                     c"system:simple-error".as_ptr(),
                     text.as_ptr(),
                     ptr::null::<c_char>(),
                 );
                 if !alert.is_null() {
-                    e_alert_sink_submit_alert(content.cast(), alert);
+                    e_alert_sink_submit_alert(written.content.cast(), alert);
                     g_object_unref(alert.cast());
                 }
             }
@@ -329,6 +355,53 @@ unsafe extern "C" fn on_written(
                 g_error_free(error);
             }
         }
-        g_object_unref(content.cast());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ptr;
+
+    use gobject_sys::{G_TYPE_OBJECT, g_object_new_with_properties, g_object_run_dispose};
+
+    use super::*;
+
+    /// A bare `GObject`, which needs no EDS, no D-Bus and no display.
+    fn plain_object() -> *mut GObject {
+        // SAFETY: this sets no properties, so the count is zero and both
+        // arrays can be NULL.
+        unsafe { g_object_new_with_properties(G_TYPE_OBJECT, 0, ptr::null_mut(), ptr::null()) }
+    }
+
+    /// Before the window is destroyed, a write failure builds an alert.
+    #[test]
+    fn a_write_failure_builds_an_alert_while_the_window_is_live() {
+        let object = plain_object();
+        // SAFETY: `object` is live, and this test holds one reference.
+        let hold = unsafe { Hold::new(object) };
+        assert!(written_outcome("boom", &hold).is_some());
+        // SAFETY: releases the test's own reference, the last one.
+        unsafe { g_object_unref(object) };
+    }
+
+    /// The shell can destroy the content's window while the write is in
+    /// flight. `on_written` must not build an alert for a window that is
+    /// gone, even though `WrittenContent::hold` still keeps the object from
+    /// finalizing.
+    #[test]
+    fn a_write_failure_builds_no_alert_once_the_window_is_destroyed() {
+        let object = plain_object();
+        // SAFETY: `object` is live, and this test holds one reference.
+        let hold = unsafe { Hold::new(object) };
+        // SAFETY: `object` is live. This simulates `gtk_widget_destroy`
+        // disposing the window while the hold's own reference remains.
+        unsafe { g_object_run_dispose(object) };
+        assert_eq!(
+            written_outcome("boom", &hold),
+            None,
+            "must not build an alert for a destroyed window"
+        );
+        // SAFETY: releases the test's own reference, the last one.
+        unsafe { g_object_unref(object) };
+    }
 }

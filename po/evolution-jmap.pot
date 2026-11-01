@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-31 08:20+0000\n"
+"POT-Creation-Date: 2026-10-31 21:12+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -115,9 +115,9 @@ msgstr ""
 #: rust/crates/jmap-backend-core/src/oauth2.rs:721
 #: rust/crates/jmap-backend-core/src/oauth2.rs:850
 #: rust/crates/jmap-ui/src/link.rs:309 rust/crates/jmap-ui/src/link.rs:314
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1047
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1050
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1072
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1080
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1083
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1105
 msgid "no further detail was given"
 msgstr ""
 
@@ -500,150 +500,150 @@ msgid ""
 "account editor, open it again and make the change again."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:90
-#: rust/crates/jmap-ui/src/vacation/page.rs:77
+#: rust/crates/jmap-ui/src/filters/page.rs:91
+#: rust/crates/jmap-ui/src/vacation/page.rs:78
 msgid "Contacting the mail server…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:91
+#: rust/crates/jmap-ui/src/filters/page.rs:92
 msgid "Your server does not offer server-side filters."
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/filters/page.rs:93
+#: rust/crates/jmap-ui/src/filters/page.rs:94
 #, c-format
 msgid "The filters could not be read: %1$s"
 msgstr ""
 
 #. TRANSLATORS: the Active column of the script list, for the one script
 #. the account runs. Every other row leaves the column empty.
-#: rust/crates/jmap-ui/src/filters/page.rs:96
+#: rust/crates/jmap-ui/src/filters/page.rs:97
 msgid "Yes"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the name of a filter script on the server.
-#: rust/crates/jmap-ui/src/filters/page.rs:98
+#: rust/crates/jmap-ui/src/filters/page.rs:99
 #, c-format
 msgid "%1$s (used by the Vacation Responder)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:99
+#: rust/crates/jmap-ui/src/filters/page.rs:100
 msgid "New Filter Script"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:100
+#: rust/crates/jmap-ui/src/filters/page.rs:101
 msgid "Rename Filter Script"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:101
+#: rust/crates/jmap-ui/src/filters/page.rs:102
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:337
 msgid "_Name:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:102
+#: rust/crates/jmap-ui/src/filters/page.rs:103
 msgid "Checking the script…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:103
+#: rust/crates/jmap-ui/src/filters/page.rs:104
 msgid "The script is valid."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:109
+#: rust/crates/jmap-ui/src/filters/page.rs:110
 msgid "New Rule"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:110
+#: rust/crates/jmap-ui/src/filters/page.rs:111
 msgid "Edit Rule"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:111
+#: rust/crates/jmap-ui/src/filters/page.rs:112
 msgid "_Edit as text"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:112
+#: rust/crates/jmap-ui/src/filters/page.rs:113
 msgid "This script was changed outside Evolution. It shows as text."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:220
+#: rust/crates/jmap-ui/src/filters/page.rs:221
 msgid "Server Filters"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:265
-#: rust/crates/jmap-ui/src/filters/page.rs:313
+#: rust/crates/jmap-ui/src/filters/page.rs:266
+#: rust/crates/jmap-ui/src/filters/page.rs:314
 msgid "Name"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:266
+#: rust/crates/jmap-ui/src/filters/page.rs:267
 msgid "Active"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:278
+#: rust/crates/jmap-ui/src/filters/page.rs:279
 msgid "_Add"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:279
+#: rust/crates/jmap-ui/src/filters/page.rs:280
 msgid "_Rename"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:280
+#: rust/crates/jmap-ui/src/filters/page.rs:281
 msgid "Re_move"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:281
+#: rust/crates/jmap-ui/src/filters/page.rs:282
 msgid "A_ctivate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:282
+#: rust/crates/jmap-ui/src/filters/page.rs:283
 msgid "_Deactivate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:293
+#: rust/crates/jmap-ui/src/filters/page.rs:294
 msgid "_Script:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:312
+#: rust/crates/jmap-ui/src/filters/page.rs:313
 msgid "Enabled"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:324
+#: rust/crates/jmap-ui/src/filters/page.rs:325
 msgid "A_dd"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:325
+#: rust/crates/jmap-ui/src/filters/page.rs:326
 msgid "_Edit"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:326
+#: rust/crates/jmap-ui/src/filters/page.rs:327
 msgid "Rem_ove"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:327
+#: rust/crates/jmap-ui/src/filters/page.rs:328
 msgid "Move _Up"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:328
+#: rust/crates/jmap-ui/src/filters/page.rs:329
 msgid "Move Do_wn"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:329
+#: rust/crates/jmap-ui/src/filters/page.rs:330
 msgid "E_nable"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:330
+#: rust/crates/jmap-ui/src/filters/page.rs:331
 msgid "Disa_ble"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:332
+#: rust/crates/jmap-ui/src/filters/page.rs:333
 msgid "C_heck"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:1411
+#: rust/crates/jmap-ui/src/filters/page.rs:1427
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:428
-#: rust/crates/jmap-ui/src/send_later/extension.rs:828
+#: rust/crates/jmap-ui/src/send_later/extension.rs:859
 msgid "_Cancel"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:1414
+#: rust/crates/jmap-ui/src/filters/page.rs:1430
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:431
 msgid "_OK"
 msgstr ""
@@ -867,76 +867,76 @@ msgstr ""
 msgid "the session document names no usable mail account"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:96
+#: rust/crates/jmap-ui/src/send_later/extension.rs:97
 msgid "Checking whether the sending account offers scheduled send…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:97
+#: rust/crates/jmap-ui/src/send_later/extension.rs:98
 msgid "The selected sending account is not a JMAP account"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:98
+#: rust/crates/jmap-ui/src/send_later/extension.rs:99
 msgid "The account’s server does not offer scheduled send"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/send_later/extension.rs:100
+#: rust/crates/jmap-ui/src/send_later/extension.rs:101
 #: rust/crates/jmap-ui/src/snooze/action.rs:81
 #, c-format
 msgid "The account’s server could not be asked: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:101
+#: rust/crates/jmap-ui/src/send_later/extension.rs:102
 msgid "The server holds the message and sends it at the chosen time"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:104
+#: rust/crates/jmap-ui/src/send_later/extension.rs:105
 #, c-format
 msgid ""
 "The message could not be scheduled: %1$s (a copy may remain in the server’s "
 "Drafts folder)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:106
+#: rust/crates/jmap-ui/src/send_later/extension.rs:107
 msgid "The message names no recipients"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:107
+#: rust/crates/jmap-ui/src/send_later/extension.rs:108
 msgid "The message has no From address"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:108
+#: rust/crates/jmap-ui/src/send_later/extension.rs:109
 msgid "The chosen time is further ahead than the server accepts"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:109
+#: rust/crates/jmap-ui/src/send_later/extension.rs:110
 #: rust/crates/jmap-ui/src/snooze/action.rs:85
 msgid "The local calendar could not name the chosen time"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:110
+#: rust/crates/jmap-ui/src/send_later/extension.rs:111
 msgid "That time has already passed — choose one in the future"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:265
-#: rust/crates/jmap-ui/src/send_later/extension.rs:351
+#: rust/crates/jmap-ui/src/send_later/extension.rs:288
+#: rust/crates/jmap-ui/src/send_later/extension.rs:374
 msgid "Send _Later"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:287
-#: rust/crates/jmap-ui/src/send_later/extension.rs:370
+#: rust/crates/jmap-ui/src/send_later/extension.rs:310
+#: rust/crates/jmap-ui/src/send_later/extension.rs:393
 msgid "_Custom Time…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:372
+#: rust/crates/jmap-ui/src/send_later/extension.rs:395
 msgid "…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:824
+#: rust/crates/jmap-ui/src/send_later/extension.rs:855
 msgid "Send Later"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:833
+#: rust/crates/jmap-ui/src/send_later/extension.rs:864
 msgid "_Send Later"
 msgstr ""
 
@@ -1078,36 +1078,42 @@ msgid ""
 "open"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:78
+#: rust/crates/jmap-ui/src/vacation/io.rs:37
+msgid ""
+"Another program changed the autoresponder after this page loaded it. Close "
+"the account editor, open it again and make the change again."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:79
 msgid "This account’s server does not offer a vacation autoresponder."
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/vacation/page.rs:80
+#: rust/crates/jmap-ui/src/vacation/page.rs:81
 #, c-format
 msgid "The autoresponder could not be read: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:161
+#: rust/crates/jmap-ui/src/vacation/page.rs:165
 msgid "Vacation Responder"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:212
+#: rust/crates/jmap-ui/src/vacation/page.rs:216
 msgid "Send _automatic replies"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:229
+#: rust/crates/jmap-ui/src/vacation/page.rs:233
 msgid "_First day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:231
+#: rust/crates/jmap-ui/src/vacation/page.rs:235
 msgid "_Last day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:233
+#: rust/crates/jmap-ui/src/vacation/page.rs:237
 msgid "_Subject:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:236
+#: rust/crates/jmap-ui/src/vacation/page.rs:240
 msgid "_Message:"
 msgstr ""
