@@ -39,6 +39,26 @@ fn list_existing_on_an_empty_book_still_yields_a_state() {
 }
 
 #[test]
+fn list_existing_reads_the_state_before_the_query() {
+    // A card created between the query and the id fetch would carry a state
+    // from after itself, and never be reported by a later `get_changes`. The
+    // state must come from a `ContactCard/get` asked before the query, not
+    // from the id-driven `ContactCard/get` after it.
+    let fixture = Fixture::start();
+    fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+
+    let asked = fixture.server.method_calls().len();
+    fixture.sync().list_existing().unwrap();
+    let calls = fixture.server.method_calls().split_off(asked);
+
+    assert_eq!(
+        calls.first().map(String::as_str),
+        Some("ContactCard/get"),
+        "the state must be read before the query: {calls:?}"
+    );
+}
+
+#[test]
 fn a_capped_query_still_lists_every_card() {
     let fixture = Fixture::start_with(MockServer::builder().query_page_size(2));
     let mut seeded: Vec<String> = (0..5)

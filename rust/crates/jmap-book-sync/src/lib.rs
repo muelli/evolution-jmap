@@ -23,9 +23,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use jmap_client::{ChangeSet, Client};
+use jmap_client::{ChangeSet, Client, expect_updated};
 use jmap_object_sync::{ObjectKind, revision_of};
 use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
+use jmap_proto::methods::SetRequest;
 use jmap_proto::{Id, State};
 use jmap_vcard::{VENDOR_MEMBER_DETAILS, card_to_vcard, states_group_kind, vcard_to_card};
 use serde_json::{Map, Value};
@@ -129,7 +130,16 @@ impl BookSync {
 
     /// Every card in this address book, with the state of that listing
     /// (`list_existing_sync`).
+    ///
+    /// The state comes from a `ContactCard/get` with no ids, asked before the
+    /// query (the same shape `jmap-mail-sync`'s mailbox listing uses, and for
+    /// the same reason). The query and the id fetch below are two round
+    /// trips, and a card created between them would otherwise carry a state
+    /// from after itself and never be reported by a later `get_changes`.
+    /// Reading the state first costs one more round trip, but the only risk
+    /// of an earlier state is a repeated, harmless lookup on the next delta.
     pub fn list_existing(&self) -> Result<(State, Vec<ContactInfo>), SyncError> {
+        let state = self.client.contact_state(&self.account_id)?;
         let ids = self.client.contact_query_every_id(
             &self.account_id,
             ContactCardQueryFilter::in_address_book(self.address_book_id.clone()),
@@ -140,7 +150,7 @@ impl BookSync {
             .iter()
             .map(|card| ContactInfo::render(&self.client, &self.account_id, card))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok((response.state, contacts))
+        Ok((state, contacts))
     }
 
     /// One card by identifier (`load_contact_sync`).
@@ -211,14 +221,26 @@ impl BookSync {
             return self.load_contact(&id);
         };
 
-        let current = self.fetch(uid)?;
+        self.write_update(uid, base, &card, true)
+    }
+
+    /// The patch for an edit of `uid`, against the given `base`/`on_conflict`
+    /// and the current server copy, plus the state that copy came from
+    /// (`ContactCard/set`'s guard, RFC 8620 Section 5.3).
+    fn patch_for(
+        &self,
+        uid: &str,
+        base: Option<Base<'_>>,
+        card: &ContactCard,
+    ) -> Result<(Map<String, Value>, State, ContactCard), SyncError> {
+        let (current, state) = self.fetch_with_state(uid)?;
         // Diff against the resolved form (its `blobId` photos inlined into a
         // `uri`, as EDS was shown them), not the raw server copy: the edited
         // card's photo never carries a `blobId` (a vCard has no such
         // property), so diffing against the raw copy would read every
         // untouched `blobId` photo as edited.
         let resolved = resolve_inline_photos(&self.client, &self.account_id, &current);
-        let mut patch = match base {
+        let patch = match base {
             Some(base) => {
                 let base_card = vcard_to_card(base.vcard).map(|mut base_card| {
                     resolve_member_uids(&self.client, &self.account_id, &mut base_card);
@@ -228,13 +250,36 @@ impl BookSync {
                     base_card,
                     base.on_conflict,
                     &resolved,
-                    &card,
+                    card,
                     uid,
                 )
                 .map_err(|_| SyncError::OutOfSync(uid.to_owned()))?
             }
-            None => patch::diff(&resolved, &card),
+            None => patch::diff(&resolved, card),
         };
+        Ok((patch, state, current))
+    }
+
+    /// Computes and sends the update for `uid`, guarded by `ifInState`.
+    ///
+    /// A card both the user and another client changed inside the same round
+    /// trip is a real conflict that the state read at [`Self::fetch`] alone
+    /// cannot see (A2-2 of the race/TOCTOU audit): the patch and the
+    /// conflict check it runs are only as fresh as that one read. `ifInState`
+    /// turns a change that landed in that window into a `stateMismatch`
+    /// instead of a silent overwrite. On a mismatch this refetches and
+    /// recomputes the patch once, the same shape as the Server Filters page's
+    /// `save` (`jmap-ui/src/filters/io.rs`): a conflict that was invisible at
+    /// the first read is real against the fresh copy, and `on_conflict`
+    /// decides it as it would have from the start.
+    fn write_update(
+        &self,
+        uid: &str,
+        base: Option<Base<'_>>,
+        card: &ContactCard,
+        retry: bool,
+    ) -> Result<ContactInfo, SyncError> {
+        let (mut patch, state, current) = self.patch_for(uid, base, card)?;
         if patch.is_empty() {
             return ContactInfo::render(&self.client, &self.account_id, &current);
         }
@@ -242,20 +287,29 @@ impl BookSync {
         let account_id = self.account_id().to_string();
         let address_book_id = self.address_book_id().to_string();
         tracing::debug!(account_id, address_book_id, uid, "updating contact card");
-        if let Err(error) =
-            self.client
-                .contact_update(&self.account_id, &Id::from(uid), Value::Object(patch))
-        {
-            tracing::warn!(
-                account_id,
-                address_book_id,
-                uid,
-                %error,
-                "contact card update failed"
-            );
-            return Err(refused(&card, error));
+        let request = SetRequest::<ContactCard>::new(self.account_id.clone())
+            .update(Id::from(uid), Value::Object(patch))
+            .if_in_state(state);
+        let outcome = self
+            .client
+            .contact_set(&request)
+            .and_then(|response| expect_updated(&response, &Id::from(uid)));
+        match outcome {
+            Ok(()) => self.load_contact(uid),
+            Err(error) if retry && error.is_state_mismatch() => {
+                self.write_update(uid, base, card, false)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    account_id,
+                    address_book_id,
+                    uid,
+                    %error,
+                    "contact card update failed"
+                );
+                Err(refused(card, error))
+            }
         }
-        self.load_contact(uid)
     }
 
     /// Destroy a card (`remove_contact_sync`).
@@ -302,15 +356,22 @@ impl BookSync {
     }
 
     fn fetch(&self, uid: &str) -> Result<ContactCard, SyncError> {
+        self.fetch_with_state(uid).map(|(card, _state)| card)
+    }
+
+    /// As [`Self::fetch`], with the `state` the `ContactCard/get` answered.
+    fn fetch_with_state(&self, uid: &str) -> Result<(ContactCard, State), SyncError> {
         let id = Id::from(uid);
         let response = self
             .client
             .contact_get(&self.account_id, std::slice::from_ref(&id))?;
-        response
+        let state = response.state.clone();
+        let card = response
             .list
             .into_iter()
             .next()
-            .ok_or_else(|| SyncError::NotFound(uid.to_owned()))
+            .ok_or_else(|| SyncError::NotFound(uid.to_owned()))?;
+        Ok((card, state))
     }
 }
 
