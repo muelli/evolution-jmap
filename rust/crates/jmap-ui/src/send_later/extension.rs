@@ -95,20 +95,20 @@ use crate::send_later::submit;
 const STATE: ObjectData<RefCell<SendState>> = ObjectData::new(c"jmap-send-later-state");
 
 const CHECKING: &CStr = N_(c"Checking whether the sending account offers scheduled send…");
-const NOT_JMAP: &CStr = N_(c"The selected sending account is not a JMAP account");
-const NOT_OFFERED: &CStr = N_(c"The account’s server does not offer scheduled send");
+const NOT_JMAP: &CStr = N_(c"The selected sending account is not a JMAP account.");
+const NOT_OFFERED: &CStr = N_(c"The account’s server does not offer scheduled send.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const NOT_REACHED: &CStr = N_(c"The account’s server could not be asked: %1$s");
-const OFFERED: &CStr = N_(c"The server holds the message and sends it at the chosen time");
+const OFFERED: &CStr = N_(c"The server holds the message and sends it at the chosen time.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const REFUSED: &CStr = N_(
     c"The message could not be scheduled: %1$s (a copy may remain in the server’s Drafts folder)",
 );
-const NO_RECIPIENTS: &CStr = N_(c"The message names no recipients");
-const NO_FROM: &CStr = N_(c"The message has no From address");
-const TOO_FAR: &CStr = N_(c"The chosen time is further ahead than the server accepts");
-const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time");
-const NOT_FUTURE: &CStr = N_(c"That time has already passed — choose one in the future");
+const NO_RECIPIENTS: &CStr = N_(c"The message names no recipients.");
+const NO_FROM: &CStr = N_(c"The message has no From address.");
+const TOO_FAR: &CStr = N_(c"The chosen time is further ahead than the server accepts.");
+const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time.");
+const NOT_FUTURE: &CStr = N_(c"That time has already passed — choose one in the future.");
 
 /// The action of the submenu, for the compiled menu layer.
 #[cfg(not(evolution_eui_manager))]
@@ -1275,6 +1275,23 @@ unsafe fn refuse_send(composer: *mut GObject, text: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_messages_are_full_sentences() {
+        for message in [
+            NOT_JMAP,
+            NOT_OFFERED,
+            OFFERED,
+            NO_RECIPIENTS,
+            NO_FROM,
+            TOO_FAR,
+            NO_CLOCK,
+            NOT_FUTURE,
+        ] {
+            let text = message.to_str().unwrap();
+            assert!(text.ends_with('.'), "{text:?} should end with a period");
+        }
+    }
 
     #[test]
     fn each_offered_action_name_reads_back_as_its_preset() {

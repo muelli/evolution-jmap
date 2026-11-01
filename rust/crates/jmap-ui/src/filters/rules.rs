@@ -86,23 +86,24 @@ pub struct Folder {
 pub const MANAGED_SCRIPT_NAME: &str = "evolution-jmap";
 
 /// The error for a rule with no action.
-pub const NO_ACTION: &CStr = N_(c"Add at least one action");
+pub const NO_ACTION: &CStr = N_(c"Add at least one action.");
 /// The error for a value that holds a newline or a NUL character.
-pub const BAD_VALUE: &CStr = N_(c"The value cannot contain a newline or NUL character");
+pub const BAD_VALUE: &CStr = N_(c"The value cannot contain a newline or NUL character.");
 /// The error for a header name outside RFC 5322's allowed characters.
 pub const BAD_HEADER_NAME: &CStr =
-    N_(c"A header name cannot contain a colon, space, control or non-ASCII character");
+    N_(c"A header name cannot contain a colon, space, control or non-ASCII character.");
 /// The error for a size comparison whose value is not a positive integer.
-pub const BAD_SIZE_VALUE: &CStr = N_(c"Size must be a whole number of kilobytes greater than zero");
+pub const BAD_SIZE_VALUE: &CStr =
+    N_(c"Size must be a whole number of kilobytes greater than zero.");
 /// The error for 'More than'/'Less than' on a field other than Size, or Size
 /// compared with anything else.
 pub const SIZE_OP_MISMATCH: &CStr =
-    N_(c"'More than' and 'Less than' compare the message size only");
+    N_(c"'More than' and 'Less than' compare the message size only.");
 /// The error for a Redirect address without exactly one '@'.
-pub const BAD_ADDRESS: &CStr = N_(c"The address must contain exactly one '@'");
+pub const BAD_ADDRESS: &CStr = N_(c"The address must contain exactly one '@'.");
 /// The error for Discard combined with an action that also delivers the message.
 pub const DISCARD_WITH_OTHER: &CStr =
-    N_(c"Discard cannot be combined with Move to, Copy to or Redirect");
+    N_(c"Discard cannot be combined with Move to, Copy to or Redirect.");
 
 impl Rule {
     /// Checks the rule against the constraints [`crate::filters::script`] relies on.
@@ -385,5 +386,21 @@ mod tests {
             name: "In\nbox".to_owned(),
         })]);
         assert_eq!(rule.validate(), Err(BAD_VALUE));
+    }
+
+    #[test]
+    fn validation_errors_are_full_sentences() {
+        for error in [
+            NO_ACTION,
+            BAD_VALUE,
+            BAD_HEADER_NAME,
+            BAD_SIZE_VALUE,
+            SIZE_OP_MISMATCH,
+            BAD_ADDRESS,
+            DISCARD_WITH_OTHER,
+        ] {
+            let text = error.to_str().unwrap();
+            assert!(text.ends_with('.'), "{text:?} should end with a period");
+        }
     }
 }
