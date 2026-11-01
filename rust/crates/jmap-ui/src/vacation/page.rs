@@ -70,7 +70,7 @@ use crate::dispatch;
 use crate::link::{self, AccountLink, SendSource};
 use crate::vacation::form::VacationForm;
 use crate::vacation::io;
-use crate::widget::{get_bool, get_text, set_bool, set_text};
+use crate::widget::{self, get_bool, get_text, set_bool, set_text};
 
 const NAME: &CStr = c"JmapVacationPage";
 const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-vacation-page-state");
@@ -208,6 +208,8 @@ unsafe fn build_widgets(page: *mut GObject) {
 
         let status = gtk_label_new(ptr::null());
         gtk_label_set_xalign(status.cast(), 0.0);
+        widget::set_bool_named(status.cast(), c"wrap", true);
+        widget::set_enum_named(status.cast(), c"wrap-mode", widget::PANGO_WRAP_WORD_CHAR);
         gtk_box_pack_start(content.cast(), status, GFALSE, GFALSE, 0);
         let contacting = cstring_lossy(&translate(CONTACTING));
         gtk_label_set_text(status.cast(), contacting.as_ptr());

@@ -78,7 +78,7 @@ use crate::filters::rules::MANAGED_SCRIPT_NAME;
 use crate::filters::script;
 use crate::hold::Hold;
 use crate::link::{self, AccountLink, SendSource};
-use crate::widget::{flag, get_bool, get_text, set_bool, set_text};
+use crate::widget::{self, flag, get_bool, get_text, set_bool, set_text};
 
 const NAME: &CStr = c"JmapFiltersPage";
 const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-filters-page-state");
@@ -87,6 +87,16 @@ const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-filters-page-
 /// runs it.
 const COLUMN_NAME: c_int = 0;
 const COLUMN_ACTIVE: c_int = 1;
+
+/// GTK's own `wrap-mode` value with the same meaning as
+/// [`crate::widget::PANGO_WRAP_WORD_CHAR`], for the script text view
+/// (`gtkenums.h`: NONE = 0, CHAR = 1, WORD = 2, WORD_CHAR = 3; a different
+/// enum from Pango's, with different values).
+const GTK_WRAP_WORD_CHAR: c_int = 3;
+/// `GtkScrolledWindow`'s `hscrollbar-policy` value that keeps the page from
+/// ever scrolling sideways; a wrapped label or script line gives up height
+/// instead (`gtkscrolledwindow.h`: ALWAYS = 0, AUTOMATIC = 1, NEVER = 2).
+const GTK_POLICY_NEVER: c_int = 2;
 
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"Your server does not offer server-side filters.");
@@ -238,11 +248,17 @@ unsafe fn build_widgets(page: *mut GObject) {
     // initialized, as the container cast requires. Each widget below is new,
     // and its container owns it.
     unsafe {
+        // A long server error must not push the script list's own buttons
+        // off screen; it wraps or grows the page's height instead.
+        widget::set_enum_named(page, c"hscrollbar-policy", GTK_POLICY_NEVER);
+
         let content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_container_add(page.cast(), content);
 
         let status = gtk_label_new(ptr::null());
         gtk_label_set_xalign(status.cast(), 0.0);
+        widget::set_bool_named(status.cast(), c"wrap", true);
+        widget::set_enum_named(status.cast(), c"wrap-mode", widget::PANGO_WRAP_WORD_CHAR);
         gtk_box_pack_start(content.cast(), status, GFALSE, GFALSE, 0);
         let contacting = cstring_lossy(&translate(CONTACTING));
         gtk_label_set_text(status.cast(), contacting.as_ptr());
@@ -290,6 +306,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         // The text-mode editor of decision D11: monospace, no highlighting.
         let source_view = gtk_text_view_new();
         gtk_text_view_set_monospace(source_view.cast(), GTRUE);
+        widget::set_enum_named(source_view.cast(), c"wrap-mode", GTK_WRAP_WORD_CHAR);
         gtk_widget_set_vexpand(source_view, GTRUE);
         let source_label = gtk_label_new_with_mnemonic(translate_static(N_(c"_Script:")));
         gtk_label_set_xalign(source_label.cast(), 0.0);
