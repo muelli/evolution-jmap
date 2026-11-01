@@ -36,9 +36,10 @@ use eds_sys::{
     camel_service_get_uid, e_source_dup_parent, e_source_registry_ref_source,
 };
 use evo_sys::{
-    EMailReader, GTK_BUTTONS_CLOSE, GTK_MESSAGE_ERROR, e_mail_reader_get_selected_uids,
-    e_mail_reader_ref_folder, e_shell_get_default, e_shell_get_registry, gtk_dialog_run,
-    gtk_message_dialog_new, gtk_widget_destroy,
+    EMailReader, GTK_BUTTONS_CLOSE, GTK_MESSAGE_ERROR, GTK_RESPONSE_CLOSE, GtkWidget,
+    e_mail_reader_get_selected_uids, e_mail_reader_ref_folder, e_shell_get_default,
+    e_shell_get_registry, gtk_dialog_run, gtk_dialog_set_default_response, gtk_message_dialog_new,
+    gtk_widget_destroy,
 };
 #[cfg(evolution_eui_manager)]
 use evo_sys::{
@@ -772,13 +773,14 @@ unsafe fn set_tooltip(action: MenuAction, text: String) {
     unsafe { e_ui_action_set_tooltip(action, text.as_ptr()) };
 }
 
-/// Shows a modal error dialog with no parent window.
-/// The reader window can be the temporary context of a popup, and the message
-/// is complete without a parent.
-fn warn_dialog(text: String) {
-    let text = CString::new(text).unwrap_or_default();
-    // SAFETY: the dialog is new, and this code runs and destroys it before it returns.
-    // "%s" prevents printf from reading format directives in the text.
+/// Builds the modal error dialog `warn_dialog` runs, without running it.
+///
+/// # Safety
+///
+/// The dialog must be destroyed before it is dropped.
+unsafe fn build_warn_dialog(text: &CStr) -> *mut GtkWidget {
+    // SAFETY: the dialog is new. "%s" prevents printf from reading format
+    // directives in the text.
     unsafe {
         let dialog = gtk_message_dialog_new(
             ptr::null_mut(),
@@ -788,6 +790,20 @@ fn warn_dialog(text: String) {
             c"%s".as_ptr(),
             text.as_ptr(),
         );
+        // Close answers Enter too: a default response for the dialog.
+        gtk_dialog_set_default_response(dialog.cast(), GTK_RESPONSE_CLOSE);
+        dialog
+    }
+}
+
+/// Shows a modal error dialog with no parent window.
+/// The reader window can be the temporary context of a popup, and the message
+/// is complete without a parent.
+fn warn_dialog(text: String) {
+    let text = CString::new(text).unwrap_or_default();
+    // SAFETY: the dialog is new, and this code runs and destroys it before it returns.
+    unsafe {
+        let dialog = build_warn_dialog(&text);
         gtk_dialog_run(dialog.cast());
         gtk_widget_destroy(dialog);
     }
@@ -927,5 +943,43 @@ mod tests {
         assert!(state.begin());
         state.end();
         assert!(state.begin(), "the retry after a finish was refused");
+    }
+
+    mod modal {
+        use std::ffi::CString;
+        use std::os::raw::{c_char, c_int};
+
+        use evo_sys::gtk_window_get_default_widget;
+        use glib_sys::{GFALSE, gboolean};
+
+        use super::super::build_warn_dialog;
+
+        unsafe extern "C" {
+            fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> gboolean;
+        }
+
+        /// GNOME HIG: every flow works with the keyboard only. The snooze
+        /// preset refusal has one button (Close), so Enter should dismiss
+        /// it. Needs a display; skips without one.
+        #[test]
+        fn the_refusal_dialog_lets_enter_confirm_it() {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(std::ptr::null_mut(), std::ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: the dialog is destroyed before returning.
+            unsafe {
+                let text = CString::new("refused").unwrap();
+                let dialog = build_warn_dialog(&text);
+
+                assert!(
+                    !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                    "the dialog has no default response: Enter would do nothing"
+                );
+
+                evo_sys::gtk_widget_destroy(dialog);
+            }
+        }
     }
 }
