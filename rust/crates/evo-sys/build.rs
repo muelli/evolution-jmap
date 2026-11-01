@@ -247,6 +247,9 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // The custom-time dialog's moment, as a `time_t` value (date and time
     // together).
     "e_date_edit_get_time",
+    // The field's internal `GtkEntry`, so the custom-time dialog can make
+    // Enter in it activate the dialog's default response.
+    "e_date_edit_get_entry",
     // The info bar after a collection delete: an alert with an Undo button and
     // a timer, shown in the content of the shell view.
     "e_alert_new",

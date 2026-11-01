@@ -23,7 +23,8 @@ use evo_sys::{
     gtk_check_button_new_with_mnemonic, gtk_combo_box_get_active, gtk_combo_box_set_active,
     gtk_combo_box_text_append, gtk_combo_box_text_new, gtk_combo_box_text_remove_all,
     gtk_container_add, gtk_container_remove, gtk_dialog_add_button, gtk_dialog_get_content_area,
-    gtk_dialog_new, gtk_dialog_run, gtk_entry_new, gtk_label_new, gtk_label_new_with_mnemonic,
+    gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response, gtk_entry_new,
+    gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
     gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_widget_destroy,
     gtk_widget_get_parent, gtk_widget_get_toplevel, gtk_widget_set_hexpand,
     gtk_widget_set_sensitive, gtk_widget_set_tooltip_text, gtk_widget_set_visible,
@@ -399,26 +400,22 @@ unsafe fn state<'a>(dialog: *mut GObject) -> Option<&'a RefCell<DialogState>> {
     unsafe { STATE.get(dialog) }
 }
 
-/// Edits one rule in a modal dialog. `None` means the user cancelled.
-///
-/// The dialog stays open while the rule it describes is not valid yet, and
-/// shows the reason in its status label. Nothing here reaches the server.
+/// Builds the rule dialog's widgets and installs its state, stopping short
+/// of running it. Split out so a test can inspect its keyboard wiring
+/// without running the nested main loop.
 ///
 /// # Safety
 ///
 /// `page` must be a live widget of the account editor, on the main thread.
-/// The function runs a nested main loop, so no caller may hold a borrow of
-/// the page state across the call.
-pub unsafe fn edit_rule(
+/// Every widget below is new and floating, and the container it goes into
+/// sinks it. The caller owns the returned dialog.
+unsafe fn build_rule_dialog(
     page: *mut GObject,
     title: &'static CStr,
     draft: &RuleDraft,
     folders: &[Folder],
     extensions: &[String],
-) -> Option<Rule> {
-    // SAFETY: the page is live, per the contract. Every widget below is
-    // new and floating, and the container it goes into sinks it. The
-    // dialog is the one widget this function destroys.
+) -> *mut GtkWidget {
     unsafe {
         let dialog = gtk_dialog_new();
         gtk_window_set_title(dialog.cast(), translate_static(title));
@@ -429,6 +426,9 @@ pub unsafe fn edit_rule(
             GTK_RESPONSE_CANCEL,
         );
         gtk_dialog_add_button(dialog.cast(), translate_static(N_(c"_OK")), GTK_RESPONSE_OK);
+        // The OK button answers Enter too: a default response for the
+        // dialog, and the name entry forwards Enter to it.
+        gtk_dialog_set_default_response(dialog.cast(), GTK_RESPONSE_OK);
 
         let content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_container_add(gtk_dialog_get_content_area(dialog.cast()).cast(), content);
@@ -436,6 +436,7 @@ pub unsafe fn edit_rule(
         let top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
         gtk_box_pack_start(content.cast(), top, GFALSE, GFALSE, 0);
         let name = labelled_entry(top, RULE_NAME_LABEL, &draft.name);
+        gtk_entry_set_activates_default(name.cast(), GTRUE);
 
         let combine = labelled_combo(
             top,
@@ -495,6 +496,31 @@ pub unsafe fn edit_rule(
             append_action(dialog.cast(), Some(action));
         }
 
+        dialog
+    }
+}
+
+/// Edits one rule in a modal dialog. `None` means the user cancelled.
+///
+/// The dialog stays open while the rule it describes is not valid yet, and
+/// shows the reason in its status label. Nothing here reaches the server.
+///
+/// # Safety
+///
+/// `page` must be a live widget of the account editor, on the main thread.
+/// The function runs a nested main loop, so no caller may hold a borrow of
+/// the page state across the call.
+pub unsafe fn edit_rule(
+    page: *mut GObject,
+    title: &'static CStr,
+    draft: &RuleDraft,
+    folders: &[Folder],
+    extensions: &[String],
+) -> Option<Rule> {
+    // SAFETY: the page is live, per the contract. `build_rule_dialog` owns
+    // the dialog it returns, and this function destroys it.
+    unsafe {
+        let dialog = build_rule_dialog(page, title, draft, folders, extensions);
         let built = run_until_valid(dialog);
         gtk_widget_destroy(dialog);
         built
@@ -1107,10 +1133,63 @@ fn index_of<T: PartialEq>(items: &[T], item: T) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::raw::c_char;
+
+    use evo_sys::gtk_window_get_default_widget;
+    use glib_sys::gboolean;
+    use gobject_sys::g_object_get;
+
     use super::*;
+
+    unsafe extern "C" {
+        fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> gboolean;
+        fn gtk_window_new(kind: c_int) -> *mut GtkWidget;
+    }
 
     fn extensions(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// GNOME HIG: every flow works with the keyboard only. Enter after
+    /// typing the rule name should confirm, the same as clicking OK, the
+    /// same gap the name dialog had (`filters::page`). Needs a display;
+    /// skips without one.
+    #[test]
+    fn the_rule_dialog_lets_enter_confirm_it() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain toplevel window stands in for the live page;
+        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+        // via `parent_on`. Both widgets are destroyed before returning.
+        unsafe {
+            let window = gtk_window_new(0);
+            let draft = RuleDraft::new();
+            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+
+            assert!(
+                !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                "the dialog has no default response: Enter would do nothing"
+            );
+            let cell = state(dialog.cast()).unwrap();
+            let name = cell.borrow().name;
+            let mut activates_default: gboolean = GFALSE;
+            g_object_get(
+                name.cast(),
+                c"activates-default".as_ptr(),
+                &mut activates_default as *mut gboolean,
+                ptr::null::<c_char>(),
+            );
+            assert_ne!(
+                activates_default, GFALSE,
+                "the name entry does not activate the default: Enter would do nothing"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(window);
+        }
     }
 
     /// GNOME HIG: button labels use Header capitalization, every word
