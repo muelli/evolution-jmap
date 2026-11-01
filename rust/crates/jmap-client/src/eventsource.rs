@@ -821,6 +821,38 @@ impl<R: BufRead> Read for ChunkedBody<R> {
     }
 }
 
+/// Parse an HTTP response head for an EventSource endpoint.
+///
+/// Verifies HTTP 200 status and chunked transfer encoding.
+pub fn parse_response_head(mut reader: impl BufRead) -> io::Result<()> {
+    read_response_head(&mut reader)
+}
+
+/// Parse a stream of EventSource frames.
+///
+/// Sends parsed state changes to `sender`.
+pub fn parse_stream(
+    mut reader: impl BufRead,
+    cancel: &CancelFlag,
+    sender: &Sender<EventSourceItem>,
+) -> io::Result<()> {
+    let last_id_slot = Arc::new(Mutex::new(None));
+    stream_events(&mut reader, cancel, sender, &last_id_slot)
+}
+
+/// Parse a chunked-transfer stream of EventSource frames.
+///
+/// Decodes chunked encoding and sends parsed state changes to `sender`.
+pub fn parse_chunked_stream(
+    reader: impl BufRead,
+    cancel: &CancelFlag,
+    sender: &Sender<EventSourceItem>,
+) -> io::Result<()> {
+    let mut body = BufReader::new(ChunkedBody::new(reader));
+    let last_id_slot = Arc::new(Mutex::new(None));
+    stream_events(&mut body, cancel, sender, &last_id_slot)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

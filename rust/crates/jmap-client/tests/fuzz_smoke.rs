@@ -137,3 +137,36 @@ fn hostile_response_bodies_never_panic() {
         exercise_session_connect_with_body(payload);
     }
 }
+
+#[test]
+fn hostile_eventsource_streams_never_panic() {
+    use jmap_client::eventsource::{parse_chunked_stream, parse_response_head, parse_stream};
+    use jmap_client::transport::CancelFlag;
+
+    let hostile_inputs: &[&[u8]] = &[
+        b"",
+        b"\r\n",
+        b"HTTP/1.1 200 OK\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+        b"HTTP/1.1 500 Error\r\n\r\n",
+        b"0\r\n\r\n",
+        b"event: state\r\ndata: {}\r\n\r\n",
+        b"event: ping\r\ndata: \r\n\r\n",
+        b"event: state\r\ndata: {\"changed\": {\"acc1\": {\"Mailbox\": \"state1\"}}}\r\n\r\n",
+        b"id: 123\r\nevent: state\r\ndata: not json\r\n\r\n",
+        b": comment\r\n\r\n",
+        b"\xFF\xFE\x00\x00\r\n\r\n",
+    ];
+
+    for input in hostile_inputs {
+        let cancel = CancelFlag::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = parse_stream(std::io::BufReader::new(*input), &cancel, &tx);
+        while rx.try_recv().is_ok() {}
+
+        let _ = parse_chunked_stream(std::io::BufReader::new(*input), &cancel, &tx);
+        while rx.try_recv().is_ok() {}
+
+        let _ = parse_response_head(std::io::BufReader::new(*input));
+    }
+}

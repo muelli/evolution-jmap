@@ -1,0 +1,11 @@
+{
+  "accountId": "acc1",
+  "oldQueryState": "qstate1",
+  "newQueryState": "qstate2",
+  "total": 5,
+  "removed": ["id1"],
+  "added": [
+    { "id": "id2", "index": 0 },
+    { "id": "id3", "index": 1 }
+  ]
+}

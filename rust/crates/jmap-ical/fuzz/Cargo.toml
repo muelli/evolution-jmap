@@ -26,3 +26,10 @@ path = "fuzz_targets/fuzz_ical_roundtrip.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_ical_import"
+path = "fuzz_targets/fuzz_ical_import.rs"
+test = false
+doc = false
+bench = false
