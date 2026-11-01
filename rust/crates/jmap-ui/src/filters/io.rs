@@ -306,7 +306,7 @@ fn write(
         }
     }
 
-    let mut set = guarded(SetRequest::<SieveScript>::new(account), &state);
+    let mut set = guarded(SetRequest::<SieveScript>::new(account.clone()), &state);
     for (write, blob_id) in plan.writes.iter().zip(blob_ids) {
         match write {
             ScriptWrite::Create { key, name, .. } => {
@@ -332,7 +332,20 @@ fn write(
         ActivationChange::Deactivate => request.deactivating(),
     };
 
-    let response = link.call(|client| client.sieve_script_set(&request))?;
+    let outcome = write_results(link, &request, plan);
+    if outcome.is_err() {
+        restore_after_failed_write(link, plan, &account, &outcome);
+    }
+    outcome
+}
+
+/// Sends `request` and checks that every write of `plan` took effect.
+fn write_results(
+    link: &AccountLink,
+    request: &SieveScriptSetRequest,
+    plan: &SavePlan,
+) -> Result<(), jmap_client::Error> {
+    let response = link.call(|client| client.sieve_script_set(request))?;
 
     for write in &plan.writes {
         match write {
@@ -349,6 +362,40 @@ fn write(
     }
 
     Ok(())
+}
+
+/// Turns the script `deactivate_first` turned off back on, after the write
+/// that was meant to replace it failed.
+///
+/// A state mismatch means another client wrote something after this save's
+/// own deactivation request, so no guess is made then: the save already
+/// refuses with [`SCRIPTS_CHANGED`] and the user must reload. Every other
+/// failure happens with the account exactly as this save last left it, so
+/// putting the old script back on is safe. Left alone when the plan also
+/// activates a different script: a destroy that fails there can be a
+/// failure of the destroy alone, and the new script is already the right
+/// one to keep active.
+fn restore_after_failed_write(
+    link: &AccountLink,
+    plan: &SavePlan,
+    account: &Id,
+    outcome: &Result<(), jmap_client::Error>,
+) {
+    let Err(error) = outcome else {
+        return;
+    };
+    if !plan.deactivate_first || error.is_state_mismatch() {
+        return;
+    }
+    if !matches!(plan.activation, ActivationChange::Keep) {
+        return;
+    }
+    let Some(active) = &plan.baseline.active else {
+        return;
+    };
+    // Best effort: the account already lost its active script to the
+    // deactivation above, so there is no worse state to fall back to.
+    let _ = link.call(|client| client.sieve_script_activate(account, active));
 }
 
 /// The current state, if the change that moved it leaves `plan` valid.
@@ -796,6 +843,42 @@ mod tests {
 
         assert_eq!(saved, Ok(()));
         assert!(load(&link).unwrap().scripts.is_empty());
+    }
+
+    #[test]
+    fn a_failed_destroy_after_the_separate_deactivation_turns_the_old_script_back_on() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+        let id = seed_script(&link, "keep;\n", true);
+        let loaded = load(&link).unwrap();
+
+        // The destroy targets a script the server does not have. The
+        // separate deactivation still runs first and still succeeds, so a
+        // save that stops here must not leave the account with no active
+        // script.
+        let error = save(
+            &link,
+            &SavePlan {
+                destroys: vec![Id::from("missing-script")],
+                deactivate_first: true,
+                baseline: loaded.baseline(),
+                if_in_state: Some(loaded.state),
+                ..SavePlan::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_ne!(error, translate(SCRIPTS_CHANGED));
+        let after = load(&link).unwrap();
+        let script = after
+            .scripts
+            .iter()
+            .find(|script| script.script.id.as_ref() == Some(&id))
+            .unwrap();
+        assert!(
+            script.script.is_active,
+            "a failed main write must not leave the account with no active script"
+        );
     }
 
     /// Turns the vacation responder on. On a server that keeps it as a Sieve
