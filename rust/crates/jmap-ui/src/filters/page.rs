@@ -110,6 +110,9 @@ const ACTIVE_MARK: &CStr = N_(c"Yes");
 const VACATION_NOTE: &CStr = N_(c"%1$s (used by the Vacation Responder)");
 const ADD_TITLE: &CStr = N_(c"New Filter Script");
 const RENAME_TITLE: &CStr = N_(c"Rename Filter Script");
+// GNOME HIG: a button that opens a dialog gets a trailing ellipsis.
+const ADD_LABEL: &CStr = N_(c"_Add…");
+const RENAME_LABEL: &CStr = N_(c"_Rename…");
 const NAME_LABEL: &CStr = N_(c"_Name:");
 const CHECKING: &CStr = N_(c"Checking the script…");
 const SCRIPT_VALID: &CStr = N_(c"The script is valid.");
@@ -122,12 +125,14 @@ const ADD_RULE_TITLE: &CStr = N_(c"New Rule");
 const EDIT_RULE_TITLE: &CStr = N_(c"Edit Rule");
 const EDIT_AS_TEXT_LABEL: &CStr = N_(c"_Edit as text");
 // Mnemonic on "t", not "E": "_Edit as text" is shown at the same time and
-// already owns Alt+E.
-const RULE_EDIT_LABEL: &CStr = N_(c"Edi_t");
+// already owns Alt+E. GNOME HIG: a button that opens a dialog gets a
+// trailing ellipsis.
+const RULE_EDIT_LABEL: &CStr = N_(c"Edi_t…");
 // Mnemonic on "i", not "D": the rules list's "A_dd" button is shown at the
 // same time and already owns Alt+D.
 const DEACTIVATE_LABEL: &CStr = N_(c"Deact_ivate");
-const RULE_ADD_LABEL: &CStr = N_(c"A_dd");
+// GNOME HIG: a button that opens a dialog gets a trailing ellipsis.
+const RULE_ADD_LABEL: &CStr = N_(c"A_dd…");
 const EXTERNAL_EDIT: &CStr = N_(c"This script was changed outside Evolution. It shows as text.");
 
 /// All page state, in a box as qdata. It holds the widget pointers (main
@@ -321,8 +326,8 @@ unsafe fn build_widgets(page: *mut GObject) {
 
         let buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_box_pack_start(row.cast(), buttons, GFALSE, GFALSE, 0);
-        let add = add_button(page, buttons, N_(c"_Add"), on_add);
-        let rename = add_button(page, buttons, N_(c"_Rename"), on_rename);
+        let add = add_button(page, buttons, ADD_LABEL, on_add);
+        let rename = add_button(page, buttons, RENAME_LABEL, on_rename);
         let remove = add_button(page, buttons, N_(c"Re_move"), on_remove);
         let activate = add_button(page, buttons, N_(c"A_ctivate"), on_activate);
         let deactivate = add_button(page, buttons, DEACTIVATE_LABEL, on_deactivate);
@@ -1756,6 +1761,17 @@ mod tests {
     #[test]
     fn deactivate_and_rule_add_keep_different_mnemonics() {
         assert_ne!(mnemonic(DEACTIVATE_LABEL), mnemonic(RULE_ADD_LABEL));
+    }
+
+    /// GNOME HIG: a button that opens a dialog carries a trailing ellipsis,
+    /// like `send_later`'s "_Custom Time…" already does. "_Add" and
+    /// "_Rename" open the New/Rename Filter Script dialog; the rules list's
+    /// "A_dd" and "Edi_t" open the New/Edit Rule dialog.
+    #[test]
+    fn dialog_opening_buttons_show_an_ellipsis() {
+        for label in [ADD_LABEL, RENAME_LABEL, RULE_ADD_LABEL, RULE_EDIT_LABEL] {
+            assert!(label.to_str().unwrap().ends_with('…'), "{label:?}");
+        }
     }
 
     /// A fresh [`UiState`], not tied to any real widget.
