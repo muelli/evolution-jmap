@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use base64::Engine;
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailHeader, EmailImportRequest,
@@ -23,7 +24,7 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, project_properties, to_result};
 use crate::patch::apply_patch;
 use crate::sieve::ensure_vacation_script;
-use crate::state::{AccountState, RecordedSubmission, ServerState};
+use crate::state::{AccountState, Blob, RecordedSubmission, ServerState};
 
 /// Fixed stand-in for "now" in reproducible tests.
 const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
@@ -2232,8 +2233,16 @@ impl EmailSeed {
     }
 }
 
-/// Build a single-part RFC 5322 `message/rfc822` blob for a seeded message.
-fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
+/// Build an RFC 5322 `message/rfc822` blob for a seeded message: a single
+/// `text/plain` part, or `multipart/mixed` when `seed` has attachments.
+///
+/// A real EDS/Camel backend does not walk `bodyStructure`/`attachments` to
+/// read a message: it downloads the whole raw message by the email's own
+/// top-level `blobId` (`jmap-mail-sync::message::SOURCE_PROPERTIES`) and
+/// hands the bytes to Camel's own MIME parser. So an attachment this
+/// function omits here is invisible to such a client, even though the JMAP
+/// `attachments` property still names it.
+fn rfc5322(id: &Id, seed: &EmailSeed, blobs: &BTreeMap<Id, Blob>) -> String {
     let mut message = String::new();
     message.push_str(&format!("From: {}\r\n", address(&seed.from)));
     if !seed.to.is_empty() {
@@ -2254,14 +2263,51 @@ fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
     }
     message.push_str(&format!("Message-ID: <{id}@mock.invalid>\r\n"));
     message.push_str("MIME-Version: 1.0\r\n");
-    message.push_str("Content-Type: text/plain; charset=utf-8\r\n");
-    message.push_str("Content-Transfer-Encoding: 8bit\r\n");
+    if seed.attachments.is_empty() {
+        message.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+        message.push_str("Content-Transfer-Encoding: 8bit\r\n");
+        for header in &seed.headers {
+            message.push_str(&format!("{}: {}\r\n", header.name, header.value));
+        }
+        message.push_str("\r\n");
+        message.push_str(&seed.text_body.replace('\n', "\r\n"));
+        message.push_str("\r\n");
+        return message;
+    }
+
+    let boundary = format!("mock-boundary-{id}");
+    message.push_str(&format!(
+        "Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n"
+    ));
     for header in &seed.headers {
         message.push_str(&format!("{}: {}\r\n", header.name, header.value));
     }
     message.push_str("\r\n");
+    message.push_str(&format!("--{boundary}\r\n"));
+    message.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    message.push_str("Content-Transfer-Encoding: 8bit\r\n\r\n");
     message.push_str(&seed.text_body.replace('\n', "\r\n"));
     message.push_str("\r\n");
+    for (blob_id, name, content_type) in &seed.attachments {
+        message.push_str(&format!("--{boundary}\r\n"));
+        message.push_str(&format!(
+            "Content-Type: {content_type}; name=\"{name}\"\r\n"
+        ));
+        message.push_str(&format!(
+            "Content-Disposition: attachment; filename=\"{name}\"\r\n"
+        ));
+        message.push_str("Content-Transfer-Encoding: base64\r\n\r\n");
+        let data = blobs
+            .get(blob_id)
+            .map(|blob| blob.data.as_slice())
+            .unwrap_or_default();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+        for line in encoded.as_bytes().chunks(76) {
+            message.push_str(std::str::from_utf8(line).expect("base64 is ASCII"));
+            message.push_str("\r\n");
+        }
+    }
+    message.push_str(&format!("--{boundary}--\r\n"));
     message
 }
 
@@ -2435,7 +2481,7 @@ impl AccountState {
             })
             .collect();
 
-        let source = rfc5322(&id, &seed);
+        let source = rfc5322(&id, &seed, &self.blobs);
         // RFC 8621 §4.1 defines `size` as octets of the raw `blobId` payload.
         let size = source.len() as u64;
         let mut email = Email::default();

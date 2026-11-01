@@ -71,6 +71,8 @@ struct SeedEmail {
     keywords: Vec<String>,
     #[serde(default)]
     headers: Vec<SeedHeader>,
+    #[serde(default)]
+    attachments: Vec<SeedAttachment>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +80,14 @@ struct SeedAddress {
     #[serde(default)]
     name: Option<String>,
     email: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeedAttachment {
+    name: String,
+    content_type: String,
+    content: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -615,6 +625,13 @@ fn seed_from_file(server: &MockServer, path: &str) -> Result<(), String> {
                 .into_iter()
                 .map(|header| EmailHeader::new(header.name, header.value))
                 .collect();
+            for attachment in email_seed.attachments {
+                let blob_id = account.add_blob(
+                    attachment.content_type.clone(),
+                    attachment.content.into_bytes(),
+                );
+                seed = seed.attachment(blob_id, &attachment.name, &attachment.content_type);
+            }
             account.seed_email(seed);
         }
 

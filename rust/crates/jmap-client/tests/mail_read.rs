@@ -129,6 +129,70 @@ fn receive_email_attachment_blob_download() {
     assert_eq!(downloaded, attachment_bytes);
 }
 
+/// A real EDS/Camel backend does not walk `bodyStructure`/`attachments` to
+/// fetch a message: it downloads the whole raw message by the email's own
+/// top-level `blobId` (RFC 8621 §4.1's "raw octets... as received") and hands
+/// it to Camel's own MIME parser (`jmap-mail-sync::message::SOURCE_PROPERTIES`
+/// documents exactly this). So the attachment must be a real MIME part of
+/// that raw message too, not only reachable through its own, separate blob.
+#[test]
+fn receive_email_raw_message_blob_includes_its_attachments() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+
+    let attachment_bytes = b"%PDF-1.7 fake report".to_vec();
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+        let blob_id = account.add_blob("application/pdf", attachment_bytes.clone());
+        account.seed_email(
+            EmailSeed::new(
+                inbox,
+                ("Bob", "bob@example.com"),
+                "Report attached",
+                "See attachment.",
+                "2026-08-03T08:00:00Z",
+            )
+            .attachment(blob_id, "report.pdf", "application/pdf"),
+        );
+    }
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let emails = client
+        .email_query_then_get(
+            &account_id,
+            EmailQueryFilter::default(),
+            None,
+            Some(&["blobId", "size"]),
+        )
+        .unwrap();
+    let email = &emails[0];
+
+    let raw = client
+        .download_blob(
+            &account_id,
+            email.blob_id.as_ref().unwrap(),
+            "message.eml",
+            limits::MAX_BLOB_BYTES,
+        )
+        .unwrap();
+    let raw = String::from_utf8(raw).expect("the raw message is ASCII/UTF-8");
+    assert!(
+        raw.contains("multipart/mixed"),
+        "the raw message is not multipart, so it carries no attachment: {raw}"
+    );
+    assert!(
+        raw.contains("report.pdf"),
+        "the raw message does not name the attachment: {raw}"
+    );
+    assert!(
+        raw.contains("JVBERi0xLjcgZmFrZSByZXBvcnQ="),
+        "the raw message does not carry the attachment's base64 bytes: {raw}"
+    );
+}
+
 /// `Email/query` filter fields the mock did not apply until now: `cc`,
 /// `bcc`, `body`, `text`, `header`, `minSize`/`maxSize`, `hasAttachment`.
 /// `from`/`to`/`subject`/`inMailbox`/keyword/date filters are covered above
