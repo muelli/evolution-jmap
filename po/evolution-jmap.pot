@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-01 09:34+0000\n"
+"POT-Creation-Date: 2026-11-01 10:14+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -760,11 +760,11 @@ msgid "Then:"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:341
-msgid "Add _condition"
+msgid "Add _Condition"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:342
-msgid "Add _action"
+msgid "Add _Action"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:343

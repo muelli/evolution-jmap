@@ -338,8 +338,8 @@ const RULE_NAME_LABEL: &CStr = N_(c"_Name:");
 const MATCH_LABEL: &CStr = N_(c"_Match:");
 const CONDITIONS_LABEL: &CStr = N_(c"If the message matches:");
 const ACTIONS_LABEL: &CStr = N_(c"Then:");
-const ADD_CONDITION: &CStr = N_(c"Add _condition");
-const ADD_ACTION: &CStr = N_(c"Add _action");
+const ADD_CONDITION: &CStr = N_(c"Add _Condition");
+const ADD_ACTION: &CStr = N_(c"Add _Action");
 const REMOVE_ROW: &CStr = N_(c"_Remove");
 const STOP_LABEL: &CStr = N_(c"_Stop processing more rules");
 const HEADER_NAME_HINT: &CStr = N_(c"Header name");
@@ -1111,6 +1111,25 @@ mod tests {
 
     fn extensions(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// GNOME HIG: button labels use Header capitalization, every word
+    /// capitalized. The mnemonic underscore does not count as a word break.
+    fn is_header_case(label: &CStr) -> bool {
+        label
+            .to_str()
+            .unwrap()
+            .split(' ')
+            .map(|word| word.trim_start_matches('_'))
+            .all(|word| word.chars().next().is_some_and(char::is_uppercase))
+    }
+
+    /// The rule list's own "Move Up"/"Move Down" buttons (`filters::page`)
+    /// use Header capitalization; these add-row buttons must match.
+    #[test]
+    fn add_row_buttons_use_header_capitalization() {
+        assert!(is_header_case(ADD_CONDITION), "{ADD_CONDITION:?}");
+        assert!(is_header_case(ADD_ACTION), "{ADD_ACTION:?}");
     }
 
     #[test]
