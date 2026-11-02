@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jmap_proto::methods::{ChangesRequest, ChangesResponse};
 use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_PRINCIPALS, CAPABILITY_SUBMISSION,
+    CAPABILITY_PRINCIPALS, CAPABILITY_SIEVE, CAPABILITY_SUBMISSION,
 };
 use jmap_proto::{Id, State};
 
@@ -32,6 +32,7 @@ impl Client {
             }
             "EmailSubmission" | "Identity" => CAPABILITY_SUBMISSION,
             "Principal" | "ShareNotification" => CAPABILITY_PRINCIPALS,
+            "SieveScript" => CAPABILITY_SIEVE,
             other => {
                 return Err(Error::Protocol(format!(
                     "no known capability for data type {other}"
