@@ -75,6 +75,16 @@ use crate::widget::{self, get_bool, get_text, set_bool, set_text};
 const NAME: &CStr = c"JmapVacationPage";
 const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-vacation-page-state");
 
+/// GTK's own `wrap-mode` value with the same meaning as
+/// [`crate::widget::PANGO_WRAP_WORD_CHAR`], for the message text view
+/// (`gtkenums.h`: NONE = 0, CHAR = 1, WORD = 2, WORD_CHAR = 3; a different
+/// enum from Pango's, with different values).
+const GTK_WRAP_WORD_CHAR: c_int = 3;
+/// `GtkScrolledWindow`'s `hscrollbar-policy` value that keeps the page from
+/// ever scrolling sideways; a wrapped label or message line gives up height
+/// instead (`gtkscrolledwindow.h`: ALWAYS = 0, AUTOMATIC = 1, NEVER = 2).
+const GTK_POLICY_NEVER: c_int = 2;
+
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"This account’s server does not offer a vacation autoresponder.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
@@ -203,6 +213,10 @@ unsafe fn build_widgets(page: *mut GObject) {
     // as the container cast requires. GTK3 adds a viewport around the box.
     // Each widget below is new, and its container owns it.
     unsafe {
+        // A long auto-reply message must not push the page into scrolling
+        // sideways; it wraps or grows the page's height instead.
+        widget::set_enum_named(page, c"hscrollbar-policy", GTK_POLICY_NEVER);
+
         let content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_container_add(page.cast(), content);
 
@@ -242,6 +256,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         attach_row(grid, 2, N_(c"_Subject:"), subject);
         let body = gtk_text_view_new();
         gtk_widget_set_vexpand(body, GTRUE);
+        widget::set_enum_named(body.cast(), c"wrap-mode", GTK_WRAP_WORD_CHAR);
         attach_row(grid, 3, N_(c"_Message:"), body);
         let buffer = gtk_text_view_get_buffer(body.cast());
 
@@ -618,6 +633,76 @@ unsafe fn set_date(field: *mut GtkWidget, value: &str) {
         match parsed {
             Some((year, month, day)) => e_date_edit_set_date(field.cast(), year, month, day),
             None => e_date_edit_set_time(field.cast(), -1),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::{c_char, c_void};
+
+    use evo_sys::gtk_widget_destroy;
+    use gobject_sys::g_object_get;
+
+    use super::*;
+
+    unsafe extern "C" {
+        fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> glib_sys::gboolean;
+        fn gtk_scrolled_window_new(
+            hadjustment: *mut c_void,
+            vadjustment: *mut c_void,
+        ) -> *mut GtkWidget;
+        /// The message row's column (`attach_row`'s `input`), row 3.
+        fn gtk_grid_get_child_at(grid: *mut GtkWidget, left: c_int, top: c_int) -> *mut GtkWidget;
+    }
+
+    /// Layout (item 174 (a)): the message body must not force the page to
+    /// scroll sideways. `GTK_WRAP_NONE` (the GtkTextView default) never
+    /// wraps, so an unbroken long line in the auto-reply message would
+    /// otherwise widen the page past the window. Needs a display; skips
+    /// without one.
+    #[test]
+    fn the_message_body_wraps_instead_of_scrolling_sideways() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain `GtkScrolledWindow` stands in for the registered
+        // `JmapVacationPage` instance; `build_widgets` only uses it as a
+        // `GtkContainer` (`gtk_container_add`) and a qdata target, both of
+        // which any `GObject` instance supports.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+
+            let grid = state(page.cast()).unwrap().borrow().grid;
+            let body = gtk_grid_get_child_at(grid, 1, 3);
+            let mut wrap_mode: c_int = -1;
+            g_object_get(
+                body.cast(),
+                c"wrap-mode".as_ptr(),
+                &mut wrap_mode as *mut c_int,
+                ptr::null::<c_char>(),
+            );
+            assert_eq!(
+                wrap_mode, GTK_WRAP_WORD_CHAR,
+                "the message body does not break an overlong word"
+            );
+
+            let mut hscrollbar_policy: c_int = -1;
+            g_object_get(
+                page.cast(),
+                c"hscrollbar-policy".as_ptr(),
+                &mut hscrollbar_policy as *mut c_int,
+                ptr::null::<c_char>(),
+            );
+            assert_eq!(
+                hscrollbar_policy, GTK_POLICY_NEVER,
+                "the page can still scroll sideways"
+            );
+
+            gtk_widget_destroy(page);
         }
     }
 }
