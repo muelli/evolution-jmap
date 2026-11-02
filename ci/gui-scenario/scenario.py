@@ -420,6 +420,67 @@ def is_showing(node):
         return False
 
 
+# Focusable-widget accessibility audit (item 174(d)).
+
+# Roles a screen reader can land keyboard focus on. Labels, static text and
+# plain containers are excluded: they are not focusable themselves. A
+# GtkTreeView reports as "table" over AT-SPI (confirmed in a dump of the
+# Server Filters page), not "tree table".
+FOCUSABLE_ROLES = {"push button", "check box", "text", "combo box", "table"}
+
+
+def labelled_by_name(node):
+    """Return the name of the first labelled-by relation target, or "".
+
+    GTK sets this relation automatically for a field whose caption used
+    `gtk_label_set_mnemonic_widget`: a screen reader resolves the field's
+    name through it even though the field's own accessible name stays
+    empty, so this counts as named too.
+    """
+    try:
+        relations = node.getRelationSet()
+    except Exception:  # noqa: BLE001
+        return ""
+    for relation in relations:
+        if relation.getRelationType() != pyatspi.RELATION_LABELLED_BY:
+            continue
+        for i in range(relation.getNTargets()):
+            text = _name(relation.getTarget(i))
+            if text:
+                return text
+    return ""
+
+
+def unnamed_widgets(root):
+    """Yield the role of every focusable descendant of `root` with no
+    accessible name and no labelled-by relation to a named widget.
+
+    Skips a node that is not `STATE_SHOWING`: an `EDateEdit` with
+    `show_time` off keeps its hidden time combo (and that combo's own
+    editable entry) in the AT-SPI tree, state VISIBLE but not SHOWING, the
+    same way a notebook page that is not the selected one keeps its
+    widgets in the tree with SHOWING unset. Tab can never reach a hidden
+    widget, so it is not a reachable "focusable widget with no name" in
+    the sense this scenario checks.
+    """
+    for node in descendants(root):
+        if _role(node) not in FOCUSABLE_ROLES:
+            continue
+        if not node.getState().contains(pyatspi.STATE_SHOWING):
+            continue
+        if _name(node) or labelled_by_name(node):
+            continue
+        yield _role(node)
+
+
+def audit_dialog(dialog, label):
+    """Raise if a focusable descendant of `dialog` has no accessible name."""
+    offenders = list(unnamed_widgets(dialog))
+    if offenders:
+        raise ScenarioFailure(f"unnamed focusable widgets in the {label!r} dialog: {offenders}")
+    say(f"a11y-audit: no unnamed focusable widget in the {label!r} dialog")
+
+
 def evolution():
     """Return the Evolution application node, or None."""
     desktop = pyatspi.Registry.getDesktop(0)

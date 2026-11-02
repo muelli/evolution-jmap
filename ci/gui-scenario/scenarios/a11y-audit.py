@@ -6,13 +6,16 @@ accessible name, either its own or through a labelled-by relation.
 This is item 174(d)'s automated audit: walk a page's widget tree over
 AT-SPI (not pixels) and fail on the first interactive widget (button,
 check box, text entry or view, combo box, tree view) whose accessible
-name is empty and has no labelled-by relation to a named widget. One
-account editor is opened once; each page in PAGES is visited in turn,
-then the name dialog and the rule dialog, both reached from the Server
-Filters page. The composer's Send Later custom-time dialog is audited
-separately, from its own composer. Duplicate-mnemonic detection and
-live Tab-key reachability, and every surface not yet covered, follow in
-later slices.
+name is empty and has no labelled-by relation to a named widget. The
+walk itself (`unnamed_widgets`, `audit_dialog`) lives in `scenario.py`,
+shared with `a11y-audit-undo-delete.py`, the sibling scenario for the
+one surface that needs a calendar/addressbook component instead of
+this scenario's mail one. One account editor is opened once; each page
+in PAGES is visited in turn, then the name dialog and the rule dialog,
+both reached from the Server Filters page. The composer's Send Later
+custom-time dialog is audited separately, from its own composer.
+Duplicate-mnemonic detection and live Tab-key reachability, and the
+snooze submenu, follow in later slices.
 """
 
 import pyatspi
@@ -20,11 +23,10 @@ import pyatspi
 from scenario import (
     Jmap,
     ScenarioFailure,
-    _name,
     _role,
+    audit_dialog,
     click_at,
     click_button,
-    descendants,
     do_action,
     evolution,
     find,
@@ -33,6 +35,7 @@ from scenario import (
     menu_item,
     say,
     select_folder,
+    unnamed_widgets,
     wait_for,
     window,
     write_collection_mail_account,
@@ -43,12 +46,6 @@ VACATION_CAPABILITY = "urn:ietf:params:jmap:vacationresponse"
 EDITOR = "Account Editor"
 # The X keysym of the Menu key.
 MENU_KEY = 0xFF67
-
-# Roles a screen reader can land keyboard focus on. Labels, static text and
-# plain containers are excluded: they are not focusable themselves. A
-# GtkTreeView reports as "table" over AT-SPI (confirmed in a dump of the
-# Server Filters page), not "tree table".
-FOCUSABLE_ROLES = {"push button", "check box", "text", "combo box", "table"}
 
 # Each page: its sidebar label, a widget whose sensitivity means the page
 # finished loading ("ready"), and a widget that is always present once the
@@ -152,50 +149,6 @@ def page_root(editor, page):
     return node
 
 
-def labelled_by_name(node):
-    """Return the name of the first labelled-by relation target, or "".
-
-    GTK sets this relation automatically for a field whose caption used
-    `gtk_label_set_mnemonic_widget`: a screen reader resolves the field's
-    name through it even though the field's own accessible name stays
-    empty, so this counts as named too.
-    """
-    try:
-        relations = node.getRelationSet()
-    except Exception:  # noqa: BLE001
-        return ""
-    for relation in relations:
-        if relation.getRelationType() != pyatspi.RELATION_LABELLED_BY:
-            continue
-        for i in range(relation.getNTargets()):
-            text = _name(relation.getTarget(i))
-            if text:
-                return text
-    return ""
-
-
-def unnamed_widgets(root):
-    """Yield the role of every focusable descendant of `root` with no
-    accessible name and no labelled-by relation to a named widget.
-
-    Skips a node that is not `STATE_SHOWING`: an `EDateEdit` with
-    `show_time` off keeps its hidden time combo (and that combo's own
-    editable entry) in the AT-SPI tree, state VISIBLE but not SHOWING, the
-    same way a notebook page that is not the selected one keeps its
-    widgets in the tree with SHOWING unset. Tab can never reach a hidden
-    widget, so it is not a reachable "focusable widget with no name" in
-    the sense this scenario checks.
-    """
-    for node in descendants(root):
-        if _role(node) not in FOCUSABLE_ROLES:
-            continue
-        if not node.getState().contains(pyatspi.STATE_SHOWING):
-            continue
-        if _name(node) or labelled_by_name(node):
-            continue
-        yield _role(node)
-
-
 def audit_page(editor, page):
     open_page(editor, page)
     loaded(editor, page)
@@ -204,13 +157,6 @@ def audit_page(editor, page):
     if offenders:
         raise ScenarioFailure(f"unnamed focusable widgets on the {page['name']!r} page: {offenders}")
     say(f"a11y-audit: no unnamed focusable widget on the {page['name']!r} page")
-
-
-def audit_dialog(dialog, label):
-    offenders = list(unnamed_widgets(dialog))
-    if offenders:
-        raise ScenarioFailure(f"unnamed focusable widgets in the {label!r} dialog: {offenders}")
-    say(f"a11y-audit: no unnamed focusable widget in the {label!r} dialog")
 
 
 def rules_add_button(editor):
