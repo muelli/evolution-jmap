@@ -22,15 +22,24 @@ label name, so this client writes that same `$Label*` string as the
 server's keyword: not cosmetic, but exactly what interop with an IMAP
 Evolution on the same account already expects.
 
+Message/Mark As/Junk sets `$junk` (and, same as stock IMAP, `$seen`: Camel's
+own handler marks a message read when it calls it junk) after a confirmation
+dialog ("Mark as Junk"/"Cancel", `mail.error.xml`'s `ask-mark-as-junk`,
+`prompt-on-mark-as-junk` defaults to on). Message/Mark As/Not Junk sets
+`$notjunk` with no prompt. Both go through the same `Keywords` machinery as
+the flags and labels above (`jmap-mail-sync/src/keywords.rs`'s
+`keyword::JUNK`/`NOT_JUNK`).
+
 Not covered here, left for later claims of the same item: a custom label
 with spaces, capitals and non-ASCII (needs driving the "New Label"
-dialog), junk/not-junk, a multi-selection, the reverse direction (a
+dialog), a multi-selection, the reverse direction (a
 server-side keyword change reflected in the message list), the 3.60.2
 Fedora container, and contacts/calendar categories.
 """
 
 from scenario import (
     Jmap,
+    confirm,
     expect_log,
     expect_no_errors,
     main,
@@ -95,6 +104,17 @@ def run():
         f"{SUBJECT!r} has no label",
     )
     say("server: all labels cleared")
+
+    menu_item("Message/Mark As/Junk")
+    confirm("Mark as Junk", "mark-as-junk-confirmation")
+    wait_for(lambda: "$junk" in server.keywords_of(SUBJECT), f"{SUBJECT!r} junk")
+    say("server: $junk set")
+
+    select_message(SUBJECT)
+    menu_item("Message/Mark As/Not Junk")
+    wait_for(lambda: "$notjunk" in server.keywords_of(SUBJECT), f"{SUBJECT!r} not junk")
+    wait_for(lambda: "$junk" not in server.keywords_of(SUBJECT), f"{SUBJECT!r} not junk (cleared)")
+    say("server: $notjunk set, $junk cleared")
 
     expect_no_errors()
 
