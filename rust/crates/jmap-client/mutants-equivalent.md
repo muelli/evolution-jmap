@@ -27,8 +27,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 ## `src/changes.rs`
 
-- `crates/jmap-client/src/changes.rs:169:35: replace match guard disposition.updated with true in ChangeSet::classify`: in `all_changes`, an entry in `by_id` is created only when the ID appears in `created`, `updated`, or `destroyed`, setting the corresponding boolean flag to true. When `(disposition.created, disposition.destroyed)` is `(false, false)`, `disposition.updated` is guaranteed to be true, so the guard is always true and replacing it with `true` has no observable effect.
-- 8 of 8 viable mutants caught by test suites, 4 unviable due to `ChangesResponse` and `ChangeSet` without `Default`, 1 genuinely equivalent.
+- Zero missed mutants (13 of 13 viable mutants caught by test suites, 4 unviable due to absence of `Default` implementations on `ChangesResponse`, `ChangeSet`, and `Result`).
+- Batch 57 `/changes` re-run: 13 of 13 viable mutants caught across `Client::changes`, `ChangeSet::nothing`, `ChangeSet::is_empty`, `Client::all_changes`, `keep`, and `ChangeSet::classify`. The previously equivalent mutant on line 166:35 in `ChangeSet::classify` (`replace match guard disposition.updated with true`) was killed by targeted unit test `changeset_classify_does_not_mark_updated_when_disposition_has_no_changes`. 4 unviable at compile time due to absence of `Default`, 0 missed mutants (100% viable mutant catch rate).
 
 ## `src/sieve.rs`
 

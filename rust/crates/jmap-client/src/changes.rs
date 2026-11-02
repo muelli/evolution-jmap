@@ -172,3 +172,68 @@ impl ChangeSet {
         set
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changeset_classify_does_not_mark_updated_when_disposition_has_no_changes() {
+        let mut by_id = BTreeMap::new();
+        by_id.insert(Id::new("unchanged1"), Disposition::default());
+        let set = ChangeSet::classify(State::new("state1"), by_id);
+        assert!(set.updated.is_empty());
+        assert!(set.created.is_empty());
+        assert!(set.destroyed.is_empty());
+    }
+
+    #[test]
+    fn changeset_classify_discards_objects_created_and_destroyed_in_same_window() {
+        let mut by_id = BTreeMap::new();
+        by_id.insert(
+            Id::new("transient"),
+            Disposition {
+                created: true,
+                updated: true,
+                destroyed: true,
+            },
+        );
+        let set = ChangeSet::classify(State::new("state1"), by_id);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn changeset_classify_marks_created_and_destroyed_correctly() {
+        let mut by_id = BTreeMap::new();
+        by_id.insert(
+            Id::new("c1"),
+            Disposition {
+                created: true,
+                updated: true,
+                destroyed: false,
+            },
+        );
+        by_id.insert(
+            Id::new("d1"),
+            Disposition {
+                created: false,
+                updated: true,
+                destroyed: true,
+            },
+        );
+        by_id.insert(
+            Id::new("u1"),
+            Disposition {
+                created: false,
+                updated: true,
+                destroyed: false,
+            },
+        );
+        let set = ChangeSet::classify(State::new("state1"), by_id);
+        assert!(set.created.contains(&Id::new("c1")));
+        assert!(!set.updated.contains(&Id::new("c1")));
+        assert!(set.destroyed.contains(&Id::new("d1")));
+        assert!(!set.updated.contains(&Id::new("d1")));
+        assert!(set.updated.contains(&Id::new("u1")));
+    }
+}
