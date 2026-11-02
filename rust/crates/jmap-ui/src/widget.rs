@@ -134,6 +134,19 @@ pub unsafe fn set_enum_named(object: *mut GObject, name: &CStr, value: c_int) {
     }
 }
 
+/// Sets a named plain integer property, such as a `GtkTreeViewColumn`'s
+/// `fixed-width`.
+///
+/// # Safety
+///
+/// `object` must be a live GObject with a writable integer property `name`.
+pub unsafe fn set_int_named(object: *mut GObject, name: &CStr, value: c_int) {
+    // SAFETY: per the contract.
+    unsafe {
+        g_object_set(object, name.as_ptr(), value, ptr::null::<c_char>());
+    }
+}
+
 /// Marks a widget's accessible object with `role`, so a screen reader
 /// treats a later text or state change as an announcement rather than a
 /// silent redraw (a status label wants `ATK_ROLE_STATUSBAR`). Does nothing

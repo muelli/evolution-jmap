@@ -99,6 +99,14 @@ const GTK_WRAP_WORD_CHAR: c_int = 3;
 /// ever scrolling sideways; a wrapped label or script line gives up height
 /// instead (`gtkscrolledwindow.h`: ALWAYS = 0, AUTOMATIC = 1, NEVER = 2).
 const GTK_POLICY_NEVER: c_int = 2;
+/// `GtkTreeViewColumn`'s `sizing` value that keeps a column's width from
+/// growing with its content, so a long script or rule name cannot force the
+/// page wider than the window (`gtktreeviewcolumn.h`: GROW_ONLY = 0,
+/// AUTOSIZE = 1, FIXED = 2).
+const GTK_TREE_VIEW_COLUMN_FIXED: c_int = 2;
+/// A starting width for a fixed-sizing name column; `expand` on the column
+/// still lets it grow into whatever room the view actually has.
+const NAME_COLUMN_WIDTH: c_int = 160;
 
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"Your server does not offer server-side filters.");
@@ -485,6 +493,13 @@ unsafe fn add_text_column(view: *mut GtkWidget, title: &'static CStr, column: c_
         let tree_column = gtk_tree_view_column_new();
         gtk_tree_view_column_set_title(tree_column, translate_static(title));
         gtk_tree_view_column_set_expand(tree_column, flag(expand));
+        if expand {
+            // A long script or rule name must not force the page wider
+            // than the window: a fixed sizing mode caps the column's own
+            // width request independently of its content.
+            widget::set_enum_named(tree_column.cast(), c"sizing", GTK_TREE_VIEW_COLUMN_FIXED);
+            widget::set_int_named(tree_column.cast(), c"fixed-width", NAME_COLUMN_WIDTH);
+        }
         gtk_tree_view_column_pack_start(tree_column, renderer, GTRUE);
         gtk_tree_view_column_add_attribute(tree_column, renderer, c"text".as_ptr(), column);
         gtk_tree_view_append_column(view.cast(), tree_column);
@@ -1713,7 +1728,9 @@ mod tests {
     use std::os::raw::c_char;
     use std::sync::Mutex;
 
-    use evo_sys::{gtk_container_get_border_width, gtk_window_get_default_widget};
+    use evo_sys::{
+        gtk_container_get_border_width, gtk_tree_view_get_column, gtk_window_get_default_widget,
+    };
     use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free};
     use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
     use jmap_backend_core::subclass::register_static;
@@ -1968,5 +1985,58 @@ mod tests {
                 "action returned"
             ]
         );
+    }
+
+    /// Layout (item 174 (a)): a long script or rule name must not force the
+    /// page to scroll sideways. Without a fixed sizing mode, a tree view
+    /// column's width request grows with its longest cell, and the page
+    /// cannot scroll horizontally (`hscrollbar-policy` is `NEVER`), so the
+    /// name column would otherwise widen the whole page past the window.
+    /// Needs a display; skips without one.
+    #[test]
+    fn a_name_column_does_not_grow_with_its_content() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain list store and tree view, both destroyed (the
+        // store's one reference moves to the view) before returning.
+        unsafe {
+            let mut types = [G_TYPE_STRING];
+            let store = gtk_list_store_newv(1, types.as_mut_ptr());
+            let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
+            g_object_unref(store.cast());
+            add_text_column(view, c"Name", 0, true);
+
+            let column = gtk_tree_view_get_column(view.cast(), 0);
+            assert!(!column.is_null(), "the column was not appended");
+
+            let mut sizing: c_int = -1;
+            g_object_get(
+                column.cast(),
+                c"sizing".as_ptr(),
+                &mut sizing as *mut c_int,
+                ptr::null::<c_char>(),
+            );
+            assert_eq!(
+                sizing, GTK_TREE_VIEW_COLUMN_FIXED,
+                "the column grows with its content instead of staying a fixed width"
+            );
+
+            let mut fixed_width: c_int = -1;
+            g_object_get(
+                column.cast(),
+                c"fixed-width".as_ptr(),
+                &mut fixed_width as *mut c_int,
+                ptr::null::<c_char>(),
+            );
+            assert_eq!(
+                fixed_width, NAME_COLUMN_WIDTH,
+                "the column has no fixed width to cap its size request at"
+            );
+
+            gtk_widget_destroy(view);
+        }
     }
 }
