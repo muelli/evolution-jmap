@@ -145,6 +145,10 @@ const RULE_EDIT_LABEL: &CStr = N_(c"Edi_t…");
 // Mnemonic on "i", not "D": the rules list's "A_dd" button is shown at the
 // same time and already owns Alt+D.
 const DEACTIVATE_LABEL: &CStr = N_(c"Deact_ivate");
+// Mnemonic on "v", not "A" or "C": the script list's "_Add…" button already
+// owns Alt+A, and the Account Editor dialog's own stock "_Cancel" button is
+// shown in the same window and already owns Alt+C.
+const ACTIVATE_LABEL: &CStr = N_(c"Acti_vate");
 // GNOME HIG: a button that opens a dialog gets a trailing ellipsis.
 const RULE_ADD_LABEL: &CStr = N_(c"A_dd…");
 const EXTERNAL_EDIT: &CStr = N_(c"This script was changed outside Evolution. It shows as text.");
@@ -347,7 +351,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         let add = add_button(page, buttons, ADD_LABEL, on_add);
         let rename = add_button(page, buttons, RENAME_LABEL, on_rename);
         let remove = add_button(page, buttons, N_(c"Re_move"), on_remove);
-        let activate = add_button(page, buttons, N_(c"A_ctivate"), on_activate);
+        let activate = add_button(page, buttons, ACTIVATE_LABEL, on_activate);
         let deactivate = add_button(page, buttons, DEACTIVATE_LABEL, on_deactivate);
 
         // Only the managed script offers rules mode; every other script
@@ -1824,6 +1828,19 @@ mod tests {
     #[test]
     fn deactivate_and_rule_add_keep_different_mnemonics() {
         assert_ne!(mnemonic(DEACTIVATE_LABEL), mnemonic(RULE_ADD_LABEL));
+    }
+
+    /// "Activate" and the Account Editor dialog's own stock "Cancel" button
+    /// are shown in the same window at the same time: the Server Filters
+    /// page never hides the dialog's own button row. Found live by
+    /// `ci/gui-scenario/scenarios/a11y-audit.py`'s `audit_mnemonics` check,
+    /// both bound Alt+C. GNOME's stock Cancel button mnemonic is always
+    /// "c" (every Evolution dialog agrees on it; not ours to change), so
+    /// this checks our own label directly rather than through a stock
+    /// GTK dialog built just for the test.
+    #[test]
+    fn activate_does_not_take_the_dialogs_own_cancel_mnemonic() {
+        assert_ne!(mnemonic(ACTIVATE_LABEL), 'c');
     }
 
     /// GNOME HIG: a button that opens a dialog carries a trailing ellipsis,

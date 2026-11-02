@@ -17,6 +17,16 @@ open" to find and activate one), the same way a hidden `EDateEdit` time
 combo does; `unnamed_widgets` would silently skip them. So this scenario
 clicks the Snooze item open before auditing its children, not only
 waiting for it to go sensitive.
+
+No `audit_mnemonics` call here: a GTK popup menu lets several items share
+one underlined letter and cycles through them on repeat presses, not the
+"one of the two widgets becomes unreachable" failure `audit_mnemonics`
+is for, and the context menu holding this submenu is stock Evolution's
+own, not a surface item 174 asks us to check. Confirmed empirically: the
+stock context menu already repeats several letters across its own
+top-level items (`i` three times, `a` four times), none of it ours to
+fix. The submenu's own three presets ("For One Hour", "Until Tomorrow
+Morning", "Until Next Monday Morning") use `h`, `t` and `m`: distinct.
 """
 
 import pyatspi
