@@ -340,9 +340,17 @@ const RULE_NAME_LABEL: &CStr = N_(c"_Name:");
 const MATCH_LABEL: &CStr = N_(c"_Match:");
 const CONDITIONS_LABEL: &CStr = N_(c"If the message matches:");
 const ACTIONS_LABEL: &CStr = N_(c"Then:");
-const ADD_CONDITION: &CStr = N_(c"Add _Condition");
+// Mnemonic on "i", not "C": the dialog's own stock "_Cancel" button is
+// shown in the same window and already owns Alt+C.
+const ADD_CONDITION: &CStr = N_(c"Add Cond_ition");
 const ADD_ACTION: &CStr = N_(c"Add _Action");
-const REMOVE_ROW: &CStr = N_(c"_Remove");
+// No mnemonic: `remove_button` makes one of these per condition or action
+// row, so a rule with more than one row of either kind shows two or more
+// "Remove" buttons at once. A window-level Alt+letter accelerator can only
+// ever reach one of them, which is not a letter clash to resolve by
+// picking a different one (every row still needs the same label); Tab and
+// the button's own name already reach each one individually.
+const REMOVE_ROW: &CStr = N_(c"Remove");
 
 /// `GtkScrolledWindow`'s `hscrollbar-policy` value that keeps the condition
 /// and action rows from ever scrolling sideways (`gtkscrolledwindow.h`:
@@ -1524,6 +1532,45 @@ mod tests {
     fn add_row_buttons_use_header_capitalization() {
         assert!(is_header_case(ADD_CONDITION), "{ADD_CONDITION:?}");
         assert!(is_header_case(ADD_ACTION), "{ADD_ACTION:?}");
+    }
+
+    /// The mnemonic underscore marks one letter per label. Panics if a
+    /// label has none, which would be a test bug, not a product one.
+    fn mnemonic(label: &CStr) -> char {
+        let text = label.to_str().unwrap();
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            if c == '_' {
+                return chars.next().unwrap().to_ascii_lowercase();
+            }
+        }
+        panic!("no mnemonic in {text:?}");
+    }
+
+    /// "Add Condition" and the dialog's own stock "Cancel" button are
+    /// always shown together in the same window. Found live by
+    /// `ci/gui-scenario/scenarios/a11y-audit.py`'s `audit_mnemonics`
+    /// check, both bound Alt+C. GNOME's stock Cancel button mnemonic is
+    /// always "c" (every Evolution dialog agrees on it; not ours to
+    /// change), so this checks our own label directly.
+    #[test]
+    fn add_condition_does_not_take_the_dialogs_own_cancel_mnemonic() {
+        assert_ne!(mnemonic(ADD_CONDITION), 'c');
+    }
+
+    /// `remove_button` makes one of these per condition or action row, so a
+    /// rule with more than one row of either kind shows two or more
+    /// "Remove" buttons in the same window at once: a mnemonic on this
+    /// label can never be unique no matter which letter it picks. Found
+    /// live by the same `audit_mnemonics` check as the test above, two
+    /// "Remove" buttons both bound Alt+R with one condition row and one
+    /// action row added.
+    #[test]
+    fn remove_row_carries_no_mnemonic() {
+        assert!(
+            !REMOVE_ROW.to_str().unwrap().contains('_'),
+            "{REMOVE_ROW:?} must not claim a window-level mnemonic: more than one can show at once"
+        );
     }
 
     #[test]
