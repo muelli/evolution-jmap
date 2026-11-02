@@ -9,9 +9,10 @@ check box, text entry or view, combo box, tree view) whose accessible
 name is empty and has no labelled-by relation to a named widget. One
 account editor is opened once; each page in PAGES is visited in turn,
 then the name dialog and the rule dialog, both reached from the Server
-Filters page. Duplicate-mnemonic detection and live Tab-key
-reachability, and every surface not yet covered, follow in later
-slices.
+Filters page. The composer's Send Later custom-time dialog is audited
+separately, from its own composer. Duplicate-mnemonic detection and
+live Tab-key reachability, and every surface not yet covered, follow in
+later slices.
 """
 
 import pyatspi
@@ -29,6 +30,7 @@ from scenario import (
     find,
     folder_tree,
     main,
+    menu_item,
     say,
     select_folder,
     wait_for,
@@ -259,11 +261,37 @@ def audit_name_and_rule_dialogs(editor):
     wait_for(lambda: window("New Rule") is None, "the rule dialog closes")
 
 
+def audit_send_later_dialog():
+    """Open a composer and audit the Send Later custom-time dialog.
+
+    The Custom Time item's handler runs a nested `gtk_dialog_run`, the same
+    shape `click_at` works around for a button in `audit_name_and_rule_
+    dialogs`; `menu_item` already runs the activating `doAction` call in a
+    child process for exactly this reason, so it is used here unchanged.
+    """
+    select_folder(ACCOUNT, "Inbox")
+    menu_item("File/New/Mail Message")
+    composer = wait_for(lambda: window("Compose Message"), "the composer window")
+    send_later = wait_for(
+        lambda: find(composer, "menu", "Send Later"), "the Send Later submenu"
+    )
+    wait_for(
+        lambda: send_later.getState().contains(pyatspi.STATE_SENSITIVE),
+        "the Send Later submenu sensitive (the gate found FUTURERELEASE)",
+    )
+    menu_item("File/Send Later/Custom Time…", "Compose Message")
+    dialog = wait_for(lambda: window("Send Later"), "the Send Later custom-time dialog")
+    audit_dialog(dialog, "Send Later")
+    click_button(dialog, "Cancel")
+    wait_for(lambda: window("Send Later") is None, "the dialog closes")
+
+
 def run():
     editor = open_editor()
     for page in PAGES:
         audit_page(editor, page)
     audit_name_and_rule_dialogs(editor)
+    audit_send_later_dialog()
 
 
-main(setup, run)
+main(setup, run, mock_args=("--max-delayed-send", "86400"))
