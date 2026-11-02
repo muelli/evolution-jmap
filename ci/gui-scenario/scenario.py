@@ -425,8 +425,10 @@ def is_showing(node):
 # Roles a screen reader can land keyboard focus on. Labels, static text and
 # plain containers are excluded: they are not focusable themselves. A
 # GtkTreeView reports as "table" over AT-SPI (confirmed in a dump of the
-# Server Filters page), not "tree table".
-FOCUSABLE_ROLES = {"push button", "check box", "text", "combo box", "table"}
+# Server Filters page), not "tree table". "menu item" is a leaf of an open
+# menu; the menu itself (role "menu") is not in this set, since arrow-key
+# navigation lands on its items, not on the menu container.
+FOCUSABLE_ROLES = {"push button", "check box", "text", "combo box", "table", "menu item"}
 
 
 def labelled_by_name(node):
