@@ -289,6 +289,8 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // to the entry beside it. `set_xalign` right-aligns it.
     "gtk_label_new_with_mnemonic",
     "gtk_label_set_mnemonic_widget",
+    // Only for a test: confirms which widget a mnemonic relation targets.
+    "gtk_label_get_mnemonic_widget",
     "gtk_label_set_xalign",
     "gtk_entry_new",
     "gtk_widget_set_hexpand",

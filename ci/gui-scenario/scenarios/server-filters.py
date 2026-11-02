@@ -190,7 +190,7 @@ def open_page():
 def loaded(editor):
     """Wait until the page has loaded and return the script list's Add button."""
     add = wait_for(
-        lambda: find(editor, "push button", "Add", showing=True), "a showing script Add button"
+        lambda: find(editor, "push button", "Add…", showing=True), "a showing script Add button"
     )
     wait_for(lambda: add.getState().contains(pyatspi.STATE_SENSITIVE), "the page loaded")
     return add
@@ -199,7 +199,7 @@ def loaded(editor):
 def structural_nodes(editor):
     """Return (the rules list's button box, the page's status label).
 
-    Both lack a usable AT-SPI name of their own ("Add" and "Remove" name
+    Both lack a usable AT-SPI name of their own ("Add…" and "Remove" name
     both the script list's and the rules list's buttons; the status label's
     text keeps changing). The rules list's "Enabled" column header is
     unique, so this walks up from it: the header's table is the rules
@@ -236,6 +236,21 @@ def script_cell(editor, text):
 def select_script(editor, name):
     cell = wait_for(lambda: script_cell(editor, name), f"{name!r} in the script list")
     cell.queryComponent().grabFocus()
+
+
+def selected_item_name(combo):
+    """Return the name of `combo`'s selected item.
+
+    Item 174(d) gave several combo boxes in this dialog a fixed accessible
+    name of their own (e.g. "Destination folder"), for a screen reader to
+    announce what the field is for. A plain `GtkComboBoxText`'s accessible
+    `name` used to mirror its selected item's text instead, which this
+    scenario relied on; read the selected child's own name now.
+    """
+    selection = combo.querySelection()
+    if selection.nSelectedChildren < 1:
+        return ""
+    return _name(selection.getSelectedChild(0))
 
 
 def close_with_ok(editor):
@@ -288,13 +303,13 @@ def run():
     wait_for(lambda: script_cell(editor, MANAGED_NAME), f"{MANAGED_NAME!r} listed")
     say(f"added the script {MANAGED_NAME!r}")
 
-    add_rule = rule_button(editor, "Add")
+    add_rule = rule_button(editor, "Add…")
     wait_for(lambda: add_rule.getState().contains(pyatspi.STATE_SENSITIVE), "rule Add sensitive")
     click_at(add_rule)
     rule_dialog = wait_for(lambda: window("New Rule"), "the rule dialog")
-    click_button(rule_dialog, "Add condition")
-    click_button(rule_dialog, "Add action")
-    click_button(rule_dialog, "Add action")
+    click_button(rule_dialog, "Add Condition")
+    click_button(rule_dialog, "Add Action")
+    click_button(rule_dialog, "Add Action")
 
     # In document order: [name, header (hidden), value, address, address].
     entries = list(descendants(rule_dialog, "text"))
@@ -315,9 +330,15 @@ def run():
         raise ScenarioFailure(f"the server has no mailbox {INVOICES_FOLDER!r}")
     invoices_id = folders[invoices_row][0]
     combos[4].querySelection().selectChild(invoices_row)
-    wait_for(lambda: combos[4].name == INVOICES_FOLDER, "the folder combo shows Invoices")
+    wait_for(
+        lambda: selected_item_name(combos[4]) == INVOICES_FOLDER,
+        "the folder combo shows Invoices",
+    )
     combos[5].querySelection().selectChild(2)  # ActionChoice::MarkRead
-    wait_for(lambda: combos[5].name == "Mark as read", "the second action shows Mark as read")
+    wait_for(
+        lambda: selected_item_name(combos[5]) == "Mark as read",
+        "the second action shows Mark as read",
+    )
     screenshot("rule-filled")
 
     ok = find(rule_dialog, "push button", "OK")
@@ -423,7 +444,7 @@ def run():
     cell = wait_for(lambda: script_cell(editor, protected_name), f"{protected_name!r} listed")
     cell.queryComponent().grabFocus()
     screenshot("vacation-protected")
-    for name in ("Rename", "Remove", "Activate"):
+    for name in ("Rename…", "Remove", "Activate"):
         button = wait_for(lambda name=name: find(editor, "push button", name, showing=True), name)
         wait_for(
             lambda button=button, name=name: not button.getState().contains(
@@ -455,7 +476,7 @@ def run():
     if message != LONG_ERROR_DETAIL:
         raise ScenarioFailure(f"expected the long canned refusal, got: {message!r}")
     screenshot("check-long-error")
-    for name in ("Add", "Rename", "Remove", "Activate", "Deactivate", "Check"):
+    for name in ("Add…", "Rename…", "Remove", "Activate", "Deactivate", "Check"):
         button = wait_for(
             lambda name=name: find(editor, "push button", name, showing=True), f"{name!r} button"
         )
