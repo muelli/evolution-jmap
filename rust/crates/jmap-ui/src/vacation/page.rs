@@ -210,6 +210,9 @@ unsafe fn build_widgets(page: *mut GObject) {
         gtk_label_set_xalign(status.cast(), 0.0);
         widget::set_bool_named(status.cast(), c"wrap", true);
         widget::set_enum_named(status.cast(), c"wrap-mode", widget::PANGO_WRAP_WORD_CHAR);
+        // A screen reader otherwise stays silent on a later `set_text`: a
+        // status role tells it this is an announcement, not a redraw.
+        widget::set_accessible_role(status.cast(), evo_sys::ATK_ROLE_STATUSBAR);
         gtk_box_pack_start(content.cast(), status, GFALSE, GFALSE, 0);
         let contacting = cstring_lossy(&translate(CONTACTING));
         gtk_label_set_text(status.cast(), contacting.as_ptr());

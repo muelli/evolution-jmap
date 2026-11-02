@@ -76,6 +76,10 @@ const ALLOWED_TYPES: &[&str] = &[
     // Evolution's headers define it, from version 3.55 (see
     // `MIN_EVO_EUI_MANAGER`).
     "EUIActionEntry",
+    // `atk_object_set_role`'s argument. A plain C enum from `atk/atkobject.h`,
+    // reached through `gtkwidget.h`'s own include of it; no layout to
+    // disagree about, the same reasoning as `ECalClientSourceType` above.
+    "AtkRole",
 ];
 
 /// Two sets of C `#define` constants, generated as `&CStr`. The first set,
@@ -298,6 +302,12 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_label_new",
     "gtk_label_set_text",
     "gtk_widget_set_visible",
+    // A status label's accessible role, so a screen reader announces a
+    // later `gtk_label_set_text` instead of staying silent (item 174d).
+    // `_get` lets a test confirm the role without a display.
+    "gtk_widget_get_accessible",
+    "atk_object_set_role",
+    "atk_object_get_role",
     // The authentication-method combo. Its choices are fixed: `"none"` and
     // this project's `EOAuth2Service` name. So `_append` is the only
     // mutator this crate needs.
@@ -523,6 +533,13 @@ fn blocked_source_types() -> Vec<String> {
 /// cross-checks, nothing would hold such a claim accountable.
 const BLOCKED_GTK_TYPES: &[&str] = &["Gtk.*", "_Gtk.*"];
 
+/// `AtkObject`, for the same reason as [`BLOCKED_GTK_TYPES`]: this crate
+/// never subclasses or allocates one, only passes the pointer
+/// `gtk_widget_get_accessible` returns straight into `atk_object_set_role`.
+/// `AtkRole` stays out of this list: it is a plain enum, not a class, so a
+/// generated copy carries no layout claim to get wrong.
+const BLOCKED_ATK_TYPES: &[&str] = &["AtkObject", "_AtkObject"];
+
 /// WebKit's *types*, for the same reason as [`BLOCKED_GTK_TYPES`]. No
 /// `webkit2gtk-sys` generation matches this workspace's `glib-sys`, and this
 /// crate neither subclasses nor allocates a WebKit class. The one WebKit
@@ -709,6 +726,12 @@ const GTK_HANDLES: &[&str] = &[
     // this workspace allocates one: the two calls that take it get NULL,
     // and the selection is read through `GtkTreePath` instead.
     "GtkTreeIter",
+    // Not a GTK type: ATK's accessible object, what `gtk_widget_get_accessible`
+    // returns. `gtkwidget.h` includes `atk/atk.h`, so clang sees it in the
+    // same translation unit as everything else here. A status label marks
+    // its accessible object with a role (`atk_object_set_role`) so a screen
+    // reader treats a later text change as an announcement.
+    "AtkObject",
 ];
 
 fn main() {
@@ -895,6 +918,7 @@ fn main() {
         .iter()
         .copied()
         .chain(BLOCKED_GTK_TYPES.iter().copied())
+        .chain(BLOCKED_ATK_TYPES.iter().copied())
         .chain(BLOCKED_EVO_TYPES.iter().copied())
         .chain(BLOCKED_WEBKIT_TYPES.iter().copied())
         .chain(source_types.iter().map(String::as_str))

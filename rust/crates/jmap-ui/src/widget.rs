@@ -13,6 +13,9 @@
 use std::ffi::{CStr, c_char, c_int};
 use std::ptr;
 
+use evo_sys::{
+    AtkRole, GtkWidget, atk_object_get_role, atk_object_set_role, gtk_widget_get_accessible,
+};
 use glib_sys::{GFALSE, GTRUE, gboolean};
 use gobject_sys::{GObject, g_object_get, g_object_set};
 use jmap_backend_core::error::cstring_lossy;
@@ -128,5 +131,86 @@ pub unsafe fn set_enum_named(object: *mut GObject, name: &CStr, value: c_int) {
     // SAFETY: per the contract.
     unsafe {
         g_object_set(object, name.as_ptr(), value, ptr::null::<c_char>());
+    }
+}
+
+/// Marks a widget's accessible object with `role`, so a screen reader
+/// treats a later text or state change as an announcement rather than a
+/// silent redraw (a status label wants `ATK_ROLE_STATUSBAR`). Does nothing
+/// if the widget has no accessible object.
+///
+/// # Safety
+///
+/// `widget` must be a live GTK widget.
+pub unsafe fn set_accessible_role(widget: *mut GObject, role: AtkRole) {
+    // SAFETY: per the contract. `gtk_widget_get_accessible` never fails for
+    // a realized widget type; it is NULL only for a type with no
+    // accessible implementation, which this crate does not build.
+    unsafe {
+        let accessible = gtk_widget_get_accessible(widget.cast::<GtkWidget>());
+        if !accessible.is_null() {
+            atk_object_set_role(accessible, role);
+        }
+    }
+}
+
+/// The accessible role a widget was given, or `ATK_ROLE_INVALID` if it has
+/// no accessible object.
+///
+/// # Safety
+///
+/// `widget` must be a live GTK widget.
+pub unsafe fn get_accessible_role(widget: *mut GObject) -> AtkRole {
+    // SAFETY: per the contract.
+    unsafe {
+        let accessible = gtk_widget_get_accessible(widget.cast::<GtkWidget>());
+        if accessible.is_null() {
+            evo_sys::ATK_ROLE_INVALID
+        } else {
+            atk_object_get_role(accessible)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::raw::c_char;
+
+    use evo_sys::{ATK_ROLE_LABEL, ATK_ROLE_STATUSBAR, gtk_label_new, gtk_widget_destroy};
+
+    use super::*;
+
+    unsafe extern "C" {
+        fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> gboolean;
+    }
+
+    /// A status label starts with GTK's own default role, not a screen
+    /// reader's live-region role: `set_accessible_role` is what gives it
+    /// one. Needs a display; skips without one.
+    #[test]
+    fn setting_an_accessible_role_is_visible_on_read_back() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a freshly made label, destroyed before returning.
+        unsafe {
+            let label = gtk_label_new(ptr::null());
+            assert_eq!(
+                get_accessible_role(label.cast()),
+                ATK_ROLE_LABEL,
+                "a plain label should start with GTK's own default role"
+            );
+
+            set_accessible_role(label.cast(), ATK_ROLE_STATUSBAR);
+            assert_eq!(
+                get_accessible_role(label.cast()),
+                ATK_ROLE_STATUSBAR,
+                "the role set should be the role read back"
+            );
+
+            gtk_widget_destroy(label);
+        }
     }
 }

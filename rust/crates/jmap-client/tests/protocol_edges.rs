@@ -325,3 +325,56 @@ fn sieve_script_active_and_query_request_dispatches() {
     let query_res = client.sieve_script_query_request(&req);
     assert!(query_res.is_ok());
 }
+
+#[test]
+fn calendar_event_copy_dispatches_with_calendars_capability() {
+    use jmap_proto::calendars::CalendarEvent;
+    use jmap_proto::methods::CopyRequest;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let request = CopyRequest::<CalendarEvent>::new(account_id.clone(), account_id);
+    let _ = client.event_copy(&request);
+}
+
+#[test]
+fn calendar_event_query_changes_dispatches_with_calendars_capability() {
+    use jmap_proto::calendars::CalendarEventQueryFilter;
+    use jmap_proto::methods::QueryChangesRequest;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let request = QueryChangesRequest::<CalendarEventQueryFilter>::new(account_id, "qs1");
+    let _ = client.event_query_changes(&request);
+}
+
+#[test]
+fn calendar_get_and_set_custom_dispatches_with_calendars_capability() {
+    use jmap_proto::Id;
+    use jmap_proto::calendars::CalendarSetRequest;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let _ = client.calendar_get(&account_id, &[Id::new("cal1")]);
+
+    let set = CalendarSetRequest::new(account_id.clone());
+    let _ = client.calendar_set_custom(&set);
+}
+
+#[test]
+fn calendar_typed_changes_dispatch_with_calendars_capability() {
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let _ = client.calendar_changes(&account_id, &State::new("s1"));
+    let _ = client.event_changes(&account_id, &State::new("s1"));
+    let _ = client.participant_identity_changes(&account_id, &State::new("s1"));
+    let _ = client.calendar_event_notification_changes(&account_id, &State::new("s1"));
+}

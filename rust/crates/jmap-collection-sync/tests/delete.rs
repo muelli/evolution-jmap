@@ -15,6 +15,8 @@ use jmap_collection_sync::{
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS};
+use jmap_tracing_capture::capture;
+use tracing::Level;
 
 fn client(server: &MockServer) -> Client {
     Client::connect(server.origin(), Credentials::none())
@@ -69,6 +71,41 @@ fn deleting_an_address_book_takes_it_off_the_server() {
     assert!(
         !address_book_names(&discovered(&server)).contains(&"Work".to_owned()),
         "the address book is still on the server"
+    );
+}
+
+#[test]
+fn deleting_an_address_book_sets_on_destroy_remove_contents() {
+    // RFC 9610 SS2.3: a server MUST reject destroying a non-empty AddressBook
+    // unless the request sets `onDestroyRemoveContents: true`. Evolution's
+    // "Delete" on an address book means delete it and its contacts, so the
+    // collection-sync delete must always ask for that, not the empty-book
+    // default. `jmap-mock` does not enforce the invariant (so the destroy
+    // would appear to succeed either way), so this checks the request body
+    // the client actually sent, not the mock's response.
+    let server = MockServer::builder().start();
+    let client = client(&server);
+    let child = create_collection(&client, &requested(ChildKind::AddressBook, "Work"))
+        .expect("the mock creates address books");
+
+    let (_, captured) = capture(|| {
+        delete_collection(
+            &client,
+            &Doomed {
+                kind: ChildKind::AddressBook,
+                collection_id: child.collection_id.clone(),
+            },
+        )
+        .expect("the mock destroys address books")
+    });
+
+    assert!(
+        captured.iter().any(|(level, name, value)| {
+            *level == Level::TRACE
+                && name == "body"
+                && value.contains("\"onDestroyRemoveContents\":true")
+        }),
+        "expected the destroy request to set onDestroyRemoveContents, got {captured:?}"
     );
 }
 
