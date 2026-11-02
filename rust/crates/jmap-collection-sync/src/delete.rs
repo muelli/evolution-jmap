@@ -35,7 +35,10 @@
 //! uid and offline cache.
 
 use jmap_client::Client;
+use jmap_client::expect_destroyed;
 use jmap_proto::Id;
+use jmap_proto::contacts::{AddressBook, AddressBookSetRequest};
+use jmap_proto::methods::SetRequest;
 
 use crate::children::{ChildKind, split_shared_identity};
 use crate::layout::CollectionLayout;
@@ -144,11 +147,21 @@ pub fn delete_collection(client: &Client, doomed: &Doomed) -> Result<(), DeleteF
 
     match doomed.kind {
         ChildKind::AddressBook => {
-            client
-                .address_book_destroy(&account.id, &collection)
+            // RFC 9610 SS2.3: a server rejects destroying a non-empty AddressBook
+            // unless the request sets onDestroyRemoveContents. Evolution's
+            // "Delete" on an address book means delete it and its cards.
+            let request = AddressBookSetRequest::new(
+                SetRequest::<AddressBook>::new(account.id.clone()).destroy(collection.clone()),
+            )
+            .with_on_destroy_remove_contents(true);
+            let response = client
+                .address_book_set_custom(&request)
                 .inspect_err(|error| {
                     tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
                 })?;
+            expect_destroyed(&response, &collection).inspect_err(|error| {
+                tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
+            })?;
         }
         ChildKind::Calendar => {
             client
