@@ -14,8 +14,15 @@ this scenario's mail one. One account editor is opened once; each page
 in PAGES is visited in turn, then the name dialog and the rule dialog,
 both reached from the Server Filters page. The composer's Send Later
 custom-time dialog is audited separately, from its own composer.
-Duplicate-mnemonic detection and live Tab-key reachability, and the
-snooze submenu, follow in later slices.
+
+Each of these surfaces is also checked for a duplicate Alt+letter
+mnemonic with `audit_mnemonics` (`scenario.py`): two widgets in the same
+window sharing one mnemonic leaves one of them unreachable by it. The
+page check passes the whole account editor, not the page's own page-tab
+container, because item 174(d) counts "Evolution's own widgets in the
+same window" too (the Account Editor's sidebar and its OK/Cancel/Help
+row), the same scope the item's text names for the keyboard-clash check
+this audit automates. Live Tab-key reachability is not covered yet.
 """
 
 import pyatspi
@@ -25,6 +32,7 @@ from scenario import (
     ScenarioFailure,
     _role,
     audit_dialog,
+    audit_mnemonics,
     click_at,
     click_button,
     do_action,
@@ -157,6 +165,7 @@ def audit_page(editor, page):
     if offenders:
         raise ScenarioFailure(f"unnamed focusable widgets on the {page['name']!r} page: {offenders}")
     say(f"a11y-audit: no unnamed focusable widget on the {page['name']!r} page")
+    audit_mnemonics(editor, page["name"])
 
 
 def rules_add_button(editor):
@@ -193,6 +202,7 @@ def audit_name_and_rule_dialogs(editor):
     click_at(add_script)
     name_dialog = wait_for(lambda: window("New Filter Script"), "the name dialog")
     audit_dialog(name_dialog, "New Filter Script")
+    audit_mnemonics(name_dialog, "New Filter Script")
     click_button(name_dialog, "OK")
     wait_for(lambda: window("New Filter Script") is None, "the name dialog closes")
 
@@ -203,6 +213,7 @@ def audit_name_and_rule_dialogs(editor):
     click_button(rule_dialog, "Add Condition")
     click_button(rule_dialog, "Add Action")
     audit_dialog(rule_dialog, "New Rule")
+    audit_mnemonics(rule_dialog, "New Rule")
     click_button(rule_dialog, "Cancel")
     wait_for(lambda: window("New Rule") is None, "the rule dialog closes")
 
@@ -228,6 +239,7 @@ def audit_send_later_dialog():
     menu_item("File/Send Later/Custom Time…", "Compose Message")
     dialog = wait_for(lambda: window("Send Later"), "the Send Later custom-time dialog")
     audit_dialog(dialog, "Send Later")
+    audit_mnemonics(dialog, "Send Later")
     click_button(dialog, "Cancel")
     wait_for(lambda: window("Send Later") is None, "the dialog closes")
 

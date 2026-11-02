@@ -483,6 +483,61 @@ def audit_dialog(dialog, label):
     say(f"a11y-audit: no unnamed focusable widget in the {label!r} dialog")
 
 
+def mnemonic_of(node):
+    """Return the lowercase Alt+letter mnemonic AT-SPI reports for `node`, or "".
+
+    GTK exposes a widget's effective mnemonic, its own underlined letter, or
+    the one of a label that targets it through `gtk_label_set_mnemonic_
+    widget`, as an Action key binding such as "<Alt>e". A widget with no
+    mnemonic has no such binding; a plain `GtkLabel` exposes no Action
+    interface at all (confirmed empirically: one never turns up in this
+    walk), so it never needs excluding by role.
+    """
+    try:
+        action = node.queryAction()
+    except Exception:  # noqa: BLE001
+        return ""
+    prefix = "<Alt>"
+    for i in range(action.nActions):
+        binding = action.getKeyBinding(i) or ""
+        if binding.startswith(prefix):
+            return binding[len(prefix) :].lower()
+    return ""
+
+
+def duplicate_mnemonics(root):
+    """Yield (letter, [names]) for each Alt+letter mnemonic two or more
+    showing descendants of `root` share.
+
+    Scope: one real window or dialog, where Alt+letter is a direct keyboard
+    accelerator, and a clash leaves one of the two widgets unreachable by
+    it. A popup menu is not walked with this: GTK lets several menu items
+    share one underlined letter and cycles through them while the menu is
+    open, a different mechanism with no unreachable widget, so it is not
+    the failure mode this check is for.
+    """
+    by_letter = {}
+    for node in descendants(root):
+        if not node.getState().contains(pyatspi.STATE_SHOWING):
+            continue
+        letter = mnemonic_of(node)
+        if not letter:
+            continue
+        by_letter.setdefault(letter, []).append(_name(node) or f"<{_role(node)}>")
+    for letter, names in by_letter.items():
+        if len(names) > 1:
+            yield letter, names
+
+
+def audit_mnemonics(root, label):
+    """Raise if two or more showing widgets under `root` share one Alt+letter mnemonic."""
+    clashes = list(duplicate_mnemonics(root))
+    if clashes:
+        detail = "; ".join(f"Alt+{letter.upper()} on {names}" for letter, names in clashes)
+        raise ScenarioFailure(f"duplicate mnemonics in the {label!r} window: {detail}")
+    say(f"a11y-audit: no duplicate mnemonic in the {label!r} window")
+
+
 def evolution():
     """Return the Evolution application node, or None."""
     desktop = pyatspi.Registry.getDesktop(0)
