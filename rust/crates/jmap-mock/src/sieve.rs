@@ -64,6 +64,7 @@ impl SieveSettings {
 #[derive(Clone)]
 struct SieveToken {
     line: usize,
+    col: usize,
     kind: SieveTokenKind,
 }
 
@@ -565,10 +566,65 @@ fn validate_sieve_blob(blob: &[u8], settings: &SieveSettings) -> Result<(), SetE
     }
 
     let source =
-        std::str::from_utf8(blob).map_err(|_| invalid_sieve(1, "script is not valid UTF-8"))?;
+        std::str::from_utf8(blob).map_err(|_| invalid_sieve(1, 1, "script is not valid UTF-8"))?;
     validate_sieve_source(source, settings)
 }
 
+#[cfg(feature = "sieve-parse")]
+fn validate_sieve_source(source: &str, settings: &SieveSettings) -> Result<(), SetError> {
+    validate_declared_extensions(source, settings)?;
+
+    let compiler = sieve::Compiler::new();
+    match compiler.compile(source.as_bytes()) {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let err_str = err.to_string();
+            // Work around upstream sieve-rs action_fileinto.rs:76 bug where
+            // fileinto :mailboxid checks Capability::Mailbox instead of Capability::MailboxId.
+            if err_str.contains("Undeclared capability 'mailbox'")
+                && source.contains("\"mailboxid\"")
+            {
+                let patched = source.replace("\"mailboxid\"", "\"mailboxid\", \"mailbox\"");
+                match compiler.compile(patched.as_bytes()) {
+                    Ok(_) => Ok(()),
+                    Err(patched_err) => Err(SetError::new(sieve_set_error::INVALID_SIEVE)
+                        .with_description(patched_err.to_string())),
+                }
+            } else if err_str.contains("Undeclared capability 'mailbox'")
+                && source.contains(":mailboxid")
+            {
+                let mapped = err_str.replace("'mailbox'", "'mailboxid'");
+                Err(SetError::new(sieve_set_error::INVALID_SIEVE).with_description(mapped))
+            } else {
+                Err(SetError::new(sieve_set_error::INVALID_SIEVE).with_description(err_str))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "sieve-parse")]
+fn validate_declared_extensions(source: &str, settings: &SieveSettings) -> Result<(), SetError> {
+    if let Ok(tokens) = tokenize_sieve(source) {
+        let mut statement: Vec<&SieveToken> = Vec::new();
+        for token in &tokens {
+            statement.push(token);
+            if is_symbol(token, ';') {
+                let content_len = statement.len().saturating_sub(1);
+                if statement_is_require(&statement[..content_len]) {
+                    let mut declared = BTreeSet::new();
+                    parse_require_statement(&statement[..content_len], settings, &mut declared)?;
+                }
+                statement.clear();
+            }
+            if is_symbol(token, '{') || is_symbol(token, '}') {
+                statement.clear();
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "sieve-parse"))]
 fn validate_sieve_source(source: &str, settings: &SieveSettings) -> Result<(), SetError> {
     let tokens = tokenize_sieve(source)?;
     let mut declared_extensions = BTreeSet::new();
@@ -608,6 +664,7 @@ fn validate_sieve_source(source: &str, settings: &SieveSettings) -> Result<(), S
     {
         return Err(invalid_sieve(
             line,
+            1,
             "statement must end with ';' or a block",
         ));
     }
@@ -616,6 +673,7 @@ fn validate_sieve_source(source: &str, settings: &SieveSettings) -> Result<(), S
         if !declared_extensions.contains(&extension) {
             return Err(invalid_sieve(
                 line,
+                1,
                 format!("missing require for extension \"{extension}\""),
             ));
         }
@@ -624,6 +682,7 @@ fn validate_sieve_source(source: &str, settings: &SieveSettings) -> Result<(), S
     Ok(())
 }
 
+#[cfg(not(feature = "sieve-parse"))]
 fn validate_statement(
     statement: &[&SieveToken],
     settings: &SieveSettings,
@@ -662,6 +721,7 @@ fn validate_statement(
     Ok(())
 }
 
+#[cfg(not(feature = "sieve-parse"))]
 fn statement_requires_terminator(statement: &[&SieveToken]) -> bool {
     statement_is_require(statement)
         || first_word_line(statement, "fileinto").is_some()
@@ -684,10 +744,13 @@ fn parse_require_statement(
     settings: &SieveSettings,
     declared_extensions: &mut BTreeSet<String>,
 ) -> Result<(), SetError> {
-    let require_line = statement.first().map(|token| token.line).unwrap_or(1);
+    let first = statement.first();
+    let require_line = first.map(|token| token.line).unwrap_or(1);
+    let require_col = first.map(|token| token.col).unwrap_or(1);
     if statement.len() < 2 || !is_symbol(statement[1], '[') {
         return Err(invalid_sieve(
             require_line,
+            require_col,
             "require must use a bracketed extension list",
         ));
     }
@@ -707,6 +770,7 @@ fn parse_require_statement(
             let SieveTokenKind::StringLiteral(extension) = &token.kind else {
                 return Err(invalid_sieve(
                     token.line,
+                    token.col,
                     "require expects extension names in double quotes",
                 ));
             };
@@ -714,6 +778,7 @@ fn parse_require_statement(
             if !settings.extensions.contains(&normalized) {
                 return Err(invalid_sieve(
                     token.line,
+                    token.col,
                     format!("unsupported extension in require: \"{normalized}\""),
                 ));
             }
@@ -735,6 +800,7 @@ fn parse_require_statement(
         }
         return Err(invalid_sieve(
             token.line,
+            token.col,
             "require list must separate names with commas",
         ));
     }
@@ -742,18 +808,21 @@ fn parse_require_statement(
     if !closed {
         return Err(invalid_sieve(
             require_line,
+            require_col,
             "require list is missing a closing ']'",
         ));
     }
     if cursor != statement.len() {
         return Err(invalid_sieve(
             statement[cursor].line,
+            statement[cursor].col,
             "unexpected token after require list",
         ));
     }
     Ok(())
 }
 
+#[cfg(not(feature = "sieve-parse"))]
 fn first_word_line(statement: &[&SieveToken], needle: &str) -> Option<usize> {
     statement.iter().find_map(|token| match &token.kind {
         SieveTokenKind::Word(word) if word.eq_ignore_ascii_case(needle) => Some(token.line),
@@ -761,12 +830,14 @@ fn first_word_line(statement: &[&SieveToken], needle: &str) -> Option<usize> {
     })
 }
 
+#[cfg(not(feature = "sieve-parse"))]
 fn statement_has_tag(statement: &[&SieveToken], needle: &str) -> bool {
     statement
         .windows(2)
         .any(|window| is_symbol(window[0], ':') && token_is_word(window[1], needle))
 }
 
+#[cfg(not(feature = "sieve-parse"))]
 fn mark_extension_usage(
     extension_usage_lines: &mut BTreeMap<String, usize>,
     extension: &str,
@@ -777,6 +848,7 @@ fn mark_extension_usage(
         .or_insert(line);
 }
 
+#[cfg(not(feature = "sieve-parse"))]
 fn token_is_word(token: &SieveToken, expected: &str) -> bool {
     matches!(&token.kind, SieveTokenKind::Word(word) if word.eq_ignore_ascii_case(expected))
 }
@@ -791,6 +863,9 @@ fn tokenize_sieve(source: &str) -> Result<Vec<SieveToken>, SetError> {
     let mut current_string = String::new();
 
     let mut line = 1usize;
+    let mut col = 1usize;
+    let mut string_start_line = 1usize;
+    let mut string_start_col = 1usize;
     let mut in_comment = false;
     let mut in_string = false;
     let mut escaped = false;
@@ -802,6 +877,9 @@ fn tokenize_sieve(source: &str) -> Result<Vec<SieveToken>, SetError> {
             if ch == '\n' {
                 in_comment = false;
                 line += 1;
+                col = 1;
+            } else {
+                col += 1;
             }
             continue;
         }
@@ -810,23 +888,30 @@ fn tokenize_sieve(source: &str) -> Result<Vec<SieveToken>, SetError> {
             if escaped {
                 current_string.push(ch);
                 escaped = false;
+                col += 1;
                 continue;
             }
             if ch == '\\' {
                 escaped = true;
+                col += 1;
                 continue;
             }
             if ch == '"' {
                 tokens.push(SieveToken {
-                    line,
+                    line: string_start_line,
+                    col: string_start_col,
                     kind: SieveTokenKind::StringLiteral(current_string.clone()),
                 });
                 current_string.clear();
                 in_string = false;
+                col += 1;
                 continue;
             }
             if ch == '\n' {
                 line += 1;
+                col = 1;
+            } else {
+                col += 1;
             }
             current_string.push(ch);
             continue;
@@ -834,97 +919,125 @@ fn tokenize_sieve(source: &str) -> Result<Vec<SieveToken>, SetError> {
 
         match ch {
             '#' => {
-                flush_word(&mut tokens, &mut current_word, line);
+                flush_word(&mut tokens, &mut current_word, line, col);
                 in_comment = true;
+                col += 1;
             }
             '"' => {
-                flush_word(&mut tokens, &mut current_word, line);
+                flush_word(&mut tokens, &mut current_word, line, col);
                 in_string = true;
                 escaped = false;
+                string_start_line = line;
+                string_start_col = col;
                 current_string.clear();
+                col += 1;
             }
             '{' => {
-                flush_word(&mut tokens, &mut current_word, line);
+                flush_word(&mut tokens, &mut current_word, line, col);
                 brace_depth += 1;
                 tokens.push(SieveToken {
                     line,
+                    col,
                     kind: SieveTokenKind::Symbol(ch),
                 });
+                col += 1;
             }
             '}' => {
-                flush_word(&mut tokens, &mut current_word, line);
+                flush_word(&mut tokens, &mut current_word, line, col);
                 if brace_depth == 0 {
-                    return Err(invalid_sieve(line, "unmatched '}'"));
+                    return Err(invalid_sieve(line, col, "unmatched '}'"));
                 }
                 brace_depth -= 1;
                 tokens.push(SieveToken {
                     line,
+                    col,
                     kind: SieveTokenKind::Symbol(ch),
                 });
+                col += 1;
             }
             '[' => {
-                flush_word(&mut tokens, &mut current_word, line);
+                flush_word(&mut tokens, &mut current_word, line, col);
                 bracket_depth += 1;
                 tokens.push(SieveToken {
                     line,
+                    col,
                     kind: SieveTokenKind::Symbol(ch),
                 });
+                col += 1;
             }
             ']' => {
-                flush_word(&mut tokens, &mut current_word, line);
+                flush_word(&mut tokens, &mut current_word, line, col);
                 if bracket_depth == 0 {
-                    return Err(invalid_sieve(line, "unmatched ']'"));
+                    return Err(invalid_sieve(line, col, "unmatched ']'"));
                 }
                 bracket_depth -= 1;
                 tokens.push(SieveToken {
                     line,
+                    col,
                     kind: SieveTokenKind::Symbol(ch),
                 });
+                col += 1;
             }
             ';' | ':' | ',' => {
-                flush_word(&mut tokens, &mut current_word, line);
+                flush_word(&mut tokens, &mut current_word, line, col);
                 tokens.push(SieveToken {
                     line,
+                    col,
                     kind: SieveTokenKind::Symbol(ch),
                 });
+                col += 1;
             }
             '\n' => {
-                flush_word(&mut tokens, &mut current_word, line);
+                flush_word(&mut tokens, &mut current_word, line, col);
                 line += 1;
+                col = 1;
             }
             c if c.is_whitespace() => {
-                flush_word(&mut tokens, &mut current_word, line);
+                flush_word(&mut tokens, &mut current_word, line, col);
+                col += 1;
             }
-            other => current_word.push(other),
+            other => {
+                current_word.push(other);
+                col += 1;
+            }
         }
     }
 
-    flush_word(&mut tokens, &mut current_word, line);
+    flush_word(&mut tokens, &mut current_word, line, col);
 
     if in_string {
-        return Err(invalid_sieve(line, "unterminated string literal"));
+        return Err(invalid_sieve(line, col, "unterminated string literal"));
     }
     if brace_depth != 0 {
-        return Err(invalid_sieve(line, "unbalanced '{' and '}'"));
+        return Err(invalid_sieve(line, col, "unbalanced '{' and '}'"));
     }
     if bracket_depth != 0 {
-        return Err(invalid_sieve(line, "unbalanced '[' and ']'"));
+        return Err(invalid_sieve(line, col, "unbalanced '[' and ']'"));
     }
 
     Ok(tokens)
 }
 
-fn flush_word(tokens: &mut Vec<SieveToken>, current_word: &mut String, line: usize) {
+fn flush_word(tokens: &mut Vec<SieveToken>, current_word: &mut String, line: usize, col: usize) {
     if current_word.is_empty() {
         return;
     }
+    let word_len = current_word.len();
     tokens.push(SieveToken {
         line,
+        col: col.saturating_sub(word_len),
         kind: SieveTokenKind::Word(std::mem::take(current_word)),
     });
 }
 
-fn invalid_sieve(line: usize, message: impl Into<String>) -> SetError {
+#[cfg(feature = "sieve-parse")]
+fn invalid_sieve(line: usize, col: usize, message: impl Into<String>) -> SetError {
+    SetError::new(sieve_set_error::INVALID_SIEVE)
+        .with_description(format!("{} at line {line}, column {col}.", message.into()))
+}
+
+#[cfg(not(feature = "sieve-parse"))]
+fn invalid_sieve(line: usize, _col: usize, message: impl Into<String>) -> SetError {
     SetError::new(sieve_set_error::INVALID_SIEVE)
         .with_description(format!("line {line}: {}", message.into()))
 }
