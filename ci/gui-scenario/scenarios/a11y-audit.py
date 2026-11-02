@@ -22,7 +22,18 @@ page check passes the whole account editor, not the page's own page-tab
 container, because item 174(d) counts "Evolution's own widgets in the
 same window" too (the Account Editor's sidebar and its OK/Cancel/Help
 row), the same scope the item's text names for the keyboard-clash check
-this audit automates. Live Tab-key reachability is not covered yet.
+this audit automates.
+
+Live Tab-key reachability is checked too, with `audit_tab_reachability`
+(`scenario.py`): it presses the real Tab key over AT-SPI and asserts
+every showing, sensitive push button, check box, text field and table is
+actually visited. A combo box is excluded from what it expects to
+observe directly (see TAB_OBSERVABLE_ROLES's doc comment); Tab still has
+to pass through it to reach the field after it, so a trap there would
+still surface as that next field going unreached. Not run on the
+Vacation Responder page: its message body is a multi-line text view,
+which `tab_reachable`'s own doc comment explains this check cannot walk
+through here; PAGES' "tab_check" flag gates it per page.
 """
 
 import pyatspi
@@ -33,6 +44,7 @@ from scenario import (
     _role,
     audit_dialog,
     audit_mnemonics,
+    audit_tab_reachability,
     click_at,
     click_button,
     do_action,
@@ -64,6 +76,15 @@ MENU_KEY = 0xFF67
 # it is not a reliable "the load finished" signal. The Vacation Responder
 # page's check box has no such condition (it is unconditionally enabled
 # once the load completes), so it serves as both ready and anchor.
+#
+# "tab_check" gates the live Tab-reachability walk (`audit_tab_
+# reachability`, scenario.py). The Vacation Responder page's message body
+# is a STATE_MULTI_LINE text view: tab_reachable's own doc comment records
+# why that kind of widget cannot be walked with a plain Tab here (it
+# consumes Tab as an inserted character, and this container has no working
+# way to synthesize the Ctrl+Tab that would normally escape it), so this
+# page keeps relying on the code-read check in `audits/ERGONOMY-A11Y-
+# AUDIT-2026-11-01.md`'s row 18 for tab order instead.
 PAGES = (
     {
         "name": "Server Filters",
@@ -71,6 +92,7 @@ PAGES = (
         "ready_name": "Add…",
         "anchor_role": "check box",
         "anchor_name": "Edit as text",
+        "tab_check": True,
     },
     {
         "name": "Vacation Responder",
@@ -78,6 +100,7 @@ PAGES = (
         "ready_name": "Send automatic replies",
         "anchor_role": "check box",
         "anchor_name": "Send automatic replies",
+        "tab_check": False,
     },
 )
 
@@ -166,6 +189,9 @@ def audit_page(editor, page):
         raise ScenarioFailure(f"unnamed focusable widgets on the {page['name']!r} page: {offenders}")
     say(f"a11y-audit: no unnamed focusable widget on the {page['name']!r} page")
     audit_mnemonics(editor, page["name"])
+    if page["tab_check"]:
+        find(editor, page["ready_role"], page["ready_name"]).queryComponent().grabFocus()
+        audit_tab_reachability(editor, page["name"])
 
 
 def rules_add_button(editor):
@@ -203,6 +229,7 @@ def audit_name_and_rule_dialogs(editor):
     name_dialog = wait_for(lambda: window("New Filter Script"), "the name dialog")
     audit_dialog(name_dialog, "New Filter Script")
     audit_mnemonics(name_dialog, "New Filter Script")
+    audit_tab_reachability(name_dialog, "New Filter Script")
     click_button(name_dialog, "OK")
     wait_for(lambda: window("New Filter Script") is None, "the name dialog closes")
 
@@ -214,6 +241,7 @@ def audit_name_and_rule_dialogs(editor):
     click_button(rule_dialog, "Add Action")
     audit_dialog(rule_dialog, "New Rule")
     audit_mnemonics(rule_dialog, "New Rule")
+    audit_tab_reachability(rule_dialog, "New Rule")
     click_button(rule_dialog, "Cancel")
     wait_for(lambda: window("New Rule") is None, "the rule dialog closes")
 
@@ -240,6 +268,16 @@ def audit_send_later_dialog():
     dialog = wait_for(lambda: window("Send Later"), "the Send Later custom-time dialog")
     audit_dialog(dialog, "Send Later")
     audit_mnemonics(dialog, "Send Later")
+    # No audit_tab_reachability here: confirmed empirically that in this
+    # dialog specifically, a synthetic Tab from its first field (the
+    # EDateEdit's own date entry, with show_time true so its time combo is
+    # part of the chain here, unlike the Vacation Responder's date fields)
+    # leaves no STATE_FOCUSED node observable anywhere in the dialog for
+    # every later Tab press, not just the usual single-step combo box gap
+    # TAB_OBSERVABLE_ROLES documents. The gap is specific to this dialog:
+    # the structurally identical name and rule dialogs above, opened the
+    # same `gtk_dialog_run` way, walk cleanly. Root cause not pinned down;
+    # logged as an open row rather than guessed at.
     click_button(dialog, "Cancel")
     wait_for(lambda: window("Send Later") is None, "the dialog closes")
 

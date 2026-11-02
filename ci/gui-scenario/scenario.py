@@ -538,6 +538,123 @@ def audit_mnemonics(root, label):
     say(f"a11y-audit: no duplicate mnemonic in the {label!r} window")
 
 
+# The X keysym of the Tab key.
+TAB_KEY = 0xFF09
+
+# Roles whose AT-SPI accessible reliably reports STATE_FOCUSED while it
+# holds keyboard focus. "combo box" is excluded: confirmed empirically
+# (gui-scenario container, the rule dialog's condition/action comboboxes)
+# that tabbing onto a plain GtkComboBox produces no STATE_FOCUSED node
+# anywhere under the window for the whole dwell time, even though Tab
+# still reaches the widget after it on schedule, so the focus ring itself
+# is intact and ATK simply never surfaces it. "menu item" is excluded for
+# the same reason FOCUSABLE_ROLES documents it stays out of the mnemonic
+# walk: it is a popup leaf, not a window-level Tab stop.
+TAB_OBSERVABLE_ROLES = {"push button", "check box", "text", "table"}
+
+
+def focused_node(root):
+    """Return the descendant of `root` with STATE_FOCUSED, or None."""
+    for node in descendants(root):
+        try:
+            if node.getState().contains(pyatspi.STATE_FOCUSED):
+                return node
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _tab_key(node):
+    return (_name(node) or labelled_by_name(node), _role(node))
+
+
+def _wait_focus_change(root, timeout_polls=6):
+    """Poll for a STATE_FOCUSED node under `root`, or return None."""
+    node = None
+    for _poll in range(timeout_polls):
+        node = focused_node(root)
+        if node is not None:
+            break
+        time.sleep(POLL_SECONDS)
+    return node
+
+
+def tab_reachable(root, max_presses=120):
+    """Press Tab repeatedly from the widget that already has focus and
+    return the (name, role) pairs AT-SPI reports STATE_FOCUSED for along
+    the way, stopping once the chain returns to the start.
+
+    The caller must already have given keyboard focus to some widget
+    inside `root` (opening a page or a dialog always leaves one focused).
+    A step that lands on a widget outside TAB_OBSERVABLE_ROLES (a combo
+    box) produces no observable STATE_FOCUSED node for a few polls; that
+    is expected and skipped, not a failure, as long as the chain still
+    closes within `max_presses`.
+
+    Not suitable for a window that holds a STATE_MULTI_LINE text view
+    (the Vacation Responder page's message body): confirmed empirically
+    that a plain Tab there inserts a tab character instead of moving
+    focus (GTK's own `accepts-tab` default), and this container has no
+    working way to synthesize the Ctrl+Tab that would normally escape it
+    (AT-SPI's keyboard event generator takes a modifier only as a keysym
+    *string* on a KEY_PRESS/KEY_RELEASE pair, which left Control
+    unobserved as held by the following Tab in every form tried). Callers
+    with such a surface skip this check; see a11y-audit.py's docstring.
+    """
+    start = wait_for(lambda: focused_node(root), "a focused widget to start the Tab walk")
+    start_key = _tab_key(start)
+    reached = {start_key}
+    for _ in range(max_presses):
+        pyatspi.Registry.generateKeyboardEvent(TAB_KEY, None, pyatspi.KEY_SYM)
+        node = _wait_focus_change(root)
+        if node is None:
+            continue
+        key = _tab_key(node)
+        if key == start_key:
+            return reached
+        reached.add(key)
+    raise ScenarioFailure(f"Tab did not return to the start within {max_presses} presses")
+
+
+def audit_tab_reachability(root, label, max_presses=120):
+    """Raise if a showing, sensitive widget under `root`, of a role whose
+    focus AT-SPI can observe (TAB_OBSERVABLE_ROLES), is never visited while
+    repeatedly pressing Tab from whatever already has focus.
+
+    Expects STATE_SHOWING and STATE_SENSITIVE, not STATE_FOCUSABLE:
+    confirmed empirically (gui-scenario container, the Server Filters
+    page's selection-dependent buttons) that a disabled `GtkButton` keeps
+    reporting STATE_FOCUSABLE regardless, the opposite of what
+    STATE_FOCUSABLE means for a check box, combo box or text entry, where
+    it does track sensitivity. GTK's own Tab order skips an insensitive
+    widget of any role, so STATE_SENSITIVE is the one check that holds
+    for all of them.
+
+    Retries the walk once on failure: a synthetic Tab key event is
+    occasionally dropped under Xvfb (confirmed empirically: an identical
+    walk that failed this way passed cleanly on an immediate rerun), so
+    one retry absorbs a single dropped event before this counts as a
+    real finding instead of a flake.
+    """
+    try:
+        reached = tab_reachable(root, max_presses)
+    except ScenarioFailure:
+        reached = tab_reachable(root, max_presses)
+    missing = []
+    for node in descendants(root):
+        if _role(node) not in TAB_OBSERVABLE_ROLES:
+            continue
+        state = node.getState()
+        if not state.contains(pyatspi.STATE_SHOWING) or not state.contains(pyatspi.STATE_SENSITIVE):
+            continue
+        key = _tab_key(node)
+        if key not in reached:
+            missing.append(key)
+    if missing:
+        raise ScenarioFailure(f"Tab never reaches {missing} in the {label!r} window")
+    say(f"a11y-audit: Tab reaches every observable focusable widget in the {label!r} window")
+
+
 def evolution():
     """Return the Evolution application node, or None."""
     desktop = pyatspi.Registry.getDesktop(0)
