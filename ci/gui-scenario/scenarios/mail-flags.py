@@ -30,24 +30,40 @@ dialog ("Mark as Junk"/"Cancel", `mail.error.xml`'s `ask-mark-as-junk`,
 the flags and labels above (`jmap-mail-sync/src/keywords.rs`'s
 `keyword::JUNK`/`NOT_JUNK`).
 
-Not covered here, left for later claims of the same item: a custom label
-with spaces, capitals and non-ASCII (needs driving the "New Label"
-dialog), a multi-selection, the reverse direction (a
-server-side keyword change reflected in the message list), the 3.60.2
-Fedora container, and contacts/calendar categories.
+Message/Mark As/Label/New Label opens the "Add Label" dialog
+(`EMailLabelDialog`) and, on OK, applies the new label to the already
+selected message right away (`e-mail-reader.c`'s
+`action_mail_label_new_cb`). Unlike the five built-in labels, a label made
+this way gets no `$Label` prefix: its tag is
+`mail_label_list_store_tag_from_name` (`e-mail-label-list-store.c`):
+lowercase the ASCII letters only, replace each of ` ()/{%*<>\"` with `_`,
+then UTF-7 encode any remaining non-ASCII character (`camel_utf8_utf7`,
+IMAP's modified UTF-7, RFC 2152/3501). `CUSTOM_LABEL_TAG` is derived from
+that algorithm, cross-checked against EDS's own
+`camel/tests/test-camel-utf7.c` vectors.
+
+Not covered here, left for later claims of the same item: a multi-selection,
+the reverse direction (a server-side keyword change reflected in the
+message list), the 3.60.2 Fedora container, and contacts/calendar
+categories.
 """
 
 from scenario import (
     Jmap,
+    ScenarioFailure,
+    click_button,
     confirm,
     expect_log,
     expect_no_errors,
+    find,
     main,
     menu_item,
     say,
     select_folder,
     select_message,
+    text_of,
     wait_for,
+    window,
     write_standalone_mail_account,
 )
 
@@ -61,6 +77,26 @@ BUILTIN_LABEL_TAGS = {
     "To Do": "$Labeltodo",
     "Later": "$Labellater",
 }
+# "Käse Co": a space, two capitals and one non-ASCII character (U+00E4,
+# "ä"). Lowercased and space-replaced: "käse_co"; "ä" alone between ASCII
+# characters UTF-7 encodes to "&AOQ-" (test-camel-utf7.c's "R\xc3\xa4s" ->
+# "R&AOQ-s" vector), giving this exact tag.
+CUSTOM_LABEL_NAME = "Käse Co"
+CUSTOM_LABEL_TAG = "k&AOQ-se_co"
+
+
+def set_text_via_atspi(node, content):
+    """Set an entry's text through AT-SPI's EditableText interface directly,
+    not through scenario.py's set_text (synthetic key events): confirmed
+    empirically that generateKeyboardEvent's KEY_STRING form hangs here on a
+    non-ASCII character, timing out the whole AT-SPI bus (dbind) rather than
+    just failing to change the text, unlike its many ASCII-only uses
+    elsewhere. GTK's own EditableText implementation still runs the entry's
+    real text-changed path, so this exercises the production "changed"
+    handler the same as a real keystroke would.
+    """
+    node.queryEditableText().setTextContents(content)
+    wait_for(lambda: text_of(node) == content, f"the field shows {content!r}")
 
 
 def setup():
@@ -104,6 +140,33 @@ def run():
         f"{SUBJECT!r} has no label",
     )
     say("server: all labels cleared")
+
+    menu_item("Message/Mark As/Label/New Label")
+    label_dialog = wait_for(lambda: window("Add Label"), "the Add Label dialog")
+    # The dialog also holds a GtkColorChooser, itself full of text fields
+    # ("Color name:", a hex entry); find the name entry by its own label
+    # instead of assuming it is the dialog's only one.
+    name_label = wait_for(
+        lambda: find(label_dialog, "label", "Label name:"), "the 'Label name:' label"
+    )
+    entry = name_label.parent.getChildAtIndex(name_label.getIndexInParent() + 1)
+    if entry is None or entry.getRoleName() != "text":
+        raise ScenarioFailure("no text entry follows the 'Label name:' label")
+    set_text_via_atspi(entry, CUSTOM_LABEL_NAME)
+    click_button(label_dialog, "OK")
+    wait_for(lambda: window("Add Label") is None, "the Add Label dialog closes")
+    wait_for(
+        lambda: CUSTOM_LABEL_TAG in server.keywords_of(SUBJECT),
+        f"{SUBJECT!r} has the custom label {CUSTOM_LABEL_TAG!r}",
+    )
+    say(f"server: {CUSTOM_LABEL_TAG!r} set from a label name with spaces, capitals and non-ASCII")
+
+    menu_item("Message/Mark As/Label/None")
+    wait_for(
+        lambda: CUSTOM_LABEL_TAG not in server.keywords_of(SUBJECT),
+        f"{SUBJECT!r} custom label cleared",
+    )
+    say("server: custom label cleared")
 
     menu_item("Message/Mark As/Junk")
     confirm("Mark as Junk", "mark-as-junk-confirmation")
