@@ -357,6 +357,15 @@ const GTK_POLICY_AUTOMATIC: c_int = 1;
 const ROWS_HEIGHT: c_int = 220;
 const STOP_LABEL: &CStr = N_(c"_Stop processing more rules");
 const HEADER_NAME_HINT: &CStr = N_(c"Header name");
+/// Accessible names for the per-row condition and action widgets below:
+/// each row has no preceding label, so nothing else names these for a
+/// screen reader.
+const CONDITION_FIELD_NAME: &CStr = N_(c"Condition field");
+const CONDITION_OP_NAME: &CStr = N_(c"Condition operator");
+const CONDITION_VALUE_NAME: &CStr = N_(c"Condition value");
+const ACTION_TYPE_NAME: &CStr = N_(c"Action type");
+const DESTINATION_FOLDER_NAME: &CStr = N_(c"Destination folder");
+const REDIRECT_ADDRESS_NAME: &CStr = N_(c"Redirect address");
 
 /// One condition row: the widgets that describe it, and the box that holds
 /// them. Removing the row removes `container`, which destroys the rest.
@@ -676,18 +685,22 @@ unsafe fn append_condition(dialog: *mut GObject, condition: Option<&Condition>) 
 
         let field = combo_in(container, FIELD_CHOICES.iter().map(|item| item.label()));
         set_combo(field, index_of(&FIELD_CHOICES, choice));
+        widget::set_accessible_name(field.cast(), &translate(CONDITION_FIELD_NAME));
 
         let header_entry = gtk_entry_new();
         set_text(header_entry.cast(), &header);
         gtk_widget_set_tooltip_text(header_entry, translate_static(HEADER_NAME_HINT));
+        widget::set_accessible_name(header_entry.cast(), &translate(HEADER_NAME_HINT));
         gtk_box_pack_start(container.cast(), header_entry, GFALSE, GFALSE, 0);
 
         let op_combo = combo_in(container, choice.ops().iter().map(|item| op_label(*item)));
         set_combo(op_combo, index_of(choice.ops(), op));
+        widget::set_accessible_name(op_combo.cast(), &translate(CONDITION_OP_NAME));
 
         let value_entry = gtk_entry_new();
         set_text(value_entry.cast(), &value);
         gtk_widget_set_hexpand(value_entry, GTRUE);
+        widget::set_accessible_name(value_entry.cast(), &translate(CONDITION_VALUE_NAME));
         gtk_box_pack_start(container.cast(), value_entry, GTRUE, GTRUE, 0);
 
         remove_button(dialog, container, on_remove_condition);
@@ -767,6 +780,7 @@ unsafe fn append_action(dialog: *mut GObject, action: Option<&Action>) {
             action_combo,
             choice.and_then(|choice| index_of(&offered, choice)),
         );
+        widget::set_accessible_name(action_combo.cast(), &translate(ACTION_TYPE_NAME));
 
         let folder_combo = gtk_combo_box_text_new();
         for label in &folder_labels {
@@ -774,11 +788,13 @@ unsafe fn append_action(dialog: *mut GObject, action: Option<&Action>) {
             gtk_combo_box_text_append(folder_combo.cast(), ptr::null(), label.as_ptr());
         }
         set_combo(folder_combo, chosen_folder);
+        widget::set_accessible_name(folder_combo.cast(), &translate(DESTINATION_FOLDER_NAME));
         gtk_box_pack_start(container.cast(), folder_combo, GFALSE, GFALSE, 0);
 
         let address_entry = gtk_entry_new();
         set_text(address_entry.cast(), &address);
         gtk_widget_set_hexpand(address_entry, GTRUE);
+        widget::set_accessible_name(address_entry.cast(), &translate(REDIRECT_ADDRESS_NAME));
         gtk_box_pack_start(container.cast(), address_entry, GTRUE, GTRUE, 0);
 
         let keep_check = gtk_check_button_new_with_mnemonic(translate_static(N_(c"_Keep a copy")));
@@ -1410,6 +1426,80 @@ mod tests {
             assert!(
                 height_request > 0,
                 "the rows scroller has no fixed height: it would grow without bound"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(window);
+        }
+    }
+
+    /// Accessibility (item 174 (d)): each condition and action row has no
+    /// preceding label, so a screen reader landing on one of its widgets
+    /// needs an accessible name of its own. Needs a display; skips without
+    /// one.
+    #[test]
+    fn the_condition_and_action_row_widgets_have_accessible_names() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain toplevel window stands in for the live page;
+        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+        // via `parent_on`. Both widgets are destroyed before returning.
+        unsafe {
+            let window = gtk_window_new(0);
+            let draft = RuleDraft::new();
+            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+            append_condition(dialog.cast(), None);
+            append_action(dialog.cast(), None);
+
+            let cell = state(dialog.cast()).unwrap();
+            let (field, header, op, value) = {
+                let ui = cell.borrow();
+                let row = ui.condition_rows.last().unwrap();
+                (row.field, row.header, row.op, row.value)
+            };
+            assert_eq!(
+                widget::get_accessible_name(field.cast()),
+                translate(CONDITION_FIELD_NAME),
+                "the condition field combo keeps no name a screen reader can announce"
+            );
+            assert_eq!(
+                widget::get_accessible_name(header.cast()),
+                translate(HEADER_NAME_HINT),
+                "the header-name entry keeps no name a screen reader can announce"
+            );
+            assert_eq!(
+                widget::get_accessible_name(op.cast()),
+                translate(CONDITION_OP_NAME),
+                "the condition operator combo keeps no name a screen reader can announce"
+            );
+            assert_eq!(
+                widget::get_accessible_name(value.cast()),
+                translate(CONDITION_VALUE_NAME),
+                "the condition value entry keeps no name a screen reader can announce"
+            );
+
+            let (action, folder, address) = {
+                let ui = cell.borrow();
+                let row = ui.action_rows.last().unwrap();
+                (row.action, row.folder, row.address)
+            };
+            assert_eq!(
+                widget::get_accessible_name(action.cast()),
+                translate(ACTION_TYPE_NAME),
+                "the action type combo keeps no name a screen reader can announce"
+            );
+            assert_eq!(
+                widget::get_accessible_name(folder.cast()),
+                translate(DESTINATION_FOLDER_NAME),
+                "the destination folder combo keeps no name a screen reader can announce"
+            );
+            assert_eq!(
+                widget::get_accessible_name(address.cast()),
+                translate(REDIRECT_ADDRESS_NAME),
+                "the redirect address entry keeps no name a screen reader can announce"
             );
 
             gtk_widget_destroy(dialog);

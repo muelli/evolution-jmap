@@ -14,7 +14,8 @@ use std::ffi::{CStr, c_char, c_int};
 use std::ptr;
 
 use evo_sys::{
-    AtkRole, GtkWidget, atk_object_get_role, atk_object_set_role, gtk_widget_get_accessible,
+    AtkRole, GtkWidget, atk_object_get_name, atk_object_get_role, atk_object_set_name,
+    atk_object_set_role, gtk_widget_get_accessible,
 };
 use glib_sys::{GFALSE, GTRUE, gboolean};
 use gobject_sys::{GObject, g_object_get, g_object_set};
@@ -185,6 +186,48 @@ pub unsafe fn get_accessible_role(widget: *mut GObject) -> AtkRole {
     }
 }
 
+/// Names a widget's accessible object, for one a screen reader could
+/// otherwise reach with nothing to announce: a `GtkTreeView` with no
+/// preceding label to supply the name through a `labelled-by` relation.
+/// Does nothing if the widget has no accessible object.
+///
+/// # Safety
+///
+/// `widget` must be a live GTK widget.
+pub unsafe fn set_accessible_name(widget: *mut GObject, name: &str) {
+    let name = cstring_lossy(name);
+    // SAFETY: per the contract. `atk_object_set_name` copies the string.
+    unsafe {
+        let accessible = gtk_widget_get_accessible(widget.cast::<GtkWidget>());
+        if !accessible.is_null() {
+            atk_object_set_name(accessible, name.as_ptr());
+        }
+    }
+}
+
+/// The accessible name a widget was given, or an empty string if it has
+/// none or no accessible object.
+///
+/// # Safety
+///
+/// `widget` must be a live GTK widget.
+pub unsafe fn get_accessible_name(widget: *mut GObject) -> String {
+    // SAFETY: per the contract. The returned pointer is owned by the
+    // AtkObject, not by this call, so it is read, not freed.
+    unsafe {
+        let accessible = gtk_widget_get_accessible(widget.cast::<GtkWidget>());
+        if accessible.is_null() {
+            return String::new();
+        }
+        let name = atk_object_get_name(accessible);
+        if name.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(name).to_string_lossy().into_owned()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::raw::c_char;
@@ -221,6 +264,36 @@ mod tests {
                 get_accessible_role(label.cast()),
                 ATK_ROLE_STATUSBAR,
                 "the role set should be the role read back"
+            );
+
+            gtk_widget_destroy(label);
+        }
+    }
+
+    /// A fresh widget has no accessible name of its own: `set_accessible_name`
+    /// is what gives one to a widget with no label to supply it through a
+    /// `labelled-by` relation. Needs a display; skips without one.
+    #[test]
+    fn setting_an_accessible_name_is_visible_on_read_back() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a freshly made label, destroyed before returning.
+        unsafe {
+            let label = gtk_label_new(ptr::null());
+            assert_eq!(
+                get_accessible_name(label.cast()),
+                "",
+                "a plain label should start with no accessible name"
+            );
+
+            set_accessible_name(label.cast(), "Filter scripts");
+            assert_eq!(
+                get_accessible_name(label.cast()),
+                "Filter scripts",
+                "the name set should be the name read back"
             );
 
             gtk_widget_destroy(label);

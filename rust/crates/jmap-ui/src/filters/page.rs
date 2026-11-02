@@ -125,6 +125,11 @@ const RENAME_LABEL: &CStr = N_(c"_Rename…");
 const NAME_LABEL: &CStr = N_(c"_Name:");
 const CHECKING: &CStr = N_(c"Checking the script…");
 const SCRIPT_VALID: &CStr = N_(c"The script is valid.");
+// Neither list has a visible label of its own to name it for a screen
+// reader through a `labelled-by` relation (item 174d), unlike the text
+// view below, which has "_Script:".
+const SCRIPT_LIST_NAME: &CStr = N_(c"Filter scripts");
+const RULE_LIST_NAME: &CStr = N_(c"Rules of the selected script");
 
 /// The columns of the rules list: whether the rule runs, and its name.
 const RULE_COLUMN_ENABLED: c_int = 0;
@@ -325,6 +330,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         // GInitiallyUnowned and the calls that take them sink them.
         g_object_unref(store.cast());
         gtk_tree_view_set_headers_visible(view.cast(), GTRUE);
+        widget::set_accessible_name(view.cast(), &translate(SCRIPT_LIST_NAME));
         add_text_column(view, N_(c"Name"), COLUMN_NAME, true);
         add_text_column(view, N_(c"Active"), COLUMN_ACTIVE, false);
         // The page's own scrolled window scrolls the list; it needs a
@@ -373,6 +379,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         // only remaining reference once this one is released.
         g_object_unref(rules_store.cast());
         gtk_tree_view_set_headers_visible(rules_view.cast(), GTRUE);
+        widget::set_accessible_name(rules_view.cast(), &translate(RULE_LIST_NAME));
         add_text_column(rules_view, N_(c"Enabled"), RULE_COLUMN_ENABLED, false);
         add_text_column(rules_view, N_(c"Name"), RULE_COLUMN_NAME, true);
         gtk_widget_set_size_request(rules_view, -1, 160);
@@ -2037,6 +2044,51 @@ mod tests {
             );
 
             gtk_widget_destroy(view);
+        }
+    }
+
+    /// Accessibility (item 174 (d)): the script list and the rules list have
+    /// no preceding label to name them for a screen reader through a
+    /// `labelled-by` relation, unlike every other field on this page, so
+    /// each needs its own accessible name. Needs a display; skips without
+    /// one.
+    #[test]
+    fn the_script_and_rule_lists_have_accessible_names() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: two plain tree views, both destroyed before returning.
+        unsafe {
+            let mut types = [G_TYPE_STRING];
+            let store = gtk_list_store_newv(1, types.as_mut_ptr());
+            let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
+            g_object_unref(store.cast());
+            widget::set_accessible_name(view.cast(), &translate(SCRIPT_LIST_NAME));
+            assert_eq!(
+                widget::get_accessible_name(view.cast()),
+                translate(SCRIPT_LIST_NAME),
+                "the script list keeps no name a screen reader can announce"
+            );
+            gtk_widget_destroy(view);
+
+            let mut rule_types = [G_TYPE_STRING];
+            let rules_store = gtk_list_store_newv(1, rule_types.as_mut_ptr());
+            let rules_view = gtk_tree_view_new_with_model(rules_store.cast::<GtkTreeModel>());
+            g_object_unref(rules_store.cast());
+            widget::set_accessible_name(rules_view.cast(), &translate(RULE_LIST_NAME));
+            assert_eq!(
+                widget::get_accessible_name(rules_view.cast()),
+                translate(RULE_LIST_NAME),
+                "the rules list keeps no name a screen reader can announce"
+            );
+            assert_ne!(
+                translate(SCRIPT_LIST_NAME),
+                translate(RULE_LIST_NAME),
+                "the two lists must not share one name"
+            );
+            gtk_widget_destroy(rules_view);
         }
     }
 }
