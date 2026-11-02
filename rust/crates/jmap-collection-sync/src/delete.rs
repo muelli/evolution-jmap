@@ -37,6 +37,7 @@
 use jmap_client::Client;
 use jmap_client::expect_destroyed;
 use jmap_proto::Id;
+use jmap_proto::calendars::CalendarSetRequest;
 use jmap_proto::contacts::{AddressBook, AddressBookSetRequest};
 use jmap_proto::methods::SetRequest;
 
@@ -164,11 +165,20 @@ pub fn delete_collection(client: &Client, doomed: &Doomed) -> Result<(), DeleteF
             })?;
         }
         ChildKind::Calendar => {
-            client
-                .calendar_destroy(&account.id, &collection)
+            // draft-ietf-jmap-calendars-33 SS4.4: a server rejects destroying a
+            // non-empty Calendar unless the request sets onDestroyRemoveContents.
+            // Evolution's "Delete" on a calendar means delete it and its events.
+            let mut request = CalendarSetRequest::new(account.id.clone());
+            request.destroy = Some(vec![collection.clone()]);
+            request.on_destroy_remove_contents = Some(true);
+            let response = client
+                .calendar_set_custom(&request)
                 .inspect_err(|error| {
                     tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
                 })?;
+            expect_destroyed(&response, &collection).inspect_err(|error| {
+                tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
+            })?;
         }
     }
 
