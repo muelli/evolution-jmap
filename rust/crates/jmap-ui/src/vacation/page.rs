@@ -39,11 +39,12 @@ use std::sync::Arc;
 use eds_sys::ESource;
 use evo_sys::{
     EMailConfigPage, EMailConfigPageInterface, GTK_ORIENTATION_VERTICAL, GtkTextBuffer, GtkWidget,
-    e_date_edit_get_date, e_date_edit_new, e_date_edit_set_allow_no_date_set, e_date_edit_set_date,
-    e_date_edit_set_show_time, e_date_edit_set_time, e_mail_config_page_get_type, gtk_box_new,
-    gtk_box_pack_start, gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_entry_new,
-    gtk_grid_attach, gtk_grid_new, gtk_grid_set_column_spacing, gtk_grid_set_row_spacing,
-    gtk_label_new, gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
+    e_date_edit_get_date, e_date_edit_get_entry, e_date_edit_new,
+    e_date_edit_set_allow_no_date_set, e_date_edit_set_date, e_date_edit_set_show_time,
+    e_date_edit_set_time, e_mail_config_page_get_type, gtk_box_new, gtk_box_pack_start,
+    gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_entry_new, gtk_grid_attach,
+    gtk_grid_new, gtk_grid_set_column_spacing, gtk_grid_set_row_spacing, gtk_label_new,
+    gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
     gtk_label_set_xalign, gtk_scrolled_window_get_type, gtk_text_view_get_buffer,
     gtk_text_view_new, gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_vexpand,
     gtk_widget_show_all,
@@ -188,13 +189,37 @@ unsafe impl InterfaceImpl for PageInterface {
 /// `grid` must be a live grid and `input` must be a live widget. Use both on
 /// the main thread.
 unsafe fn attach_row(grid: *mut GtkWidget, row: c_int, label: &CStr, input: *mut GtkWidget) {
+    // SAFETY: forwarded; `input` is also the right mnemonic target here.
+    unsafe { attach_row_targeted(grid, row, label, input, input) }
+}
+
+/// Like [`attach_row`], but points the label's mnemonic relation at
+/// `mnemonic_target` instead of `input`.
+///
+/// An `EDateEdit` is not itself the accessible object a screen reader lands
+/// keyboard focus on; its internal `GtkEntry` is. A mnemonic relation set on
+/// the `EDateEdit` container leaves that entry with no accessible name at
+/// all, even though the visible label and the Alt-key shortcut both work.
+///
+/// # Safety
+///
+/// `grid` must be a live grid; `input` and `mnemonic_target` must be live
+/// widgets. Use all three on the main thread.
+unsafe fn attach_row_targeted(
+    grid: *mut GtkWidget,
+    row: c_int,
+    label: &CStr,
+    input: *mut GtkWidget,
+    mnemonic_target: *mut GtkWidget,
+) {
     let text = translate(label);
     let text = cstring_lossy(&text);
-    // SAFETY: the label is new; the grid and input are live, per the contract.
+    // SAFETY: the label is new; the grid, input and mnemonic target are live,
+    // per the contract.
     unsafe {
         let label = gtk_label_new_with_mnemonic(text.as_ptr());
         gtk_label_set_xalign(label.cast(), 1.0);
-        gtk_label_set_mnemonic_widget(label.cast(), input);
+        gtk_label_set_mnemonic_widget(label.cast(), mnemonic_target);
         gtk_grid_attach(grid.cast(), label, 0, row, 1, 1);
         gtk_widget_set_hexpand(input, GTRUE);
         gtk_grid_attach(grid.cast(), input, 1, row, 1, 1);
@@ -249,9 +274,21 @@ unsafe fn build_widgets(page: *mut GObject) {
         // `fromDate`/`toDate` of RFC 8621 §8. The page shows days only, no
         // time.
         let from_date = new_date_field();
-        attach_row(grid, 0, N_(c"_First day:"), from_date);
+        attach_row_targeted(
+            grid,
+            0,
+            N_(c"_First day:"),
+            from_date,
+            e_date_edit_get_entry(from_date.cast()).cast(),
+        );
         let to_date = new_date_field();
-        attach_row(grid, 1, N_(c"_Last day:"), to_date);
+        attach_row_targeted(
+            grid,
+            1,
+            N_(c"_Last day:"),
+            to_date,
+            e_date_edit_get_entry(to_date.cast()).cast(),
+        );
         let subject = gtk_entry_new();
         attach_row(grid, 2, N_(c"_Subject:"), subject);
         let body = gtk_text_view_new();
@@ -641,7 +678,7 @@ unsafe fn set_date(field: *mut GtkWidget, value: &str) {
 mod tests {
     use std::ffi::{c_char, c_void};
 
-    use evo_sys::gtk_widget_destroy;
+    use evo_sys::{gtk_label_get_mnemonic_widget, gtk_widget_destroy};
     use gobject_sys::g_object_get;
 
     use super::*;
@@ -701,6 +738,41 @@ mod tests {
                 hscrollbar_policy, GTK_POLICY_NEVER,
                 "the page can still scroll sideways"
             );
+
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// Accessibility (item 174 (d)): the "First day" and "Last day" labels'
+    /// mnemonic relation must target each `EDateEdit` field's internal
+    /// `GtkEntry`, the widget AT-SPI actually reports as focusable, not the
+    /// `EDateEdit` container. The container is not itself a screen reader's
+    /// landing point, so a relation aimed at it leaves the entry unnamed.
+    /// Needs a display; skips without one.
+    #[test]
+    fn the_date_field_labels_target_the_entry_not_the_container() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: see the test above; the same stand-in instance works here.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+
+            let grid = state(page.cast()).unwrap().borrow().grid;
+            for (row, name) in [(0, "First day"), (1, "Last day")] {
+                let label = gtk_grid_get_child_at(grid, 0, row);
+                let field = gtk_grid_get_child_at(grid, 1, row);
+                let target = gtk_label_get_mnemonic_widget(label.cast());
+                let entry = e_date_edit_get_entry(field.cast()).cast();
+                assert_eq!(
+                    target, entry,
+                    "the {name} label's mnemonic relation targets the EDateEdit \
+                     container instead of its entry"
+                );
+            }
 
             gtk_widget_destroy(page);
         }
