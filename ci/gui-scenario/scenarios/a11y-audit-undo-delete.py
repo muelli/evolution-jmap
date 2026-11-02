@@ -10,6 +10,13 @@ bar `undo_delete/shell_ext.rs` submits after a collection delete. Reuses
 (shared-calendar-delete.py), stopping once the info bar shows: the rest
 of that scenario's undo/wait/destroy steps are shared_delete.py's own
 job, not this audit's.
+
+Not run here: `audit_tab_reachability` (item 174(d)'s live Tab-key
+check, see a11y-audit.py). Confirmed empirically that pressing Tab after
+the info bar appears, right after a confirmation dialog closes, leaves
+no STATE_FOCUSED node observable anywhere for the rest of the walk, the
+same symptom a11y-audit.py's Send Later dialog hits and documents; root
+cause not pinned down, logged as an open row rather than guessed at.
 """
 
 from scenario import audit_dialog, audit_mnemonics, confirm, info_bar, main, menu_item, select_source, wait_for
