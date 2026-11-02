@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-02 06:18+0000\n"
+"POT-Creation-Date: 2026-11-02 07:59+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -646,13 +646,13 @@ msgid "C_heck"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/filters/page.rs:1512
-#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:438
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:447
 #: rust/crates/jmap-ui/src/send_later/extension.rs:844
 msgid "_Cancel"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/filters/page.rs:1515
-#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:441
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:450
 msgid "_OK"
 msgstr ""
 
@@ -787,7 +787,31 @@ msgstr ""
 msgid "Header name"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:784
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:363
+msgid "Condition field"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:364
+msgid "Condition operator"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:365
+msgid "Condition value"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:366
+msgid "Action type"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:367
+msgid "Destination folder"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:368
+msgid "Redirect address"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/rule_dialog.rs:800
 msgid "_Keep a copy"
 msgstr ""
 
