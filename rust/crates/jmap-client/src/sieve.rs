@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use jmap_proto::error::{SetError, set};
 use jmap_proto::methods::{
-    GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+    ChangesResponse, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
 pub use jmap_proto::sieve::{
@@ -291,6 +291,47 @@ impl Client {
         let arguments = self.single_call(USING, "SieveScript/query", &request)?;
         let response: QueryResponse = serde_json::from_value(arguments)?;
         Ok(response.ids)
+    }
+
+    /// Query Sieve script IDs with a full query request (RFC 9661 §2.5).
+    pub fn sieve_script_query_request(
+        &self,
+        request: &QueryRequest<SieveScriptQueryFilter>,
+    ) -> Result<QueryResponse, Error> {
+        let arguments = self.single_call(USING, "SieveScript/query", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// Fetch a single Sieve script by ID (`SieveScript/get`, RFC 9661 §2.3).
+    pub fn sieve_script_get(&self, account_id: &Id, id: &Id) -> Result<Option<SieveScript>, Error> {
+        let request = GetRequest::ids(account_id.clone(), [id.clone()]);
+        let arguments = self.single_call(USING, "SieveScript/get", &request)?;
+        let response: GetResponse<SieveScript> = serde_json::from_value(arguments)?;
+        Ok(response.list.into_iter().next())
+    }
+
+    /// Return the currently active Sieve script for an account, if any (RFC 9661 §2.1, §2.5).
+    ///
+    /// Resolves the active script ID via `SieveScript/query` with `isActive: true`
+    /// and fetches the script object via `SieveScript/get`.
+    pub fn sieve_script_active(&self, account_id: &Id) -> Result<Option<SieveScript>, Error> {
+        let ids = self.sieve_script_query(
+            account_id,
+            SieveScriptQueryFilter::new().with_is_active(true),
+        )?;
+        let Some(active_id) = ids.first() else {
+            return Ok(None);
+        };
+        self.sieve_script_get(account_id, active_id)
+    }
+
+    /// Request changes for Sieve scripts (`SieveScript/changes`, RFC 8620 §5.2).
+    pub fn sieve_script_changes(
+        &self,
+        account_id: &Id,
+        since_state: &State,
+    ) -> Result<ChangesResponse, Error> {
+        self.changes(account_id, "SieveScript", since_state)
     }
 
     /// Validate an uploaded Sieve script by blob ID (RFC 9661 Section 2.6).

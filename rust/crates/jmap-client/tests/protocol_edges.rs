@@ -290,3 +290,38 @@ fn share_notification_query_changes_dispatches_with_principals_capability() {
     let request = QueryChangesRequest::<ShareNotificationQueryFilter>::new(account_id, "qs1");
     let _ = client.share_notification_query_changes(&request);
 }
+
+#[test]
+fn changes_sieve_script_dispatches_with_sieve_capability() {
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let res = client.changes(&account_id, "SieveScript", &State::new("s1"));
+    if let Err(Error::Protocol(msg)) = &res {
+        assert!(
+            !msg.contains("no known capability"),
+            "SieveScript must map to CAPABILITY_SIEVE: {msg}"
+        );
+    }
+
+    let _ = client.sieve_script_changes(&account_id, &State::new("s1"));
+}
+
+#[test]
+fn sieve_script_active_and_query_request_dispatches() {
+    use jmap_proto::methods::QueryRequest;
+    use jmap_proto::sieve::SieveScriptQueryFilter;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let active = client.sieve_script_active(&account_id);
+    assert!(active.is_ok());
+
+    let req = QueryRequest::new(account_id.clone())
+        .filter(SieveScriptQueryFilter::new().with_is_active(true));
+    let query_res = client.sieve_script_query_request(&req);
+    assert!(query_res.is_ok());
+}
