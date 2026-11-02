@@ -786,15 +786,24 @@ def set_text(node, content):
     say(f"typed {content!r}")
 
 
+MENU_ITEM_ROLES = ("menu item", "check menu item", "radio menu item")
+
+
 def _menu_entry(root, path):
     """Return the menu item at `path` ("File/Send Later/In One Hour") under `root`, or None.
 
     A menu bar can have two menus with the same name (the composer has an
-    empty "File" menu first), so each match is tried.
+    empty "File" menu first), so each match is tried. The terminal item can
+    be a plain, check or radio menu item: Evolution's label menu, for
+    example, has one check menu item per label.
     """
     first, _, rest = path.partition("/")
     if not rest:
-        return find(root, "menu item", first)
+        for role in MENU_ITEM_ROLES:
+            entry = find(root, role, first)
+            if entry is not None:
+                return entry
+        return None
     for menu in descendants(root, "menu"):
         if _name(menu) == first:
             entry = _menu_entry(menu, rest)
