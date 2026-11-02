@@ -462,6 +462,21 @@ def window(prefix):
     return None
 
 
+def click_at(node):
+    """Click `node` with a synthetic mouse event, not an AT-SPI action call.
+
+    A button whose handler opens a modal dialog (`gtk_dialog_run`) leaves
+    the application unreachable over AT-SPI for the rest of an in-flight
+    `doAction` call: the action dispatch and the nested main loop it starts
+    share the same call stack. A real click does not have this problem, so
+    a button that opens a dialog uses this instead of `do_action`.
+    """
+    extents = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    x = extents.x + extents.width // 2
+    y = extents.y + extents.height // 2
+    pyatspi.Registry.generateMouseEvent(x, y, "b1c")
+
+
 def double_click(node):
     """Double-click the centre of `node` with the synthetic mouse."""
     extents = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)

@@ -7,9 +7,11 @@ This is item 174(d)'s automated audit: walk a page's widget tree over
 AT-SPI (not pixels) and fail on the first interactive widget (button,
 check box, text entry or view, combo box, tree view) whose accessible
 name is empty and has no labelled-by relation to a named widget. One
-account editor is opened once; each page in PAGES is visited in turn.
-Duplicate-mnemonic detection and live Tab-key reachability, and every
-surface not yet listed in PAGES, follow in later slices.
+account editor is opened once; each page in PAGES is visited in turn,
+then the name dialog and the rule dialog, both reached from the Server
+Filters page. Duplicate-mnemonic detection and live Tab-key
+reachability, and every surface not yet covered, follow in later
+slices.
 """
 
 import pyatspi
@@ -19,6 +21,8 @@ from scenario import (
     ScenarioFailure,
     _name,
     _role,
+    click_at,
+    click_button,
     descendants,
     do_action,
     evolution,
@@ -200,10 +204,66 @@ def audit_page(editor, page):
     say(f"a11y-audit: no unnamed focusable widget on the {page['name']!r} page")
 
 
+def audit_dialog(dialog, label):
+    offenders = list(unnamed_widgets(dialog))
+    if offenders:
+        raise ScenarioFailure(f"unnamed focusable widgets in the {label!r} dialog: {offenders}")
+    say(f"a11y-audit: no unnamed focusable widget in the {label!r} dialog")
+
+
+def rules_add_button(editor):
+    """Return the rules list's own Add button, not the script list's.
+
+    Both lists have a button named "Add…"; tell them apart by the rules
+    list's unique "Enabled" column header, the same structural walk
+    server-filters.py uses.
+    """
+    header = wait_for(
+        lambda: find(editor, "table column header", "Enabled"), "the 'Enabled' column header"
+    )
+    buttons_box = header.parent.parent.getChildAtIndex(1)
+    button = find(buttons_box, "push button", "Add…")
+    if button is None:
+        raise ScenarioFailure("no rules list Add button")
+    return button
+
+
+def audit_name_and_rule_dialogs(editor):
+    """Add a script and a rule, auditing the name dialog and the rule dialog.
+
+    Both dialogs are reached from the Server Filters page: the PAGES loop
+    may have left the editor on a later page, so return to it first.
+    Clicking Cancel on the rule dialog discards the rule: its fields need
+    not hold valid data, only exist.
+    """
+    server_filters = PAGES[0]
+    open_page(editor, server_filters)
+    loaded(editor, server_filters)
+    add_script = wait_for(
+        lambda: find(editor, "push button", "Add…", showing=True), "the script Add button"
+    )
+    click_at(add_script)
+    name_dialog = wait_for(lambda: window("New Filter Script"), "the name dialog")
+    audit_dialog(name_dialog, "New Filter Script")
+    click_button(name_dialog, "OK")
+    wait_for(lambda: window("New Filter Script") is None, "the name dialog closes")
+
+    add_rule = rules_add_button(editor)
+    wait_for(lambda: add_rule.getState().contains(pyatspi.STATE_SENSITIVE), "rule Add sensitive")
+    click_at(add_rule)
+    rule_dialog = wait_for(lambda: window("New Rule"), "the rule dialog")
+    click_button(rule_dialog, "Add Condition")
+    click_button(rule_dialog, "Add Action")
+    audit_dialog(rule_dialog, "New Rule")
+    click_button(rule_dialog, "Cancel")
+    wait_for(lambda: window("New Rule") is None, "the rule dialog closes")
+
+
 def run():
     editor = open_editor()
     for page in PAGES:
         audit_page(editor, page)
+    audit_name_and_rule_dialogs(editor)
 
 
 main(setup, run)
