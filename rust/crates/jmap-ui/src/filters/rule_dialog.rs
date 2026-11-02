@@ -25,10 +25,11 @@ use evo_sys::{
     gtk_container_add, gtk_container_remove, gtk_container_set_border_width, gtk_dialog_add_button,
     gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response,
     gtk_entry_new, gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
-    gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_widget_destroy,
-    gtk_widget_get_parent, gtk_widget_get_toplevel, gtk_widget_set_hexpand,
-    gtk_widget_set_sensitive, gtk_widget_set_tooltip_text, gtk_widget_set_visible,
-    gtk_widget_show_all, gtk_window_get_type, gtk_window_set_title, gtk_window_set_transient_for,
+    gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign,
+    gtk_scrolled_window_new, gtk_widget_destroy, gtk_widget_get_parent, gtk_widget_get_toplevel,
+    gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_size_request,
+    gtk_widget_set_tooltip_text, gtk_widget_set_visible, gtk_widget_show_all, gtk_window_get_type,
+    gtk_window_set_title, gtk_window_set_transient_for,
 };
 use glib_sys::{GFALSE, GTRUE, gpointer};
 use gobject_sys::{GObject, GTypeInstance, g_signal_connect_data, g_type_check_instance_is_a};
@@ -342,6 +343,18 @@ const ACTIONS_LABEL: &CStr = N_(c"Then:");
 const ADD_CONDITION: &CStr = N_(c"Add _Condition");
 const ADD_ACTION: &CStr = N_(c"Add _Action");
 const REMOVE_ROW: &CStr = N_(c"_Remove");
+
+/// `GtkScrolledWindow`'s `hscrollbar-policy` value that keeps the condition
+/// and action rows from ever scrolling sideways (`gtkscrolledwindow.h`:
+/// ALWAYS = 0, AUTOMATIC = 1, NEVER = 2).
+const GTK_POLICY_NEVER: c_int = 2;
+/// The matching `vscrollbar-policy` value: a scrollbar appears only once the
+/// rows outgrow the fixed height below.
+const GTK_POLICY_AUTOMATIC: c_int = 1;
+/// The rows area's own fixed height. Nothing bounds how many conditions or
+/// actions a rule can have, so without this the dialog would grow taller
+/// than the screen instead of scrolling (item 174a).
+const ROWS_HEIGHT: c_int = 220;
 const STOP_LABEL: &CStr = N_(c"_Stop processing more rules");
 const HEADER_NAME_HINT: &CStr = N_(c"Header name");
 
@@ -448,15 +461,34 @@ unsafe fn build_rule_dialog(
         );
         set_combo(combine, index_of(&COMBINE_CHOICES, draft.combine));
 
-        section_label(content, CONDITIONS_LABEL);
-        let conditions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-        gtk_box_pack_start(content.cast(), conditions, GFALSE, GFALSE, 0);
-        add_row_button(dialog, content, ADD_CONDITION, on_add_condition);
+        // Neither list below has a limit on how many rows it can hold. A
+        // plain box here would let the dialog grow taller than the screen
+        // with nothing to scroll it, cutting off the stop checkbox, the
+        // status label and the OK/Cancel buttons: exactly what item 174(a)
+        // forbids. A scroller of its own, fixed to one height, keeps the
+        // dialog's own height bounded and scrolls just this section.
+        let rows_scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+        widget::set_enum_named(rows_scroller.cast(), c"hscrollbar-policy", GTK_POLICY_NEVER);
+        widget::set_enum_named(
+            rows_scroller.cast(),
+            c"vscrollbar-policy",
+            GTK_POLICY_AUTOMATIC,
+        );
+        gtk_widget_set_size_request(rows_scroller, -1, ROWS_HEIGHT);
+        gtk_box_pack_start(content.cast(), rows_scroller, GTRUE, GTRUE, 0);
 
-        section_label(content, ACTIONS_LABEL);
+        let rows = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+        gtk_container_add(rows_scroller.cast(), rows);
+
+        section_label(rows, CONDITIONS_LABEL);
+        let conditions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+        gtk_box_pack_start(rows.cast(), conditions, GFALSE, GFALSE, 0);
+        add_row_button(dialog, rows, ADD_CONDITION, on_add_condition);
+
+        section_label(rows, ACTIONS_LABEL);
         let actions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-        gtk_box_pack_start(content.cast(), actions, GFALSE, GFALSE, 0);
-        add_row_button(dialog, content, ADD_ACTION, on_add_action);
+        gtk_box_pack_start(rows.cast(), actions, GFALSE, GFALSE, 0);
+        add_row_button(dialog, rows, ADD_ACTION, on_add_action);
 
         let stop = gtk_check_button_new_with_mnemonic(translate_static(STOP_LABEL));
         set_bool(stop.cast(), draft.stop);
@@ -1143,7 +1175,8 @@ mod tests {
     use std::os::raw::c_char;
 
     use evo_sys::{
-        gtk_box_get_spacing, gtk_container_get_border_width, gtk_window_get_default_widget,
+        gtk_box_get_spacing, gtk_container_get_border_width, gtk_scrolled_window_get_type,
+        gtk_window_get_default_widget,
     };
     use glib_sys::gboolean;
     use gobject_sys::g_object_get;
@@ -1309,6 +1342,74 @@ mod tests {
                 gtk_box_get_spacing(actions.cast()),
                 6,
                 "the actions row box uses a different spacing than the rest of the dialog"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(window);
+        }
+    }
+
+    /// Layout (item 174 (a)): nothing bounds how many conditions or actions
+    /// a rule can have. Without a scroller of its own, the dialog would
+    /// grow taller than the screen instead of scrolling, cutting off the
+    /// stop checkbox, the status label and the OK/Cancel buttons below.
+    /// Needs a display; skips without one.
+    #[test]
+    fn the_condition_and_action_rows_scroll_instead_of_growing_the_dialog() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain toplevel window stands in for the live page;
+        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+        // via `parent_on`. Both widgets are destroyed before returning.
+        unsafe {
+            let window = gtk_window_new(0);
+            let draft = RuleDraft::new();
+            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+
+            let conditions = state(dialog.cast()).unwrap().borrow().conditions;
+            // GTK3 wraps a non-`GtkScrollable` child (a plain `GtkBox`) in a
+            // `GtkViewport` of its own, so the scroller is two parents up,
+            // not one.
+            let mut ancestor = gtk_widget_get_parent(conditions);
+            while !ancestor.is_null()
+                && g_type_check_instance_is_a(
+                    ancestor.cast::<GTypeInstance>(),
+                    gtk_scrolled_window_get_type(),
+                ) == GFALSE
+            {
+                ancestor = gtk_widget_get_parent(ancestor);
+            }
+            assert!(
+                !ancestor.is_null(),
+                "the condition and action rows have no GtkScrolledWindow ancestor: \
+                 the dialog would grow without bound instead of scrolling"
+            );
+
+            let mut hscrollbar_policy: c_int = -1;
+            g_object_get(
+                ancestor.cast(),
+                c"hscrollbar-policy".as_ptr(),
+                &mut hscrollbar_policy as *mut c_int,
+                ptr::null::<c_char>(),
+            );
+            assert_eq!(
+                hscrollbar_policy, GTK_POLICY_NEVER,
+                "the rows scroller can still scroll sideways"
+            );
+
+            let mut height_request: c_int = -1;
+            g_object_get(
+                ancestor.cast(),
+                c"height-request".as_ptr(),
+                &mut height_request as *mut c_int,
+                ptr::null::<c_char>(),
+            );
+            assert!(
+                height_request > 0,
+                "the rows scroller has no fixed height: it would grow without bound"
             );
 
             gtk_widget_destroy(dialog);
