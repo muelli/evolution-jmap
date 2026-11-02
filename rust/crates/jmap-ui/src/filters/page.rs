@@ -503,9 +503,12 @@ unsafe fn add_text_column(view: *mut GtkWidget, title: &'static CStr, column: c_
         if expand {
             // A long script or rule name must not force the page wider
             // than the window: a fixed sizing mode caps the column's own
-            // width request independently of its content.
+            // width request independently of its content, and the
+            // ellipsis marks that the name was cut off instead of
+            // clipping it with no visual cue.
             widget::set_enum_named(tree_column.cast(), c"sizing", GTK_TREE_VIEW_COLUMN_FIXED);
             widget::set_int_named(tree_column.cast(), c"fixed-width", NAME_COLUMN_WIDTH);
+            widget::set_enum_named(renderer.cast(), c"ellipsize", widget::PANGO_ELLIPSIZE_END);
         }
         gtk_tree_view_column_pack_start(tree_column, renderer, GTRUE);
         gtk_tree_view_column_add_attribute(tree_column, renderer, c"text".as_ptr(), column);
@@ -2041,6 +2044,57 @@ mod tests {
             assert_eq!(
                 fixed_width, NAME_COLUMN_WIDTH,
                 "the column has no fixed width to cap its size request at"
+            );
+
+            gtk_widget_destroy(view);
+        }
+    }
+
+    /// GNOME HIG (item 174 (c)): a name column fixed to [`NAME_COLUMN_WIDTH`]
+    /// clips a longer name with no visual cue that it was cut off. The
+    /// renderer needs `ellipsize` set to mark the cut with "…". Needs a
+    /// display; skips without one.
+    #[test]
+    fn a_name_column_ellipsizes_a_clipped_name() {
+        unsafe extern "C" {
+            fn gtk_cell_layout_get_cells(
+                cell_layout: *mut evo_sys::GtkTreeViewColumn,
+            ) -> *mut GList;
+        }
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain list store and tree view, both destroyed (the
+        // store's one reference moves to the view) before returning.
+        unsafe {
+            let mut types = [G_TYPE_STRING];
+            let store = gtk_list_store_newv(1, types.as_mut_ptr());
+            let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
+            g_object_unref(store.cast());
+            add_text_column(view, c"Name", 0, true);
+
+            let column = gtk_tree_view_get_column(view.cast(), 0);
+            assert!(!column.is_null(), "the column was not appended");
+
+            let cells = gtk_cell_layout_get_cells(column);
+            assert!(!cells.is_null(), "the column has no cell renderer");
+            let renderer = (*cells).data;
+            g_list_free(cells);
+
+            let mut ellipsize: c_int = -1;
+            g_object_get(
+                renderer.cast(),
+                c"ellipsize".as_ptr(),
+                &mut ellipsize as *mut c_int,
+                ptr::null::<c_char>(),
+            );
+            assert_eq!(
+                ellipsize,
+                widget::PANGO_ELLIPSIZE_END,
+                "the renderer does not mark a clipped name with an ellipsis"
             );
 
             gtk_widget_destroy(view);
