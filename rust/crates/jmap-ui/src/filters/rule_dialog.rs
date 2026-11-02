@@ -40,7 +40,7 @@ use jmap_backend_core::trampoline::guard;
 
 use crate::filters::rule_form::RuleDraft;
 use crate::filters::rules::{Action, Combine, Condition, Field, Folder, Op, Rule};
-use crate::widget::{flag, get_bool, get_text, set_bool, set_text};
+use crate::widget::{self, flag, get_bool, get_text, set_bool, set_text};
 
 /// The error when an action that files a message has no folder chosen.
 pub const NO_FOLDER_CHOSEN: &CStr = N_(c"Choose a folder for this action.");
@@ -464,6 +464,10 @@ unsafe fn build_rule_dialog(
 
         let status = gtk_label_new(ptr::null());
         gtk_label_set_xalign(status.cast(), 0.0);
+        // A long reason (longer still in German) wraps instead of widening
+        // the dialog, the same fix as the filters and vacation pages.
+        widget::set_bool_named(status.cast(), c"wrap", true);
+        widget::set_enum_named(status.cast(), c"wrap-mode", widget::PANGO_WRAP_WORD_CHAR);
         gtk_box_pack_start(content.cast(), status, GFALSE, GFALSE, 0);
 
         STATE.set(
@@ -1219,6 +1223,54 @@ mod tests {
                 gtk_container_get_border_width(content_area.cast()),
                 12,
                 "the content area has no HIG margin: content touches the dialog's edges"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(window);
+        }
+    }
+
+    /// Layout (item 174 (a)): a long status reason (longer still in German)
+    /// wraps instead of widening the dialog past the window. Needs a
+    /// display; skips without one.
+    #[test]
+    fn the_rule_dialog_status_label_wraps() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain toplevel window stands in for the live page;
+        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+        // via `parent_on`. Both widgets are destroyed before returning.
+        unsafe {
+            let window = gtk_window_new(0);
+            let draft = RuleDraft::new();
+            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+
+            let status = state(dialog.cast()).unwrap().borrow().status;
+            let mut wrap: gboolean = GFALSE;
+            g_object_get(
+                status.cast(),
+                c"wrap".as_ptr(),
+                &mut wrap as *mut gboolean,
+                ptr::null::<c_char>(),
+            );
+            assert_ne!(
+                wrap, GFALSE,
+                "the status label does not wrap: a long reason would widen the dialog"
+            );
+            let mut wrap_mode: c_int = -1;
+            g_object_get(
+                status.cast(),
+                c"wrap-mode".as_ptr(),
+                &mut wrap_mode as *mut c_int,
+                ptr::null::<c_char>(),
+            );
+            assert_eq!(
+                wrap_mode,
+                widget::PANGO_WRAP_WORD_CHAR,
+                "the status label does not break an overlong word"
             );
 
             gtk_widget_destroy(dialog);
