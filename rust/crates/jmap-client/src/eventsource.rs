@@ -1703,4 +1703,62 @@ mod tests {
         assert_eq!(read_bounded_line(&mut no_newline, &mut line).unwrap(), 11);
         assert_eq!(line, "hello world");
     }
+
+    #[test]
+    fn parse_response_head_validates_status_and_chunked_transfer() {
+        let valid = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+        parse_response_head(Cursor::new(&valid[..]))
+            .expect("valid 200 chunked response head succeeds");
+
+        let err_status =
+            b"HTTP/1.1 500 Internal Server Error\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let err = parse_response_head(Cursor::new(&err_status[..]))
+            .expect_err("500 response status is rejected");
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+
+        let err_not_chunked = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+        let err = parse_response_head(Cursor::new(&err_not_chunked[..]))
+            .expect_err("missing chunked encoding is rejected");
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn parse_stream_parses_frames_and_propagates_state_and_errors() {
+        let raw = b"event: state\r\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\r\n\r\n";
+        let (sender, receiver) = mpsc::channel();
+        parse_stream(Cursor::new(&raw[..]), &CancelFlag::new(), &sender)
+            .expect("parse_stream parses valid frame");
+
+        let item = receiver.try_recv().expect("received state change item");
+        assert_eq!(item, EventSourceItem::State(changed("a1", "Mailbox", "1")));
+
+        let mut overlong = vec![b'x'; MAX_LINE_BYTES + 1];
+        overlong.push(b'\n');
+        let (sender_err, _) = mpsc::channel();
+        let err = parse_stream(Cursor::new(&overlong[..]), &CancelFlag::new(), &sender_err)
+            .expect_err("overlong stream line is rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_chunked_stream_decodes_chunking_and_delivers_state_and_errors() {
+        let frame = "event: state\r\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"2\"}}}\r\n\r\n";
+        let chunked = format!("{:x}\r\n{frame}\r\n0\r\n\r\n", frame.len());
+        let (sender, receiver) = mpsc::channel();
+        parse_chunked_stream(Cursor::new(chunked.as_bytes()), &CancelFlag::new(), &sender)
+            .expect("parse_chunked_stream decodes chunked frames");
+
+        let item = receiver.try_recv().expect("received state change item");
+        assert_eq!(item, EventSourceItem::State(changed("a1", "Mailbox", "2")));
+
+        let invalid_chunk = b"not-hex-size\r\ndata\r\n";
+        let (sender_err, _) = mpsc::channel();
+        let err = parse_chunked_stream(
+            Cursor::new(&invalid_chunk[..]),
+            &CancelFlag::new(),
+            &sender_err,
+        )
+        .expect_err("invalid chunk size is rejected");
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
 }
