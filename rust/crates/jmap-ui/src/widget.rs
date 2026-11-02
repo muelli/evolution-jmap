@@ -108,6 +108,12 @@ pub fn flag(value: bool) -> gboolean {
 /// WORD_CHAR = 2). A plain integer, so this needs no new FFI type.
 pub const PANGO_WRAP_WORD_CHAR: c_int = 2;
 
+/// Pango's `ellipsize` value that cuts off a line's end with "…", read by
+/// `GtkCellRendererText`'s `ellipsize` property (`pango-layout.h`:
+/// NONE = 0, START = 1, MIDDLE = 2, END = 3). A plain integer, so this
+/// needs no new FFI type.
+pub const PANGO_ELLIPSIZE_END: c_int = 3;
+
 /// Sets a named boolean property, for a widget whose property is not
 /// `active`.
 ///
