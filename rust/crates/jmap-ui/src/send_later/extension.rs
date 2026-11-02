@@ -92,6 +92,7 @@ use crate::hold::Hold;
 use crate::link::{self, AccountLink, SendSource};
 use crate::send_later::schedule::{self, Preset};
 use crate::send_later::submit;
+use crate::widget;
 
 const STATE: ObjectData<RefCell<SendState>> = ObjectData::new(c"jmap-send-later-state");
 
@@ -110,6 +111,7 @@ const NO_FROM: &CStr = N_(c"The message has no From address.");
 const TOO_FAR: &CStr = N_(c"The chosen time is further ahead than the server accepts.");
 const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time.");
 const NOT_FUTURE: &CStr = N_(c"That time has already passed — choose one in the future.");
+const SEND_TIME_NAME: &CStr = N_(c"Send time");
 
 /// The action of the submenu, for the compiled menu layer.
 #[cfg(not(evolution_eui_manager))]
@@ -858,6 +860,10 @@ unsafe fn build_custom_time_dialog(composer: *mut GObject) -> (*mut GtkWidget, *
         // Show the time part too: a send time needs a time of day.
         e_date_edit_set_show_time(field.cast(), GTRUE);
         gtk_entry_set_activates_default(e_date_edit_get_entry(field.cast()).cast(), GTRUE);
+        // No preceding label names this field, unlike the name dialog's
+        // visible "Name:" label: a screen reader would otherwise hear only
+        // the current date and time, with no indication of what it is for.
+        widget::set_accessible_name(field.cast(), &translate(SEND_TIME_NAME));
         // Start one hour ahead, not at "now". "Now" is already in the past
         // when the user reads it.
         let now = glib_sys::g_date_time_new_now_local();
@@ -1634,6 +1640,30 @@ mod tests {
                     gtk_container_get_border_width(content_area.cast()),
                     12,
                     "the content area has no HIG margin: content touches the dialog's edges"
+                );
+
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window.cast());
+            }
+        }
+
+        /// No label precedes the field: a screen reader needs its own
+        /// accessible name instead. Needs a display; skips without one.
+        #[test]
+        fn the_custom_time_field_has_an_accessible_name() {
+            if !display() {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: as above.
+            unsafe {
+                let window: *mut GObject = gtk_window_new(0).cast();
+                let (dialog, field) = build_custom_time_dialog(window);
+
+                assert_eq!(
+                    widget::get_accessible_name(field.cast()),
+                    translate(SEND_TIME_NAME),
+                    "the field keeps no name a screen reader can announce"
                 );
 
                 gtk_widget_destroy(dialog);
