@@ -344,6 +344,10 @@ fn every_widget_entry_point_this_crate_offers_resolves() {
             gtk_tree_view_append_column as *const (),
         ),
         (
+            "gtk_tree_view_get_column",
+            gtk_tree_view_get_column as *const (),
+        ),
+        (
             "gtk_tree_view_get_selection",
             gtk_tree_view_get_selection as *const (),
         ),

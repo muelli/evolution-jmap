@@ -403,6 +403,7 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_list_store_insert_with_valuesv",
     "gtk_tree_view_new_with_model",
     "gtk_tree_view_append_column",
+    "gtk_tree_view_get_column",
     "gtk_tree_view_get_selection",
     "gtk_tree_view_set_headers_visible",
     "gtk_tree_view_set_cursor",
