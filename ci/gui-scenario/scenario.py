@@ -997,6 +997,30 @@ def select_message(subject):
     say(f"selected message {subject!r}")
 
 
+def select_messages(subjects):
+    """Select every message in `subjects` at once, a multi-row selection.
+
+    Uses the table's own `addRowSelection`, not a held Ctrl key: a synthetic
+    modifier held across a separate mouse or key event is not reliable in
+    this AT-SPI/Xvfb setup (the same reason `tab_reachable` cannot
+    synthesize Ctrl+Tab). `addRowSelection` reaches the identical
+    `GtkTreeSelection` a Ctrl+click would, so a menu action that follows
+    still sees and acts on the real multi-row selection.
+    """
+    select_message(subjects[0])
+    table = message_list()
+    rows = table.queryTable()
+    for subject in subjects:
+        cell = wait_for(
+            lambda subject=subject: find(table, "table cell", subject),
+            f"message {subject!r} in the message list",
+        )
+        row = rows.getRowAtIndex(cell.getIndexInParent())
+        if not rows.addRowSelection(row):
+            raise ScenarioFailure(f"could not add message {subject!r} (row {row}) to the selection")
+    say(f"selected messages {list(subjects)!r}")
+
+
 # The calendar and contacts views.
 
 

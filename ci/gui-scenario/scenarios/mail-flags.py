@@ -42,10 +42,19 @@ IMAP's modified UTF-7, RFC 2152/3501). `CUSTOM_LABEL_TAG` is derived from
 that algorithm, cross-checked against EDS's own
 `camel/tests/test-camel-utf7.c` vectors.
 
-Not covered here, left for later claims of the same item: a multi-selection,
-the reverse direction (a server-side keyword change reflected in the
-message list), the 3.60.2 Fedora container, and contacts/calendar
-categories.
+Message/Mark As/Important acts on the whole selection, not just the
+cursor message: with both seeded messages selected at once, one menu click
+sets `$flagged` on both.
+
+A built-in label, Junk/Not Junk and Read/Unread act on the whole selection
+too, the same as Important/Unimportant: one menu click (one confirmation
+for Junk) sets or clears the keyword on every selected message, not just
+the cursor message.
+
+Not covered here, left for later claims of the same item: the reverse
+direction (a server-side keyword change reflected in the message list,
+live push and after a restart), the 3.60.2 Fedora container, and
+contacts/calendar categories.
 """
 
 from scenario import (
@@ -61,6 +70,7 @@ from scenario import (
     say,
     select_folder,
     select_message,
+    select_messages,
     text_of,
     wait_for,
     window,
@@ -69,6 +79,7 @@ from scenario import (
 
 ACCOUNT = "JMAP scenario mail"
 SUBJECT = "Welcome to jmap-mockd"
+SECOND_SUBJECT = "Second message"
 KEYWORDS_LOG = 'jmap_mail_sync: setting message keywords .*uid="{}"'
 BUILTIN_LABEL_TAGS = {
     "Important": "$Labelimportant",
@@ -178,6 +189,64 @@ def run():
     wait_for(lambda: "$notjunk" in server.keywords_of(SUBJECT), f"{SUBJECT!r} not junk")
     wait_for(lambda: "$junk" not in server.keywords_of(SUBJECT), f"{SUBJECT!r} not junk (cleared)")
     say("server: $notjunk set, $junk cleared")
+
+    select_messages([SUBJECT, SECOND_SUBJECT])
+    menu_item("Message/Mark As/Important")
+    wait_for(lambda: "$flagged" in server.keywords_of(SUBJECT), f"{SUBJECT!r} flagged")
+    wait_for(lambda: "$flagged" in server.keywords_of(SECOND_SUBJECT), f"{SECOND_SUBJECT!r} flagged")
+    say("server: $flagged set on both selected messages")
+
+    menu_item("Message/Mark As/Unimportant")
+    wait_for(lambda: "$flagged" not in server.keywords_of(SUBJECT), f"{SUBJECT!r} unflagged")
+    wait_for(
+        lambda: "$flagged" not in server.keywords_of(SECOND_SUBJECT),
+        f"{SECOND_SUBJECT!r} unflagged",
+    )
+    say("server: $flagged cleared on both selected messages")
+
+    menu_item("Message/Mark As/Label/Work")
+    wait_for(lambda: "$Labelwork" in server.keywords_of(SUBJECT), f"{SUBJECT!r} has $Labelwork")
+    wait_for(
+        lambda: "$Labelwork" in server.keywords_of(SECOND_SUBJECT),
+        f"{SECOND_SUBJECT!r} has $Labelwork",
+    )
+    say("server: $Labelwork set on both selected messages")
+
+    menu_item("Message/Mark As/Label/None")
+    wait_for(lambda: "$Labelwork" not in server.keywords_of(SUBJECT), f"{SUBJECT!r} label cleared")
+    wait_for(
+        lambda: "$Labelwork" not in server.keywords_of(SECOND_SUBJECT),
+        f"{SECOND_SUBJECT!r} label cleared",
+    )
+    say("server: label cleared on both selected messages")
+
+    menu_item("Message/Mark As/Junk")
+    confirm("Mark as Junk")
+    wait_for(lambda: "$junk" in server.keywords_of(SUBJECT), f"{SUBJECT!r} junk")
+    wait_for(lambda: "$junk" in server.keywords_of(SECOND_SUBJECT), f"{SECOND_SUBJECT!r} junk")
+    say("server: $junk set on both selected messages")
+
+    select_messages([SUBJECT, SECOND_SUBJECT])
+    menu_item("Message/Mark As/Not Junk")
+    wait_for(lambda: "$notjunk" in server.keywords_of(SUBJECT), f"{SUBJECT!r} not junk")
+    wait_for(lambda: "$junk" not in server.keywords_of(SUBJECT), f"{SUBJECT!r} not junk (cleared)")
+    wait_for(lambda: "$notjunk" in server.keywords_of(SECOND_SUBJECT), f"{SECOND_SUBJECT!r} not junk")
+    wait_for(
+        lambda: "$junk" not in server.keywords_of(SECOND_SUBJECT),
+        f"{SECOND_SUBJECT!r} not junk (cleared)",
+    )
+    say("server: $notjunk set, $junk cleared on both selected messages")
+
+    select_messages([SUBJECT, SECOND_SUBJECT])
+    menu_item("Message/Mark As/Unread")
+    wait_for(lambda: "$seen" not in server.keywords_of(SUBJECT), f"{SUBJECT!r} unread")
+    wait_for(lambda: "$seen" not in server.keywords_of(SECOND_SUBJECT), f"{SECOND_SUBJECT!r} unread")
+    say("server: $seen cleared on both selected messages")
+
+    menu_item("Message/Mark As/Read")
+    wait_for(lambda: "$seen" in server.keywords_of(SUBJECT), f"{SUBJECT!r} read")
+    wait_for(lambda: "$seen" in server.keywords_of(SECOND_SUBJECT), f"{SECOND_SUBJECT!r} read")
+    say("server: $seen set on both selected messages")
 
     expect_no_errors()
 
