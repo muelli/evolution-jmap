@@ -858,3 +858,110 @@ fn client_event_source_validation() {
         other => panic!("expected Error::Protocol, got {other:?}"),
     }
 }
+
+#[test]
+fn client_execute_idempotent_within_exhaustion_and_attempt_counting() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_clone = attempts.clone();
+
+    let transport = MockTransport::new(move |req| {
+        if req.url.ends_with("/.well-known/jmap") {
+            return Ok(HttpResponse {
+                status: 200,
+                content_type: Some("application/json".into()),
+                body: make_session_json(SessionConfig::default()),
+                final_url: req.url.to_string(),
+            });
+        }
+        let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
+        if count >= 10 {
+            return Err(TransportError::Failed("loop guard reached".into()));
+        }
+        Ok(HttpResponse {
+            status: 429,
+            content_type: Some("application/problem+json".into()),
+            body: serde_json::to_vec(&json!({
+                "type": "urn:ietf:params:jmap:error:limit",
+                "status": 429,
+                "detail": "rate limited"
+            }))
+            .unwrap(),
+            final_url: req.url.to_string(),
+        })
+    });
+
+    let client = Client::builder()
+        .transport(transport)
+        .max_retry_after(Duration::ZERO)
+        .max_rate_limit_retries(3)
+        .connect("http://127.0.0.1:8080", Credentials::none())
+        .unwrap();
+
+    let account_id = jmap_proto::Id::new("acc1");
+    let blob_id = jmap_proto::Id::new("blob1");
+    let result = client.download_blob(
+        &account_id,
+        &blob_id,
+        "application/octet-stream",
+        1024 * 1024,
+    );
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert!(matches!(result, Err(Error::RateLimited { .. })));
+}
+
+#[test]
+fn client_single_call_method_limit_exhaustion_and_non_idempotent_rejection() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_clone = attempts.clone();
+
+    let transport = MockTransport::new(move |req| {
+        if req.url.ends_with("/.well-known/jmap") {
+            return Ok(HttpResponse {
+                status: 200,
+                content_type: Some("application/json".into()),
+                body: make_session_json(SessionConfig::default()),
+                final_url: req.url.to_string(),
+            });
+        }
+        let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
+        if count >= 10 {
+            return Err(TransportError::Failed("loop guard reached".into()));
+        }
+        let parsed_req: Request =
+            serde_json::from_slice(req.body.expect("request body present")).unwrap();
+        let call_id = parsed_req.method_calls[0].call_id.clone();
+        let response_body = json!({
+            "sessionState": "s1",
+            "methodResponses": [
+                ["error", {"type": "limit", "description": "rate limited"}, call_id]
+            ]
+        });
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".into()),
+            body: serde_json::to_vec(&response_body).unwrap(),
+            final_url: req.url.to_string(),
+        })
+    });
+
+    let client = Client::builder()
+        .transport(transport)
+        .max_retry_after(Duration::ZERO)
+        .max_rate_limit_retries(3)
+        .connect("http://127.0.0.1:8080", Credentials::none())
+        .unwrap();
+
+    attempts.store(0, Ordering::SeqCst);
+    let idemp_result = client.single_call(&["urn:ietf:params:jmap:core"], "Core/echo", &json!({}));
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert!(matches!(idemp_result, Err(Error::RateLimited { .. })));
+
+    attempts.store(0, Ordering::SeqCst);
+    let non_idemp_result =
+        client.single_call(&["urn:ietf:params:jmap:mail"], "Email/set", &json!({}));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(matches!(non_idemp_result, Err(Error::RateLimited { .. })));
+}
