@@ -308,6 +308,11 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_widget_get_accessible",
     "atk_object_set_role",
     "atk_object_get_role",
+    // A focusable widget's accessible name, for one with no label of its
+    // own to supply it through a `labelled-by` relation (item 174d).
+    // `_get` lets a test confirm the name without a display.
+    "atk_object_set_name",
+    "atk_object_get_name",
     // The authentication-method combo. Its choices are fixed: `"none"` and
     // this project's `EOAuth2Service` name. So `_append` is the only
     // mutator this crate needs.
@@ -541,9 +546,10 @@ const BLOCKED_GTK_TYPES: &[&str] = &["Gtk.*", "_Gtk.*"];
 
 /// `AtkObject`, for the same reason as [`BLOCKED_GTK_TYPES`]: this crate
 /// never subclasses or allocates one, only passes the pointer
-/// `gtk_widget_get_accessible` returns straight into `atk_object_set_role`.
-/// `AtkRole` stays out of this list: it is a plain enum, not a class, so a
-/// generated copy carries no layout claim to get wrong.
+/// `gtk_widget_get_accessible` returns straight into `atk_object_set_role`
+/// or `atk_object_set_name`. `AtkRole` stays out of this list: it is a
+/// plain enum, not a class, so a generated copy carries no layout claim to
+/// get wrong.
 const BLOCKED_ATK_TYPES: &[&str] = &["AtkObject", "_AtkObject"];
 
 /// WebKit's *types*, for the same reason as [`BLOCKED_GTK_TYPES`]. No
@@ -742,7 +748,8 @@ const GTK_HANDLES: &[&str] = &[
     // returns. `gtkwidget.h` includes `atk/atk.h`, so clang sees it in the
     // same translation unit as everything else here. A status label marks
     // its accessible object with a role (`atk_object_set_role`) so a screen
-    // reader treats a later text change as an announcement.
+    // reader treats a later text change as an announcement; an unlabelled
+    // widget gets a name (`atk_object_set_name`) the same way.
     "AtkObject",
 ];
 
