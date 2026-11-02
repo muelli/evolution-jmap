@@ -81,7 +81,7 @@ impl Component {
     fn write_into(&self, out: &mut String) {
         write!(out, "BEGIN:{}\r\n", self.component_type.as_str()).unwrap();
         for entry in &self.entries {
-            entry.write_to(out).unwrap();
+            write_entry(entry, out);
         }
         for child in &self.children {
             child.write_into(out);
@@ -97,6 +97,35 @@ impl Component {
 }
 
 pub use jmap_proto::text::{MAX_LINE_OCTETS, caret_decoded, caret_encoded, fold_overlong_lines};
+
+/// Write one content line. A URI value (RFC 5545 Section 3.3.13) is written
+/// as is: calcard escapes it like TEXT, so `;` and `,` would get a
+/// backslash that libical and Evolution keep in the URL.
+fn write_entry(entry: &ICalendarEntry, out: &mut String) {
+    let [ICalendarValue::Uri(Uri::Location(uri))] = entry.values.as_slice() else {
+        entry.write_to(out).unwrap();
+        return;
+    };
+    let mut bare = entry.clone();
+    bare.values.clear();
+    let mut line = String::new();
+    bare.write_to(&mut line).unwrap();
+    let head = line.strip_suffix("\r\n").unwrap_or(&line);
+    out.push_str(head);
+    if !head.ends_with(':') {
+        out.push(':');
+    }
+    out.extend(uri.chars().filter(|c| !c.is_control()));
+    out.push_str("\r\n");
+}
+
+/// A property with a URI value (RFC 5545 Section 3.3.13), written without
+/// TEXT escapes.
+pub fn make_uri_entry(name: &str, value: &str) -> ICalendarEntry {
+    let prop = ICalendarProperty::parse(name.as_bytes())
+        .unwrap_or_else(|| ICalendarProperty::Other(name.to_ascii_uppercase()));
+    ICalendarEntry::new(prop).with_value(ICalendarValue::Uri(Uri::Location(value.to_owned())))
+}
 
 pub fn make_entry(name: &str, value: &str) -> ICalendarEntry {
     let prop = ICalendarProperty::parse(name.as_bytes())
@@ -649,14 +678,15 @@ pub fn drawn_participants(event: &CalendarEvent) -> Vec<ICalendarEntry> {
         if owns && !organizer_drawn {
             organizer_drawn = true;
             lines.push(
-                make_entry("ORGANIZER", address).with_named_params("CN", stated_name(participant)),
+                make_uri_entry("ORGANIZER", address)
+                    .with_named_params("CN", stated_name(participant)),
             );
         }
         if owns && role.is_none() {
             continue;
         }
         lines.push(
-            make_entry("ATTENDEE", address)
+            make_uri_entry("ATTENDEE", address)
                 .with_named_params("CN", stated_name(participant))
                 .with_named_params(
                     "CUTYPE",
@@ -716,7 +746,7 @@ pub fn drawn_conference(key: &str, location: &Value) -> Option<ICalendarEntry> {
         .as_str()
         .filter(|uri| names_a_uri(uri))?;
     Some(
-        make_entry("CONFERENCE", uri)
+        make_uri_entry("CONFERENCE", uri)
             .with_named_param("VALUE", "URI")
             .with_named_params("FEATURE", joining_features(location))
             .with_named_params("LABEL", stated_name(location))
@@ -786,7 +816,7 @@ pub fn drawn_link(key: &str, link: &Value) -> Option<ICalendarEntry> {
         // `CONFERENCE`, and the reason both write a parameter that says only
         // what the default already says.
         return Some(
-            make_entry("IMAGE", href)
+            make_uri_entry("IMAGE", href)
                 .with_named_param("VALUE", "URI")
                 .with_named_params("DISPLAY", spelled(&LINK_DISPLAYS, link.get("display")))
                 .with_named_params("FMTTYPE", media_type)
@@ -799,7 +829,7 @@ pub fn drawn_link(key: &str, link: &Value) -> Option<ICalendarEntry> {
     // link that asked to be displayed without saying it is an icon is taken at
     // its `rel`.
     Some(
-        make_entry("ATTACH", href)
+        make_uri_entry("ATTACH", href)
             .with_named_params("FMTTYPE", media_type)
             .with_named_params("SIZE", stated_size(link))
             .with_named_param(X_JMAP_KEY, key),
