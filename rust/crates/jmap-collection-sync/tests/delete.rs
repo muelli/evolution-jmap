@@ -131,6 +131,42 @@ fn deleting_a_calendar_takes_it_off_the_server() {
 }
 
 #[test]
+fn deleting_a_calendar_sets_on_destroy_remove_contents() {
+    // draft-ietf-jmap-calendars-33 SS4.4: a server rejects destroying a
+    // non-empty Calendar unless the request sets `onDestroyRemoveContents:
+    // true`. Evolution's "Delete" on a calendar means delete it and its
+    // events, so the collection-sync delete must always ask for that, not
+    // the empty-calendar default. `jmap-mock` does not enforce the
+    // invariant (so the destroy would appear to succeed either way), so
+    // this checks the request body the client actually sent, not the
+    // mock's response.
+    let server = MockServer::builder().start();
+    let client = client(&server);
+    let child = create_collection(&client, &requested(ChildKind::Calendar, "Trips"))
+        .expect("the mock creates calendars");
+
+    let (_, captured) = capture(|| {
+        delete_collection(
+            &client,
+            &Doomed {
+                kind: ChildKind::Calendar,
+                collection_id: child.collection_id.clone(),
+            },
+        )
+        .expect("the mock destroys calendars")
+    });
+
+    assert!(
+        captured.iter().any(|(level, name, value)| {
+            *level == Level::TRACE
+                && name == "body"
+                && value.contains("\"onDestroyRemoveContents\":true")
+        }),
+        "expected the destroy request to set onDestroyRemoveContents, got {captured:?}"
+    );
+}
+
+#[test]
 fn deleting_an_address_book_leaves_a_calendar_of_the_same_id_alone() {
     // Ids are unique per account and type (RFC 8620 §1.2): both get the same id.
     let server = MockServer::builder().start();
