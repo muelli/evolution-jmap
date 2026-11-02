@@ -337,11 +337,13 @@ class Jmap:
         return created["created"]["m"]["id"]
 
     def emails(self):
-        """Return {subject: email} of all messages, with their mailboxIds."""
+        """Return {subject: email} of all messages, with their mailboxIds and keywords."""
         ids = self.call("Email/query", {})["ids"]
         if not ids:
             return {}
-        found = self.call("Email/get", {"ids": ids, "properties": ["subject", "mailboxIds"]})
+        found = self.call(
+            "Email/get", {"ids": ids, "properties": ["subject", "mailboxIds", "keywords"]}
+        )
         return {email["subject"]: email for email in found["list"]}
 
     def submissions(self):
@@ -357,6 +359,13 @@ class Jmap:
         """Return the set of mailbox ids of a message, or None if it is gone."""
         email = self.emails().get(subject)
         return None if email is None else set(email["mailboxIds"])
+
+    def keywords_of(self, subject):
+        """Return the set of keyword names set on a message, or None if it is gone."""
+        email = self.emails().get(subject)
+        if email is None:
+            return None
+        return {name for name, value in (email.get("keywords") or {}).items() if value}
 
 
 # AT-SPI.
