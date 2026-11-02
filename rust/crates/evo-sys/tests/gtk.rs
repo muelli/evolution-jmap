@@ -169,7 +169,7 @@ fn the_casts_the_widget_calls_require_are_upcasts_gtk_agrees_with() {
             "{name} is no longer a GtkWidget: every call here that takes a GtkWidget * would be handed one that is not"
         );
     }
-    for name in ["GtkBox", "GtkGrid"] {
+    for name in ["GtkBox", "GtkGrid", "GtkScrolledWindow"] {
         assert_eq!(
             unsafe { g_type_is_a(class(name), container) },
             GTRUE,

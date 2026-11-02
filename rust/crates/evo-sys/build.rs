@@ -324,6 +324,11 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_scrolled_window_get_type",
     "gtk_box_new",
     "gtk_container_add",
+    // The rule dialog's condition and action rows have no limit on their
+    // count, unlike the plain boxes above. A `GtkScrolledWindow` of their
+    // own, built rather than subclassed this time, keeps that growth from
+    // widening or heightening the dialog past the window (item 174a).
+    "gtk_scrolled_window_new",
     // A control for an absent or not-yet-known server feature is
     // desensitized, not hidden. Its tooltip says why.
     "gtk_widget_set_sensitive",
@@ -726,6 +731,12 @@ const GTK_HANDLES: &[&str] = &[
     // this workspace allocates one: the two calls that take it get NULL,
     // and the selection is read through `GtkTreePath` instead.
     "GtkTreeIter",
+    // The rule dialog's own scroller for its condition and action rows.
+    // `gtk_scrolled_window_new` takes two of these; this crate always
+    // passes NULL for both, so it names the type only to let the function
+    // itself exist.
+    "GtkAdjustment",
+    "GtkScrolledWindow",
     // Not a GTK type: ATK's accessible object, what `gtk_widget_get_accessible`
     // returns. `gtkwidget.h` includes `atk/atk.h`, so clang sees it in the
     // same translation unit as everything else here. A status label marks
