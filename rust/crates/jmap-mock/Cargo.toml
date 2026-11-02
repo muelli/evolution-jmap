@@ -24,10 +24,16 @@ name = "jmap_mock"
 [[bin]]
 name = "jmap-mockd"
 path = "src/bin/jmap-mockd.rs"
+required-features = ["sieve-parse"]
+
+[[test]]
+name = "sieve_server_checks"
+required-features = ["sieve-parse"]
 
 [features]
-default = []
+default = ["sieve-parse"]
 parse = ["dep:evolution-jmap-ical", "dep:evolution-jmap-vcard"]
+sieve-parse = ["dep:sieve"]
 
 [dependencies]
 evolution-jmap-proto = { path = "../jmap-proto", version = "0.6.1" }
@@ -39,6 +45,7 @@ tiny_http = { workspace = true }
 percent-encoding = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
+sieve = { version = "0.7.3", package = "sieve-rs", default-features = false, optional = true }
 
 [dev-dependencies]
 evolution-jmap-client = { path = "../jmap-client", version = "0.6.1" }

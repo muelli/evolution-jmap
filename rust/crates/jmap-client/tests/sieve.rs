@@ -421,13 +421,13 @@ fn sieve_script_query_filters_by_is_active() {
 
 /// Verifies `SieveScript/validate` on raw script content via temporary blob upload.
 #[test]
-fn sieve_script_validate_content_is_always_valid() {
+fn sieve_script_validate_content_on_valid_script() {
     let server = MockServer::builder().start();
     let account_id = server.account_id();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
     let response = client
-        .sieve_script_validate_content(&account_id, b"not actually sieve at all".to_vec())
+        .sieve_script_validate_content(&account_id, b"keep;\n".to_vec())
         .unwrap();
     assert!(response.is_valid());
     assert!(response.error.is_none());

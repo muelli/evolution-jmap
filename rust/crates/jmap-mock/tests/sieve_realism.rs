@@ -174,6 +174,9 @@ fn validate_reports_invalid_sieve_with_line_prefix() {
     let description = error["description"]
         .as_str()
         .expect("validation error description");
+    #[cfg(feature = "sieve-parse")]
+    assert!(description.contains("at line 1, column"), "{description}");
+    #[cfg(not(feature = "sieve-parse"))]
     assert!(description.starts_with("line 1:"), "{description}");
 }
 
@@ -219,6 +222,9 @@ fn sieve_set_create_runs_the_same_validation_checker() {
     let description = response["methodResponses"][0][1]["notCreated"]["k1"]["description"]
         .as_str()
         .expect("set error description");
+    #[cfg(feature = "sieve-parse")]
+    assert!(description.contains("at line 1, column"), "{description}");
+    #[cfg(not(feature = "sieve-parse"))]
     assert!(description.starts_with("line 1:"), "{description}");
 }
 
@@ -233,14 +239,14 @@ fn sieve_limits_return_too_large_and_over_quota_errors() {
     let too_large = set_create(&server, "s1", &too_large_blob);
     assert_eq!(set_error_type(&too_large, "notCreated", "k1"), "tooLarge");
 
-    let ok_blob = upload_blob(&server, "application/sieve", b"x;\n");
+    let ok_blob = upload_blob(&server, "application/sieve", b"#1\n");
     let created = set_create(&server, "s1", &ok_blob);
     let created_id = created["methodResponses"][0][1]["created"]["k1"]["id"]
         .as_str()
         .expect("created script id");
     assert!(!created_id.is_empty());
 
-    let second_blob = upload_blob(&server, "application/sieve", b"y;\n");
+    let second_blob = upload_blob(&server, "application/sieve", b"#2\n");
     let second = set_create(&server, "s2", &second_blob);
     assert_eq!(set_error_type(&second, "notCreated", "k1"), "overQuota");
 }

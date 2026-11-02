@@ -43,3 +43,7 @@ allow-wildcard-paths = true
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[[licenses.exceptions]]
+allow = ["AGPL-3.0-only"]
+name = "sieve-rs"

@@ -11,7 +11,7 @@
 use jmap_proto::principals::BusyPeriod;
 use jmap_proto::state::UtcDate;
 
-use crate::event::{Component, EntryExt, make_entry, to_utc_date_time};
+use crate::event::{Component, EntryExt, make_entry, make_uri_entry, to_utc_date_time};
 
 /// Returns the RFC 5545 Section 3.2.9 `FBTYPE` parameter for a busy status.
 ///
@@ -39,7 +39,7 @@ pub fn busy_periods_to_vfreebusy(
     let mut vfreebusy = Component::new("VFREEBUSY")
         .with(make_entry("DTSTART", &instant(utc_start)?))
         .with(make_entry("DTEND", &instant(utc_end)?))
-        .with(make_entry("ATTENDEE", &mailto(attendee)));
+        .with(make_uri_entry("ATTENDEE", &mailto(attendee)));
 
     for period in periods {
         let start = instant(&period.utc_start)?;
