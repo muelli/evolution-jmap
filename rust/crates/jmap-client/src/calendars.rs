@@ -3,17 +3,19 @@
 
 //! Calendar operations (draft-ietf-jmap-calendars).
 
-use jmap_proto::Id;
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
     CalendarEventParseRequest, CalendarEventParseResponse, CalendarEventQueryFilter,
-    CalendarEventSetRequest, ParticipantIdentity, ParticipantIdentitySetRequest,
+    CalendarEventSetRequest, CalendarSetRequest, ParticipantIdentity,
+    ParticipantIdentitySetRequest,
 };
 use jmap_proto::error::SetError;
 use jmap_proto::methods::{
-    GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+    ChangesResponse, CopyRequest, CopyResponse, GetRequest, GetResponse, QueryChangesRequest,
+    QueryChangesResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CORE};
+use jmap_proto::{Id, State};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -32,6 +34,17 @@ impl Client {
             self.single_call(USING, "Calendar/get", &GetRequest::all(account_id.clone()))?;
         let response: GetResponse<Calendar> = serde_json::from_value(arguments)?;
         Ok(response.list)
+    }
+
+    /// Fetch calendars by ID (`Calendar/get`, draft-ietf-jmap-calendars-33 §4.2).
+    pub fn calendar_get(
+        &self,
+        account_id: &Id,
+        ids: &[Id],
+    ) -> Result<GetResponse<Calendar>, Error> {
+        let request = GetRequest::ids(account_id.clone(), ids.to_vec());
+        let arguments = self.single_call(USING, "Calendar/get", &request)?;
+        Ok(serde_json::from_value(arguments)?)
     }
 
     /// Create a calendar; returns the stored calendar (with server-set id).
@@ -62,6 +75,16 @@ impl Client {
         request: &SetRequest<Calendar>,
     ) -> Result<SetResponse<Calendar>, Error> {
         self.set_chunked(USING, "Calendar/set", request)
+    }
+
+    /// Modify calendars (`Calendar/set`, draft-ietf-jmap-calendars-33 §4.3, §4.4) with
+    /// extra options such as `onDestroyRemoveContents` and `onSuccessSetIsDefault`.
+    pub fn calendar_set_custom(
+        &self,
+        request: &CalendarSetRequest,
+    ) -> Result<SetResponse<Calendar>, Error> {
+        let arguments = self.single_call(USING, "Calendar/set", request)?;
+        Ok(serde_json::from_value(arguments)?)
     }
 
     /// Create a calendar event and return the stored record.
@@ -194,6 +217,24 @@ impl Client {
         self.query_every_id(USING, "CalendarEvent/query", account_id, filter, None)
     }
 
+    /// Copy calendar events across accounts (`CalendarEvent/copy`, draft-ietf-jmap-calendars-33 §5.7).
+    pub fn event_copy(
+        &self,
+        request: &CopyRequest<CalendarEvent>,
+    ) -> Result<CopyResponse<CalendarEvent>, Error> {
+        let arguments = self.single_call(USING, "CalendarEvent/copy", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// Query changes for calendar events (`CalendarEvent/queryChanges`, draft-ietf-jmap-calendars-33 §5.6).
+    pub fn event_query_changes(
+        &self,
+        request: &QueryChangesRequest<CalendarEventQueryFilter>,
+    ) -> Result<QueryChangesResponse, Error> {
+        let arguments = self.single_call(USING, "CalendarEvent/queryChanges", request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
     /// Modify calendar events (`CalendarEvent/set`, draft-ietf-jmap-calendars §5.9).
     ///
     /// Supports the `sendSchedulingMessages` parameter for iTIP scheduling.
@@ -289,6 +330,42 @@ impl Client {
         }
         // Treat omitted IDs as notFound.
         Err(Error::Set(SetError::new("notFound")))
+    }
+
+    /// Request changes for calendars (`Calendar/changes`, draft-ietf-jmap-calendars-33 §4.3).
+    pub fn calendar_changes(
+        &self,
+        account_id: &Id,
+        since_state: &State,
+    ) -> Result<ChangesResponse, Error> {
+        self.changes(account_id, "Calendar", since_state)
+    }
+
+    /// Request changes for calendar events (`CalendarEvent/changes`, draft-ietf-jmap-calendars-33 §5.4).
+    pub fn event_changes(
+        &self,
+        account_id: &Id,
+        since_state: &State,
+    ) -> Result<ChangesResponse, Error> {
+        self.changes(account_id, "CalendarEvent", since_state)
+    }
+
+    /// Request changes for participant identities (`ParticipantIdentity/changes`, draft-ietf-jmap-calendars-33 §3.3).
+    pub fn participant_identity_changes(
+        &self,
+        account_id: &Id,
+        since_state: &State,
+    ) -> Result<ChangesResponse, Error> {
+        self.changes(account_id, "ParticipantIdentity", since_state)
+    }
+
+    /// Request changes for calendar event notifications (`CalendarEventNotification/changes`, draft-ietf-jmap-calendars-33 §7.3).
+    pub fn calendar_event_notification_changes(
+        &self,
+        account_id: &Id,
+        since_state: &State,
+    ) -> Result<ChangesResponse, Error> {
+        self.changes(account_id, "CalendarEventNotification", since_state)
     }
 
     /// Fetch all participant identities (`ParticipantIdentity/get`, draft-ietf-jmap-calendars §3.1).
