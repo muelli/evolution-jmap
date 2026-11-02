@@ -371,6 +371,10 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // `_get` lets a test confirm the value without a display.
     "gtk_container_set_border_width",
     "gtk_container_get_border_width",
+    // The custom-time dialog's EDateEdit field never names its own time
+    // combo's editable entry, only the combo itself: this walks the
+    // field's children, then the combo's one child, to copy the name over.
+    "gtk_container_get_children",
     // GNOME HIG wants 6px between related rows in a box. `_get` lets a
     // test confirm a box's spacing without a display.
     "gtk_box_get_spacing",

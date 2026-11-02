@@ -55,10 +55,11 @@ use evo_sys::{
     e_date_edit_get_entry, e_date_edit_get_time, e_date_edit_new, e_date_edit_set_show_time,
     e_date_edit_set_time, e_html_editor_get_ui_manager, e_msg_composer_get_editor,
     e_msg_composer_get_header_table, e_msg_composer_get_message, e_msg_composer_get_message_finish,
-    e_msg_composer_get_type, gtk_container_add, gtk_container_set_border_width,
-    gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run,
-    gtk_dialog_set_default_response, gtk_entry_set_activates_default, gtk_message_dialog_new,
-    gtk_widget_destroy, gtk_widget_show_all, gtk_window_set_title, gtk_window_set_transient_for,
+    e_msg_composer_get_type, gtk_combo_box_get_type, gtk_container_add, gtk_container_get_children,
+    gtk_container_set_border_width, gtk_dialog_add_button, gtk_dialog_get_content_area,
+    gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response,
+    gtk_entry_set_activates_default, gtk_message_dialog_new, gtk_widget_destroy,
+    gtk_widget_show_all, gtk_window_set_title, gtk_window_set_transient_for,
 };
 #[cfg(evolution_eui_manager)]
 use evo_sys::{
@@ -73,10 +74,13 @@ use evo_sys::{
     gtk_action_set_sensitive, gtk_ui_manager_add_ui_from_string, gtk_ui_manager_ensure_update,
 };
 use gio_sys::GAsyncResult;
-use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, g_free, gpointer};
+use glib_sys::{GError, GFALSE, GList, GTRUE, GType, g_error_free, g_free, g_list_free, gpointer};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::g_object_set;
-use gobject_sys::{GObject, GParamSpec, g_object_unref, g_signal_connect_data};
+use gobject_sys::{
+    GObject, GParamSpec, GTypeInstance, g_object_unref, g_signal_connect_data,
+    g_type_check_instance_is_a,
+};
 use jmap_backend_core::BACKEND_NAME;
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::extension::{Extension, ExtensionObject};
@@ -825,6 +829,47 @@ unsafe fn refresh_labels(action_group: MenuActionGroup) {
     }
 }
 
+/// Names the editable entry of `field`'s time combo with the combo's own
+/// accessible name.
+///
+/// `EDateEdit` names the combo itself ("Time", set by upstream
+/// `e-dateedit.c`) but never the `GtkComboBox`'s own entry child, a
+/// separate accessible object a screen reader can land keyboard focus on.
+/// Walks `field`'s children for the one that is a `GtkComboBox`, then that
+/// combo's one child, since `GtkComboBox` has no public getter for either.
+/// Does nothing if the combo or its entry cannot be found: a GTK version
+/// that drops the time combo changes shape, not this field's two other
+/// already-named parts.
+///
+/// # Safety
+///
+/// `field` must be a live `EDateEdit` widget, on the main thread.
+unsafe fn name_time_entry(field: *mut GtkWidget) {
+    // SAFETY: per the contract. Each list this function walks is freed
+    // right after, never past this call.
+    unsafe {
+        let children: *mut GList = gtk_container_get_children(field.cast());
+        let mut node = children;
+        while !node.is_null() {
+            let combo = (*node).data as *mut GtkWidget;
+            if g_type_check_instance_is_a(combo.cast::<GTypeInstance>(), gtk_combo_box_get_type())
+                != GFALSE
+            {
+                let entry_children: *mut GList = gtk_container_get_children(combo.cast());
+                if !entry_children.is_null() {
+                    let entry = (*entry_children).data as *mut GtkWidget;
+                    let name = widget::get_accessible_name(combo.cast());
+                    widget::set_accessible_name(entry.cast(), &name);
+                }
+                g_list_free(entry_children);
+                break;
+            }
+            node = (*node).next;
+        }
+        g_list_free(children);
+    }
+}
+
 /// Builds the custom-time dialog, unshown and not yet run. Returns the
 /// dialog and its `EDateEdit` field.
 ///
@@ -864,6 +909,10 @@ unsafe fn build_custom_time_dialog(composer: *mut GObject) -> (*mut GtkWidget, *
         // visible "Name:" label: a screen reader would otherwise hear only
         // the current date and time, with no indication of what it is for.
         widget::set_accessible_name(field.cast(), &translate(SEND_TIME_NAME));
+        // EDateEdit names its time combo "Time", but never names the
+        // combo's own editable entry: a screen reader landing focus there
+        // (typing a time directly) hears nothing.
+        name_time_entry(field);
         // Start one hour ahead, not at "now". "Now" is already in the past
         // when the user reads it.
         let now = glib_sys::g_date_time_new_now_local();
