@@ -89,3 +89,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 - `crates/jmap-client/src/set.rs:300:67: replace > with >= in partition_set_request`: in `partition_set_request`, before packing create components, `sort_creation_components` validates that every strongly connected component satisfies `scc.len() <= limit`. Consequently, when `current_count == 0`, `current_count + scc.len() > limit` simplifies to `scc.len() > limit`, which is guaranteed to be false. The left-hand condition of the `&&` short-circuit expression evaluates to false whenever `current_count == 0`. When `current_count > 0`, both `current_count > 0` and `current_count >= 0` evaluate to `true`. Thus, replacing `>` with `>=` produces identical boolean evaluations across all possible inputs and states, making the mutant genuinely equivalent.
 - 69 of 69 viable mutants caught by test suites (68 caught directly, 1 caught via infinite loop timeout on line 436 `delete ! in send_chunks`), 12 unviable (due to absence of `Default` implementations on `Error`, generic `T`, and `SetChunk`, parameterless constructors on `SetResponse`, and let-chain syntax errors with `||`), 1 genuinely equivalent.
+
+## `src/query.rs`
+
+- Zero missed mutants (10 of 10 generated mutants caught by test suites across return value replacements, pagination limit check, empty answer check, loop termination condition, and total count mismatch validation).

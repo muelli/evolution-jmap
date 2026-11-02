@@ -3,6 +3,7 @@
 
 //! Tests for `Client::query_every_id` and `Client::email_query_every_id` pagination and sorting.
 
+use jmap_client::limits::IdBudget;
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
@@ -137,5 +138,31 @@ fn query_every_id_fails_when_page_hides_limit_and_count_disagrees_with_total() {
             assert!(message.contains("reports a total of 5"));
         }
         other => panic!("expected Error::Protocol for short total disagreement, got {other:?}"),
+    }
+}
+
+#[test]
+fn query_every_id_past_id_budget_is_refused() {
+    let server = MockServer::builder().query_page_size(2).start();
+    let (account_id, _) = seed_five_emails(&server);
+    let client = Client::builder()
+        .id_budget(IdBudget::new(3, usize::MAX))
+        .connect(server.origin(), Credentials::none())
+        .unwrap();
+
+    let result = client.query_every_id(
+        &[CAPABILITY_CORE, CAPABILITY_MAIL],
+        "Email/query",
+        &account_id,
+        Filter::condition(EmailQueryFilter::default()),
+        None,
+    );
+
+    match result {
+        Err(Error::Protocol(message)) => {
+            assert!(message.contains("Email/query"));
+            assert!(message.contains("more ids than the budget"));
+        }
+        other => panic!("expected Error::Protocol for id budget exceeded, got {other:?}"),
     }
 }
