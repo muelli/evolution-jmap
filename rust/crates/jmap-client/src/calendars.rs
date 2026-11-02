@@ -131,6 +131,17 @@ impl Client {
         )
     }
 
+    /// Fetch all calendar events in the account (`CalendarEvent/get` with `ids: null`, RFC 8620 §5.1, RFC 8984).
+    pub fn events(&self, account_id: &Id) -> Result<Vec<CalendarEvent>, Error> {
+        let arguments = self.single_call(
+            USING,
+            "CalendarEvent/get",
+            &GetRequest::all(account_id.clone()),
+        )?;
+        let response: GetResponse<CalendarEvent> = serde_json::from_value(arguments)?;
+        Ok(response.list)
+    }
+
     /// Fetch the current `CalendarEvent` state string.
     pub fn calendar_event_state(&self, account_id: &Id) -> Result<jmap_proto::State, Error> {
         Ok(self.event_get(account_id, &[])?.state)
@@ -205,6 +216,15 @@ impl Client {
     ) -> Result<QueryResponse, Error> {
         let request = QueryRequest::new(account_id.clone()).filter(filter);
         let arguments = self.single_call(USING, "CalendarEvent/query", &request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// Query calendar events with full query parameters (filter, sort, position, limit, calculateTotal).
+    pub fn event_query_request(
+        &self,
+        request: &QueryRequest<CalendarEventQueryFilter>,
+    ) -> Result<QueryResponse, Error> {
+        let arguments = self.single_call(USING, "CalendarEvent/query", request)?;
         Ok(serde_json::from_value(arguments)?)
     }
 

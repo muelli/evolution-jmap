@@ -378,3 +378,21 @@ fn calendar_typed_changes_dispatch_with_calendars_capability() {
     let _ = client.participant_identity_changes(&account_id, &State::new("s1"));
     let _ = client.calendar_event_notification_changes(&account_id, &State::new("s1"));
 }
+
+#[test]
+fn calendar_events_fetches_all_with_ids_null_and_query_request_dispatches() {
+    use jmap_proto::calendars::CalendarEventQueryFilter;
+    use jmap_proto::methods::QueryRequest;
+
+    let server = MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let account_id = server.account_id();
+
+    let all_events = client.events(&account_id);
+    assert!(all_events.is_ok());
+
+    let query_req =
+        QueryRequest::new(account_id.clone()).filter(CalendarEventQueryFilter::default());
+    let query_resp = client.event_query_request(&query_req);
+    assert!(query_resp.is_ok());
+}
