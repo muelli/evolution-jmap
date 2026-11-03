@@ -635,3 +635,95 @@ fn a_query_that_never_stops_paging_fails_the_inbox_with_an_error() {
         "the provider made {queries} Email/query calls\n{report}"
     );
 }
+
+/// ROADMAP item 176: does the generic `CamelOfflineStore` protocol flush a
+/// flag changed while offline once the application reports the network back,
+/// with no write of ours involved?
+///
+/// `offline-roundtrip` mode of `mail-client.c` marks the store offline
+/// (`camel_offline_store_set_online_sync (FALSE)`), sets `CAMEL_MESSAGE_SEEN`
+/// on a message (a local Camel write, no network either way), then marks the
+/// store online again. It never calls `camel_folder_synchronize_sync`
+/// itself: `camel_offline_store_set_online_sync (TRUE)` calls
+/// `camel_store_synchronize_sync` on its own, by the stock EDS source
+/// (`camel-offline-store.c`), the same call the shell makes on every store on
+/// a network-monitor reconnect. If the mock gets the keyword, that generic
+/// call reached our `synchronize_sync` vfunc with no extra wiring from this
+/// crate.
+#[test]
+fn going_back_online_flushes_a_flag_changed_while_offline() {
+    let client = required_path("JMAP_FUNCTIONAL_MAIL_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_MAIL_MODULE");
+    let urls = required_path("JMAP_FUNCTIONAL_MAIL_URLS");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let email_id = {
+        let state = server.state();
+        let mut state = state.lock().expect("mock state lock");
+        let account = state.account_mut(&account_id).expect("the default account");
+        let inbox = account.seed_mailbox("Inbox", Some("inbox"));
+        account.seed_email(EmailSeed::new(
+            inbox,
+            ("Bob", "bob@example.com"),
+            FIRST_SUBJECT,
+            FIRST_BODY,
+            "2026-01-14T09:00:00Z",
+        ))
+    };
+
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/mail-offline-roundtrip"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_camel_provider(&module, &urls);
+
+    let output = session.run(&client, &["jmap-functional", "offline-roundtrip"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+    assert_eq!(
+        seen.get("went-offline"),
+        Some(&"1"),
+        "the store never reported going offline\n{report}"
+    );
+    assert_eq!(
+        seen.get("went-online"),
+        Some(&"1"),
+        "the store never reported going back online\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let account = state.account(&account_id).expect("the default account");
+    let email = account.emails.get(&email_id).expect("the seeded message");
+    let seen_keyword = email.keywords.as_ref().is_some_and(|keywords| {
+        keywords
+            .get(jmap_proto::mail::keyword::SEEN)
+            .copied()
+            .unwrap_or(false)
+    });
+    assert!(
+        seen_keyword,
+        "the flag set while offline never reached the server after going \
+         back online: the mock's own copy of the message still carries no \
+         {}\n{report}",
+        jmap_proto::mail::keyword::SEEN
+    );
+}
