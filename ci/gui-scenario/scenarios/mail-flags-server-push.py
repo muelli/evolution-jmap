@@ -14,10 +14,15 @@ has for "the message list changed": it only rises or falls with the read
 state of the messages inside, so it proves the client's background sync
 picked up the server-side push and re-rendered, not a stale cache.
 
+This scenario also asserts the row's own AT-SPI-visible status name
+("Unseen"/"Seen", `scenario.py`'s `message_status_name`) follows the same
+server-side push, not just the folder tree's unread count.
+
 Not covered here: a client restart after the server-side change (the
 harness has no mid-scenario Evolution restart yet, the same gap every
-`mail-flags.py` session before this one logged), and the visual star icon
-or label colour of the row itself. Both the mail sync engine's push path
+`mail-flags.py` session before this one logged), and a label's row
+colour, which has no AT-SPI signal at all (see `message_row_cell`'s
+docstring). Both the mail sync engine's push path
 (`jmap-mail/tests/push.rs`, `live_server_push.rs`) and the `$seen` write
 itself (`jmap-mail-sync/tests/keywords.rs`,
 `jmap-mail/tests/live_server_keyword_race.rs`) already have unit coverage;
@@ -33,6 +38,7 @@ from scenario import (
     expect_no_errors,
     folder_cell,
     main,
+    message_status_name,
     say,
     select_folder,
     wait_for,
@@ -81,10 +87,16 @@ def run():
         "Inbox drops to 1 unread after a server-side $seen, no client action",
     )
     say("server sets $seen with no client action: the unread count follows through live push")
+    wait_for(lambda: message_status_name(SUBJECT) == "Seen", f"{SUBJECT!r} row shows Seen")
+    say("row: status shows Seen, with no client action")
 
     server.update("Email", second_id, {f"keywords/{SEEN}": True})
     wait_for(lambda: unread_count(ACCOUNT, "Inbox") == 0, "Inbox drops to 0 unread")
     say("server marks the second message read too: Inbox shows no unread count")
+    wait_for(
+        lambda: message_status_name(SECOND_SUBJECT) == "Seen", f"{SECOND_SUBJECT!r} row shows Seen"
+    )
+    say("row: second message's status shows Seen too")
 
     server.update("Email", message_id, {f"keywords/{SEEN}": None})
     wait_for(
@@ -92,10 +104,17 @@ def run():
         "Inbox rises to 1 unread after a server-side $seen removal",
     )
     say("server clears $seen with no client action: the unread count rises again through live push")
+    wait_for(lambda: message_status_name(SUBJECT) == "Unseen", f"{SUBJECT!r} row shows Unseen")
+    say("row: status shows Unseen again, with no client action")
 
     server.update("Email", second_id, {f"keywords/{SEEN}": None})
     wait_for(lambda: unread_count(ACCOUNT, "Inbox") == 2, "Inbox rises to 2 unread")
     say("server clears $seen on the second message too: Inbox shows 2 unread again")
+    wait_for(
+        lambda: message_status_name(SECOND_SUBJECT) == "Unseen",
+        f"{SECOND_SUBJECT!r} row shows Unseen",
+    )
+    say("row: second message's status shows Unseen too")
 
     expect_no_errors()
 

@@ -1021,6 +1021,55 @@ def select_messages(subjects):
     say(f"selected messages {list(subjects)!r}")
 
 
+# The message list's default column order (message-list.etspec's
+# <ETableState>): Status, Attachment, Flagged, From, Subject, Date.
+STATUS_COLUMN = 0
+FLAGGED_COLUMN = 2
+
+
+def message_row_cell(subject, column):
+    """Return the table cell at `column` in the row of the message `subject`.
+
+    `STATUS_COLUMN` and `FLAGGED_COLUMN` are the two columns with a visible
+    AT-SPI signal: both are `ECellToggle`s, so AT-SPI reports a value-derived
+    name or state, not a pixbuf. A label's row colour has neither: it is a
+    `GdkRGBA` painted straight onto the row's GnomeCanvas item
+    (`message-list.c`'s `ml_get_cell_color`), so no AT-SPI property carries
+    it.
+    """
+    table = message_list()
+    rows = table.queryTable()
+    cell = wait_for(
+        lambda: find(table, "table cell", subject),
+        f"message {subject!r} in the message list",
+    )
+    row = rows.getRowAtIndex(cell.getIndexInParent())
+    return rows.getAccessibleAt(row, column)
+
+
+def message_is_flagged(subject):
+    """Whether the message `subject` shows the star icon (Flagged column).
+
+    `gal-a11y-e-cell-toggle.c`'s `update_cell` sets `ATK_STATE_CHECKED` on a
+    toggle cell whose `ECellToggle` value is non-zero and has no configured
+    icon description; the Flagged column's cell never gets one
+    (`message-list.c` never calls `e_cell_toggle_set_icon_descriptions` for
+    its `render_flagged` cell), so checked state is the only AT-SPI signal.
+    """
+    return message_row_cell(subject, FLAGGED_COLUMN).getState().contains(pyatspi.STATE_CHECKED)
+
+
+def message_status_name(subject):
+    """Return the Status column cell's name: "Unseen" or "Seen".
+
+    The Status column's `render_message_status` cell does get
+    `e_cell_toggle_set_icon_descriptions` (`status_map`), so
+    `gal_a11y_e_cell_toggle`'s `update_cell` sets this string as the cell's
+    AT-SPI name instead of a checked state.
+    """
+    return message_row_cell(subject, STATUS_COLUMN).name
+
+
 # The calendar and contacts views.
 
 

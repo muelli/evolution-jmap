@@ -51,6 +51,14 @@ too, the same as Important/Unimportant: one menu click (one confirmation
 for Junk) sets or clears the keyword on every selected message, not just
 the cursor message.
 
+The star and read/unread toggles above also assert the message list row's
+own AT-SPI-visible state, not just the server's keywords: the Flagged
+column's cell reports `ATK_STATE_CHECKED` for the star, and the Status
+column's cell name is "Unseen" or "Seen". A label's row colour has no
+AT-SPI signal at all (a `GdkRGBA` painted straight onto the row's canvas
+item, `message-list.c`'s `ml_get_cell_color`), so it cannot be asserted
+here; see `scenario.py`'s `message_row_cell`.
+
 Not covered here, left for later claims of the same item: the reverse
 direction (a server-side keyword change reflected in the message list,
 live push and after a restart), the 3.60.2 Fedora container, and
@@ -67,6 +75,8 @@ from scenario import (
     find,
     main,
     menu_item,
+    message_is_flagged,
+    message_status_name,
     say,
     select_folder,
     select_message,
@@ -127,18 +137,26 @@ def run():
     wait_for(lambda: "$flagged" in server.keywords_of(SUBJECT), f"{SUBJECT!r} flagged")
     say("server: $flagged set")
     expect_log(KEYWORDS_LOG.format(message_id), "the keyword write for Important")
+    wait_for(lambda: message_is_flagged(SUBJECT), f"{SUBJECT!r} shows the star icon")
+    say("row: star icon shown")
 
     menu_item("Message/Mark As/Unimportant")
     wait_for(lambda: "$flagged" not in server.keywords_of(SUBJECT), f"{SUBJECT!r} unflagged")
     say("server: $flagged cleared")
+    wait_for(lambda: not message_is_flagged(SUBJECT), f"{SUBJECT!r} shows no star icon")
+    say("row: star icon cleared")
 
     menu_item("Message/Mark As/Unread")
     wait_for(lambda: "$seen" not in server.keywords_of(SUBJECT), f"{SUBJECT!r} unread")
     say("server: $seen cleared")
+    wait_for(lambda: message_status_name(SUBJECT) == "Unseen", f"{SUBJECT!r} shows Unseen")
+    say("row: status shows Unseen")
 
     menu_item("Message/Mark As/Read")
     wait_for(lambda: "$seen" in server.keywords_of(SUBJECT), f"{SUBJECT!r} read")
     say("server: $seen set")
+    wait_for(lambda: message_status_name(SUBJECT) == "Seen", f"{SUBJECT!r} shows Seen")
+    say("row: status shows Seen")
 
     for label, tag in BUILTIN_LABEL_TAGS.items():
         menu_item(f"Message/Mark As/Label/{label}")
@@ -195,6 +213,9 @@ def run():
     wait_for(lambda: "$flagged" in server.keywords_of(SUBJECT), f"{SUBJECT!r} flagged")
     wait_for(lambda: "$flagged" in server.keywords_of(SECOND_SUBJECT), f"{SECOND_SUBJECT!r} flagged")
     say("server: $flagged set on both selected messages")
+    wait_for(lambda: message_is_flagged(SUBJECT), f"{SUBJECT!r} shows the star icon")
+    wait_for(lambda: message_is_flagged(SECOND_SUBJECT), f"{SECOND_SUBJECT!r} shows the star icon")
+    say("row: star icon shown on both selected messages")
 
     menu_item("Message/Mark As/Unimportant")
     wait_for(lambda: "$flagged" not in server.keywords_of(SUBJECT), f"{SUBJECT!r} unflagged")
@@ -203,6 +224,11 @@ def run():
         f"{SECOND_SUBJECT!r} unflagged",
     )
     say("server: $flagged cleared on both selected messages")
+    wait_for(lambda: not message_is_flagged(SUBJECT), f"{SUBJECT!r} shows no star icon")
+    wait_for(
+        lambda: not message_is_flagged(SECOND_SUBJECT), f"{SECOND_SUBJECT!r} shows no star icon"
+    )
+    say("row: star icon cleared on both selected messages")
 
     menu_item("Message/Mark As/Label/Work")
     wait_for(lambda: "$Labelwork" in server.keywords_of(SUBJECT), f"{SUBJECT!r} has $Labelwork")
