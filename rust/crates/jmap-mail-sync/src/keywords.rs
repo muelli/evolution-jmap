@@ -36,6 +36,11 @@ use serde_json::{Map, Value};
 use crate::message::MessageFlags;
 use crate::pointer;
 
+/// Keyword pairs that must never both be set on one message: each says the
+/// opposite of the other about the same message. [`Keywords::patched`] uses
+/// this to resolve a replay that would otherwise hold both.
+const EXCLUSIVE_PAIRS: [(&str, &str); 1] = [(keyword::JUNK, keyword::NOT_JUNK)];
+
 /// The keywords of one message: [`MessageFlags`] and the labels, as the single
 /// set that a JMAP server keeps.
 ///
@@ -118,6 +123,13 @@ impl Keywords {
     ///
     /// If an added keyword is already in this set, it keeps this set's
     /// spelling, because a later removal must use the server's name.
+    ///
+    /// An added keyword also clears its exclusive-pair partner, if it has
+    /// one (`$junk` and `$notjunk` today). Without this, a user who marks a
+    /// message Junk while this set already holds Not Junk from another
+    /// client's meanwhile change (or the reverse) would keep both: `$junk`
+    /// and `$notjunk` mean opposite things about one message, so a set that
+    /// holds both is wrong however it was reached.
     pub fn patched(&self, change: &KeywordChange) -> Self {
         let mut keywords = self.clone();
         for name in &change.cleared {
@@ -125,6 +137,14 @@ impl Keywords {
         }
         for name in &change.set {
             keywords.insert(name);
+            let folded = name.to_lowercase();
+            for (a, b) in EXCLUSIVE_PAIRS {
+                if folded == a {
+                    keywords.0.remove(b);
+                } else if folded == b {
+                    keywords.0.remove(a);
+                }
+            }
         }
         keywords
     }

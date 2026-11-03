@@ -902,6 +902,74 @@ fn a_listing_takes_a_keyword_off_a_queued_row_when_the_server_did() {
     }
 }
 
+/// ROADMAP item 176: two clients changing the same message, one offline, one
+/// live. `$junk` and `$notjunk` are two independent keywords
+/// (`MessageFlags::junk`/`not_junk`), but they mean opposite things about the
+/// same message, so a row must never carry both at once. If the user marks a
+/// message Junk locally while a listing meets the queued row reporting that
+/// another client marked the very same message Not Junk meanwhile, the patch
+/// replay must not let the two coexist.
+#[test]
+fn a_local_junk_mark_does_not_coexist_with_a_conflicting_notjunk_the_listing_brought() {
+    let info = info_of(&row("Em0039"));
+    let mut listed = row("Em0039");
+    listed.flags.not_junk = true;
+
+    // SAFETY: `info` is a live message info this test owns, updated from a row
+    // with the same uid.
+    unsafe {
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_JUNK);
+
+        update_message_info(info, &listed);
+
+        let flags = camel_message_info_get_flags(info);
+        assert_ne!(
+            flags & CAMEL_MESSAGE_JUNK,
+            0,
+            "the user's unsaved Junk mark was overwritten"
+        );
+        assert_eq!(
+            flags & CAMEL_MESSAGE_NOTJUNK,
+            0,
+            "the row is both Junk and Not Junk at once: another client's Not \
+             Junk mark survived the user's own, conflicting Junk mark"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
+/// The mirror of the test above: the user clears spam locally (marks Not
+/// Junk) while the listing meets the queued row reporting that another
+/// client marked the same message Junk meanwhile.
+#[test]
+fn a_local_notjunk_mark_does_not_coexist_with_a_conflicting_junk_the_listing_brought() {
+    let info = info_of(&row("Em0040"));
+    let mut listed = row("Em0040");
+    listed.flags.junk = true;
+
+    // SAFETY: `info` is a live message info this test owns, updated from a row
+    // with the same uid.
+    unsafe {
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_NOTJUNK, CAMEL_MESSAGE_NOTJUNK);
+
+        update_message_info(info, &listed);
+
+        let flags = camel_message_info_get_flags(info);
+        assert_ne!(
+            flags & CAMEL_MESSAGE_NOTJUNK,
+            0,
+            "the user's unsaved Not Junk mark was overwritten"
+        );
+        assert_eq!(
+            flags & CAMEL_MESSAGE_JUNK,
+            0,
+            "the row is both Junk and Not Junk at once: another client's \
+             Junk mark survived the user's own, conflicting Not Junk mark"
+        );
+        g_object_unref(info.cast());
+    }
+}
+
 /// A row with no outstanding change takes the listing whole. This is the
 /// ordinary case, and the only way a drifted row returns to what the server
 /// says. The replay above is only for a row waiting to speak; a row that is

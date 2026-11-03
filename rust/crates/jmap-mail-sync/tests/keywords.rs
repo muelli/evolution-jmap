@@ -187,6 +187,60 @@ fn a_change_applied_to_a_set_it_was_not_taken_from_touches_only_what_it_names() 
     );
 }
 
+/// ROADMAP item 176: two clients changing the same message, one offline, one
+/// live. `$junk` and `$notjunk` say opposite things about one message, so a
+/// set must never hold both, however it was reached.
+#[test]
+fn patching_in_junk_clears_a_notjunk_the_listing_already_held() {
+    let listed = Keywords::new(
+        &MessageFlags {
+            not_junk: true,
+            ..MessageFlags::default()
+        },
+        &[],
+    );
+    let change = KeywordChange::between(
+        &Keywords::default(),
+        &Keywords::new(
+            &MessageFlags {
+                junk: true,
+                ..MessageFlags::default()
+            },
+            &[],
+        ),
+    );
+
+    let patched = listed.patched(&change);
+
+    assert_eq!(patched.iter().collect::<Vec<&str>>(), vec!["$junk"]);
+}
+
+/// The mirror: patching in Not Junk clears a Junk mark the listing held.
+#[test]
+fn patching_in_notjunk_clears_a_junk_the_listing_already_held() {
+    let listed = Keywords::new(
+        &MessageFlags {
+            junk: true,
+            ..MessageFlags::default()
+        },
+        &[],
+    );
+    let change = KeywordChange::between(
+        &Keywords::default(),
+        &Keywords::new(
+            &MessageFlags {
+                not_junk: true,
+                ..MessageFlags::default()
+            },
+            &[],
+        ),
+    );
+
+    let patched = listed.patched(&change);
+
+    assert_eq!(patched.iter().collect::<Vec<&str>>(), vec!["$notjunk"]);
+}
+
 #[test]
 fn a_change_removes_a_keyword_however_the_set_spells_it() {
     // The removal uses the spelling of the *previous* set, which can differ
