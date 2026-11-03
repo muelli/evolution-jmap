@@ -188,6 +188,11 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // against. The shell singleton is the one place certain to hold one.
     "e_shell_get_default",
     "e_shell_get_registry",
+    // Whether the shell is offline, checked before a settings page's own
+    // network call so it can report "you are offline" at once instead of
+    // waiting out a connection timeout.
+    "e_shell_get_online",
+    "e_shell_get_network_available",
     // The detached message window: its own `GtkUIManager` (on 3.52), and
     // its own `EMailReader`.
     "e_mail_browser_get_type",
@@ -300,9 +305,10 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_check_button_new_with_mnemonic",
     // The status label. This crate fills it once, rewrites it on every
     // keystroke `on_extension_changed` reacts to, and hides it when there
-    // is nothing to say.
+    // is nothing to say. `_get_text` lets a test confirm what it says.
     "gtk_label_new",
     "gtk_label_set_text",
+    "gtk_label_get_text",
     "gtk_widget_set_visible",
     // A status label's accessible role, so a screen reader announces a
     // later `gtk_label_set_text` instead of staying silent (item 174d).

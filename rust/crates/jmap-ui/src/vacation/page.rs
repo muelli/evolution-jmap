@@ -68,7 +68,7 @@ use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_proto::State;
 
 use crate::dispatch;
-use crate::link::{self, AccountLink, SendSource};
+use crate::link::{self, AccountLink, LoadOutcome, SendSource};
 use crate::vacation::form::VacationForm;
 use crate::vacation::io;
 use crate::widget::{self, get_bool, get_text, set_bool, set_text};
@@ -88,6 +88,8 @@ const GTK_POLICY_NEVER: c_int = 2;
 
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"This account’s server does not offer a vacation autoresponder.");
+const OFFLINE: &CStr =
+    N_(c"You are offline. The autoresponder cannot be read or changed until you reconnect.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const LOAD_FAILED: &CStr = N_(c"The autoresponder could not be read: %1$s");
 
@@ -376,17 +378,27 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
         return ptr::null_mut();
     }
 
+    // SAFETY: `create` runs on the main loop, per its own contract (it builds
+    // a GTK widget above).
+    let offline = unsafe { link::shell_is_offline() };
     // SAFETY: the source is valid, per the contract of this function. The
     // worker owns the reference and releases it.
     let source = unsafe { SendSource::adopt(g_object_ref(connect_source.cast()).cast()) };
     let work = move || {
-        // SAFETY: the reference from `create` keeps the source alive for all
-        // of this closure.
-        let outcome = unsafe { link::connect_account(source.as_ptr()) }.and_then(|link| {
-            let loaded = io::load(&link)?;
-            let form = VacationForm::from_response(&loaded.response);
-            Ok((Arc::new(link), form, loaded.state))
-        });
+        let outcome = if offline {
+            LoadOutcome::Offline
+        } else {
+            // SAFETY: the reference from `create` keeps the source alive for
+            // all of this closure.
+            match unsafe { link::connect_account(source.as_ptr()) }.and_then(|link| {
+                let loaded = io::load(&link)?;
+                let form = VacationForm::from_response(&loaded.response);
+                Ok((Arc::new(link), form, loaded.state))
+            }) {
+                Ok(loaded) => LoadOutcome::Loaded(loaded),
+                Err(message) => LoadOutcome::Failed(message),
+            }
+        };
         drop(source);
         outcome
     };
@@ -409,13 +421,13 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
 /// `page` must be the live page of the load.
 unsafe fn apply_outcome(
     page: *mut GObject,
-    outcome: Result<(Arc<AccountLink>, VacationForm, State), String>,
+    outcome: LoadOutcome<(Arc<AccountLink>, VacationForm, State)>,
 ) {
     let Some(cell) = (unsafe { state(page) }) else {
         return;
     };
     match outcome {
-        Ok((link, form, load_state)) if link.features.vacation => {
+        LoadOutcome::Loaded((link, form, load_state)) if link.features.vacation => {
             // Copy the widget pointers in a short borrow, and release it
             // before a widget call. `set_bool` on `enabled` emits `"toggled"`
             // synchronously when the value changes (an enabled responder does
@@ -451,13 +463,19 @@ unsafe fn apply_outcome(
             ui.link = Some(link);
             ui.state = Some(load_state);
         }
-        Ok(_) => {
+        LoadOutcome::Loaded(_) => {
             let text = cstring_lossy(&translate(NOT_OFFERED));
             let status = cell.borrow().status;
             // SAFETY: the status label is a live child of the page.
             unsafe { gtk_label_set_text(status.cast(), text.as_ptr()) };
         }
-        Err(message) => {
+        LoadOutcome::Offline => {
+            let text = cstring_lossy(&translate(OFFLINE));
+            let status = cell.borrow().status;
+            // SAFETY: as above.
+            unsafe { gtk_label_set_text(status.cast(), text.as_ptr()) };
+        }
+        LoadOutcome::Failed(message) => {
             let text = translate_with(LOAD_FAILED, &[&message]);
             let text = cstring_lossy(&text);
             let status = cell.borrow().status;
@@ -678,8 +696,9 @@ unsafe fn set_date(field: *mut GtkWidget, value: &str) {
 mod tests {
     use std::ffi::{c_char, c_void};
 
-    use evo_sys::{gtk_label_get_mnemonic_widget, gtk_widget_destroy};
+    use evo_sys::{gtk_label_get_mnemonic_widget, gtk_label_get_text, gtk_widget_destroy};
     use gobject_sys::g_object_get;
+    use jmap_backend_core::marshal::read_string;
 
     use super::*;
 
@@ -773,6 +792,36 @@ mod tests {
                      container instead of its entry"
                 );
             }
+
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// Offline (item 176): the page must say so at once instead of showing
+    /// the generic transport-error sentence a timed-out connection attempt
+    /// would otherwise produce. Needs a display; skips without one.
+    #[test]
+    fn offline_shows_an_offline_message_not_a_generic_load_failure() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: see the tests above; the same stand-in instance works here.
+        // No network call happens: `LoadOutcome::Offline` is applied directly.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+
+            apply_outcome(page.cast(), LoadOutcome::Offline);
+
+            let status = state(page.cast()).unwrap().borrow().status;
+            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                text,
+                translate(OFFLINE),
+                "the status label does not say the account is offline"
+            );
 
             gtk_widget_destroy(page);
         }

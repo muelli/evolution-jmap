@@ -31,7 +31,8 @@ use std::ffi::{CStr, c_char};
 use std::ptr;
 
 use eds_sys::{ESource, e_source_lookup_password_sync};
-use glib_sys::{GError, g_error_free, g_free};
+use evo_sys::{e_shell_get_default, e_shell_get_network_available, e_shell_get_online};
+use glib_sys::{GError, GFALSE, g_error_free, g_free};
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::{connect, oauth2, retry, source};
@@ -102,6 +103,40 @@ fn describe_rate_limit(error: &jmap_client::Error) -> String {
             &[&detail],
         ),
     }
+}
+
+/// Whether the shell is offline: the user chose File > Work Offline, or no
+/// network is reachable. A page checks this before its own network call, so
+/// it can report "you are offline" at once instead of waiting out the
+/// connection timeout and then showing a generic transport-error sentence.
+///
+/// A missing shell singleton (no shell instance running) is treated as
+/// online: there is no evidence either way.
+///
+/// # Safety
+///
+/// Must run on the main loop: it reads the shell's `online` and
+/// `network-available` properties, which are only ever written from there.
+pub unsafe fn shell_is_offline() -> bool {
+    // SAFETY: the process owns the shell singleton, the same call
+    // `connect_source_of` and `shown_views` already make.
+    let shell = unsafe { e_shell_get_default() };
+    if shell.is_null() {
+        return false;
+    }
+    // SAFETY: `shell` is non-null, checked above, and lives for the process.
+    unsafe { e_shell_get_online(shell) == GFALSE || e_shell_get_network_available(shell) == GFALSE }
+}
+
+/// The outcome of a page's connect-and-load worker: either the server
+/// answered, the shell was offline so the page never tried, or the attempt
+/// failed. Kept separate from an ordinary load error so a page can show its
+/// own "you are offline" message instead of a transport-error sentence built
+/// around a timeout that never actually ran.
+pub enum LoadOutcome<T> {
+    Loaded(T),
+    Offline,
+    Failed(String),
 }
 
 /// A connected client and the session data about its account.
