@@ -85,9 +85,12 @@ def categories_field(editor):
     """Return the event editor's Categories entry, or None.
 
     It has no accessible name or labelled-by relation; it is the sibling
-    just before the "Categories…" button in their shared GtkGrid.
+    just before the "Categories…" button in their shared GtkGrid. Found by
+    name, not role: the button's role name is "push button" on some AT-SPI
+    versions and "button" on others, the same gap `click_button` already
+    works around.
     """
-    for button in descendants(editor, "push button"):
+    for button in descendants(editor):
         if button.name != "Categories…":
             continue
         parent = button.parent

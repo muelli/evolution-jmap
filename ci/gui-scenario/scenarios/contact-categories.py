@@ -33,6 +33,8 @@ from scenario import (
     window,
 )
 
+CATEGORIES_BUTTON_NAMES = ("Categories...", "Categories…")
+
 FULL_NAME = "Cara Categories"
 CARD_UID = "gui-scenario-categories"
 EDITOR = "Contact Editor"
@@ -57,12 +59,35 @@ def setup():
 def categories_field(editor):
     """Return the contact editor's Categories entry, or None.
 
-    It has no accessible name of its own; it is named only through a
-    labelled-by relation to the "Categories..." button beside it.
+    On Evolution 3.52.3 it has no accessible name of its own; it is named
+    only through a labelled-by relation to the "Categories..." button
+    beside it (3.60.2 ships that button's label with one real ellipsis
+    character, "Categories…", the same HIG tightening item 174(c) already
+    applied to this project's own buttons, so both forms are checked). On
+    3.60.2 that relation was not found live, so this also falls back to the
+    entry nested in the filler right before the button, the same
+    position-based approach calendar-categories.py uses for the event
+    editor's own Categories field. Both loops look up the button by name,
+    not role: the button's role name is "push button" on some AT-SPI
+    versions and "button" on others, the same gap `click_button` already
+    works around.
     """
     for node in descendants(editor, "text"):
-        if labelled_by_name(node) == "Categories...":
+        if labelled_by_name(node) in CATEGORIES_BUTTON_NAMES:
             return node
+    for button in descendants(editor):
+        if button.name not in CATEGORIES_BUTTON_NAMES:
+            continue
+        parent = button.parent
+        index = button.getIndexInParent()
+        if parent is None or index <= 0:
+            return None
+        sibling = parent.getChildAtIndex(index - 1)
+        if sibling is None:
+            return None
+        if sibling.getRoleName() == "text":
+            return sibling
+        return next(descendants(sibling, "text"), None)
     return None
 
 
