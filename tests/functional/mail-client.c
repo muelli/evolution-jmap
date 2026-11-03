@@ -150,14 +150,18 @@ main (int argc,
 	const gchar *cache_dir;
 	int status = 0;
 	gboolean offline_roundtrip;
+	gboolean restart_prime;
+	gboolean restart_second;
 
 	if (argc != 2 && argc != 3) {
-		g_printerr ("usage: %s <source-uid> [offline-roundtrip]\n", argv[0]);
+		g_printerr ("usage: %s <source-uid> [offline-roundtrip|restart-prime|restart-second]\n", argv[0]);
 		return 2;
 	}
 
 	source_uid = argv[1];
 	offline_roundtrip = argc == 3 && g_strcmp0 (argv[2], "offline-roundtrip") == 0;
+	restart_prime = argc == 3 && g_strcmp0 (argv[2], "restart-prime") == 0;
+	restart_second = argc == 3 && g_strcmp0 (argv[2], "restart-second") == 0;
 
 	/* The harness points these at the scratch tree. Camel keeps a summary
 	 * database and a message cache for each service in them. The real XDG
@@ -208,6 +212,16 @@ main (int argc,
 				"user-cache-dir", cache_dir,
 				NULL);
 
+	/* `restart-second` mode: item 176's question whether the message
+	 * list of a folder opened before survives a restart with no network
+	 * reachable, the way the folder tree already does (176(b)). This
+	 * mode simulates a process that starts with the session already
+	 * offline, the same as the shell's "Work Offline" state at startup:
+	 * no connection is ever attempted, so a dead or unreachable mock
+	 * cannot be told apart from "no network" here. */
+	if (restart_second)
+		camel_session_set_online (session, FALSE);
+
 	/* Camel dlopens the provider here. It finds the protocol in the table
 	 * from the `.urls` files and opens the object beside the file that
 	 * claims it. An unclaimed protocol fails here with "no provider
@@ -221,13 +235,106 @@ main (int argc,
 	 * the security method that connect_sync reads. */
 	e_source_camel_configure_service (source, service);
 
+	store = CAMEL_STORE (service);
+
+	/* With the session already offline, `reconnect_if_dropped`
+	 * (`jmap-mail/src/folders.rs`) never tries the network: it opens the
+	 * inbox from the folder tree and the message summary this process
+	 * finds already on disk, written by an earlier, online process at
+	 * the same cache directory. No `camel_service_connect_sync` call at
+	 * all, so a request here would prove this mode reached the network. */
+	if (restart_second) {
+		GPtrArray *uids;
+		GPtrArray *subjects;
+		guint restart_index;
+
+		inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
+		if (!inbox)
+			return functional_fail ("restart-second-inbox", error);
+
+		uids = folder_dup_uids (inbox);
+		g_print ("restart-inbox-count=%u\n", uids->len);
+
+		subjects = g_ptr_array_new_with_free_func (g_free);
+		for (restart_index = 0; restart_index < uids->len; restart_index++) {
+			const gchar *uid = uids->pdata[restart_index];
+			CamelMessageInfo *message_info = camel_folder_get_message_info (inbox, uid);
+
+			if (!message_info) {
+				g_ptr_array_unref (subjects);
+				folder_free_uids (inbox, uids);
+				return functional_fail ("restart-second-message-info", NULL);
+			}
+			g_ptr_array_add (subjects,
+					 g_strdup (camel_message_info_get_subject (message_info)));
+			g_clear_object (&message_info);
+		}
+		folder_free_uids (inbox, uids);
+		report_sorted ("restart-inbox-subjects", subjects);
+		g_ptr_array_unref (subjects);
+		g_object_unref (inbox);
+		return 0;
+	}
+
 	if (!camel_service_connect_sync (service, NULL, &error))
 		return functional_fail ("connect", error);
 
 	g_print ("store-connected=%d\n",
 		 camel_service_get_connection_status (service) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
 
-	store = CAMEL_STORE (service);
+	/* `restart-prime` mode: the first half of the restart pair above. It
+	 * connects normally, refreshes the inbox once (so the message list
+	 * and the folder's own summary state reach disk), reports what it
+	 * saw, and exits before the rest of main() runs any of the folder
+	 * create/rename/transfer operations below, which this test does not
+	 * want in the inbox it primes. */
+	if (restart_prime) {
+		GPtrArray *uids;
+		GPtrArray *subjects;
+		guint prime_index;
+
+		inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
+		if (!inbox)
+			return functional_fail ("restart-prime-inbox", error);
+		if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
+			return functional_fail ("restart-prime-refresh", error);
+
+		/* `camel_folder_changed` (`jmap-mail/src/refresh.rs`'s call
+		 * at the end of a refresh) schedules its signal on a
+		 * low-priority idle of the session's main context
+		 * (`camel-folder.c`); the default handler that saves the
+		 * summary to disk runs only once that idle fires. Evolution
+		 * always has a running main loop, so it gets there on its
+		 * own; this program is a synchronous client with none, so it
+		 * drains the context itself before it exits. Without this,
+		 * the refreshed rows exist only in memory, and a second
+		 * process at the same cache directory finds no saved state. */
+		while (g_main_context_pending (NULL))
+			g_main_context_iteration (NULL, FALSE);
+
+		uids = folder_dup_uids (inbox);
+		g_print ("restart-inbox-count=%u\n", uids->len);
+
+		subjects = g_ptr_array_new_with_free_func (g_free);
+		for (prime_index = 0; prime_index < uids->len; prime_index++) {
+			const gchar *uid = uids->pdata[prime_index];
+			CamelMessageInfo *message_info = camel_folder_get_message_info (inbox, uid);
+
+			if (!message_info) {
+				g_ptr_array_unref (subjects);
+				folder_free_uids (inbox, uids);
+				return functional_fail ("restart-prime-message-info", NULL);
+			}
+			g_ptr_array_add (subjects,
+					 g_strdup (camel_message_info_get_subject (message_info)));
+			g_clear_object (&message_info);
+		}
+		folder_free_uids (inbox, uids);
+		report_sorted ("restart-inbox-subjects", subjects);
+		g_ptr_array_unref (subjects);
+		g_object_unref (inbox);
+		return 0;
+	}
 
 	/* `offline-roundtrip` mode: item 176's question whether the generic
 	 * `CamelOfflineStore` protocol, not a per-provider write, flushes a

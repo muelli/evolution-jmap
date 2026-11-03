@@ -639,10 +639,24 @@ impl JmapStore {
     /// into a broken one. Writes to a sibling temporary file first and
     /// renames it over the cache file, so a process killed mid-write leaves
     /// the previous, still-valid listing in place rather than a truncated one.
+    ///
+    /// Creates the account's cache directory first. `CamelStore`'s own
+    /// `GInitable::init` only makes `user-data-dir` or `user-cache-dir`, never
+    /// both (`camel-store.c`'s `store_initable_init`, gated on the
+    /// `CAMEL_STORE_USE_CACHE_DIR` flag this store never sets); it makes
+    /// `user-data-dir` here. Camel's data and cache directories differ on a
+    /// real account, so without this call the first write of a process
+    /// landed in a directory that did not yet exist and silently did
+    /// nothing, the same way [`crate::cache::MessageCache::open`] relies on
+    /// `camel_data_cache_new` to make its own directory rather than assume
+    /// Camel already did.
     fn persist_folders_to_disk(&self, state: &State, tree: &FolderTree) {
         let Some(path) = self.folder_tree_cache_path() else {
             return;
         };
+        if let Some(directory) = path.parent() {
+            let _ = std::fs::create_dir_all(directory);
+        }
         let mut tmp = path.clone().into_os_string();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
