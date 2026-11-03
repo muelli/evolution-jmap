@@ -26,6 +26,7 @@
 //! two.
 
 use std::ffi::CStr;
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -33,8 +34,8 @@ use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_SUPPORTS_INITIAL_SETUP, CAMEL_STORE_VJUNK,
     CAMEL_STORE_VTRASH, CamelOfflineStore, CamelOfflineStoreClass, CamelService, CamelServiceClass,
     CamelStore, CamelStoreClass, CamelStoreGetFolderInfoFlags, camel_offline_store_get_type,
-    camel_service_get_type, camel_service_ref_session, camel_service_ref_settings,
-    camel_store_get_flags, camel_store_set_flags,
+    camel_service_get_type, camel_service_get_user_cache_dir, camel_service_ref_session,
+    camel_service_ref_settings, camel_store_get_flags, camel_store_set_flags,
 };
 use glib_sys::GType;
 use gobject_sys::GObject;
@@ -50,7 +51,7 @@ use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static
 use jmap_client::Credentials;
 use jmap_mail_sync::{
     Filing, FolderInfo, FolderListChange, FolderTree, FolderUpdate, KeywordChange, Keywords,
-    MailSync, MessageSummary, MessageUpdate, SyncError,
+    MailSync, MessageSummary, MessageUpdate, SyncError, folder_tree_from_json, folder_tree_to_json,
 };
 use jmap_proto::mail::EmailQueryFilter;
 use jmap_proto::methods::Filter;
@@ -475,16 +476,27 @@ impl JmapStore {
         &self,
         flags: CamelStoreGetFolderInfoFlags,
     ) -> Result<Arc<FolderTree>, StoreError> {
-        let (connection, folders) = self
-            .connection()
-            .zip(self.folder_listing())
-            .ok_or(StoreError::Disconnected)?;
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let folders = self.folder_listing().ok_or(StoreError::Disconnected)?;
 
         // Hold this lock across the request, as the ordering rule of the
         // `folders` field requires: the connection that read a listing is
         // still current when the listing is written.
         let connection = read(connection);
-        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let Some(sync) = connection.as_ref() else {
+            // No connection: hydrate once from a previous process's listing
+            // if nothing is held yet, then serve whatever the slot holds
+            // (freshly hydrated, held from earlier in this process, or
+            // still empty). This path alone, not the connected one below:
+            // a reconnect (`store_connection`) deliberately forgets the
+            // listing so the next request refreshes it from the live
+            // server, which can differ from what a stale disk cache says.
+            self.hydrate_folders_from_disk(folders);
+            return read(folders)
+                .as_ref()
+                .map(|listing| Arc::clone(&listing.tree))
+                .ok_or(StoreError::Disconnected);
+        };
 
         tracing::debug!(flags, "fetching folder tree");
 
@@ -565,19 +577,105 @@ impl JmapStore {
             (&*guard, baseline_generation),
             (Some(current), Some(baseline)) if current.generation != baseline
         );
-        let tree = if stale {
-            guard
-                .as_ref()
-                .map(|current| Arc::clone(&current.tree))
-                .unwrap_or_else(|| Arc::clone(&listing.tree))
+        let (tree, persisted_state) = if stale {
+            match guard.as_ref() {
+                Some(current) => (Arc::clone(&current.tree), current.state.clone()),
+                None => (Arc::clone(&listing.tree), listing.state.clone()),
+            }
         } else {
             let tree = Arc::clone(&listing.tree);
+            let state = listing.state.clone();
             *guard = Some(listing);
-            tree
+            (tree, state)
         };
         drop(guard);
         drop(connection);
+        // Outside both locks, like the request above: a slow disk must not
+        // make every other caller of `folders` wait for this one.
+        self.persist_folders_to_disk(&persisted_state, &tree);
         Ok(tree)
+    }
+
+    /// Fills the folder-listing slot from the on-disk cache
+    /// ([`Self::persist_folders_to_disk`]'s file) if the slot is still empty.
+    /// [`Self::folders`] calls this only when it has no live connection:
+    /// item 176(b) of the roadmap, a restart with no network. A process that
+    /// does connect always lists or relists over that connection instead,
+    /// because a reconnect can mean a different server; a stale disk answer
+    /// must never stand in for that.
+    ///
+    /// Best effort, like [`crate::cache::MessageCache`]: a missing,
+    /// unreadable or corrupt cache file is silently nothing to hydrate, not
+    /// a disconnected error.
+    fn hydrate_folders_from_disk(&self, folders: &RwLock<Option<Listing>>) {
+        if read(folders).is_some() {
+            return;
+        }
+        let Some((state, tree)) = self
+            .folder_tree_cache_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|json| folder_tree_from_json(&json))
+        else {
+            return;
+        };
+        let mut guard = write(folders);
+        // Lost the race against a connection that listed the account while
+        // this read the file: keep the live answer, which is newer.
+        if guard.is_none() {
+            *guard = Some(Listing {
+                state,
+                tree: Arc::new(tree),
+                generation: 0,
+            });
+        }
+    }
+
+    /// Writes `state` and `tree` to the account's folder-tree cache file,
+    /// best effort. [`Self::hydrate_folders_from_disk`] reads this back.
+    ///
+    /// Never reports a failure to the caller: like
+    /// [`crate::cache::MessageCache`], a full disk or a read-only directory
+    /// is a reason to skip the optimisation, not to turn a working account
+    /// into a broken one. Writes to a sibling temporary file first and
+    /// renames it over the cache file, so a process killed mid-write leaves
+    /// the previous, still-valid listing in place rather than a truncated one.
+    fn persist_folders_to_disk(&self, state: &State, tree: &FolderTree) {
+        let Some(path) = self.folder_tree_cache_path() else {
+            return;
+        };
+        let mut tmp = path.clone().into_os_string();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        let json = folder_tree_to_json(state, tree);
+        if std::fs::write(&tmp, json)
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .is_err()
+        {
+            tracing::debug!("writing the folder tree cache failed");
+        }
+    }
+
+    /// The path of this account's folder-tree cache file: the Camel cache
+    /// directory of the service, the same directory
+    /// [`crate::folder::account_cache`] uses for the message cache, with a
+    /// fixed file name.
+    ///
+    /// `None` on a [`JmapStore::detached`] test instance, which has no
+    /// `CamelService` to ask, and on the (never seen in practice) case where
+    /// Camel's directory is not valid UTF-8.
+    fn folder_tree_cache_path(&self) -> Option<PathBuf> {
+        let service = self.service()?;
+        // SAFETY: `service` is a live `CamelService`, by the check in
+        // `Self::service`. The string belongs to the service, and this code
+        // only reads it before the call returns.
+        let directory = unsafe {
+            let directory = camel_service_get_user_cache_dir(service);
+            if directory.is_null() {
+                return None;
+            }
+            CStr::from_ptr(directory).to_str().ok()?.to_owned()
+        };
+        Some(PathBuf::from(directory).join("folder-tree.json"))
     }
 
     /// Tells if the folder listing lets this mailbox accept new messages
