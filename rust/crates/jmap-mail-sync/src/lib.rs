@@ -39,7 +39,10 @@ use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL};
 use jmap_proto::{Id, State, UtcDate};
 
 pub use error::SyncError;
-pub use folder::{FolderDelta, FolderInfo, FolderListChange, FolderRole, FolderTree};
+pub use folder::{
+    FolderDelta, FolderInfo, FolderListChange, FolderRole, FolderTree, folder_tree_from_json,
+    folder_tree_to_json,
+};
 pub use keywords::{KeywordChange, Keywords};
 pub use mailboxes::Filing;
 pub use message::{

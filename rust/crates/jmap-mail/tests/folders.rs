@@ -2132,3 +2132,46 @@ fn opening_a_folder_with_messages_answers_non_empty_summary_on_first_open() {
         g_object_unref(folder.cast());
     }
 }
+
+/// Item 176(b) of the roadmap: a restart with no network. Camel asks a store
+/// for its folder tree long before it decides an account is offline, so a
+/// store that answers `Disconnected` here shows the user an empty account,
+/// even though a previous, connected process already knew its folders.
+///
+/// `Account::open_at` opens a second, never-connected store at the first
+/// one's directory, the same `user-cache-dir` and service uid a real restart
+/// reuses. This needs a real `CamelService` (`account.cache_dir()` is how
+/// the store finds its cache file), unlike most of this file's tests, which
+/// use `JmapStore::detached()`.
+#[test]
+fn a_restarted_store_with_no_connection_serves_the_last_listed_folder_tree() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX));
+        account.seed_mailbox("Archive", Some(role::ARCHIVE));
+    });
+
+    let first = Account::open().keep_directory();
+    first.connect(sync_against(&server));
+    let listed = first
+        .jmap()
+        .folders(RECURSIVE)
+        .expect("a connected store lists its folders");
+    let listed_paths = paths(&listed);
+    let directory = first.directory();
+    drop(first);
+
+    // A fresh store at the same directory, never connected: what a new
+    // process sees on an offline restart.
+    let restarted = Account::open_at(directory);
+    let restarted_tree = restarted
+        .jmap()
+        .folders(CACHED)
+        .expect("a restarted store with a cached listing must not report itself disconnected");
+
+    assert_eq!(
+        paths(&restarted_tree),
+        listed_paths,
+        "the restarted store's cached folder tree must match what the last connected process listed"
+    );
+}

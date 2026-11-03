@@ -61,6 +61,11 @@ pub struct Account {
     session: *mut GObject,
     pub store: *mut CamelStore,
     directory: PathBuf,
+    /// Whether dropping this account removes [`Self::directory`]. A second
+    /// `Account` opened at the first one's directory
+    /// ([`Account::open_at`]) needs the first one's files to survive its
+    /// own drop; [`Account::keep_directory`] turns this off.
+    cleanup: bool,
 }
 
 /// Tells one account's directory from the next. A store's summary database
@@ -74,12 +79,24 @@ impl Account {
     /// [`register`] leaks names the store's type. A `CamelService` is
     /// constructed with all three of session, provider, and uid.
     pub fn open() -> Self {
-        let provider: *const CamelProvider = register();
-        let directory = std::env::temp_dir().join(format!(
+        Self::open_at(std::env::temp_dir().join(format!(
             "jmap-mail-test-{}-{}",
             std::process::id(),
             ACCOUNTS.fetch_add(1, Ordering::Relaxed)
-        ));
+        )))
+    }
+
+    /// The same construction as [`Self::open`], but at a directory the
+    /// caller names instead of a fresh one.
+    ///
+    /// A test for something that must survive a restart opens a second
+    /// `Account` at the same directory as the first: a new session and a new
+    /// store, as a new process would have, but Camel resolves the same cache
+    /// directory from the same `user-cache-dir` and the same service uid
+    /// (`"jmap-test"` below), so a file the first store wrote is where the
+    /// second one looks for it.
+    pub fn open_at(directory: PathBuf) -> Self {
+        let provider: *const CamelProvider = register();
         std::fs::create_dir_all(&directory).expect("a directory for the account");
         let dir = CString::new(directory.to_string_lossy().as_ref())
             .expect("a temporary directory path with no NUL in it");
@@ -122,8 +139,17 @@ impl Account {
                 session,
                 store: store.cast::<CamelStore>(),
                 directory,
+                cleanup: true,
             }
         }
+    }
+
+    /// Stops [`Drop`] from removing [`Self::directory`]. For the first of
+    /// two accounts opened at the same directory ([`Self::open_at`]); the
+    /// second one's drop removes it for both.
+    pub fn keep_directory(mut self) -> Self {
+        self.cleanup = false;
+        self
     }
 
     /// The store as its Rust self, for the state no Camel accessor reaches.
@@ -142,6 +168,13 @@ impl Account {
     /// Installs a live connection, the way `connect_sync` would.
     pub fn connect(&self, sync: MailSync) {
         self.jmap().store_connection(sync);
+    }
+
+    /// The directory this account's session was built at. Pass it to
+    /// [`Self::open_at`] for a second `Account` that shares the same
+    /// on-disk state, as a restarted process would.
+    pub fn directory(&self) -> PathBuf {
+        self.directory.clone()
     }
 
     /// Where Camel says this account may keep files: the session's cache
@@ -243,10 +276,12 @@ impl Drop for Account {
             g_object_unref(self.store.cast());
             g_object_unref(self.session.cast());
         }
-        // Removes the summary database the store just closed, and whatever
-        // else Camel put beside it. Best effort: a test that already failed
-        // is not improved by a panic during its teardown.
-        let _ = std::fs::remove_dir_all(&self.directory);
+        if self.cleanup {
+            // Removes the summary database the store just closed, and
+            // whatever else Camel put beside it. Best effort: a test that
+            // already failed is not improved by a panic during its teardown.
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
     }
 }
 

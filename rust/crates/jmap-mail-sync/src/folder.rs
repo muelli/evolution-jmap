@@ -6,7 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::Id;
+use jmap_proto::State;
 use jmap_proto::mail::{Mailbox, role};
+use serde::{Deserialize, Serialize};
 
 use crate::error::SyncError;
 use crate::path::{SEPARATOR, encode_component, join};
@@ -30,7 +32,7 @@ pub const MAX_DEPTH: usize = 64;
 /// Only the roles that this crate uses. The other roles of the RFC 8457
 /// registry (`\Important`, `\Flagged`, …) are views, not folder types of
 /// Camel, so they become plain folders.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum FolderRole {
     Inbox,
     Drafts,
@@ -76,7 +78,7 @@ impl FolderRole {
 }
 
 /// One folder, with its subfolders.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderInfo {
     /// The JMAP mailbox id: the filter of each `Email/query`.
     pub id: Id,
@@ -148,7 +150,7 @@ impl FolderInfo {
 /// All mailboxes of an account, as a forest.
 ///
 /// JMAP has no root mailbox, so the top-level mailboxes are siblings.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FolderTree {
     roots: Vec<FolderInfo>,
 }
@@ -623,6 +625,39 @@ impl FolderTree {
         roots.reverse();
         roots
     }
+}
+
+/// A folder tree and the state it answers `Mailbox/changes` with, as bytes
+/// for a disk cache. See `jmap-mail::store::JmapStore::folders` (item 176(b)
+/// of the roadmap): a store with no connection reads this to answer "what
+/// folders are there" from the last successful listing of a previous
+/// process, instead of failing outright.
+///
+/// Serialisation never fails: every field of [`FolderTree`] and [`State`] is
+/// a string, a number, a bool or a collection of those. Deserialisation can
+/// fail on a file from an older or a newer version of this crate, or one a
+/// disk error corrupted; [`folder_tree_from_json`] treats that the same as a
+/// missing file, not an error to report.
+pub fn folder_tree_to_json(state: &State, tree: &FolderTree) -> String {
+    #[derive(Serialize)]
+    struct Persisted<'a> {
+        state: &'a State,
+        tree: &'a FolderTree,
+    }
+    serde_json::to_string(&Persisted { state, tree })
+        .expect("a FolderTree and a State always serialise")
+}
+
+/// The inverse of [`folder_tree_to_json`]. `None` for anything that is not
+/// exactly what that function wrote, including an empty or truncated file.
+pub fn folder_tree_from_json(json: &str) -> Option<(State, FolderTree)> {
+    #[derive(Deserialize)]
+    struct Persisted {
+        state: State,
+        tree: FolderTree,
+    }
+    let persisted: Persisted = serde_json::from_str(json).ok()?;
+    Some((persisted.state, persisted.tree))
 }
 
 impl Node<'_> {

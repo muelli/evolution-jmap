@@ -414,6 +414,7 @@ dependencies = [
  "evolution-jmap-proto",
  "evolution-jmap-test-support",
  "evolution-jmap-tracing-capture",
+ "serde",
  "serde_json",
  "tracing",
 ]
