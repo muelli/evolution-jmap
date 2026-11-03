@@ -497,6 +497,23 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
+	# ROADMAP item 176(a): a restart with nothing listening on the mock's
+	# port still lists a contact a prior connect cached, because EDS's own
+	# `ebmb_open_sync` skips reconnecting once `ever-connected` is set. See
+	# `tests/book-restart-offline.rs`.
+	add_test(
+		NAME functional-book-restart-offline
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test book-restart-offline
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-restart-offline PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
 	# An edit of a copy that an editor kept open across a refresh. See
 	# `tests/book-stale-edit.rs`.
 	add_test(
@@ -714,6 +731,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 	)
 	set_tests_properties(functional-cal-offline-edit PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CHANGES_CLIENT=$<TARGET_FILE:functional-cal-changes-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# ROADMAP item 176(a): the calendar twin of
+	# `functional-book-restart-offline`. See
+	# `tests/calendar-restart-offline.rs`.
+	add_test(
+		NAME functional-cal-restart-offline
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar-restart-offline
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-restart-offline PROPERTIES
 		LABELS functional
 		TIMEOUT 300
 		ENVIRONMENT
