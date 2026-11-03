@@ -802,3 +802,123 @@ fn a_message_opened_while_online_stays_readable_offline() {
         "the body read offline does not match the one read online\n{report}"
     );
 }
+
+/// ROADMAP item 176: the message list of a folder opened before a restart
+/// stays available with no network reachable, the way the folder tree
+/// already does (176(b)) and a single already-opened message body does
+/// (the test above).
+///
+/// Runs the client twice against the same session directory, the same way
+/// `jmap-mail/tests/folders.rs::
+/// a_restarted_store_with_no_connection_serves_the_last_listed_folder_tree`
+/// simulates a restart at the Rust-unit level: a second process at the same
+/// `XDG_CACHE_HOME`/`XDG_DATA_HOME` sees what an earlier process left on
+/// disk. The first run (`restart-prime`) connects normally and refreshes the
+/// inbox once. The second (`restart-second`) starts with the session
+/// already offline (`camel_session_set_online(session, FALSE)`, before any
+/// service is even added) and never calls `camel_service_connect_sync` at
+/// all, the same as the shell's "Work Offline" state at startup or
+/// Evolution started with no network reachable. If the second run reports
+/// the same message list, Camel's own generic folder summary database
+/// serves it with no extra wiring from this crate, the same shape as the
+/// message-body row.
+#[test]
+fn a_message_list_opened_while_online_stays_listed_after_a_restart_offline() {
+    let client = required_path("JMAP_FUNCTIONAL_MAIL_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_MAIL_MODULE");
+    let urls = required_path("JMAP_FUNCTIONAL_MAIL_URLS");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    {
+        let state = server.state();
+        let mut state = state.lock().expect("mock state lock");
+        let account = state.account_mut(&account_id).expect("the default account");
+        let inbox = account.seed_mailbox("Inbox", Some("inbox"));
+        account.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            FIRST_SUBJECT,
+            FIRST_BODY,
+            "2026-01-14T09:00:00Z",
+        ));
+        account.seed_email(EmailSeed::new(
+            inbox,
+            ("Carol", "carol@example.com"),
+            SECOND_SUBJECT,
+            SECOND_BODY,
+            "2026-01-14T10:00:00Z",
+        ));
+    }
+
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/mail-restart-offline"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_camel_provider(&module, &urls);
+
+    let prime_output = session.run(&client, &["jmap-functional", "restart-prime"]);
+    let prime_stdout = String::from_utf8_lossy(&prime_output.stdout);
+    let prime_stderr = String::from_utf8_lossy(&prime_output.stderr);
+    let prime_report =
+        format!("--- client stdout ---\n{prime_stdout}--- client stderr ---\n{prime_stderr}");
+    let prime_seen = observations(&prime_stdout);
+
+    assert!(
+        prime_output.status.success(),
+        "the priming run failed with {}\n{prime_report}",
+        prime_output.status
+    );
+    assert_eq!(
+        prime_seen.get("restart-inbox-count"),
+        Some(&"2"),
+        "the priming run did not see the two seeded messages\n{prime_report}"
+    );
+    let expected_subjects = format!("{FIRST_SUBJECT},{SECOND_SUBJECT}");
+    assert_eq!(
+        prime_seen.get("restart-inbox-subjects"),
+        Some(&expected_subjects.as_str()),
+        "the priming run's subjects are not the seeded messages\n{prime_report}"
+    );
+
+    let calls_before_restart = server.method_calls().len();
+
+    let restart_output = session.run(&client, &["jmap-functional", "restart-second"]);
+    let restart_stdout = String::from_utf8_lossy(&restart_output.stdout);
+    let restart_stderr = String::from_utf8_lossy(&restart_output.stderr);
+    let restart_report =
+        format!("--- client stdout ---\n{restart_stdout}--- client stderr ---\n{restart_stderr}");
+    let restart_seen = observations(&restart_stdout);
+
+    assert!(
+        restart_output.status.success(),
+        "the restarted, offline run failed with {}\n{restart_report}",
+        restart_output.status
+    );
+    assert_eq!(
+        restart_seen.get("restart-inbox-count"),
+        Some(&"2"),
+        "the restarted, offline run did not see the same two messages\n{restart_report}"
+    );
+    assert_eq!(
+        restart_seen.get("restart-inbox-subjects"),
+        Some(&expected_subjects.as_str()),
+        "the restarted, offline run's subjects do not match the priming run\n{restart_report}"
+    );
+
+    assert_eq!(
+        server.method_calls().len(),
+        calls_before_restart,
+        "the restarted, offline run reached the mock: it must serve the \
+         message list from disk alone"
+    );
+}
