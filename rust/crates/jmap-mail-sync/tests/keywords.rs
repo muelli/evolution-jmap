@@ -354,6 +354,54 @@ fn a_label_with_a_slash_survives_a_round_trip_through_the_server() {
 }
 
 #[test]
+fn a_keyword_with_characters_rfc_8621_excludes_is_one_keyword_unharmed() {
+    // RFC 8621 §4.1.1 limits a keyword this client writes to `%x21-%x7e`
+    // without `( ) { ] % * " \`, but a keyword this client only reads back
+    // (set by another client or a server that does not enforce the limit)
+    // gets no such check. One keyword holding all seven excluded characters
+    // must still read, fold and patch as a single opaque name, the same as
+    // any other.
+    const WILD: &str = "A(b)c{d]e%f*g\"h\\i";
+
+    let after = Keywords::new(&MessageFlags::default(), &[WILD.to_owned()]);
+    assert_eq!(after.iter().collect::<Vec<_>>(), vec![WILD]);
+
+    assert_eq!(
+        KeywordChange::between(&Keywords::default(), &after).patch(),
+        json!({"keywords/A(b)c{d]e%f*g\"h\\i": true})
+    );
+    assert_eq!(
+        KeywordChange::between(&after, &Keywords::default()).patch(),
+        json!({"keywords/A(b)c{d]e%f*g\"h\\i": null})
+    );
+}
+
+#[test]
+fn a_keyword_with_characters_rfc_8621_excludes_survives_a_round_trip_through_the_server() {
+    const WILD: &str = "A(b)c{d]e%f*g\"h\\i";
+
+    let fixture = Fixture::start();
+    let uid = fixture.seed_message(&[]);
+
+    let change = KeywordChange::between(
+        &Keywords::default(),
+        &Keywords::new(&MessageFlags::default(), &[WILD.to_owned()]),
+    );
+    fixture.sync().set_keywords(&uid, &change).unwrap();
+    assert_eq!(
+        fixture.keywords_on_server(&uid),
+        BTreeMap::from([(WILD.to_owned(), true)])
+    );
+
+    let change = KeywordChange::between(
+        &Keywords::new(&MessageFlags::default(), &[WILD.to_owned()]),
+        &Keywords::default(),
+    );
+    fixture.sync().set_keywords(&uid, &change).unwrap();
+    assert_eq!(fixture.keywords_on_server(&uid), BTreeMap::new());
+}
+
+#[test]
 fn a_change_with_nothing_in_it_is_not_a_request() {
     let fixture = Fixture::start();
 
