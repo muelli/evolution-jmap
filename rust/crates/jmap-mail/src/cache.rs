@@ -569,6 +569,30 @@ impl MessageCache {
         stored
     }
 
+    /// Whether a valid, undamaged entry for `uid` already exists, without
+    /// reading its bytes.
+    ///
+    /// `CamelOfflineFolderClass::downsync_sync`'s default implementation
+    /// (the one behind "Download messages for offline use" and "Copy folder
+    /// content locally") asks this question once for every message in a
+    /// folder, so it must not pay for a full read each time the way [`load`]
+    /// does. The size check against `listed` matches `load`'s: a file
+    /// shorter than the row's claimed size is damage, not a cached message,
+    /// and must not count as present, or a truncated entry could never be
+    /// downloaded again.
+    ///
+    /// [`load`]: MessageCache::load
+    pub fn contains(&self, uid: &str, listed: Option<u32>) -> bool {
+        let Some(path) = self.filename(uid) else {
+            return false;
+        };
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return false;
+        };
+        let len = metadata.len();
+        len > 0 && claimed(listed).is_none_or(|listed| len >= u64::from(listed))
+    }
+
     /// The path on disk of the entry for `uid`, also if it is not cached yet.
     ///
     /// `camel_data_cache_get_filename` only computes a path, the same path

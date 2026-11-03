@@ -375,6 +375,57 @@ fn an_entry_shorter_than_the_row_claims_is_not_a_message() {
     );
 }
 
+/// `contains` answers the same yes/no question `load` does, for a caller
+/// (`CamelOfflineFolderClass::downsync_sync`'s default `get_uncached_uids`,
+/// run once per message in a folder) that must not pay for a full read just
+/// to ask it.
+#[test]
+fn contains_is_false_before_any_store() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+
+    assert!(
+        !cache.contains("M1", None),
+        "an entry that was never stored is reported present"
+    );
+}
+
+#[test]
+fn contains_is_true_after_a_store_the_row_agrees_with() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+    let size = Some(SOURCE.len() as u32);
+
+    assert!(
+        cache.store("M1", SOURCE, size),
+        "the message was not cached"
+    );
+
+    assert!(
+        cache.contains("M1", size),
+        "a whole entry the row agrees with is reported missing"
+    );
+}
+
+/// The same truncation `an_entry_shorter_than_the_row_claims_is_not_a_message`
+/// checks for `load`: a file a crash cut short must not count as a cached
+/// copy of the full message, or the message could never be downloaded again.
+#[test]
+fn contains_is_false_for_an_entry_shorter_than_the_row_claims() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+    let truncated = &SOURCE[..SOURCE.len() - 30];
+
+    // Written without a size claim, the same way the entry it mimics
+    // (a process killed mid-write) never consulted the row either.
+    assert!(cache.store("M1", truncated, None));
+
+    assert!(
+        !cache.contains("M1", Some(SOURCE.len() as u32)),
+        "a truncated entry was reported as the whole message"
+    );
+}
+
 /// The refused entry is removed, not merely refused. Nothing will ever serve
 /// it. An entry left in place would keep producing the same critical error at
 /// every open, until the bound below eventually swept the file that each
