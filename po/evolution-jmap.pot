@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-03 11:04+0000\n"
+"POT-Creation-Date: 2026-11-03 12:00+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -115,9 +115,9 @@ msgstr ""
 #: rust/crates/jmap-backend-core/src/oauth2.rs:721
 #: rust/crates/jmap-backend-core/src/oauth2.rs:850
 #: rust/crates/jmap-ui/src/link.rs:368 rust/crates/jmap-ui/src/link.rs:373
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1163
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1166
-#: rust/crates/jmap-ui/src/send_later/extension.rs:1188
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1178
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1181
+#: rust/crates/jmap-ui/src/send_later/extension.rs:1203
 msgid "no further detail was given"
 msgstr ""
 
@@ -651,7 +651,7 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/filters/page.rs:1535
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:455
-#: rust/crates/jmap-ui/src/send_later/extension.rs:891
+#: rust/crates/jmap-ui/src/send_later/extension.rs:906
 msgid "_Cancel"
 msgstr ""
 
@@ -927,68 +927,72 @@ msgstr ""
 msgid "The account’s server does not offer scheduled send."
 msgstr ""
 
+#: rust/crates/jmap-ui/src/send_later/extension.rs:106
+msgid "You are offline. A message cannot be scheduled until you reconnect."
+msgstr ""
+
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/send_later/extension.rs:107
+#: rust/crates/jmap-ui/src/send_later/extension.rs:108
 #: rust/crates/jmap-ui/src/snooze/action.rs:82
 #, c-format
 msgid "The account’s server could not be asked: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:108
+#: rust/crates/jmap-ui/src/send_later/extension.rs:109
 msgid "The server holds the message and sends it at the chosen time."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:111
+#: rust/crates/jmap-ui/src/send_later/extension.rs:112
 #, c-format
 msgid ""
 "The message could not be scheduled: %1$s (a copy may remain in the server’s "
 "Drafts folder)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:113
+#: rust/crates/jmap-ui/src/send_later/extension.rs:114
 msgid "The message names no recipients."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:114
+#: rust/crates/jmap-ui/src/send_later/extension.rs:115
 msgid "The message has no From address."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:115
+#: rust/crates/jmap-ui/src/send_later/extension.rs:116
 msgid "The chosen time is further ahead than the server accepts."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:116
+#: rust/crates/jmap-ui/src/send_later/extension.rs:117
 #: rust/crates/jmap-ui/src/snooze/action.rs:86
 msgid "The local calendar could not name the chosen time."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:117
+#: rust/crates/jmap-ui/src/send_later/extension.rs:118
 msgid "That time has already passed — choose one in the future."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:118
+#: rust/crates/jmap-ui/src/send_later/extension.rs:119
 msgid "Send time"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:295
-#: rust/crates/jmap-ui/src/send_later/extension.rs:381
+#: rust/crates/jmap-ui/src/send_later/extension.rs:296
+#: rust/crates/jmap-ui/src/send_later/extension.rs:382
 msgid "Send _Later"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:317
-#: rust/crates/jmap-ui/src/send_later/extension.rs:400
+#: rust/crates/jmap-ui/src/send_later/extension.rs:318
+#: rust/crates/jmap-ui/src/send_later/extension.rs:401
 msgid "_Custom Time…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:402
+#: rust/crates/jmap-ui/src/send_later/extension.rs:403
 msgid "…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:887
+#: rust/crates/jmap-ui/src/send_later/extension.rs:902
 msgid "Send Later"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:896
+#: rust/crates/jmap-ui/src/send_later/extension.rs:911
 msgid "_Send Later"
 msgstr ""
 
