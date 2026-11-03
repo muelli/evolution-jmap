@@ -22,9 +22,16 @@
  * cached event, then sets the summary of the old copy in `<path>` and saves it.
  * `rust/crates/jmap-functional/tests/calendar-stale-edit.rs` uses the two runs.
  *
+ * With `--create`, it adds a new event with the given summary.
+ * With `--remove`, it deletes the event of the given UID.
+ * `rust/crates/jmap-functional/tests/calendar-offline-create-delete.rs` uses
+ * both while the server is out of reach.
+ *
  *   usage: functional-cal-changes-client <source-uid> [<event-uid> <summary>]
  *          functional-cal-changes-client <source-uid> --save <event-uid> <path>
  *          functional-cal-changes-client <source-uid> --modify-from <path> <summary>
+ *          functional-cal-changes-client <source-uid> --create <summary>
+ *          functional-cal-changes-client <source-uid> --remove <event-uid>
  */
 
 #include <libecal/libecal.h>
@@ -169,6 +176,54 @@ main (int argc,
 		}
 		g_object_unref (event);
 		g_free (old);
+	} else if (argc == 4 && g_str_equal (argv[2], "--create")) {
+		ICalComponent *event;
+		ICalTime *dtstart;
+		gchar *added_uid = NULL;
+
+		event = i_cal_component_new_vevent ();
+		i_cal_component_set_summary (event, argv[3]);
+		dtstart = i_cal_time_new_from_string ("20260115T130000Z");
+		i_cal_component_set_dtstart (event, dtstart);
+		g_object_unref (dtstart);
+
+		if (!e_cal_client_create_object_sync (cal, event, E_CAL_OPERATION_FLAG_NONE,
+						      &added_uid, NULL, &error)) {
+			g_object_unref (event);
+			return functional_fail ("create", error);
+		}
+		g_object_unref (event);
+		g_print ("added=%s\n", added_uid ? added_uid : "");
+		g_free (added_uid);
+	} else if (argc == 4 && g_str_equal (argv[2], "--remove")) {
+		ICalComponent *event = NULL;
+
+		/* Wait for the event to exist in the cache first, the same check
+		 * `--save`/the plain modify form make with `e_cal_client_get_object_sync`,
+		 * so a removal of an event the cache never saw fails clearly instead of
+		 * silently at the server. */
+		if (!e_cal_client_get_object_sync (cal, argv[3], NULL, &event, NULL, &error))
+			return functional_fail ("get", error);
+		g_object_unref (event);
+
+		if (!e_cal_client_remove_object_sync (cal, argv[3], NULL, E_CAL_OBJ_MOD_ALL,
+						      E_CAL_OPERATION_FLAG_NONE, NULL, &error))
+			return functional_fail ("remove", error);
+
+		g_print ("removed=1\n");
+
+		/* A removed event gives `E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND`. Any other
+		 * result, success included, shows that the cache still has it. */
+		if (e_cal_client_get_object_sync (cal, argv[3], NULL, &event, NULL, &error)) {
+			g_object_unref (event);
+			g_print ("gone=0\n");
+		} else {
+			g_print ("gone=%d\n",
+				 g_error_matches (error, E_CAL_CLIENT_ERROR,
+						  E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND) ? 1 : 0);
+			g_print ("gone-error-message=%s\n", error ? error->message : "");
+			g_clear_error (&error);
+		}
 	} else if (argc == 4) {
 		ICalComponent *event = NULL;
 
