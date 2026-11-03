@@ -146,9 +146,17 @@ fn uncached_uids_of(folder: *mut CamelFolder, uids: &[CString]) -> Vec<String> {
         }
 
         let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
+        // EDS 3.58 renamed this slot from `get_uncached_uids` to
+        // `dup_uncached_uids`; `src/message.rs::install_vfuncs` installs
+        // whichever name this EDS declares.
+        #[cfg(camel_folder_get_uids)]
         let vfunc = (*class)
             .get_uncached_uids
             .expect("the folder has no get_uncached_uids vfunc");
+        #[cfg(not(camel_folder_get_uids))]
+        let vfunc = (*class)
+            .dup_uncached_uids
+            .expect("the folder has no dup_uncached_uids vfunc");
         let mut error: *mut GError = ptr::null_mut();
         let result = vfunc(folder, input, &mut error);
         g_type_class_unref(class.cast());

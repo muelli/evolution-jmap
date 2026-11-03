@@ -24,6 +24,8 @@
 
 use std::ptr;
 
+#[cfg(not(camel_folder_get_uids))]
+use eds_sys::camel_pstring_free;
 use eds_sys::{
     CAMEL_FOLDER_ERROR_INVALID, CamelDataWrapper, CamelFolder, CamelFolderClass, CamelMimeMessage,
     camel_data_wrapper_construct_from_data_sync, camel_folder_error_quark,
@@ -31,9 +33,11 @@ use eds_sys::{
     camel_mime_message_new, camel_pstring_strdup,
 };
 use gio_sys::GCancellable;
-use glib_sys::{
-    GError, GFALSE, GPtrArray, g_error_new_literal, g_ptr_array_add, g_ptr_array_new, gchar, gssize,
-};
+#[cfg(camel_folder_get_uids)]
+use glib_sys::g_ptr_array_new;
+use glib_sys::{GError, GFALSE, GPtrArray, g_error_new_literal, g_ptr_array_add, gchar, gssize};
+#[cfg(not(camel_folder_get_uids))]
+use glib_sys::{g_ptr_array_new_with_free_func, gpointer};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{fail, set_raw_gerror};
 use jmap_backend_core::marshal::read_string;
@@ -56,7 +60,17 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
     let vfuncs = unsafe { &mut *class };
     vfuncs.get_message_sync = Some(get_message_sync);
     vfuncs.get_message_cached = Some(get_message_cached);
-    vfuncs.get_uncached_uids = Some(get_uncached_uids);
+    // EDS 3.58 renamed this slot from `get_uncached_uids` to
+    // `dup_uncached_uids` and changed how its caller frees the result; see
+    // `new_uncached_uids_array`.
+    #[cfg(camel_folder_get_uids)]
+    {
+        vfuncs.get_uncached_uids = Some(get_uncached_uids);
+    }
+    #[cfg(not(camel_folder_get_uids))]
+    {
+        vfuncs.dup_uncached_uids = Some(get_uncached_uids);
+    }
 }
 
 /// Fetches one message and parses it.
@@ -160,7 +174,7 @@ unsafe extern "C" fn get_uncached_uids(
     unsafe {
         guard_ptr("get_uncached_uids", error, || {
             let cache = JmapFolder::borrow(folder).and_then(JmapFolder::cache);
-            let result = g_ptr_array_new();
+            let result = new_uncached_uids_array();
             for index in 0..(*uids).len {
                 // SAFETY: `uids` holds `len` live, NUL-terminated strings.
                 let raw: *const gchar = (*uids).pdata.add(index as usize).read().cast();
@@ -169,17 +183,51 @@ unsafe extern "C" fn get_uncached_uids(
                         .is_some_and(|uid| cache.contains(&uid, listed_size(folder, raw)))
                 });
                 if !present {
-                    // The element type the base `free_uids` (`camel_folder_
-                    // summary_free_array`) expects: a string from Camel's own
-                    // pool, not a `g_malloc`'d one. This class installs no
-                    // `free_uids` of its own, so the base implementation is
-                    // what releases this array.
+                    // A pooled string, the element type `new_uncached_uids_array`'s
+                    // result expects on every EDS this crate supports.
                     g_ptr_array_add(result, camel_pstring_strdup(raw).cast_mut().cast());
                 }
             }
             result
         })
     }
+}
+
+/// A new, empty array ready to collect uncached uids into, with the ownership
+/// contract the installed vfunc slot's caller expects of the result on this
+/// EDS.
+///
+/// Before EDS 3.58, `get_uncached_uids`'s caller frees the result with
+/// `camel_folder_free_uids`, which releases each pooled string itself; giving
+/// the array its own free function here would free those strings twice. From
+/// 3.58, `dup_uncached_uids`'s caller frees the result with a plain
+/// `g_ptr_array_unref`, so the array needs a free function for its pooled
+/// strings, or they leak.
+fn new_uncached_uids_array() -> *mut GPtrArray {
+    #[cfg(camel_folder_get_uids)]
+    // SAFETY: no preconditions.
+    unsafe {
+        g_ptr_array_new()
+    }
+    #[cfg(not(camel_folder_get_uids))]
+    // SAFETY: `free_pstring` matches `GDestroyNotify`, and every element this
+    // array ever holds is a pooled string, `free_pstring`'s contract.
+    unsafe {
+        g_ptr_array_new_with_free_func(Some(free_pstring))
+    }
+}
+
+/// Frees one element of [`new_uncached_uids_array`]'s result, as a
+/// `GDestroyNotify`.
+///
+/// # Safety
+///
+/// `ptr` must be a pooled string from `camel_pstring_strdup`, as every element
+/// [`get_uncached_uids`] adds to that array is.
+#[cfg(not(camel_folder_get_uids))]
+unsafe extern "C" fn free_pstring(ptr: gpointer) {
+    // SAFETY: the caller's contract above.
+    unsafe { camel_pstring_free(ptr.cast()) }
 }
 
 /// The cached copy of `message_uid` in `folder`, or NULL for a miss.

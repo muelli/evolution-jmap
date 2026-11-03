@@ -31,7 +31,9 @@ const FEATURES: &[&str] = &[
     "camel_provider_auto_detect",
     "camel_provider_url_helpers",
     // Whether a folder lends its uid list (`get_uids`/`free_uids`) or gives a
-    // copy (`dup_uids`). Only the tests use it, but all targets get the cfg.
+    // copy (`dup_uids`), and whether its `get_uncached_uids`/`dup_
+    // uncached_uids` vfunc slot follows the same lend-or-copy split:
+    // `crate::message`.
     "camel_folder_get_uids",
     // Whether the message cache writes a new entry to a temporary name and
     // renames it into place (`camel_data_cache_add_atomic`/`commit_atomic`/
