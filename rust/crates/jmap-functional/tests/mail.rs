@@ -727,3 +727,78 @@ fn going_back_online_flushes_a_flag_changed_while_offline() {
         jmap_proto::mail::keyword::SEEN
     );
 }
+
+/// ROADMAP item 176: a message read once while online stays readable
+/// offline, with no extra wiring from this crate.
+///
+/// `jmap-mail`'s `get_message_sync` reads the message cache before it checks
+/// the connection (`jmap-mail/src/message.rs`), and a unit test already
+/// covers that at the Rust layer
+/// (`get_message_cached_serves_an_already_opened_message_disconnected`).
+/// This test confirms the same thing end to end: the same `offline-
+/// roundtrip` mode of `mail-client.c` opens the message once while online,
+/// goes offline, then opens it again through the real Camel/EDS path.
+#[test]
+fn a_message_opened_while_online_stays_readable_offline() {
+    let client = required_path("JMAP_FUNCTIONAL_MAIL_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_MAIL_MODULE");
+    let urls = required_path("JMAP_FUNCTIONAL_MAIL_URLS");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    {
+        let state = server.state();
+        let mut state = state.lock().expect("mock state lock");
+        let account = state.account_mut(&account_id).expect("the default account");
+        let inbox = account.seed_mailbox("Inbox", Some("inbox"));
+        account.seed_email(EmailSeed::new(
+            inbox,
+            ("Bob", "bob@example.com"),
+            FIRST_SUBJECT,
+            FIRST_BODY,
+            "2026-01-14T09:00:00Z",
+        ));
+    }
+
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/mail-offline-message-body"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_camel_provider(&module, &urls);
+
+    let output = session.run(&client, &["jmap-functional", "offline-roundtrip"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+    assert_eq!(
+        seen.get("online-message-body"),
+        Some(&FIRST_BODY),
+        "the message did not read back its own body while online\n{report}"
+    );
+    assert_eq!(
+        seen.get("offline-message-error"),
+        None,
+        "opening the already-read message failed once offline\n{report}"
+    );
+    assert_eq!(
+        seen.get("offline-message-body"),
+        Some(&FIRST_BODY),
+        "the body read offline does not match the one read online\n{report}"
+    );
+}
