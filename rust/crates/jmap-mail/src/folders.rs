@@ -101,7 +101,7 @@ use eds_sys::{
     g_hash_table_insert,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GTRUE, g_strdup, gboolean, gchar};
+use glib_sys::{GError, GFALSE, GTRUE, g_clear_error, g_strdup, gboolean, gchar};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{fail, fail_bool};
 use jmap_backend_core::marshal::read_string;
@@ -743,8 +743,14 @@ unsafe fn open_by_role(
 }
 
 /// Connects the store again before it opens a folder, if the store has no
-/// connection and the session and the store are online. Returns false with
-/// `error` set if the connection fails.
+/// connection and the session and the store are online. Always returns true:
+/// a failed connection attempt falls through to the caller's own
+/// `tree_holding`/`JmapStore::folders` lookup, which serves the last cached
+/// folder tree if one exists and fails with `Disconnected` otherwise, the
+/// same as the already-offline branch below. A down server must degrade
+/// exactly like an explicit Work Offline toggle, not surface as a harder,
+/// uncached error (ROADMAP item 176(a): a process that starts online but
+/// cannot reach the server must still open a folder from its cache).
 ///
 /// Evolution disconnects the store after each save in the account editor, but
 /// the session stays online. Camel connects again before a folder listing and
@@ -773,12 +779,14 @@ unsafe fn reconnect_if_dropped(
             .as_ref()
             .is_some_and(|session| camel_session_get_online(session.as_ptr()) != GFALSE)
             && camel_offline_store_get_online(store.cast::<CamelOfflineStore>()) != GFALSE;
-        if !online {
-            // Offline: the open fails with `Disconnected`, as before.
-            return true;
+        if online {
+            tracing::debug!("connecting the store again to open a folder");
+            if camel_service_connect_sync(service, cancellable, error) == GFALSE {
+                tracing::debug!("reconnect failed, falling back to the cached folder tree");
+                g_clear_error(error);
+            }
         }
-        tracing::debug!("connecting the store again to open a folder");
-        camel_service_connect_sync(service, cancellable, error) != GFALSE
+        true
     }
 }
 
