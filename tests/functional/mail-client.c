@@ -61,6 +61,34 @@ folder_free_uids (CamelFolder *folder,
 #endif
 }
 
+/* Decodes the content of `message` into a stripped string, the same
+ * transform the main body-reading loop below applies. The caller frees the
+ * returned string. Returns NULL on a decode failure, with `error` set. */
+static gchar *
+decoded_body (CamelMimeMessage *message,
+	      GError **error)
+{
+	GByteArray *body;
+	CamelStream *stream;
+	gchar *joined;
+
+	body = g_byte_array_new ();
+	stream = camel_stream_mem_new_with_byte_array (body);
+	if (camel_data_wrapper_decode_to_stream_sync (
+			camel_medium_get_content (CAMEL_MEDIUM (message)),
+			stream, NULL, error) < 0) {
+		g_object_unref (stream);
+		return NULL;
+	}
+
+	/* The decoded bytes have no NUL terminator. The trailing newline is
+	 * part of the MIME transfer, not of the text. */
+	joined = g_strndup ((const gchar *) body->data, body->len);
+	g_strstrip (joined);
+	g_object_unref (stream);
+	return joined;
+}
+
 /* Flattens the folder tree into a list of full names. This test checks the
  * names; the jmap-mail tests check the tree shape. */
 static void
@@ -212,11 +240,22 @@ main (int argc,
 	 * without this program ever calling `camel_folder_synchronize_sync`
 	 * itself. Returns here, before the subscription and trash/junk
 	 * blocks below: it needs only the inbox, and the mock of this mode
-	 * seeds no other mailbox. */
+	 * seeds no other mailbox.
+	 *
+	 * It also opens the message body once while online, then again while
+	 * offline, to answer a second item 176 question: does a message read
+	 * before going offline stay readable offline? `jmap-mail`'s
+	 * `get_message_sync` reads its cache before it checks the connection
+	 * (`message.rs`), so this is expected to work with no extra wiring;
+	 * the Rust harness compares the two bodies to confirm it from a real
+	 * Camel client. A failure here reports it rather than exiting, so the
+	 * harness can tell a missing body from a client crash. */
 	if (offline_roundtrip) {
 		GPtrArray *uids;
 		const gchar *uid;
 		CamelMessageInfo *flag_info;
+		CamelMimeMessage *primed;
+		gchar *online_body;
 
 		inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
 		if (!inbox)
@@ -231,12 +270,50 @@ main (int argc,
 		}
 		uid = uids->pdata[0];
 
+		primed = camel_folder_get_message_sync (inbox, uid, NULL, &error);
+		if (!primed) {
+			folder_free_uids (inbox, uids);
+			return functional_fail ("offline-roundtrip-prime-message", error);
+		}
+		online_body = decoded_body (primed, &error);
+		g_object_unref (primed);
+		if (!online_body) {
+			folder_free_uids (inbox, uids);
+			return functional_fail ("offline-roundtrip-prime-body", error);
+		}
+		g_print ("online-message-body=%s\n", online_body);
+		g_free (online_body);
+
 		if (!camel_offline_store_set_online_sync (
 				CAMEL_OFFLINE_STORE (store), FALSE, NULL, &error)) {
 			folder_free_uids (inbox, uids);
 			return functional_fail ("offline-roundtrip-go-offline", error);
 		}
 		g_print ("went-offline=1\n");
+
+		{
+			CamelMimeMessage *offline_message;
+			GError *offline_error = NULL;
+
+			offline_message = camel_folder_get_message_sync (inbox, uid, NULL, &offline_error);
+			if (!offline_message) {
+				g_print ("offline-message-error=%s\n",
+					 offline_error ? offline_error->message : "(no detail)");
+				g_clear_error (&offline_error);
+			} else {
+				gchar *offline_body = decoded_body (offline_message, &offline_error);
+
+				g_object_unref (offline_message);
+				if (!offline_body) {
+					g_print ("offline-message-error=%s\n",
+						 offline_error ? offline_error->message : "(no detail)");
+					g_clear_error (&offline_error);
+				} else {
+					g_print ("offline-message-body=%s\n", offline_body);
+					g_free (offline_body);
+				}
+			}
+		}
 
 		flag_info = camel_folder_get_message_info (inbox, uid);
 		if (!flag_info) {
@@ -340,8 +417,6 @@ main (int argc,
 	for (index = 0; index < uids->len; index++) {
 		const gchar *uid = uids->pdata[index];
 		CamelMessageInfo *message_info;
-		GByteArray *body;
-		CamelStream *stream;
 
 		/* Keep the first and second UIDs for the `synchronize_sync`
 		 * and `expunge_sync` blocks below. Which messages they are is
@@ -372,26 +447,13 @@ main (int argc,
 			return functional_fail ("get-message", error);
 		}
 
-		body = g_byte_array_new ();
-		stream = camel_stream_mem_new_with_byte_array (body);
-		if (camel_data_wrapper_decode_to_stream_sync (
-				camel_medium_get_content (CAMEL_MEDIUM (message)),
-				stream, NULL, &error) < 0) {
-			g_object_unref (stream);
-			g_object_unref (message);
+		joined = decoded_body (message, &error);
+		g_object_unref (message);
+		if (!joined) {
 			folder_free_uids (inbox, uids);
 			return functional_fail ("message-body", error);
 		}
-
-		/* The decoded bytes have no NUL terminator. The trailing
-		 * newline is part of the MIME transfer, not of the text. */
-		joined = g_strndup ((const gchar *) body->data, body->len);
-		g_ptr_array_add (bodies, g_strdup (g_strstrip (joined)));
-		g_free (joined);
-
-		/* The stream owns `body`. */
-		g_object_unref (stream);
-		g_object_unref (message);
+		g_ptr_array_add (bodies, joined);
 	}
 
 	folder_free_uids (inbox, uids);
