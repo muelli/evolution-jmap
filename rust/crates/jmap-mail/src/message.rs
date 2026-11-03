@@ -28,10 +28,12 @@ use eds_sys::{
     CAMEL_FOLDER_ERROR_INVALID, CamelDataWrapper, CamelFolder, CamelFolderClass, CamelMimeMessage,
     camel_data_wrapper_construct_from_data_sync, camel_folder_error_quark,
     camel_folder_get_folder_summary, camel_folder_summary_get, camel_message_info_get_size,
-    camel_mime_message_new,
+    camel_mime_message_new, camel_pstring_strdup,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, g_error_new_literal, gchar, gssize};
+use glib_sys::{
+    GError, GFALSE, GPtrArray, g_error_new_literal, g_ptr_array_add, g_ptr_array_new, gchar, gssize,
+};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{fail, set_raw_gerror};
 use jmap_backend_core::marshal::read_string;
@@ -54,6 +56,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
     let vfuncs = unsafe { &mut *class };
     vfuncs.get_message_sync = Some(get_message_sync);
     vfuncs.get_message_cached = Some(get_message_cached);
+    vfuncs.get_uncached_uids = Some(get_uncached_uids);
 }
 
 /// Fetches one message and parses it.
@@ -132,6 +135,49 @@ unsafe extern "C" fn get_message_cached(
     unsafe {
         guard("get_message_cached", ptr::null_mut(), || {
             cached_message(folder, message_uid)
+        })
+    }
+}
+
+/// Of `uids`, the ones with no valid cached copy yet.
+///
+/// `CamelOfflineFolderClass::downsync_sync`'s default implementation (behind
+/// "Download messages for offline use" and "Copy folder content locally")
+/// calls this vfunc to learn which messages still need fetching, then fetches
+/// only those. `CamelFolder`'s own base implementation, which answers when no
+/// subclass installs this slot, reports every uid as uncached, unconditionally
+/// (`camel-folder.c`'s `folder_get_uncached_uids`): without this vfunc, a
+/// downsync would redownload the whole folder every time it runs, including
+/// messages already read and cached.
+unsafe extern "C" fn get_uncached_uids(
+    folder: *mut CamelFolder,
+    uids: *mut GPtrArray,
+    error: *mut *mut GError,
+) -> *mut GPtrArray {
+    // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a live
+    // `GPtrArray` of NUL-terminated uids, and an out-parameter that is NULL or
+    // writable and currently NULL.
+    unsafe {
+        guard_ptr("get_uncached_uids", error, || {
+            let cache = JmapFolder::borrow(folder).and_then(JmapFolder::cache);
+            let result = g_ptr_array_new();
+            for index in 0..(*uids).len {
+                // SAFETY: `uids` holds `len` live, NUL-terminated strings.
+                let raw: *const gchar = (*uids).pdata.add(index as usize).read().cast();
+                let present = cache.is_some_and(|cache| {
+                    read_string(raw)
+                        .is_some_and(|uid| cache.contains(&uid, listed_size(folder, raw)))
+                });
+                if !present {
+                    // The element type the base `free_uids` (`camel_folder_
+                    // summary_free_array`) expects: a string from Camel's own
+                    // pool, not a `g_malloc`'d one. This class installs no
+                    // `free_uids` of its own, so the base implementation is
+                    // what releases this array.
+                    g_ptr_array_add(result, camel_pstring_strdup(raw).cast_mut().cast());
+                }
+            }
+            result
         })
     }
 }
