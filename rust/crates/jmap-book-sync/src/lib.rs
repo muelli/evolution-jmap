@@ -25,10 +25,12 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use jmap_client::{ChangeSet, Client, expect_updated};
 use jmap_object_sync::{ObjectKind, revision_of};
-use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
+use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter, Name, name_component_kind};
 use jmap_proto::methods::SetRequest;
 use jmap_proto::{Id, State};
-use jmap_vcard::{VENDOR_MEMBER_DETAILS, card_to_vcard, states_group_kind, vcard_to_card};
+use jmap_vcard::{
+    VENDOR_MEMBER_DETAILS, card_to_vcard, states_file_as, states_group_kind, vcard_to_card,
+};
 use serde_json::{Map, Value};
 
 pub use error::SyncError;
@@ -406,11 +408,13 @@ impl ContactInfo {
     /// `client` and `account_id` resolve a photo that names a `blob_id` (RFC
     /// 9610 section 2) into an inline `data:` URI; see [`resolve_inline_photos`].
     /// They also give a group card's members the id EDS recognises; see
-    /// [`resolve_member_ids`].
+    /// [`resolve_member_ids`]. A card with no file-as of its own gets one
+    /// derived from its name; see [`default_file_as`].
     fn render(client: &Client, account_id: &Id, card: &ContactCard) -> Result<Self, SyncError> {
         let uid = jmap_object_sync::id_of::<Cards>(card)?.to_string();
         let card = resolve_inline_photos(client, account_id, card);
         let card = resolve_member_ids(client, account_id, &card);
+        let card = default_file_as(&card);
         let vcard = card_to_vcard(&card);
         Ok(Self {
             revision: revision_of(&vcard),
@@ -418,6 +422,69 @@ impl ContactInfo {
             vcard,
         })
     }
+}
+
+/// Give a card with no file-as of its own one derived from its name.
+///
+/// `card_to_vcard` already does this for a group's own name (comment at its
+/// call site), but leaves an ordinary card's `X-EVOLUTION-FILE-AS` unset
+/// unless the server states one explicitly. Evolution's contact editor then
+/// loads that card with its File under field blank, and
+/// `e-contact-editor.c`'s `sensitize_ok` refuses to enable Save after an
+/// edit to any field but the name or company while that field stays blank:
+/// a contact synced from a JMAP server that never set a file-as can have
+/// none of its other fields edited and saved. Defaulting it here, before
+/// render, gives such a card the same starting point one created inside
+/// Evolution would have had. A group card is left alone: `card_to_vcard`
+/// already covers it, and its own kind of file-as (naming the list) differs
+/// from a person's.
+///
+/// The derived value must never equal `full` verbatim: the Contact Editor's
+/// Full Name field starts out showing that same string, and a GUI scenario
+/// that finds a field by its current content (`text_field` in
+/// `ci/gui-scenario/contact_photo.py`) cannot tell the two entries apart
+/// when they read the same. `derive_file_as` avoids this by always joining
+/// two parts with ", ", the same shape `e-contact-editor.c` itself offers
+/// as its own top default once a name has more than one part.
+fn default_file_as(card: &ContactCard) -> ContactCard {
+    if states_file_as(card.name.as_ref()) || states_group_kind(card.kind.as_deref()) {
+        return card.clone();
+    }
+    let Some(derived) = card.name.as_ref().and_then(derive_file_as) else {
+        return card.clone();
+    };
+    let mut card = card.clone();
+    if let Some(name) = card.name.as_mut() {
+        name.extra
+            .insert("fileAs".to_owned(), Value::String(derived));
+    }
+    card
+}
+
+/// "Surname, Given" from `name`'s structured components, or the same split
+/// of its `full` string on the first run of whitespace when it states no
+/// components. `None` when neither gives two non-empty parts to join: a
+/// single-word name is left with no derived file-as rather than one that
+/// would equal `full` verbatim (see [`default_file_as`]).
+fn derive_file_as(name: &Name) -> Option<String> {
+    let component = |kind: &str| {
+        name.components
+            .iter()
+            .flatten()
+            .find(|component| component.kind == kind)
+            .map(|component| component.value.trim())
+            .filter(|value| !value.is_empty())
+    };
+    if let (Some(surname), Some(given)) = (
+        component(name_component_kind::SURNAME),
+        component(name_component_kind::GIVEN),
+    ) {
+        return Some(format!("{surname}, {given}"));
+    }
+    let full = name.full.as_deref()?.trim();
+    let (first, rest) = full.split_once(char::is_whitespace)?;
+    let rest = rest.trim();
+    (!first.is_empty() && !rest.is_empty()).then(|| format!("{rest}, {first}"))
 }
 
 /// The largest photo this crate downloads for display, in decoded octets.
