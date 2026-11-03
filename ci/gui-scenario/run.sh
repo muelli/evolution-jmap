@@ -191,6 +191,12 @@ run_scenario() {
 		# screenshots.
 		"${session_env[@]}" gsettings set \
 			org.gnome.evolution.window:/org/gnome/evolution/shell/window/ maximized true
+		if [ "$component" = "calendar" ]; then
+			# The event/task/memo editor hides its Categories field by
+			# default; show it so a scenario can reach it.
+			"${session_env[@]}" gsettings set \
+				org.gnome.evolution.calendar editor-show-categories true
+		fi
 		"${session_env[@]}" openbox >"$run_dir/openbox.log" 2>&1 &
 		PIDS+=($!)
 
