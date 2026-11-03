@@ -402,6 +402,36 @@ fn a_keyword_with_characters_rfc_8621_excludes_survives_a_round_trip_through_the
 }
 
 #[test]
+fn a_custom_label_tag_colliding_with_a_built_in_labels_tag_is_one_keyword() {
+    // Evolution derives a custom label's Camel tag from its display name with
+    // `mail_label_list_store_tag_from_name` (lowercase, then a fixed set of
+    // characters replaced with `_`), independently of the four built-in
+    // labels' own tags (`$Labelimportant`, `$Labelpersonal`, `$Labeltodo`,
+    // `$Labellater`). Because that derivation always lowercases, a custom
+    // label can never produce one of those exact tags (their `L` is
+    // uppercase), but RFC 8621 keywords are case-insensitive (§4.1.1), so a
+    // custom label named to fold to `$labelimportant` still collides with the
+    // built-in Important label at the JMAP layer. This is the same case-fold
+    // collision `two_spellings_of_one_keyword_collected_together_are_one_
+    // keyword` already proves generically; this test ties it to the specific
+    // family item 177(c) C-6 names, so the mechanism, not just its existence,
+    // stays covered by name.
+    let before = Keywords::new(&MessageFlags::default(), &["$Labelimportant".to_owned()]);
+    let after = Keywords::new(&MessageFlags::default(), &["$labelimportant".to_owned()]);
+
+    assert!(KeywordChange::between(&before, &after).is_empty());
+
+    let restored: Keywords = ["$Labelimportant".to_owned(), "$labelimportant".to_owned()]
+        .into_iter()
+        .collect();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(
+        restored.iter().collect::<Vec<&str>>(),
+        vec!["$Labelimportant"]
+    );
+}
+
+#[test]
 fn a_change_with_nothing_in_it_is_not_a_request() {
     let fixture = Fixture::start();
 
