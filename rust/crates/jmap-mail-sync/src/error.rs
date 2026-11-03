@@ -136,4 +136,41 @@ mod tests {
         );
         assert!(!SyncError::NoOutgoingFolder.is_unauthorized());
     }
+
+    // ROADMAP item 177(c), row C-5: a live Stalwart test server (2026-11-03)
+    // refuses `Email/set` keyword patches it will not accept, for two
+    // reasons RFC 8621 leaves to the server to decide. Camel shows the
+    // `SyncError::Client` text verbatim in a sync alert (`e-mail-folder-
+    // utils.c`'s `sync_folder_exec` passes the `GError` straight through,
+    // `mail-mt.c` renders `error->message`), so this is what the user reads.
+    // `Keywords`/`KeywordChange` carry no concept of a server-side cap: the
+    // check happens only on the server, so no client-side change is
+    // possible or needed here. Both tests use the exact error shape
+    // observed live, confirming the existing generic `Error::Set` display
+    // already names the problem without a keyword-specific branch.
+
+    #[test]
+    fn a_keyword_the_server_rejects_as_too_long_names_the_offending_keyword() {
+        let offending = "k".repeat(300);
+        let error = SyncError::Client(jmap_client::Error::Set(
+            jmap_proto::error::SetError::new(jmap_proto::error::set::INVALID_PROPERTIES)
+                .with_description("Invalid patch value")
+                .with_properties([format!("keywords/{offending}")]),
+        ));
+        let message = error.to_string();
+        assert!(message.contains("Invalid patch value"));
+        assert!(message.contains(&offending));
+    }
+
+    #[test]
+    fn a_message_over_the_servers_keyword_count_limit_names_the_servers_own_explanation() {
+        let error = SyncError::Client(jmap_client::Error::Set(
+            jmap_proto::error::SetError::new("tooManyKeywords")
+                .with_description("An email cannot have more than 100 keywords."),
+        ));
+        assert_eq!(
+            error.to_string(),
+            "set error: tooManyKeywords (An email cannot have more than 100 keywords.)"
+        );
+    }
 }
