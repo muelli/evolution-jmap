@@ -153,6 +153,48 @@ unsafe fn folder_with_two_rows(account: &Account) -> *mut CamelFolder {
     folder
 }
 
+/// A folder with two local summary rows that carry distinct subjects, backed
+/// by a store that has never connected to any server.
+///
+/// Unlike [`folder_with_two_rows`], the rows carry a subject, so a
+/// `header-contains` expression can tell them apart locally. The mailbox id
+/// still comes from [`mailbox`], the same as that function, so the folder
+/// looks exactly as reachable as a connected one from `server_matches`'s
+/// point of view: only the store's connection slot differs.
+///
+/// # Safety
+///
+/// `account` must outlive the returned folder.
+unsafe fn disconnected_folder_with_two_subjects(account: &Account) -> (*mut CamelFolder, String) {
+    // SAFETY: `account.store` is a live `CamelStore` for as long as the
+    // `Account` is, and it was never given a connection.
+    let folder = unsafe { new_folder(account.store, &mailbox()) };
+    assert!(!folder.is_null(), "no folder for the mailbox");
+
+    let mut lunch = message("Msg0001", MessageFlags::default());
+    lunch.subject = Some("Lunch?".to_owned());
+    let mut other = message("Msg0002", MessageFlags::default());
+    other.subject = Some("Status report".to_owned());
+    let listed = [lunch, other];
+
+    // SAFETY: as `folder_with_two_rows`.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(folder);
+        assert!(!summary.is_null(), "the folder kept no summary");
+        apply_listing(summary, &listed);
+
+        let mut error: *mut GError = ptr::null_mut();
+        assert_ne!(
+            camel_folder_summary_save(summary, ptr::addr_of_mut!(error)),
+            glib_sys::GFALSE,
+            "the summary would not save"
+        );
+        assert!(error.is_null(), "saving the summary reported an error");
+    }
+
+    (folder, "Msg0001".to_owned())
+}
+
 /// The uids `folder` answers `expression` with, in the order Camel gave them.
 ///
 /// The two arms ask the same question of the two APIs. The ownership rules
@@ -425,6 +467,38 @@ fn a_translatable_expression_over_uids_is_narrowed_to_them() {
         );
         assert_eq!(collect(result), Vec::<String>::new());
         eds_sys::camel_folder_search_free(folder, result);
+
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A translatable expression asked of a store that has never connected still
+/// answers from the local summary, instead of erroring or finding nothing.
+///
+/// `server_matches` treats a disconnected store as "ask the local summary
+/// instead", not as an error, by explicit design: see its own doc comment in
+/// `jmap-mail::folder`. The two tests above show the same expression going to
+/// the server when a connection exists; this one is its missing counterpart,
+/// with a store that was never connected at all. Without it, a change that
+/// turned the fallback into an error, matching `search_body_sync`'s stricter
+/// shape, would compile and pass every other test in this file.
+#[cfg(camel_folder_search_object)]
+#[test]
+fn a_translatable_expression_asked_of_a_never_connected_store_still_answers_locally() {
+    let account = Account::open();
+    // SAFETY: the account outlives the folder, which this test unrefs.
+    unsafe {
+        let (folder, lunch) = disconnected_folder_with_two_subjects(&account);
+
+        let result = search(
+            folder,
+            c"(match-all (header-contains \"Subject\" \"Lunch\"))",
+        );
+        assert_eq!(
+            result,
+            vec![lunch],
+            "the local summary should have answered"
+        );
 
         g_object_unref(folder.cast());
     }
