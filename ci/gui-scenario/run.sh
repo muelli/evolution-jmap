@@ -203,6 +203,16 @@ run_scenario() {
 			"${session_env[@]}" gsettings set \
 				org.gnome.evolution.calendar editor-show-categories true
 		fi
+		if [ "$name" = "mail-flags-server-push" ]; then
+			# Evolution marks the message the list cursor rests on as read
+			# after a timeout (1.5s by default, mark-seen), on its own, with
+			# no explicit user action. This scenario asserts on a
+			# server-driven read/unread change alone, so that timer would
+			# race its own assertions; turn it off for this scenario only.
+			# Other scenarios check read/unread through an explicit
+			# Message/Mark As action and rely on mark-seen staying on.
+			"${session_env[@]}" gsettings set org.gnome.evolution.mail mark-seen false
+		fi
 		"${session_env[@]}" openbox >"$run_dir/openbox.log" 2>&1 &
 		PIDS+=($!)
 
