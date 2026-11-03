@@ -497,6 +497,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
+	# The `functional-book-offline-edit` twin for a create and a delete,
+	# instead of an edit: list, write (or remove) offline, replay. ROADMAP
+	# item 176(a). See `tests/book-offline-create-delete.rs`.
+	add_test(
+		NAME functional-book-offline-create-delete
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test book-offline-create-delete
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-offline-create-delete PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
 	# ROADMAP item 176(a): a restart with nothing listening on the mock's
 	# port still lists a contact a prior connect cached, because EDS's own
 	# `ebmb_open_sync` skips reconnecting once `ever-connected` is set. See
@@ -731,6 +747,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 	)
 	set_tests_properties(functional-cal-offline-edit PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CHANGES_CLIENT=$<TARGET_FILE:functional-cal-changes-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# The calendar twin of `functional-book-offline-create-delete`: list,
+	# create (or remove) offline, replay. ROADMAP item 176(a). See
+	# `tests/calendar-offline-create-delete.rs`.
+	add_test(
+		NAME functional-cal-offline-create-delete
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar-offline-create-delete
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-offline-create-delete PROPERTIES
 		LABELS functional
 		TIMEOUT 300
 		ENVIRONMENT
