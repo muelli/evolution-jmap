@@ -191,6 +191,12 @@ run_scenario() {
 		# screenshots.
 		"${session_env[@]}" gsettings set \
 			org.gnome.evolution.window:/org/gnome/evolution/shell/window/ maximized true
+		# A scenario's account can be contacts/calendars-only, with no mail
+		# account; Evolution then shows its first-run "Welcome" assistant
+		# (modules/startup-wizard checks for a mail account specifically),
+		# a real top-level window that can swallow a synthetic click meant
+		# for the window underneath. No scenario tests that assistant.
+		"${session_env[@]}" gsettings set org.gnome.evolution.mail show-startup-wizard false
 		if [ "$component" = "calendar" ]; then
 			# The event/task/memo editor hides its Categories field by
 			# default; show it so a scenario can reach it.
