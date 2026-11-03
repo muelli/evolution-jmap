@@ -121,13 +121,15 @@ main (int argc,
 	const gchar *data_dir;
 	const gchar *cache_dir;
 	int status = 0;
+	gboolean offline_roundtrip;
 
-	if (argc != 2) {
-		g_printerr ("usage: %s <source-uid>\n", argv[0]);
+	if (argc != 2 && argc != 3) {
+		g_printerr ("usage: %s <source-uid> [offline-roundtrip]\n", argv[0]);
 		return 2;
 	}
 
 	source_uid = argv[1];
+	offline_roundtrip = argc == 3 && g_strcmp0 (argv[2], "offline-roundtrip") == 0;
 
 	/* The harness points these at the scratch tree. Camel keeps a summary
 	 * database and a message cache for each service in them. The real XDG
@@ -198,6 +200,63 @@ main (int argc,
 		 camel_service_get_connection_status (service) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
 
 	store = CAMEL_STORE (service);
+
+	/* `offline-roundtrip` mode: item 176's question whether the generic
+	 * `CamelOfflineStore` protocol, not a per-provider write, flushes a
+	 * flag changed while offline once the application calls
+	 * `camel_offline_store_set_online_sync (TRUE)` again, the same call
+	 * the shell makes on a network-monitor reconnect. It flags the first
+	 * inbox message while the store reports itself offline, then goes
+	 * back online and exits: the Rust harness checks the mock's own copy
+	 * of the message to see whether the flush reached the server,
+	 * without this program ever calling `camel_folder_synchronize_sync`
+	 * itself. Returns here, before the subscription and trash/junk
+	 * blocks below: it needs only the inbox, and the mock of this mode
+	 * seeds no other mailbox. */
+	if (offline_roundtrip) {
+		GPtrArray *uids;
+		const gchar *uid;
+		CamelMessageInfo *flag_info;
+
+		inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
+		if (!inbox)
+			return functional_fail ("offline-roundtrip-inbox", error);
+		if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
+			return functional_fail ("offline-roundtrip-refresh", error);
+
+		uids = folder_dup_uids (inbox);
+		if (uids->len == 0) {
+			folder_free_uids (inbox, uids);
+			return functional_fail ("offline-roundtrip-no-message", NULL);
+		}
+		uid = uids->pdata[0];
+
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), FALSE, NULL, &error)) {
+			folder_free_uids (inbox, uids);
+			return functional_fail ("offline-roundtrip-go-offline", error);
+		}
+		g_print ("went-offline=1\n");
+
+		flag_info = camel_folder_get_message_info (inbox, uid);
+		if (!flag_info) {
+			folder_free_uids (inbox, uids);
+			return functional_fail ("offline-roundtrip-get-message-info", NULL);
+		}
+		camel_message_info_set_flags (flag_info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+		g_clear_object (&flag_info);
+		g_print ("offline-flag-uid=%s\n", uid);
+
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), TRUE, NULL, &error)) {
+			folder_free_uids (inbox, uids);
+			return functional_fail ("offline-roundtrip-go-online", error);
+		}
+		g_print ("went-online=1\n");
+
+		folder_free_uids (inbox, uids);
+		return 0;
+	}
 
 	info = camel_store_get_folder_info_sync (store, NULL,
 						 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
