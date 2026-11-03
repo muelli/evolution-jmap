@@ -79,7 +79,7 @@ use crate::filters::rule_form::{self, NO_RULE_SELECTED, RuleDraft, RulesEditor};
 use crate::filters::rules::MANAGED_SCRIPT_NAME;
 use crate::filters::script;
 use crate::hold::Hold;
-use crate::link::{self, AccountLink, SendSource};
+use crate::link::{self, AccountLink, LoadOutcome, SendSource};
 use crate::widget::{self, flag, get_bool, get_text, set_bool, set_text};
 
 const NAME: &CStr = c"JmapFiltersPage";
@@ -110,6 +110,8 @@ const NAME_COLUMN_WIDTH: c_int = 160;
 
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"Your server does not offer server-side filters.");
+const OFFLINE: &CStr =
+    N_(c"You are offline. Filters cannot be read or changed until you reconnect.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const LOAD_FAILED: &CStr = N_(c"The filters could not be read: %1$s");
 // TRANSLATORS: the Active column of the script list, for the one script
@@ -573,16 +575,26 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
         return ptr::null_mut();
     }
 
+    // SAFETY: `create` runs on the main loop, per its own contract (it builds
+    // a GTK widget above).
+    let offline = unsafe { link::shell_is_offline() };
     // SAFETY: the source is valid, per the contract of this function. The
     // worker owns the reference and releases it.
     let source = unsafe { SendSource::adopt(g_object_ref(connect_source.cast()).cast()) };
     let work = move || {
-        // SAFETY: the reference from `create` keeps the source alive for all
-        // of this closure.
-        let outcome = unsafe { link::connect_account(source.as_ptr()) }.and_then(|link| {
-            let loaded = io::load(&link)?;
-            Ok((Arc::new(link), loaded))
-        });
+        let outcome = if offline {
+            LoadOutcome::Offline
+        } else {
+            // SAFETY: the reference from `create` keeps the source alive for
+            // all of this closure.
+            match unsafe { link::connect_account(source.as_ptr()) }.and_then(|link| {
+                let loaded = io::load(&link)?;
+                Ok((Arc::new(link), loaded))
+            }) {
+                Ok(loaded) => LoadOutcome::Loaded(loaded),
+                Err(message) => LoadOutcome::Failed(message),
+            }
+        };
         drop(source);
         outcome
     };
@@ -601,13 +613,13 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
 /// # Safety
 ///
 /// `page` must be the live page of the load.
-unsafe fn apply_outcome(page: *mut GObject, outcome: Result<(Arc<AccountLink>, Loaded), String>) {
+unsafe fn apply_outcome(page: *mut GObject, outcome: LoadOutcome<(Arc<AccountLink>, Loaded)>) {
     // SAFETY: the page is live, per the contract.
     let Some(cell) = (unsafe { state(page) }) else {
         return;
     };
     match outcome {
-        Ok((link, loaded)) if link.features.sieve => {
+        LoadOutcome::Loaded((link, loaded)) if link.features.sieve => {
             {
                 let mut ui = cell.borrow_mut();
                 ui.form = FiltersForm::from_loaded(loaded);
@@ -620,11 +632,15 @@ unsafe fn apply_outcome(page: *mut GObject, outcome: Result<(Arc<AccountLink>, L
                 refresh(cell);
             }
         }
-        Ok(_) => {
+        LoadOutcome::Loaded(_) => {
             // SAFETY: as above.
             unsafe { set_status(cell, &translate(NOT_OFFERED)) };
         }
-        Err(message) => {
+        LoadOutcome::Offline => {
+            // SAFETY: as above.
+            unsafe { set_status(cell, &translate(OFFLINE)) };
+        }
+        LoadOutcome::Failed(message) => {
             let text = translate_with(LOAD_FAILED, &[&message]);
             // SAFETY: as above.
             unsafe { set_status(cell, &text) };
@@ -1743,10 +1759,12 @@ mod tests {
     use std::sync::Mutex;
 
     use evo_sys::{
-        gtk_container_get_border_width, gtk_tree_view_get_column, gtk_window_get_default_widget,
+        gtk_container_get_border_width, gtk_label_get_text, gtk_tree_view_get_column,
+        gtk_window_get_default_widget,
     };
     use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free};
     use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
+    use jmap_backend_core::marshal::read_string;
     use jmap_backend_core::subclass::register_static;
 
     use super::*;
@@ -2160,6 +2178,36 @@ mod tests {
                 "the two lists must not share one name"
             );
             gtk_widget_destroy(rules_view);
+        }
+    }
+
+    /// Offline (item 176): the page must say so at once instead of showing
+    /// the generic transport-error sentence a timed-out connection attempt
+    /// would otherwise produce. Needs a display; skips without one.
+    #[test]
+    fn offline_shows_an_offline_message_not_a_generic_load_failure() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens: `LoadOutcome::Offline` is applied directly.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+            apply_outcome(page, LoadOutcome::Offline);
+
+            let status = state(page).unwrap().borrow().status;
+            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                text,
+                translate(OFFLINE),
+                "the status label does not say the account is offline"
+            );
+
+            gtk_widget_destroy(page.cast());
         }
     }
 }
