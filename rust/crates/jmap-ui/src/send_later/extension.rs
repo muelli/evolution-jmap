@@ -103,6 +103,7 @@ const STATE: ObjectData<RefCell<SendState>> = ObjectData::new(c"jmap-send-later-
 const CHECKING: &CStr = N_(c"Checking whether the sending account offers scheduled send…");
 const NOT_JMAP: &CStr = N_(c"The selected sending account is not a JMAP account.");
 const NOT_OFFERED: &CStr = N_(c"The account’s server does not offer scheduled send.");
+const OFFLINE: &CStr = N_(c"You are offline. A message cannot be scheduled until you reconnect.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const NOT_REACHED: &CStr = N_(c"The account’s server could not be asked: %1$s");
 const OFFERED: &CStr = N_(c"The server holds the message and sends it at the chosen time.");
@@ -579,6 +580,8 @@ unsafe fn gate(composer: *mut GObject) {
     };
 
     // Level 2: ask the server off the main loop. The newest request wins.
+    // SAFETY: `gate` runs on the main loop, per its own contract.
+    let offline = unsafe { link::shell_is_offline() };
     let generation = GENERATIONS.fetch_add(1, Ordering::SeqCst);
     {
         let Some(state) = (unsafe { state(composer) }) else {
@@ -592,9 +595,21 @@ unsafe fn gate(composer: *mut GObject) {
         // SAFETY: the action and the group live as long as the composer.
         unsafe {
             set_action_sensitive(state.menu_action, false);
-            set_tooltip(state.menu_action, translate(CHECKING));
+            set_tooltip(
+                state.menu_action,
+                translate(if offline { OFFLINE } else { CHECKING }),
+            );
             refresh_labels(state.action_group);
         }
+    }
+
+    if offline {
+        // The shell cannot reach the server; do not even try, the way
+        // `vacation::page::create` and `filters::page::create` skip their own
+        // network call when offline. SAFETY: this releases the reference
+        // that level 1 gave; no worker runs to take it.
+        unsafe { g_object_unref(connect_source.cast()) };
+        return;
     }
 
     // SAFETY: this takes the reference that level 1 gave.
@@ -1379,6 +1394,7 @@ mod tests {
         for message in [
             NOT_JMAP,
             NOT_OFFERED,
+            OFFLINE,
             OFFERED,
             NO_RECIPIENTS,
             NO_FROM,
