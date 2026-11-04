@@ -803,6 +803,103 @@ fn a_message_opened_while_online_stays_readable_offline() {
     );
 }
 
+/// ROADMAP item 176(a): "save a draft" while offline. `append_message_sync`
+/// (`jmap-mail/src/append.rs`) fails outright with `StoreError::Disconnected`
+/// when the store reports itself offline: unlike `synchronize_sync`, which
+/// deliberately leaves a flag change queued on the row for the next
+/// synchronisation, nothing here queues the message anywhere. Evolution's own
+/// `em_utils_composer_save_to_drafts_cb` (`em-composer-utils.c`) has no
+/// online check at all, unlike the actual Send path, so a real composer
+/// reaches this vfunc directly while offline. This test confirms the gap
+/// end to end: a draft appended while offline is not saved, and going back
+/// online does not retroactively save it either, unlike a flag change.
+#[test]
+fn a_draft_appended_while_offline_is_not_queued_for_later() {
+    let client = required_path("JMAP_FUNCTIONAL_MAIL_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_MAIL_MODULE");
+    let urls = required_path("JMAP_FUNCTIONAL_MAIL_URLS");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    {
+        let state = server.state();
+        let mut state = state.lock().expect("mock state lock");
+        let account = state.account_mut(&account_id).expect("the default account");
+        let inbox = account.seed_mailbox("Inbox", Some("inbox"));
+        account.seed_mailbox("Drafts", Some("drafts"));
+        account.seed_email(EmailSeed::new(
+            inbox,
+            ("Bob", "bob@example.com"),
+            FIRST_SUBJECT,
+            FIRST_BODY,
+            "2026-01-14T09:00:00Z",
+        ));
+    }
+
+    let port: u16 = server
+        .origin()
+        .rsplit_once(':')
+        .expect("the mock's origin ends in a port")
+        .1
+        .parse()
+        .expect("the mock's port is a number");
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/mail-offline-save-draft"
+    ));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_camel_provider(&module, &urls);
+
+    let output = session.run(&client, &["jmap-functional", "offline-save-draft"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+    assert_eq!(
+        seen.get("drafts-count-before"),
+        Some(&"0"),
+        "Drafts should start empty\n{report}"
+    );
+    assert_eq!(
+        seen.get("went-offline"),
+        Some(&"1"),
+        "the store never reported going offline\n{report}"
+    );
+    assert_eq!(
+        seen.get("offline-save-draft-appended"),
+        Some(&"0"),
+        "appending a draft while offline unexpectedly succeeded: this \
+         confirms a gap closed, update this test and the offline matrix\n{report}"
+    );
+    assert_eq!(
+        seen.get("went-online"),
+        Some(&"1"),
+        "the store never reported going back online\n{report}"
+    );
+    assert_eq!(
+        seen.get("drafts-count-after"),
+        Some(&"0"),
+        "the failed draft should not appear in Drafts even after reconnecting\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let account = state.account(&account_id).expect("the default account");
+    assert_eq!(
+        account.emails.len(),
+        1,
+        "the mock should still hold only the seeded inbox message, with no \
+         draft ever uploaded\n{report}"
+    );
+}
+
 /// ROADMAP item 176: the message list of a folder opened before a restart
 /// stays available with no network reachable, the way the folder tree
 /// already does (176(b)) and a single already-opened message body does
