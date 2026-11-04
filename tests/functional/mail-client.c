@@ -152,9 +152,10 @@ main (int argc,
 	gboolean offline_roundtrip;
 	gboolean restart_prime;
 	gboolean restart_second;
+	gboolean offline_save_draft;
 
 	if (argc != 2 && argc != 3) {
-		g_printerr ("usage: %s <source-uid> [offline-roundtrip|restart-prime|restart-second]\n", argv[0]);
+		g_printerr ("usage: %s <source-uid> [offline-roundtrip|restart-prime|restart-second|offline-save-draft]\n", argv[0]);
 		return 2;
 	}
 
@@ -162,6 +163,7 @@ main (int argc,
 	offline_roundtrip = argc == 3 && g_strcmp0 (argv[2], "offline-roundtrip") == 0;
 	restart_prime = argc == 3 && g_strcmp0 (argv[2], "restart-prime") == 0;
 	restart_second = argc == 3 && g_strcmp0 (argv[2], "restart-second") == 0;
+	offline_save_draft = argc == 3 && g_strcmp0 (argv[2], "offline-save-draft") == 0;
 
 	/* The harness points these at the scratch tree. Camel keeps a summary
 	 * database and a message cache for each service in them. The real XDG
@@ -439,6 +441,97 @@ main (int argc,
 		g_print ("went-online=1\n");
 
 		folder_free_uids (inbox, uids);
+		return 0;
+	}
+
+	/* `offline-save-draft` mode: item 176(a)'s "save a draft" row. Does
+	 * `append_message_sync` queue a message for later upload when the
+	 * store is offline, the way `synchronize_sync` leaves a flag change
+	 * queued (see `going_back_online_flushes_a_flag_changed_while_
+	 * offline` above), or does it fail outright with nothing saved
+	 * anywhere? Evolution's own `em_utils_composer_save_to_drafts_cb`
+	 * (`em-composer-utils.c`) has no online check at all, unlike the
+	 * actual Send path, so a real composer reaches this vfunc directly
+	 * while offline. This mode goes offline, tries to append a message to
+	 * Drafts, reports whether that succeeded, then goes back online and
+	 * reports whether Drafts gained the message anyway (a flush, the way
+	 * the flag change above flushes) or stayed exactly as before (a lost
+	 * write). */
+	if (offline_save_draft) {
+		CamelFolder *drafts;
+		GPtrArray *drafts_uids;
+		static const gchar draft_message[] =
+			"From: Alice <alice@example.com>\r\n"
+			"To: Carol <carol@example.com>\r\n"
+			"Subject: Draft while offline\r\n"
+			"Message-ID: <offline-draft@example.com>\r\n"
+			"Date: Thu, 15 Jan 2026 12:00:00 +0000\r\n"
+			"\r\n"
+			"Written with no network.\r\n";
+		CamelMimeMessage *draft;
+		gchar *draft_uid = NULL;
+		GError *draft_error = NULL;
+
+		drafts = camel_store_get_folder_sync (store, "Drafts",
+						       CAMEL_STORE_FOLDER_NONE,
+						       NULL, &error);
+		if (!drafts)
+			return functional_fail ("offline-save-draft-drafts-folder", error);
+
+		if (!camel_folder_refresh_info_sync (drafts, NULL, &error)) {
+			g_object_unref (drafts);
+			return functional_fail ("offline-save-draft-refresh", error);
+		}
+		drafts_uids = folder_dup_uids (drafts);
+		g_print ("drafts-count-before=%u\n", drafts_uids->len);
+		folder_free_uids (drafts, drafts_uids);
+
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), FALSE, NULL, &error)) {
+			g_object_unref (drafts);
+			return functional_fail ("offline-save-draft-go-offline", error);
+		}
+		g_print ("went-offline=1\n");
+
+		draft = camel_mime_message_new ();
+		if (!camel_data_wrapper_construct_from_data_sync (
+				CAMEL_DATA_WRAPPER (draft),
+				draft_message, sizeof (draft_message) - 1,
+				NULL, &error)) {
+			g_object_unref (draft);
+			g_object_unref (drafts);
+			return functional_fail ("offline-save-draft-parse", error);
+		}
+
+		if (camel_folder_append_message_sync (drafts, draft, NULL,
+						       &draft_uid, NULL, &draft_error)) {
+			g_print ("offline-save-draft-appended=1\n");
+			g_print ("offline-save-draft-uid=%s\n", draft_uid ? draft_uid : "");
+			g_free (draft_uid);
+		} else {
+			g_print ("offline-save-draft-appended=0\n");
+			g_print ("offline-save-draft-error=%s\n",
+				 draft_error ? draft_error->message : "(no detail)");
+			g_clear_error (&draft_error);
+		}
+		g_object_unref (draft);
+
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), TRUE, NULL, &error)) {
+			g_object_unref (drafts);
+			return functional_fail ("offline-save-draft-go-online", error);
+		}
+		g_print ("went-online=1\n");
+
+		if (!camel_folder_refresh_info_sync (drafts, NULL, &error)) {
+			g_object_unref (drafts);
+			return functional_fail ("offline-save-draft-refresh-after", error);
+		}
+		drafts_uids = folder_dup_uids (drafts);
+		g_print ("drafts-count-after=%u\n", drafts_uids->len);
+		folder_free_uids (drafts, drafts_uids);
+
+		g_object_unref (drafts);
 		return 0;
 	}
 
