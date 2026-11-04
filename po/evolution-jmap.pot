@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-03 12:00+0000\n"
+"POT-Creation-Date: 2026-11-04 05:39+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -443,10 +443,12 @@ msgid "Uses an OAuth 2.0 access token to connect to the JMAP server."
 msgstr ""
 
 #: rust/crates/jmap-ui/src/external_photo/display_ext.rs:56
+#: rust/crates/jmap-ui/src/external_photo/mail_display_ext.rs:45
 msgid "Externally hosted image"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/external_photo/display_ext.rs:59
+#: rust/crates/jmap-ui/src/external_photo/mail_display_ext.rs:48
 msgid "Load image"
 msgstr ""
 
