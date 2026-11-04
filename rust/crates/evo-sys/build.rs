@@ -212,6 +212,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // extension names this public parent class as its extensible type and
     // tests the real type by name when it is constructed.
     "e_web_view_get_type",
+    // The mail reader's own `EWebView` subclass, which the mail vCard
+    // placeholder extension gates on. Unlike `EABContactDisplay`, Evolution
+    // installs a header for this one (`mail/e-mail-display.h`, already
+    // pulled in by `e-mail-reader.h` above), so the gate calls this
+    // accessor directly instead of a name lookup.
+    "e_mail_display_get_type",
     // Runs one script in the page the preview shows. The `_take` form frees
     // the script string with `g_free` after it starts the script, so the
     // caller must allocate that string with GLib.

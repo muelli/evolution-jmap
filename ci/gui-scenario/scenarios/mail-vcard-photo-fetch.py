@@ -18,6 +18,12 @@ unlike a `file://` photo, yet no fetch happens at Evolution's default
 remote image policy (`image-loading-policy` "never"). See the harness log
 entry this scenario's commit is paired with for the full trail.
 
+Past the expand, this scenario also drives jmap-ui's click-to-load
+placeholder (`external_photo::mail_display_ext`): the "Load image" button
+it puts in place of the `<img>` the compact render would otherwise show,
+same as `contact-photo-fetch.py` already does for the standalone address
+book preview.
+
 Not yet covered here: item 175 also asks to check with the user's "Load
 remote content" setting turned on. Switching `image-loading-policy` to
 "always" live, while this message is open, makes Evolution reformat the
@@ -57,6 +63,10 @@ VCARD = (
     f"PHOTO;VALUE=uri:{cp.PHOTO_URL}\r\nEND:VCARD\r\n"
 )
 WAIT_SECONDS = 10
+# The label of the placeholder and the text of its button, as jmap-ui writes
+# them (same English text as the address book preview's own placeholder).
+PLACEHOLDER = "Externally hosted image"
+LOAD_BUTTON = "Load image"
 SEED_PATH = os.path.join(os.environ.get("GUI_SCENARIO_ARTIFACTS", "."), "mail-vcard-seed.json")
 
 
@@ -167,6 +177,20 @@ def run():
     if photos.requests:
         raise ScenarioFailure(f"expanding the vCard fetched the http photo: {photos.requests}")
     say("mail reader: shows the compact vCard inline, still no photo fetch")
+
+    if not any(PLACEHOLDER in text for text in texts):
+        raise ScenarioFailure(f"the placeholder never showed: {texts}")
+    if not any(cp.PHOTO_URL in text for text in texts):
+        raise ScenarioFailure(f"the placeholder does not name the URL: {texts}")
+    say(f"mail reader: the placeholder names {cp.PHOTO_URL}")
+
+    click_button(browser, LOAD_BUTTON)
+    wait_for(lambda: photos.requests or None, "the photo server to see the click's request")
+    time.sleep(2)
+    screenshot("after-load-click")
+    if photos.requests != ["/photo.png"]:
+        raise ScenarioFailure(f"the click made an unexpected request shape: {photos.requests}")
+    say(f"photo server: exactly one request after the click: {photos.requests}")
 
 
 main(setup, run, mock_args=("--seed", write_seed()))
