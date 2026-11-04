@@ -6,15 +6,25 @@ A mail from someone else carries a vCard attachment whose PHOTO is an http
 URL. This scenario measures first, as item 175 requires: does opening the
 mail make Evolution fetch the photo URL on its own.
 
-What this scenario does NOT yet confirm: on 3.52.3 in the `ci/gui-scenario`
-container, the attachment shows as a plain "Electronic business card
-attachment" bar, not through `e-mail-formatter-vcard.c`'s own inline
-`<iframe>` render (the one that would write the `<img src=the-photo-url>`
-item 175 is actually worried about). So this run checks that a real,
-Camel-recognised `text/vcard` attachment does not cause a fetch by itself,
-not that the inline compact-vCard render specifically does not fetch its
-photo: that render was never reached here, root cause open, see the harness
-log entry this scenario's commit is paired with.
+The attachment's `Content-Disposition` is `attachment` (this seed's own
+choice, matching how most senders attach a vCard), so
+`e_mail_part_should_show_inline` (`e-mail-part.c`) answers FALSE and the
+vcard-inline module's own render stays collapsed behind the attachment
+bar's "Toggle View Inline" expander button until a user clicks it: this
+scenario does, so it reaches the real inline render, not only the generic
+attachment bar. The compact render writes a plain
+`<img src="the-photo-url">` (`eab-contact-formatter.c`'s `render_compact`),
+unlike a `file://` photo, yet no fetch happens at Evolution's default
+remote image policy (`image-loading-policy` "never"). See the harness log
+entry this scenario's commit is paired with for the full trail.
+
+Not yet covered here: item 175 also asks to check with the user's "Load
+remote content" setting turned on. Switching `image-loading-policy` to
+"always" live, while this message is open, makes Evolution reformat the
+message on its own (a new "Load Images" information bar appears and the
+vCard section collapses back to its unexpanded state), so this needs its
+own, carefully observed follow-up rather than a quick reuse of this
+window; left open, see the harness log.
 """
 
 import json
@@ -25,6 +35,7 @@ import urllib.request
 import contact_photo as cp
 from scenario import (
     ScenarioFailure,
+    click_button,
     descendants,
     find,
     main,
@@ -95,6 +106,17 @@ def setup():
     say("setup: account sources written, seed file holds the vCard message")
 
 
+def contacts_shown(browser):
+    """The text nodes of `browser`, for an assertion on the rendered content."""
+    texts = []
+    for node in descendants(browser):
+        try:
+            texts.append(text_of(node))
+        except Exception:  # noqa: BLE001
+            continue
+    return texts
+
+
 def run():
     photos = cp.PhotoServer()
 
@@ -123,12 +145,7 @@ def run():
     time.sleep(WAIT_SECONDS)
     screenshot("after-wait")
 
-    texts = []
-    for node in descendants(browser):
-        try:
-            texts.append(text_of(node))
-        except Exception:  # noqa: BLE001
-            continue
+    texts = contacts_shown(browser)
     if not any("contact.vcf" in text for text in texts):
         raise ScenarioFailure(f"the attachment never showed as a real vCard part: {texts}")
     say("mail reader: shows the vCard as a real attachment, not a fetch artifact")
@@ -136,6 +153,20 @@ def run():
     if photos.requests:
         raise ScenarioFailure(f"opening the mail fetched the http photo: {photos.requests}")
     say(f"photo server: no request for the http photo after {WAIT_SECONDS}s")
+
+    # The attachment bar's own expander reveals the vcard-inline module's
+    # real compact render (see the module docstring for why a click is
+    # needed at all). Only past this click does the scenario reach the
+    # `<img src="the-photo-url">` item 175 is actually worried about.
+    click_button(browser, "Toggle View Inline")
+    time.sleep(WAIT_SECONDS)
+    screenshot("after-expand")
+    texts = contacts_shown(browser)
+    if not any("Helen Httpphoto" in text for text in texts):
+        raise ScenarioFailure(f"the compact vCard render never showed: {texts}")
+    if photos.requests:
+        raise ScenarioFailure(f"expanding the vCard fetched the http photo: {photos.requests}")
+    say("mail reader: shows the compact vCard inline, still no photo fetch")
 
 
 main(setup, run, mock_args=("--seed", write_seed()))
