@@ -577,3 +577,67 @@ fn upload_download_blob_roundtrip() {
         .unwrap();
     assert_eq!(downloaded, data);
 }
+
+/// A control character in an envelope address is refused before any request
+/// (cross-protocol audit X3-1). RFC 5321 Section 4.1.2 permits no CTL in a
+/// `Mailbox`. A server that copies the string into its SMTP session would
+/// otherwise send a CRLF and a second command (SMTP command injection).
+#[test]
+fn a_control_character_in_an_envelope_address_is_refused_locally() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let (client, identity_id, email_id) = ready_to_submit(&server);
+
+    let hostile = [
+        "bob@example.com>\r\nRCPT TO:<eve@example.com",
+        "bob@example.com\n",
+        "bob@exa\0mple.com",
+        "bob@example.com\x7f",
+    ];
+    for address in hostile {
+        for in_mail_from in [false, true] {
+            let envelope = if in_mail_from {
+                Envelope::new(
+                    EnvelopeAddress::new(address),
+                    [EnvelopeAddress::new("bob@example.com")],
+                )
+            } else {
+                Envelope::new(
+                    EnvelopeAddress::new("alice@example.com"),
+                    [
+                        EnvelopeAddress::new("carol@example.com"),
+                        EnvelopeAddress::new(address),
+                    ],
+                )
+            };
+            match client.submit_email(&account_id, &email_id, &identity_id, Some(envelope), None) {
+                Err(Error::Protocol(message)) => assert!(
+                    message.contains("control character"),
+                    "{address:?}: {message}"
+                ),
+                other => panic!("{address:?}: expected Error::Protocol, got {other:?}"),
+            }
+        }
+    }
+
+    // White box: nothing reached the server's outbox.
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(state.account(&account_id).unwrap().outbox.is_empty());
+}
+
+/// A quoted local part may hold a space and angle brackets (RFC 5321 Section
+/// 4.1.2 `Quoted-string`). The local check refuses only control characters.
+#[test]
+fn a_quoted_local_part_with_a_space_is_not_refused_locally() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let (client, identity_id, email_id) = ready_to_submit(&server);
+
+    let envelope = Envelope::new(
+        EnvelopeAddress::new("alice@example.com"),
+        [EnvelopeAddress::new("\"bob <x> smith\"@example.com")],
+    );
+    let result = client.submit_email(&account_id, &email_id, &identity_id, Some(envelope), None);
+    assert!(!matches!(result, Err(Error::Protocol(_))), "{result:?}");
+}
