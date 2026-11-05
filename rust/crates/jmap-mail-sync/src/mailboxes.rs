@@ -88,6 +88,21 @@ impl Filing {
         self.out_of.as_ref() == Some(&self.into)
     }
 
+    /// The mailbox this filing adds the message to.
+    ///
+    /// A provider that could not send a filing while offline uses this, with
+    /// [`Filing::out_of_mailbox`], to persist the filing on the row that
+    /// carries it and rebuild it once the store reconnects.
+    pub fn into_mailbox(&self) -> &Id {
+        &self.into
+    }
+
+    /// The mailbox this filing removes the message from, for a move.
+    /// `None` for a copy.
+    pub fn out_of_mailbox(&self) -> Option<&Id> {
+        self.out_of.as_ref()
+    }
+
     /// The filing as the `PatchObject` an `Email/set` update takes.
     ///
     /// `true` adds the message to a mailbox and `null` removes it. RFC 8621

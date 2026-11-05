@@ -93,12 +93,11 @@ use common::array::StringArray;
 use common::signals::{Context, Emission, emissions, watch};
 use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
-    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_SEEN, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
-    CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
-    camel_folder_error_quark, camel_folder_get_folder_summary, camel_folder_lock,
-    camel_folder_refresh_info_sync, camel_folder_summary_get,
-    camel_folder_transfer_messages_to_sync, camel_folder_unlock, camel_message_info_set_flags,
-    camel_service_error_quark, camel_store_get_folder_sync,
+    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_SEEN, CAMEL_STORE_FOLDER_NONE, CamelFolder,
+    CamelFolderClass, CamelMessageInfo, camel_folder_error_quark, camel_folder_get_folder_summary,
+    camel_folder_lock, camel_folder_refresh_info_sync, camel_folder_summary_get,
+    camel_folder_synchronize_sync, camel_folder_transfer_messages_to_sync, camel_folder_unlock,
+    camel_message_info_set_flags, camel_store_get_folder_sync,
 };
 #[cfg(camel_folder_get_uids)]
 use glib_sys::g_free;
@@ -364,6 +363,26 @@ impl Fixture {
             g_object_unref(info.cast());
         }
     }
+
+    /// Installs a new connection, the way Camel reconnects a store after an
+    /// outage. The store forgets its folder listing; the next request lists
+    /// it again.
+    fn reconnect(&self) {
+        let client = Client::connect(self.server.origin(), Credentials::none()).expect("connected");
+        self.account
+            .connect(MailSync::new(client, self.server.account_id()));
+    }
+
+    /// Through Camel's own wrapper, the way Evolution's generic reconnect
+    /// flush calls it on every open folder.
+    fn synchronize(&self, folder: *mut CamelFolder) -> Synchronised {
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: a live folder, and an out-parameter that is writable and
+        // currently NULL.
+        let ok =
+            unsafe { camel_folder_synchronize_sync(folder, GFALSE, ptr::null_mut(), &mut error) };
+        Synchronised::new(ok, error)
+    }
 }
 
 impl Drop for Fixture {
@@ -513,6 +532,53 @@ impl Drop for Transferred {
                 }
                 g_ptr_array_free(self.uids, GTRUE);
             }
+            if !self.error.is_null() {
+                glib_sys::g_error_free(self.error);
+            }
+        }
+    }
+}
+
+/// One synchronisation, and both of its answers, owned the same way
+/// [`Transferred`] owns its own.
+struct Synchronised {
+    ok: bool,
+    error: *mut GError,
+}
+
+impl Synchronised {
+    fn new(ok: gboolean, error: *mut GError) -> Self {
+        Self {
+            ok: ok != GFALSE,
+            error,
+        }
+    }
+
+    fn expect_ok(&self) {
+        assert!(self.ok, "the synchronisation failed: {}", self.message());
+        assert!(
+            self.error.is_null(),
+            "a synchronisation that worked set an error"
+        );
+    }
+
+    fn message(&self) -> String {
+        if self.error.is_null() {
+            return "no error".to_owned();
+        }
+        // SAFETY: a live GError whose message is NUL-terminated.
+        unsafe {
+            CStr::from_ptr((*self.error).message)
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+}
+
+impl Drop for Synchronised {
+    fn drop(&mut self) {
+        // SAFETY: an allocation this value owns from the call that made it.
+        unsafe {
             if !self.error.is_null() {
                 glib_sys::g_error_free(self.error);
             }
@@ -684,32 +750,86 @@ fn a_transfer_of_no_messages_needs_no_server() {
         .expect_ok();
 }
 
-/// The folder is asked, but the connection belongs to the store.
-/// `NOT_CONNECTED` is the code that makes Camel connect and ask again,
-/// rather than showing the account as broken. The other three folder
-/// vfuncs follow the same rule. The message stays where it is, row and all.
+/// ROADMAP item 176(b): a move or copy made with no connection must not fail
+/// outright. `file_message` queues the filing on the row and reports success,
+/// the same way an offline flag change or an offline Expunge already
+/// succeeds locally, and the row stays in this folder until
+/// `synchronize_sync`'s reconnect walk actually lands it (see
+/// [`a_queued_move_lands_once_the_store_reconnects`]).
 #[test]
-fn a_folder_whose_store_has_no_connection_reports_it() {
+fn a_move_with_no_connection_is_queued_and_the_row_stays() {
     let fixture = Fixture::start();
     assert!(fixture.account.jmap().drop_connection());
 
     let transferred =
         fixture.transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true);
 
-    assert!(!transferred.ok, "a disconnected folder transferred anyway");
-    assert!(!transferred.error.is_null(), "it failed without saying why");
-    // SAFETY: a live GError, and the quark accessor takes no arguments.
-    unsafe {
-        assert_eq!((*transferred.error).domain, camel_service_error_quark());
-        assert_eq!(
-            (*transferred.error).code,
-            CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32
-        );
-    }
+    transferred.expect_ok();
+    assert_eq!(
+        transferred.reported(),
+        vec![Some(fixture.uid().to_string())],
+        "a queued filing must be reported as landed, the same as an \
+         immediate one, so the caller sees the move as done"
+    );
     assert_eq!(
         listed(fixture.inbox),
         vec![fixture.uid().to_string()],
-        "a message that never moved was taken out of its folder"
+        "the row must stay in the folder while offline: removal happens \
+         only after a server write actually confirms the move"
+    );
+}
+
+/// The queued filing reaches the server once the store reconnects, with no
+/// explicit `Email/set` call from the client beyond the generic
+/// `CamelOfflineStore` reconnect flush: the same flush
+/// `expunge.rs`'s own offline test already proves exists for a deleted mark.
+#[test]
+fn a_queued_move_lands_once_the_store_reconnects() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    fixture.reconnect();
+    fixture.synchronize(fixture.inbox).expect_ok();
+
+    assert_eq!(
+        fixture.mailboxes_on_server(fixture.uid()),
+        BTreeMap::from([(fixture.archive_id.clone(), true)]),
+        "the queued move never reached the server after reconnecting"
+    );
+    assert!(
+        listed(fixture.inbox).is_empty(),
+        "the row stayed in the source folder after the queued move finally landed"
+    );
+}
+
+/// A queued copy behaves the same way as a queued move, except that it never
+/// removes the row: a copy leaves every mailbox the message was already in.
+#[test]
+fn a_queued_copy_lands_once_the_store_reconnects() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], false)
+        .expect_ok();
+
+    fixture.reconnect();
+    fixture.synchronize(fixture.inbox).expect_ok();
+
+    assert_eq!(
+        fixture.mailboxes_on_server(fixture.uid()),
+        BTreeMap::from([
+            (fixture.inbox_id.clone(), true),
+            (fixture.archive_id.clone(), true)
+        ]),
+        "the queued copy never reached the server after reconnecting"
+    );
+    assert_eq!(
+        listed(fixture.inbox),
+        vec![fixture.uid().to_string()],
+        "a copy must never remove the row it came from"
     );
 }
 
@@ -836,12 +956,17 @@ fn a_message_another_client_deleted_is_announced_as_its_row_goes() {
     );
 }
 
-/// Every other failure leaves the message list alone, because it leaves the
-/// rows alone. Camel retries a disconnected store after reconnecting. A
-/// folder that had announced the message as removed in the meantime would
-/// have taken it off the user's screen until the retry.
+/// A queued offline filing does not announce the row as removed, because it
+/// leaves the row where it is (see
+/// [`a_move_with_no_connection_is_queued_and_the_row_stays`]): only
+/// `replay_filing`'s later, successful write removes it and announces that. A
+/// folder that announced the message as removed before the server actually
+/// agreed would take it off the user's screen too soon. Camel still announces
+/// the row itself as *changed*: marking it for the reconnect walk to find is a
+/// real mutation of the row (`CAMEL_MESSAGE_FOLDER_FLAGGED` goes from unset to
+/// set), the same as any other summary property change.
 #[test]
-fn a_transfer_that_failed_leaves_the_message_list_alone() {
+fn a_queued_transfer_does_not_announce_the_row_as_removed() {
     let context = Context::push();
     let fixture = Fixture::start().watched(&context, |fixture| fixture.inbox);
     assert!(fixture.account.jmap().drop_connection());
@@ -849,11 +974,17 @@ fn a_transfer_that_failed_leaves_the_message_list_alone() {
     let transferred =
         fixture.transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true);
 
-    assert!(!transferred.ok, "a disconnected folder transferred anyway");
-    let emissions = emissions(&context);
-    assert!(
-        emissions.is_empty(),
-        "a transfer that failed announced {emissions:?}"
+    transferred.expect_ok();
+    assert_eq!(
+        emissions(&context),
+        vec![Emission {
+            added: Vec::new(),
+            removed: Vec::new(),
+            changed: vec![fixture.uid().to_string()],
+            recent: Vec::new(),
+        }],
+        "a queued transfer must not announce the row as removed before the \
+         server agreed"
     );
 }
 
