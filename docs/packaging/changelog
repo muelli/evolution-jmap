@@ -1,3 +1,69 @@
+evolution-jmap (0.6.6) unstable; urgency=medium
+
+  * Fixed a security hole in the address book preview's "Load image"
+    button for a contact's externally hosted photo: a contact could
+    carry a forged button that fetched a URL of the sender's choosing
+    when clicked, because the button always used the same fixed,
+    guessable identifier. The button now gets a fresh, unguessable one
+    on every render, so a forged button cannot be reached this way.
+    This affects every release from 0.6.0 to 0.6.5; upgrading is
+    recommended.
+  * Removed the mail view's own "Load image" placeholder for a vCard
+    photo attached to a message: it had the same forgeable-button
+    flaw, reachable from a plain HTML message with no vCard attachment
+    at all. It was never released. Evolution's own "Load remote
+    content" setting already covers the mail case, so no replacement
+    was added.
+  * The folder tree, and messages already read, now still show after
+    starting Evolution with no network, or after restarting it
+    offline.
+  * Deleting a message, emptying Trash, and expunging a folder now
+    succeed while offline; the change reaches the server once you
+    reconnect.
+  * The Vacation Responder, Server Filters, and Send Later pages now
+    say "offline" right away, instead of waiting for a connection
+    attempt to time out.
+  * A reconnect that keeps failing no longer loops forever: Evolution
+    now falls back to the cached folder tree instead.
+  * "Download messages for offline use" and "Copy folder content
+    locally" no longer redownload every message each time; only
+    messages not already cached are fetched.
+  * Fixed a message that could disappear and reappear on every refresh
+    when its own id needed sanitizing.
+  * Fixed marking a message Junk, and another client marking it Not
+    Junk at nearly the same time, leaving both labels on the message.
+  * A contact synced from the server now gets a usable "File under"
+    name by default, so Evolution's contact editor can save further
+    edits to it (it used to refuse to enable Save while that field
+    stayed blank).
+  * Fixed a calendar invitation or contact URL (ATTACH, IMAGE,
+    CONFERENCE, ATTENDEE, ORGANIZER) gaining stray backslashes before
+    a ';' or ','.
+  * Deleting a calendar or address book now also deletes its events or
+    contacts, instead of leaving them behind on the server.
+  * Fixed a contact or calendar event from the server with a NUL byte
+    in a field being saved as a truncated, malformed vCard or
+    iCalendar document; the NUL byte is now replaced with a visible
+    placeholder character instead.
+  * Hardened against a malicious or buggy server: a crafted address
+    can no longer forge a second, fake address in the message list by
+    breaking out of its angle brackets; a stray CR or LF in a subject
+    or address is now replaced instead of planting a forged extra
+    line; and a bidi override character in a subject or sender name
+    can no longer change the reading direction of the columns beside
+    it.
+  * Many small accessibility and keyboard fixes across the Server
+    Filters page, its rule dialog, Vacation Responder, Send Later,
+    snooze, and the undo-delete notice: fixed keyboard shortcuts that
+    clashed with each other, made Enter confirm dialogs that used to
+    ignore it, gave screen readers names for fields and buttons that
+    had none and spoken announcements for status changes, and made
+    every control reachable with the keyboard alone. Dialog spacing,
+    capitalization, and ellipses now follow GNOME's own style
+    consistently.
+
+ -- Tobias Mueller <muelli@cryptobitch.de>  Thu, 05 Nov 2026 08:17:52 +0000
+
 evolution-jmap (0.6.5) unstable; urgency=medium
 
   * The Server Filters page no longer scrolls sideways. A long error
