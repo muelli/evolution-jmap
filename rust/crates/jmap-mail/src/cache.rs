@@ -52,13 +52,15 @@
 //! removal, a short file stays. Camel's parser reads that file as a *complete*
 //! message with a truncated body, because MIME has no length.
 //!
-//! Thus both operations take the size that the row of the folder claims. This
+//! Thus every operation takes the size that the row of the folder claims. This
 //! is the `size` of RFC 8621 §4.1, which the specification defines as the
 //! octets of exactly the bytes that the `blobId` references. An entry shorter
 //! than that size is not a message. [`load`] removes such an entry and does not
 //! serve it. [`store`] does not write one, for the same reason that it does not
 //! write an empty one: an entry that the cache does not serve is a syscall that
-//! only makes a miss.
+//! only makes a miss. [`MessageCache::filename`] refuses one too, because a
+//! caller of `CamelFolderClass::get_filename` ("View Source") opens that path
+//! directly and shows whatever is in it, with no size check of its own.
 //!
 //! **Shorter, not different.** This check prevents truncation, and truncation
 //! always gives a short file. A server whose `size` is too small by a byte has
@@ -146,6 +148,7 @@ use jmap_backend_core::trampoline::{guard_ptr, log_critical, log_critical_for_me
 
 use crate::connect::StoreError;
 use crate::folder::JmapFolder;
+use crate::message::listed_size;
 
 /// The subdirectory of the entries, below the cache directory of the account.
 ///
@@ -583,17 +586,17 @@ impl MessageCache {
     ///
     /// [`load`]: MessageCache::load
     pub fn contains(&self, uid: &str, listed: Option<u32>) -> bool {
-        let Some(path) = self.filename(uid) else {
-            return false;
-        };
-        let Ok(metadata) = std::fs::metadata(path) else {
-            return false;
-        };
-        let len = metadata.len();
-        len > 0 && claimed(listed).is_none_or(|listed| len >= u64::from(listed))
+        // `filename` now makes the same undamaged-and-the-right-size check
+        // this function needs; the one thing it does not check, because a
+        // caller that opens the raw path is allowed to rely on an unfetched
+        // message instead, is that the file exists at all.
+        self.filename(uid, listed)
+            .is_some_and(|path| Path::new(&path).is_file())
     }
 
-    /// The path on disk of the entry for `uid`, also if it is not cached yet.
+    /// The path on disk of the entry for `uid`, also if it is not cached yet,
+    /// checked against the size that the row of the folder claims, the same
+    /// check [`Self::load`] makes. See `claimed` for what a claim is.
     ///
     /// `camel_data_cache_get_filename` only computes a path, the same path
     /// that `camel_data_cache_add`/`_get` use internally. Thus this function
@@ -603,11 +606,22 @@ impl MessageCache {
     /// reason as there. Each caller of `CamelFolderClass::get_filename` treats a
     /// path that it cannot open as "no local copy", and reads the message in a
     /// different way. "View Source" in `e-mail-formatter-source.c` is this
-    /// fallback. No caller reads the path as a promise that the file exists.
+    /// fallback, and it is the whole reason for the size check below: that
+    /// caller, unlike [`Self::load`], opens the file directly and shows
+    /// whatever bytes are in it, with no check of its own. A process that
+    /// stopped mid-write, the same gap [`Self::load`]'s own doc describes,
+    /// would otherwise show the user a silently truncated message instead of
+    /// the correct, complete one the in-memory `CamelMimeMessage` still holds.
+    /// A path that was never fetched is not this damage, so it still passes
+    /// through unchecked: no caller reads the path as a promise that the file
+    /// exists.
     ///
-    /// `None` for the same reason that `Self::key` refuses: a uid that is not
-    /// a valid JMAP id is never a file name that this cache creates.
-    pub fn filename(&self, uid: &str) -> Option<String> {
+    /// `None` for an invalid uid, for the same reason that `Self::key`
+    /// refuses: a uid that is not a valid JMAP id is never a file name that
+    /// this cache creates. `None` also for a file this check finds damaged.
+    ///
+    /// [`load`]: MessageCache::load
+    pub fn filename(&self, uid: &str, listed: Option<u32>) -> Option<String> {
         let key = self.key(uid)?;
         let cache = self.lock();
 
@@ -623,7 +637,20 @@ impl MessageCache {
         // SAFETY: `raw` is NULL or a `g_malloc`'d pointer that this function
         // owns. `g_free` on NULL is a defined no-op.
         unsafe { g_free(raw.cast()) };
-        path
+        let path = path?;
+
+        // A path with nothing at it yet is not damage, only an unfetched
+        // message; leave the existence test to the caller's own open, as the
+        // doc above explains. A path whose file exists is checked by length
+        // alone, the same signal `Self::load` and `Self::contains` use,
+        // because the damage this guards against is a short write, not a
+        // wrong one.
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            return Some(path);
+        };
+        let len = metadata.len();
+        let damaged = len == 0 || claimed(listed).is_some_and(|listed| len < u64::from(listed));
+        if damaged { None } else { Some(path) }
     }
 
     /// A uid as the file name that it becomes, or `None` if it cannot be one.
@@ -666,8 +693,10 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
 /// from this path, and do not ask Camel to serialize the message again.
 ///
 /// On success, a path, also if no file is there yet. NULL with the error set
-/// when the folder has no cache, or `uid` is not a valid key. See
-/// [`MessageCache::filename`] for why the usual case needs no check.
+/// when the folder has no cache, `uid` is not a valid key, or the entry on
+/// disk is damaged (shorter than the row's claimed size). See
+/// [`MessageCache::filename`] for why the usual, unfetched case needs no
+/// check, and why a damaged one is refused.
 unsafe extern "C" fn get_filename(
     folder: *mut CamelFolder,
     uid: *const gchar,
@@ -678,6 +707,9 @@ unsafe extern "C" fn get_filename(
     // that is NULL, or writable and NULL.
     unsafe {
         guard_ptr("get_filename", error, || {
+            // SAFETY: `folder` and `uid` meet the vfunc contract above, read
+            // before `uid` is consumed into an owned `String` below.
+            let listed = listed_size(folder, uid);
             let Some(uid) = read_string(uid) else {
                 return fail(error, &StoreError::NoLocalFile, StoreError::to_gerror);
             };
@@ -687,7 +719,7 @@ unsafe extern "C" fn get_filename(
             let Some(cache) = this.cache() else {
                 return fail(error, &StoreError::NoLocalFile, StoreError::to_gerror);
             };
-            match cache.filename(&uid) {
+            match cache.filename(&uid, listed) {
                 Some(path) => dup_string(&path),
                 None => fail(error, &StoreError::NoLocalFile, StoreError::to_gerror),
             }

@@ -164,7 +164,9 @@ fn a_stored_messages_filename_reads_back_the_same_bytes() {
     let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
 
     assert!(cache.store("M1", SOURCE, None));
-    let path = cache.filename("M1").expect("a filename for a cached entry");
+    let path = cache
+        .filename("M1", None)
+        .expect("a filename for a cached entry");
     assert_eq!(
         fs::read(&path).expect("the filename names a readable file"),
         SOURCE,
@@ -183,7 +185,7 @@ fn an_uncached_uid_still_gets_a_computed_filename() {
     let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
 
     let path = cache
-        .filename("M1")
+        .filename("M1", None)
         .expect("a filename computed for an uncached uid");
     assert!(
         !Path::new(&path).exists(),
@@ -201,10 +203,51 @@ fn a_uid_that_is_a_path_gets_no_filename() {
 
     for hostile in ["../escape", "..", ".", "sub/dir", "/absolute", ""] {
         assert!(
-            cache.filename(hostile).is_none(),
+            cache.filename(hostile, None).is_none(),
             "{hostile:?} was accepted as a cache key"
         );
     }
+}
+
+/// `camel_folder_get_filename` has real, unguarded callers: `e-mail-
+/// formatter-source.c`'s "View Source" and `camel_folder_fetch_headers`'s
+/// local-file fallback both open whatever file this path names directly,
+/// with no size check of their own, falling back to the in-memory message
+/// only when the path cannot be opened at all. `load` already refuses an
+/// entry shorter than the row's claimed size, the mark of a process killed
+/// mid-write; `filename` must refuse the same entry the same way, or a
+/// crash-truncated file reaches "View Source" undetected, instead of the
+/// correct fallback to the in-memory message.
+#[test]
+fn a_filename_refuses_an_entry_shorter_than_the_row_claims() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+    let truncated = &SOURCE[..SOURCE.len() - 30];
+
+    assert!(cache.store("M1", truncated, None));
+
+    assert!(
+        cache.filename("M1", Some(SOURCE.len() as u32)).is_none(),
+        "a truncated entry was handed out as a filename"
+    );
+}
+
+/// The same entry, read with no size to compare against (a folder with no
+/// refresh yet has no rows, same as `load`'s own `None` case): the only
+/// damage this cache can detect by size alone is an empty file, so a
+/// truncated-but-nonempty entry still gets a filename.
+#[test]
+fn a_filename_with_no_row_to_compare_against_is_not_refused() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+    let truncated = &SOURCE[..SOURCE.len() - 30];
+
+    assert!(cache.store("M1", truncated, None));
+
+    assert!(
+        cache.filename("M1", None).is_some(),
+        "an entry was refused with nothing to compare its size against"
+    );
 }
 
 #[test]
