@@ -36,6 +36,9 @@ evolution-jmap-collection-sync = { workspace = true }
 # The identity that covers a sender address, as Send selects it.
 evolution-jmap-mail-sync = { workspace = true }
 evolution-jmap-proto = { workspace = true }
+# A fresh, unguessable class for the external-photo placeholder's button on
+# each render, so a vCard field cannot forge one in advance.
+getrandom = { workspace = true }
 # GTask (the async submit pair) and GCancellable.
 gio-sys = { workspace = true }
 glib-sys = { workspace = true }

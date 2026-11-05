@@ -23,6 +23,17 @@
 //! The extension therefore attaches to every `EWebView` and returns at once
 //! for all but the address book preview. One small object per web view is the
 //! price of not linking a private library.
+//!
+//! The "Load image" button's class is a fresh, unguessable value per render
+//! ([`script::fresh_load_class`]), not a fixed string: Evolution's contact
+//! formatter pastes the photo URI into the page without escaping it, so a
+//! vCard field can inject arbitrary markup, including a forged button of a
+//! guessed fixed class. [`e_web_view_register_element_clicked`] matches a
+//! click by the clicked element's whole class, so a fixed class would let a
+//! forged element reach the real click handler and fetch an attacker URL.
+//! A class chosen fresh, after the forged markup was already written into
+//! the vCard, closes that: a forger cannot guess a value this crate has not
+//! picked yet.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
@@ -57,10 +68,6 @@ const LABEL: &CStr = N_(c"Externally hosted image");
 
 /// The text of the button that fetches the photo.
 const LOAD_ACTION: &CStr = N_(c"Load image");
-
-/// [`script::LOAD_CLASS`], as the `CStr` the registration call needs.
-/// `tests::the_load_class_matches_the_script_module` keeps the two equal.
-const LOAD_CLASS: &CStr = c"__jmap-external-photo-load";
 
 /// The placeholder for an externally hosted contact photo.
 pub struct ExternalPhoto;
@@ -129,22 +136,30 @@ unsafe fn is_contact_display(view: *mut EWebView) -> bool {
 /// the id goes into the user-data slot.
 ///
 /// The script is idempotent, so a second frame in the same page costs one
-/// script run and changes nothing.
+/// script run and changes nothing: it finds the button it already made and
+/// only gives it the fresh class this call just picked.
 ///
 /// `e_web_view_register_element_clicked` is called here, not in
-/// `constructed`: Evolution forgets every registration on each new content
-/// load, so the extension must register again every time, and only after
-/// the script above has had the chance to create the button.
+/// `constructed`, for two reasons: Evolution forgets every registration on
+/// each new content load, and a fresh [`script::fresh_load_class`] is picked
+/// each time anyway, so the class must be registered again regardless. It
+/// runs after the script, not before, so the registration is never live
+/// without a button of that same class already in the page.
 unsafe extern "C" fn on_content_loaded(
     object: *mut GObject,
     _frame_id: *const c_char,
     _user_data: gpointer,
 ) {
     guard("JmapExternalPhotoExtension::content-loaded", (), || {
+        let load_class = script::fresh_load_class();
         let Ok(placeholder) = CString::new(script::placeholder_script(
             &translate(LABEL),
             &translate(LOAD_ACTION),
+            &load_class,
         )) else {
+            return;
+        };
+        let Ok(load_class) = CString::new(load_class) else {
             return;
         };
         // SAFETY: `object` is the live `EWebView` that emitted the signal,
@@ -152,7 +167,7 @@ unsafe extern "C" fn on_content_loaded(
         // `evo-sys`'s `tests/web_view.rs`). The callee frees the script with
         // `g_free`, so the copy it gets comes from GLib, not from Rust.
         // `e_web_view_register_element_clicked` re-scans the current
-        // document for `LOAD_CLASS` elements once it is called, which is
+        // document for `load_class` elements once it is called, which is
         // why it runs after the script above, not before.
         unsafe {
             e_web_view_jsc_run_script_take(
@@ -162,7 +177,7 @@ unsafe extern "C" fn on_content_loaded(
             );
             e_web_view_register_element_clicked(
                 object.cast(),
-                LOAD_CLASS.as_ptr(),
+                load_class.as_ptr(),
                 Some(on_load_clicked),
                 ptr::null_mut(),
             );
@@ -172,7 +187,10 @@ unsafe extern "C" fn on_content_loaded(
 
 /// `EWebViewElementClickedFunc`: called when the "Load image" button is
 /// clicked. `element_value` is the button's `value` attribute, the photo URL
-/// copied verbatim from the document by the placeholder script.
+/// copied verbatim from the document by the placeholder script. This still
+/// trusts that value, but only an element of the fresh class `on_content_
+/// loaded` just registered can ever reach this function at all, and a
+/// forger writing a vCard field cannot know that class in advance.
 ///
 /// # Safety
 ///
@@ -241,14 +259,7 @@ unsafe extern "C" fn on_load_clicked(
     });
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The registration call and the script that creates the button must
-    /// name the same class, or Evolution never binds the click.
-    #[test]
-    fn the_load_class_matches_the_script_module() {
-        assert_eq!(LOAD_CLASS.to_str().unwrap(), script::LOAD_CLASS);
-    }
-}
+// `on_content_loaded` reads one local `load_class` into both the script and
+// the registration call, so the two cannot drift apart the way two separate
+// constants in two files once could; see `script`'s own tests for the
+// class-generation and script-templating properties this relies on.
