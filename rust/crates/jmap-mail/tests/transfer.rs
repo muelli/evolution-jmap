@@ -100,7 +100,9 @@ use eds_sys::{
     camel_folder_transfer_messages_to_sync, camel_folder_unlock, camel_message_info_set_flags,
     camel_service_error_quark, camel_store_get_folder_sync,
 };
-use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_free, g_ptr_array_free, gboolean};
+#[cfg(camel_folder_get_uids)]
+use glib_sys::g_free;
+use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_free, gboolean};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
@@ -497,11 +499,15 @@ impl Transferred {
 impl Drop for Transferred {
     fn drop(&mut self) {
         // SAFETY: both are references this value took from the call that
-        // made it. The array is owned whole: Camel's own callers free its
-        // members with `g_free`, then the array. The error is one
-        // allocation.
+        // made it. The array is owned whole, but how a filled slot's string
+        // is released depends on the installed EDS, the split
+        // `jmap_mail::transfer::Reported`'s own doc names: before EDS 3.58,
+        // Camel's own callers free the members with `g_free`, then the
+        // array; from 3.58, the array carries its own `g_free` and one call
+        // frees everything. The error is one allocation.
         unsafe {
             if !self.uids.is_null() {
+                #[cfg(camel_folder_get_uids)]
                 for index in 0..(*self.uids).len {
                     g_free(*(*self.uids).pdata.add(index as usize));
                 }

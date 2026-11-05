@@ -80,10 +80,11 @@ use eds_sys::{
     camel_folder_summary_remove_uid, camel_folder_unlock,
 };
 use gio_sys::GCancellable;
-use glib_sys::{
-    GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_new, g_ptr_array_set_size, g_strdup, gboolean,
-    gchar,
-};
+#[cfg(camel_folder_get_uids)]
+use glib_sys::g_ptr_array_new;
+use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_set_size, g_strdup, gboolean, gchar};
+#[cfg(not(camel_folder_get_uids))]
+use glib_sys::{g_free, g_ptr_array_new_with_free_func};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::fail_bool;
 use jmap_backend_core::marshal::{checked_borrow, read_string};
@@ -337,7 +338,18 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<CString> {
 ///
 /// The array has the shape of Camel's generic transfer, because its callers free
 /// that shape. The array has one slot per uid from the start. A message that did
-/// not land has `NULL`. One `g_free` releases each string.
+/// not land has `NULL`.
+///
+/// The way a caller releases a filled slot's string depends on the installed
+/// EDS, the same split [`crate::message::new_uncached_uids_array`] already
+/// names. Before EDS 3.58, Camel's own `folder_transfer_messages_to_sync`
+/// builds this array with a plain `g_ptr_array_new()`, and every Camel-side
+/// consumer frees it as elements then container
+/// (`g_ptr_array_foreach(g_free)`, then `g_ptr_array_free`). From 3.58, the
+/// same function gives the array its own `g_free` and a caller frees it with
+/// one call. Giving the wrong one here either leaks (no free function, freed
+/// with one call) or double frees (free function present, a caller also
+/// frees each element the old way).
 struct Reported(*mut GPtrArray);
 
 impl Reported {
@@ -353,9 +365,13 @@ impl Reported {
         }
         // SAFETY: a new array, sized so that every slot exists before a write.
         // `set_size` sets the new slots to NULL, the value for a message that
-        // did not land.
+        // did not land. The ownership contract of a filled slot's string is
+        // the struct doc's EDS-version split.
         unsafe {
+            #[cfg(camel_folder_get_uids)]
             let array = g_ptr_array_new();
+            #[cfg(not(camel_folder_get_uids))]
+            let array = g_ptr_array_new_with_free_func(Some(g_free));
             g_ptr_array_set_size(array, len as c_int);
             *out = array;
             Self(array)

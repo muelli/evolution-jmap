@@ -28,7 +28,9 @@ use eds_sys::{
     CamelFolder, camel_folder_get_folder_summary, camel_folder_refresh_info_sync,
     camel_folder_summary_get, camel_folder_transfer_messages_to_sync,
 };
-use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_free, g_ptr_array_free};
+#[cfg(camel_folder_get_uids)]
+use glib_sys::g_free;
+use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_error_free, g_ptr_array_free};
 use gobject_sys::g_object_unref;
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
@@ -139,8 +141,12 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight() {
                 ptr::null_mut(),
                 &mut error,
             );
-            // Camel's own callers free the members with `g_free`, then the array.
+            // Before EDS 3.58, Camel's own callers free the members with
+            // `g_free`, then the array; from 3.58, the array carries its own
+            // `g_free` and one call frees everything (see
+            // `jmap_mail::transfer::Reported`'s own doc).
             if !transferred.is_null() {
+                #[cfg(camel_folder_get_uids)]
                 for index in 0..(*transferred).len {
                     g_free(*(*transferred).pdata.add(index as usize));
                 }
