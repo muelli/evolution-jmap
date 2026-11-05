@@ -308,3 +308,90 @@ fn seed_file_email_can_carry_an_attachment() {
 
     let _ = fs::remove_file(path);
 }
+
+/// `bodyIsHtml` in the `--seed` JSON format, so a scenario can seed a
+/// sender-controlled HTML mail body (item 178's forged load-button scenario
+/// needs exactly this: a plain `textBody` is escaped as text, never parsed
+/// as markup by the mail reader).
+#[test]
+fn seed_file_email_body_can_be_html() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let seed = json!({
+        "accounts": [
+            {
+                "id": "A1",
+                "name": "seeded@example.test",
+                "mailboxes": [
+                    {"id": "M100", "name": "Inbox", "role": "inbox"}
+                ],
+                "emails": [
+                    {
+                        "mailboxId": "M100",
+                        "from": {"name": "Sender", "email": "sender@example.test"},
+                        "subject": "A styled message",
+                        "textBody": "<p>Hi <b>Alice</b></p>",
+                        "bodyIsHtml": true,
+                        "receivedAt": "2026-01-02T03:04:05Z"
+                    }
+                ]
+            }
+        ]
+    });
+    let path = std::env::temp_dir().join(format!(
+        "jmap-mockd-seed-html-body-{}-{}.json",
+        std::process::id(),
+        nonce
+    ));
+    fs::write(
+        &path,
+        serde_json::to_vec(&seed).expect("serialize seed document"),
+    )
+    .expect("write seed file");
+
+    let path_arg = path.to_string_lossy().into_owned();
+    let mockd = Mockd::spawn(&["--seed", &path_arg]);
+
+    let ids = api(
+        &mockd,
+        json!({
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [["Email/query", {"accountId": "A1"}, "e1"]],
+        }),
+    );
+    let email_id = ids["methodResponses"][0][1]["ids"][0]
+        .as_str()
+        .expect("one seeded email")
+        .to_owned();
+
+    let got = api(
+        &mockd,
+        json!({
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [[
+                "Email/get",
+                {"accountId": "A1", "ids": [email_id], "properties": ["blobId"]},
+                "e2"
+            ]],
+        }),
+    );
+    let blob_id = got["methodResponses"][0][1]["list"][0]["blobId"]
+        .as_str()
+        .expect("the email has a blobId");
+
+    let (status, _, raw) =
+        mockd.request("GET", &format!("/download/A1/{blob_id}/message.eml"), b"");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        raw.contains("Content-Type: text/html"),
+        "the raw message is not marked as HTML: {raw}"
+    );
+    assert!(
+        raw.contains("<p>Hi <b>Alice</b></p>"),
+        "the raw message does not carry the HTML body: {raw}"
+    );
+
+    let _ = fs::remove_file(path);
+}

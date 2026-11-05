@@ -193,6 +193,61 @@ fn receive_email_raw_message_blob_includes_its_attachments() {
     );
 }
 
+/// A seeded email can carry an HTML body, not only plain text, so a
+/// scenario can seed a sender-controlled mail body for an adversarial test
+/// (item 178's forged load-button scenario needs exactly this).
+#[test]
+fn receive_email_html_body_is_served_as_text_html() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+        account.seed_email(
+            EmailSeed::new(
+                inbox,
+                ("Bob", "bob@example.com"),
+                "A styled message",
+                "<p>Hi <b>Alice</b></p>",
+                "2026-08-03T08:00:00Z",
+            )
+            .html_body(),
+        );
+    }
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let emails = client
+        .email_query_then_get(
+            &account_id,
+            EmailQueryFilter::default(),
+            None,
+            Some(&["blobId", "size"]),
+        )
+        .unwrap();
+    let email = &emails[0];
+
+    let raw = client
+        .download_blob(
+            &account_id,
+            email.blob_id.as_ref().unwrap(),
+            "message.eml",
+            limits::MAX_BLOB_BYTES,
+        )
+        .unwrap();
+    let raw = String::from_utf8(raw).expect("the raw message is ASCII/UTF-8");
+    assert!(
+        raw.contains("Content-Type: text/html"),
+        "the raw message is not marked as HTML: {raw}"
+    );
+    assert!(
+        raw.contains("<p>Hi <b>Alice</b></p>"),
+        "the raw message does not carry the HTML body: {raw}"
+    );
+}
+
 /// `Email/query` filter fields the mock did not apply until now: `cc`,
 /// `bcc`, `body`, `text`, `header`, `minSize`/`maxSize`, `hasAttachment`.
 /// `from`/`to`/`subject`/`inMailbox`/keyword/date filters are covered above

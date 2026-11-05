@@ -15,6 +15,9 @@ at all, to measure whether the existing click-to-load placeholder
 (`external_photo::mail_script`), keyed on the element's id and attributes
 rather than on which vCard property produced it, already covers this
 case too.
+
+Item 178's own red test lives here too: see `mail-vcard-photo-fetch.py`'s
+docstring for why a forged HTML mail body reaches the same click handler.
 """
 
 import json
@@ -51,6 +54,18 @@ PLACEHOLDER = "Externally hosted image"
 LOAD_BUTTON = "Load image"
 SEED_PATH = os.path.join(os.environ.get("GUI_SCENARIO_ARTIFACTS", "."), "mail-vcard-logo-seed.json")
 
+# Item 178: same forged-button check as mail-vcard-photo-fetch.py, see that
+# scenario's docstring for why. The class must match `jmap_ui::
+# external_photo::mail_script::LOAD_CLASS`.
+FORGED_SUBJECT = "A forged load-image button"
+FORGED_LOAD_CLASS = "__jmap-mail-vcard-photo-load"
+EVIL_PATH = "/evil.png"
+EVIL_URL = f"http://127.0.0.1:{cp.PHOTO_PORT}{EVIL_PATH}"
+FORGED_HTML = (
+    "<p>Nothing to see here.</p>"
+    f'<button class="{FORGED_LOAD_CLASS}" value="{EVIL_URL}">{LOAD_BUTTON}</button>'
+)
+
 
 def write_seed():
     """Write the `--seed` JSON for a minimal account with one message: a
@@ -83,7 +98,16 @@ def write_seed():
                                 "content": VCARD,
                             }
                         ],
-                    }
+                    },
+                    {
+                        "mailboxId": "M1",
+                        "from": {"name": "Sender", "email": "sender@example.test"},
+                        "to": [{"name": "Alice", "email": "alice@example.com"}],
+                        "subject": FORGED_SUBJECT,
+                        "textBody": FORGED_HTML,
+                        "bodyIsHtml": True,
+                        "receivedAt": "2026-01-02T03:05:05Z",
+                    },
                 ],
             }
         ]
@@ -165,6 +189,27 @@ def run():
     if photos.requests != ["/photo.png"]:
         raise ScenarioFailure(f"the click made an unexpected request shape: {photos.requests}")
     say(f"photo server: exactly one request after the click: {photos.requests}")
+
+    # Item 178: a sender's own HTML body, not a vCard at all, forges the same
+    # class our placeholder's button uses. This message carries no vCard.
+    select_message(FORGED_SUBJECT)
+    menu_item("Message/Open in New Window")
+    forged = wait_for(lambda: window(FORGED_SUBJECT), "the forged message window")
+    wait_for(
+        lambda: find(forged, "document web", name="Evolution Mail Display"),
+        "the forged message body",
+    )
+    time.sleep(WAIT_SECONDS)
+    screenshot("forged-button-shown")
+    click_button(forged, LOAD_BUTTON)
+    time.sleep(WAIT_SECONDS)
+    screenshot("after-forged-click")
+    if EVIL_PATH in photos.requests:
+        raise ScenarioFailure(
+            f"a forged load button in the sender's own HTML body fetched its "
+            f"URL: {photos.requests}"
+        )
+    say("mail reader: a forged load button in the sender's own HTML body made no request")
 
 
 main(setup, run, mock_args=("--seed", write_seed()))
