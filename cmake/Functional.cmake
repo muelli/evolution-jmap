@@ -1071,6 +1071,23 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_CLIENT=$<TARGET_FILE:functional-mail-client>;JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT=$<TARGET_FILE:functional-mail-live-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
+	# ROADMAP item 176(b): the offline-journal fix for `expunge_sync`, a
+	# separate registration (and a separate `cargo test` binary) from
+	# functional-mail, deliberately not a ninth test in that one: see
+	# rust/crates/jmap-functional/tests/mail-offline-expunge.rs for why.
+	add_test(
+		NAME functional-mail-offline-expunge
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test mail-offline-expunge
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-mail-offline-expunge PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_CLIENT=$<TARGET_FILE:functional-mail-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+	)
+
 	# functional-mail-live-client against a real Stalwart instead of the
 	# in-process mock. It stages the same module and `.urls` file as
 	# functional-mail, with the same two variable names, for the reason that

@@ -153,9 +153,10 @@ main (int argc,
 	gboolean restart_prime;
 	gboolean restart_second;
 	gboolean offline_save_draft;
+	gboolean offline_expunge_roundtrip;
 
 	if (argc != 2 && argc != 3) {
-		g_printerr ("usage: %s <source-uid> [offline-roundtrip|restart-prime|restart-second|offline-save-draft]\n", argv[0]);
+		g_printerr ("usage: %s <source-uid> [offline-roundtrip|restart-prime|restart-second|offline-save-draft|offline-expunge-roundtrip]\n", argv[0]);
 		return 2;
 	}
 
@@ -164,6 +165,7 @@ main (int argc,
 	restart_prime = argc == 3 && g_strcmp0 (argv[2], "restart-prime") == 0;
 	restart_second = argc == 3 && g_strcmp0 (argv[2], "restart-second") == 0;
 	offline_save_draft = argc == 3 && g_strcmp0 (argv[2], "offline-save-draft") == 0;
+	offline_expunge_roundtrip = argc == 3 && g_strcmp0 (argv[2], "offline-expunge-roundtrip") == 0;
 
 	/* The harness points these at the scratch tree. Camel keeps a summary
 	 * database and a message cache for each service in them. The real XDG
@@ -532,6 +534,93 @@ main (int argc,
 		folder_free_uids (drafts, drafts_uids);
 
 		g_object_unref (drafts);
+		return 0;
+	}
+
+	/* `offline-expunge-roundtrip` mode: item 176(b)'s offline-journal fix
+	 * for `expunge_sync`. `CAMEL_MESSAGE_DELETED` is already a durable
+	 * local mark (see `expunge.rs`'s module doc): a row stays marked until
+	 * a server write actually removes it, and every walk of the summary,
+	 * including the one `synchronize_sync` runs, finds a previously marked
+	 * row again. So unlike a save-a-draft, no new local record is needed
+	 * here, only that `expunge_sync` not fail outright while offline. This
+	 * mode goes offline, marks the first inbox message deleted (after, not
+	 * before: `camel_offline_store_set_online_sync` itself synchronizes
+	 * every open folder as a side effect, while still connected for a
+	 * moment before it actually disconnects, so marking a row dirty first
+	 * would let that call alone flush it, proving nothing about the
+	 * offline path), calls `camel_folder_expunge_sync`, reports whether
+	 * that call itself succeeded and the inbox listing right after, then
+	 * goes back online with no explicit synchronize call (the same
+	 * generic EDS reconnect flush that `offline-roundtrip` above already
+	 * proved exists) and reports the listing again, to see whether the
+	 * deferred removal reached the server. */
+	if (offline_expunge_roundtrip) {
+		GPtrArray *uids;
+		gchar *expunge_uid;
+		CamelMessageInfo *delete_info;
+		GError *expunge_error = NULL;
+
+		inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
+		if (!inbox)
+			return functional_fail ("offline-expunge-inbox", error);
+		if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
+			return functional_fail ("offline-expunge-refresh", error);
+
+		uids = folder_dup_uids (inbox);
+		if (uids->len == 0) {
+			folder_free_uids (inbox, uids);
+			return functional_fail ("offline-expunge-no-message", NULL);
+		}
+		expunge_uid = g_strdup (uids->pdata[0]);
+		folder_free_uids (inbox, uids);
+		g_print ("offline-expunge-uid=%s\n", expunge_uid);
+
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), FALSE, NULL, &error)) {
+			g_free (expunge_uid);
+			return functional_fail ("offline-expunge-go-offline", error);
+		}
+		g_print ("went-offline=1\n");
+
+		delete_info = camel_folder_get_message_info (inbox, expunge_uid);
+		if (!delete_info) {
+			g_free (expunge_uid);
+			return functional_fail ("offline-expunge-get-message-info", NULL);
+		}
+		camel_message_info_set_flags (delete_info, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DELETED);
+		g_clear_object (&delete_info);
+
+		if (camel_folder_expunge_sync (inbox, NULL, &expunge_error)) {
+			g_print ("offline-expunge-succeeded=1\n");
+		} else {
+			g_print ("offline-expunge-succeeded=0\n");
+			g_print ("offline-expunge-error=%s\n",
+				 expunge_error ? expunge_error->message : "(no detail)");
+			g_clear_error (&expunge_error);
+		}
+
+		uids = folder_dup_uids (inbox);
+		g_print ("inbox-count-after-offline-expunge=%u\n", uids->len);
+		folder_free_uids (inbox, uids);
+
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), TRUE, NULL, &error)) {
+			g_free (expunge_uid);
+			return functional_fail ("offline-expunge-go-online", error);
+		}
+		g_print ("went-online=1\n");
+
+		if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
+			g_free (expunge_uid);
+			return functional_fail ("offline-expunge-refresh-after", error);
+		}
+		uids = folder_dup_uids (inbox);
+		g_print ("inbox-count-after-reconnect=%u\n", uids->len);
+		folder_free_uids (inbox, uids);
+
+		g_free (expunge_uid);
+		g_object_unref (inbox);
 		return 0;
 	}
 

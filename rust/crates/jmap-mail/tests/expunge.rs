@@ -55,7 +55,7 @@ use eds_sys::{
     CAMEL_MESSAGE_DELETED, CamelFolder, CamelFolderClass, camel_folder_expunge_sync,
     camel_folder_get_folder_summary, camel_folder_get_message_count,
     camel_folder_refresh_info_sync, camel_folder_summary_get, camel_folder_synchronize_sync,
-    camel_message_info_set_flags,
+    camel_message_info_get_flags, camel_message_info_set_flags,
 };
 use gio_sys::{G_IO_ERROR_CANCELLED, g_cancellable_cancel, g_cancellable_new, g_io_error_quark};
 use glib_sys::{GError, GFALSE};
@@ -604,10 +604,11 @@ fn synchronising_without_expunge_leaves_the_deleted_rows_alone() {
 }
 
 #[test]
-fn expunging_a_folder_of_a_store_that_is_not_connected_fails() {
-    // Camel cannot be left to guess the result. An expunge that answers TRUE
-    // without a connection would report the user's deletions as carried out
-    // when they were not.
+fn expunging_a_folder_of_a_store_that_is_not_connected_succeeds_locally() {
+    // ROADMAP item 176(b): an offline Expunge or Empty Trash must not fail
+    // outright, the same as a keyword change left for a later synchronise.
+    // The row stays marked deleted and in the folder; only the server write
+    // is deferred, so nothing here claims a removal that did not happen.
     let server = MockServer::builder().start();
     let account_id = server.account_id();
     let inbox_id = {
@@ -631,7 +632,7 @@ fn expunging_a_folder_of_a_store_that_is_not_connected_fails() {
 
     let account = Account::open();
     let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
-    account.connect(MailSync::new(client, account_id));
+    account.connect(MailSync::new(client, account_id.clone()));
     let inbox = open(&account, "Inbox");
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: a live folder of ours and a writable out-parameter.
@@ -655,9 +656,38 @@ fn expunging_a_folder_of_a_store_that_is_not_connected_fails() {
     // SAFETY: as above.
     let ok = unsafe { camel_folder_expunge_sync(inbox, ptr::null_mut(), &mut error) };
     let answered = Expunged::new(ok, error);
+    answered.expect_ok();
 
-    assert!(!answered.ok, "a disconnected store cannot expunge anything");
-    assert!(!answered.error.is_null(), "a failure with no error set");
+    assert_eq!(
+        rows_of(inbox),
+        1,
+        "the row must stay in the folder while offline: removal happens \
+         only after a server write confirms it"
+    );
+    // SAFETY: a live summary with a row for the listed message.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(inbox);
+        let info = camel_folder_summary_get(summary, uid_c.as_ptr());
+        assert_ne!(
+            camel_message_info_get_flags(info) & CAMEL_MESSAGE_DELETED,
+            0,
+            "the row must stay marked deleted so a later call finds it again"
+        );
+        g_object_unref(info.cast());
+    }
+    {
+        let state = server.state();
+        let state = state.lock().unwrap();
+        assert!(
+            state
+                .account(&account_id)
+                .unwrap()
+                .emails
+                .get(&uid)
+                .is_some(),
+            "a disconnected store must not have reached the server"
+        );
+    }
     // SAFETY: the reference `camel_store_get_folder_sync` handed over.
     unsafe { g_object_unref(inbox.cast()) };
 }
