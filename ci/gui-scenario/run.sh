@@ -213,6 +213,15 @@ run_scenario() {
 			# Message/Mark As action and rely on mark-seen staying on.
 			"${session_env[@]}" gsettings set org.gnome.evolution.mail mark-seen false
 		fi
+		if [ "$name" = "mail-vcard-photo-fetch-remote-content" ]; then
+			# This scenario measures a sender-supplied vCard photo URL with
+			# the user's "Load remote content" setting already on, so it
+			# must be set before Evolution starts: flipping it live while a
+			# message is open makes Evolution reformat that message on its
+			# own, which is not a clean measurement.
+			"${session_env[@]}" gsettings set \
+				org.gnome.evolution.mail image-loading-policy always
+		fi
 		"${session_env[@]}" openbox >"$run_dir/openbox.log" 2>&1 &
 		PIDS+=($!)
 
