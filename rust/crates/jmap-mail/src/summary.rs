@@ -129,7 +129,7 @@ use jmap_mail_sync::MessageSummary;
 use jmap_proto::{Id, State};
 
 use crate::changes::Changes;
-use crate::folder_info::c_string;
+use crate::folder_info::{c_string, sanitized};
 use crate::message_info::{
     clear_pending_write, message_info_type, new_message_info, update_message_info,
 };
@@ -680,9 +680,13 @@ pub unsafe fn apply_listing(
     summary: *mut CamelFolderSummary,
     messages: &[MessageSummary],
 ) -> Changes {
-    let listed: BTreeSet<&str> = messages
+    // The stored row is keyed on the sanitized uid (`c_string`), so the
+    // membership test below must compare against that same form: a raw id
+    // the sanitizer rewrites would otherwise never match its own row, and
+    // every listing would look like a removal and a fresh arrival of it.
+    let listed: BTreeSet<String> = messages
         .iter()
-        .map(|message| message.uid.as_str())
+        .map(|message| sanitized(message.uid.as_str()).into_owned())
         .collect();
     let mut changes = Changes::new();
 
@@ -775,7 +779,7 @@ unsafe fn remove_row(summary: *mut CamelFolderSummary, uid: &str, changes: &mut 
 /// `summary` must be live and locked.
 unsafe fn remove_absent(
     summary: *mut CamelFolderSummary,
-    listed: &BTreeSet<&str>,
+    listed: &BTreeSet<String>,
     changes: &mut Changes,
 ) {
     // SAFETY: `summary_dup_uids` gives a snapshot that the caller owns, with

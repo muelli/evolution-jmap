@@ -209,6 +209,35 @@ fn a_listing_becomes_the_folders_rows() {
     }
 }
 
+/// A listing is a poll: Camel redraws the message list for every uid a
+/// refresh names as added or removed, so an unchanged mailbox must report no
+/// change at all. An `Email` id with a NUL, CR or LF (RFC 8621 §2 forbids one,
+/// but a non-conforming server could still send it) is stored under a
+/// rewritten uid (`c_string`'s U+FFFD substitution, see `folder_info.rs`).
+/// The set this function builds to find rows the listing no longer names must
+/// use that same rewritten form, or such a row never matches its own listing
+/// and flaps: removed and immediately re-added, every single refresh.
+#[test]
+fn an_id_that_needs_sanitizing_does_not_flap_on_every_listing() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+
+    // SAFETY: `folder` is live, and so is the summary borrowed from it.
+    unsafe {
+        let summary = summary_of(folder);
+        let listing = [message("M1001\nInjected")];
+        apply_listing(summary, &listing);
+        assert_eq!(camel_folder_summary_count(summary), 1);
+
+        let changes = apply_listing(summary, &listing);
+        assert!(
+            changes.is_empty(),
+            "an unchanged listing reported a change for an id the sanitizer rewrites"
+        );
+        g_object_unref(folder.cast());
+    }
+}
+
 /// A row that does not know its own summary cannot tell Camel about a later
 /// flag change: `camel_message_info_update_summary_and_folder` reads the
 /// back-pointer first and does nothing at all when it is NULL, so the
