@@ -116,6 +116,7 @@ comment of each file explains what the file asserts and why.
 | `functional-cal-scheduling` | Which party sends the invitations of a meeting to the guests. |
 | `functional-cal-discard-alarm` | A dismissed reminder becomes `ACKNOWLEDGED` on the alarm and `acknowledged` on the server, for a single event and for an occurrence of a series. |
 | `functional-mail` | Camel loads the provider through its `.urls` file, opens the store and lists the Inbox. |
+| `functional-mail-offline-expunge` | A message deleted and expunged while offline succeeds locally and reaches the server once the store goes back online, with no explicit synchronize call. |
 | `functional-transport` | Camel sends through the transport that the identity names. A transport without an `[Authentication]` group cannot send. |
 | `functional-config-lookup` | The "Look Up Account Details" worker (`JmapConfigLookup`), including OAuth 2.0 discovery, against a real `EConfigLookup`. |
 | `functional-collection` | `evolution-source-registry` loads `module-jmap-backend.so` and creates the child sources of a collection account. |

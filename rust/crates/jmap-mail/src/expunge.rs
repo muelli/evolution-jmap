@@ -47,6 +47,15 @@
 //!
 //! The call [`observe`]s the `cancellable`. A stop is a failure of the walk. The
 //! rows before the stop are removed, and the rows after it stay marked.
+//!
+//! ## Offline
+//!
+//! `JmapStore::trash_message`/`expunge_message` fail with `StoreError::
+//! Disconnected` with no connection. This walk treats that failure as "write
+//! it later", not as a failure of the walk: it leaves the row marked and moves
+//! to the next one. A later walk, whether the user's own or the generic
+//! reconnect flush `CamelOfflineStore` runs, finds the row again and writes
+//! the removal then.
 
 use std::ffi::{CStr, CString};
 
@@ -206,6 +215,15 @@ pub(crate) unsafe fn expunge_folder(
                 unsafe { camel_folder_summary_remove_uid(summary, uid.as_ptr()) };
                 changes.remove(text);
             }
+            // Offline: there is no connection to write the removal to. The row
+            // stays marked deleted, the same durable local record that made
+            // this walk read the full summary instead of a changed list (the
+            // module doc above). The next walk here, whether the user's own
+            // or `synchronize_sync`'s automatic reconnect flush, finds the row
+            // again and writes the removal then. This is not a failure: the
+            // user's Expunge or Empty Trash succeeds locally, the same as a
+            // keyword change left for later.
+            Err(StoreError::Disconnected) => {}
             Err(problem) => {
                 failure.get_or_insert(problem);
             }
