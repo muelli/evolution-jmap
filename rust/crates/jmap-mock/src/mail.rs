@@ -2181,6 +2181,9 @@ pub struct EmailSeed {
     pub headers: Vec<EmailHeader>,
     /// (blob id, filename, content type)
     pub attachments: Vec<(Id, String, String)>,
+    /// Whether `text_body` is HTML. Picks the raw message's body part
+    /// content type. Default is `false`, a plain text body.
+    pub html: bool,
 }
 
 impl EmailSeed {
@@ -2203,11 +2206,18 @@ impl EmailSeed {
             keywords: Vec::new(),
             headers: Vec::new(),
             attachments: Vec::new(),
+            html: false,
         }
     }
 
     pub fn keyword(mut self, keyword: &str) -> Self {
         self.keywords.push(keyword.to_owned());
+        self
+    }
+
+    /// Mark `text_body` as HTML, not plain text.
+    pub fn html_body(mut self) -> Self {
+        self.html = true;
         self
     }
 
@@ -2263,8 +2273,9 @@ fn rfc5322(id: &Id, seed: &EmailSeed, blobs: &BTreeMap<Id, Blob>) -> String {
     }
     message.push_str(&format!("Message-ID: <{id}@mock.invalid>\r\n"));
     message.push_str("MIME-Version: 1.0\r\n");
+    let body_type = if seed.html { "text/html" } else { "text/plain" };
     if seed.attachments.is_empty() {
-        message.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+        message.push_str(&format!("Content-Type: {body_type}; charset=utf-8\r\n"));
         message.push_str("Content-Transfer-Encoding: 8bit\r\n");
         for header in &seed.headers {
             message.push_str(&format!("{}: {}\r\n", header.name, header.value));
@@ -2284,7 +2295,7 @@ fn rfc5322(id: &Id, seed: &EmailSeed, blobs: &BTreeMap<Id, Blob>) -> String {
     }
     message.push_str("\r\n");
     message.push_str(&format!("--{boundary}\r\n"));
-    message.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    message.push_str(&format!("Content-Type: {body_type}; charset=utf-8\r\n"));
     message.push_str("Content-Transfer-Encoding: 8bit\r\n\r\n");
     message.push_str(&seed.text_body.replace('\n', "\r\n"));
     message.push_str("\r\n");

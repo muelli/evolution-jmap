@@ -61,6 +61,9 @@ struct SeedEmail {
     subject: String,
     text_body: String,
     received_at: String,
+    /// Whether `text_body` is HTML, not plain text.
+    #[serde(default)]
+    body_is_html: bool,
     #[serde(default)]
     to: Vec<SeedAddress>,
     #[serde(default)]
@@ -602,6 +605,9 @@ fn seed_from_file(server: &MockServer, path: &str) -> Result<(), String> {
                 &email_seed.text_body,
                 &email_seed.received_at,
             );
+            if email_seed.body_is_html {
+                seed = seed.html_body();
+            }
             if !email_seed.to.is_empty() {
                 seed.to = email_seed
                     .to
