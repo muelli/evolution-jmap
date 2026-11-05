@@ -44,12 +44,9 @@ pub unsafe fn load(type_module: *mut GTypeModule) {
             register_dynamic::<external_photo::display_ext::JmapExternalPhotoExtension>(
                 type_module,
             );
-            register_dynamic::<external_photo::mail_display_ext::JmapMailVcardPhotoExtension>(
-                type_module,
-            );
         }
         tracing::trace!(
-            "jmap-ui loaded: vacation, server filters, scheduled send, snooze, undo of a delete and the external photo placeholders (address book and mail) registered"
+            "jmap-ui loaded: vacation, server filters, scheduled send, snooze, undo of a delete and the address book external photo placeholder registered"
         );
     });
 }
