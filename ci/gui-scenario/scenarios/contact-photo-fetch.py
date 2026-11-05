@@ -21,6 +21,14 @@ to be.
 Third, that clicking the "Load image" button is the one thing that makes a
 request happen, and that it makes exactly one, not zero and not a retry
 storm.
+
+Fourth, item 178's own check: Evolution's contact formatter pastes a vCard's
+PHOTO URI into the page without escaping it, so a crafted URI can break out
+of the `src="..."` attribute and inject arbitrary markup, including a forged
+button of the placeholder's own class and an attacker-chosen value. Before
+the fix, that forged button reached the same native click handler as the
+real one, because the class was a fixed string. This asserts a click on
+such a forged button makes no request.
 """
 
 import time
@@ -40,12 +48,30 @@ from scenario import (
 )
 
 NAME = "Helen Httpphoto"
-CARDS = [cp.card("photo-fetch", NAME, cp.PHOTO_URL)]
 WAIT_SECONDS = 10
 # The label of the placeholder, as jmap-ui writes it in English.
 PLACEHOLDER = "Externally hosted image"
 # The text of the button that fetches the photo, as jmap-ui writes it.
 LOAD_BUTTON = "Load image"
+
+# Item 178: a contact whose PHOTO URI breaks out of the formatter's
+# unescaped `src="..."` attribute and injects a forged button of the
+# placeholder's own class, pointing at a different, "evil" URL.
+FORGED_NAME = "Forged Load Button Test"
+FORGED_LOAD_TEXT = "Forged Load image"
+EVIL_PATH = "/forged-ab.png"
+EVIL_URL = f"http://127.0.0.1:{cp.PHOTO_PORT}{EVIL_PATH}"
+FORGED_PHOTO_URI = (
+    f'{cp.PHOTO_URL}">'
+    f'<button type="button" class="__jmap-external-photo-load" '
+    f'value="{EVIL_URL}">{FORGED_LOAD_TEXT}</button>'
+    '<img src="'
+)
+
+CARDS = [
+    cp.card("photo-fetch", NAME, cp.PHOTO_URL),
+    cp.card("forged-load-button", FORGED_NAME, FORGED_PHOTO_URI),
+]
 
 
 def run():
@@ -90,6 +116,20 @@ def run():
     if photos.requests != ["/photo.png"]:
         raise ScenarioFailure(f"the click made an unexpected request shape: {photos.requests}")
     say(f"photo server: exactly one request after the click: {photos.requests}")
+
+    cp.preview(FORGED_NAME, "forged-preview")
+    time.sleep(WAIT_SECONDS)
+    screenshot("forged-after-wait")
+    forged_button = wait_find(None, FORGED_LOAD_TEXT, showing=True)
+    do_action(forged_button)
+    time.sleep(2)
+    screenshot("forged-after-click")
+    if EVIL_PATH in photos.requests:
+        raise ScenarioFailure(
+            f"a forged load button injected through a vCard field fetched "
+            f"its URL: {photos.requests}"
+        )
+    say("address book preview: a forged load button made no request")
 
     expect_no_errors()
     expect_no_errors("dbus.log")

@@ -219,11 +219,18 @@ mod tests {
 
     /// The two placeholders must never collide: a mail that also opens the
     /// standalone address book preview for the same contact must not have
-    /// one placeholder's script hide or replace the other's elements.
+    /// one placeholder's script hide or replace the other's elements. The
+    /// address book's load class is a fresh token per render, not a fixed
+    /// string (see `script::LOAD_CLASS_PREFIX`), so this checks the one
+    /// fixed thing that stays true for every token it could ever produce.
     #[test]
     fn the_classes_differ_from_the_address_book_placeholder() {
         use crate::external_photo::script;
         assert_ne!(PLACEHOLDER_CLASS, script::PLACEHOLDER_CLASS);
-        assert_ne!(LOAD_CLASS, script::LOAD_CLASS);
+        assert!(
+            !LOAD_CLASS.starts_with(script::LOAD_CLASS_PREFIX),
+            "the mail placeholder's fixed class could collide with an address \
+             book placeholder's token class"
+        );
     }
 }
