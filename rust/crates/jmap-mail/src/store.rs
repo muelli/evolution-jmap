@@ -573,10 +573,17 @@ impl JmapStore {
         // generation during this request. Its write is more current than this
         // answer, which was correct when asked but is now stale. Keep the
         // edit, and give the caller the tree that the edit wrote.
-        let stale = matches!(
-            (&*guard, baseline_generation),
-            (Some(current), Some(baseline)) if current.generation != baseline
-        );
+        //
+        // A `None` baseline (this request started with no listing at all)
+        // is stale too if the slot now holds one. Two first listings can
+        // race the same empty slot; whichever populates it first can then
+        // be edited, and the other has no generation to notice that. Its
+        // own answer must not overwrite a slot that is no longer empty.
+        let stale = match (&*guard, baseline_generation) {
+            (Some(current), Some(baseline)) => current.generation != baseline,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
         let (tree, persisted_state) = if stale {
             match guard.as_ref() {
                 Some(current) => (Arc::clone(&current.tree), current.state.clone()),
