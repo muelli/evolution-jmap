@@ -30,6 +30,7 @@
 //!
 //! [`into_raw`]: FolderInfoChain::into_raw
 
+use std::borrow::Cow;
 use std::ffi::CString;
 use std::ptr;
 
@@ -217,6 +218,21 @@ fn count(count: u32) -> i32 {
     i32::try_from(count).unwrap_or(i32::MAX)
 }
 
+/// The rewrite [`c_string`] applies, as a plain Rust string.
+///
+/// Anything that stores a value through [`c_string`] and later tests a second
+/// value for equality with what is stored (for example, "is this id still in
+/// the mailbox the listing named?") must sanitize both sides with this same
+/// function, not compare a sanitized value against a raw one: the two would
+/// never match for a value this rewrite touches at all.
+pub(crate) fn sanitized(text: &str) -> Cow<'_, str> {
+    if text.contains(['\0', '\r', '\n']) {
+        Cow::Owned(text.replace(['\0', '\r', '\n'], "\u{fffd}"))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
 /// A Rust string as a C string, with any NUL, CR or LF rewritten.
 ///
 /// A JMAP string is a JSON string, so a mailbox name, subject or display name
@@ -231,9 +247,5 @@ fn count(count: u32) -> i32 {
 /// which is what lets the build above have no error path and therefore no
 /// half-built forest to clean up.
 pub(crate) fn c_string(text: &str) -> CString {
-    if text.contains(['\0', '\r', '\n']) {
-        return CString::new(text.replace(['\0', '\r', '\n'], "\u{fffd}"))
-            .expect("every NUL, CR and LF replaced leaves no NUL");
-    }
-    CString::new(text).expect("checked for NUL above")
+    CString::new(sanitized(text).into_owned()).expect("every NUL, CR and LF replaced leaves none")
 }
