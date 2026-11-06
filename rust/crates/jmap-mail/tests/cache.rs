@@ -330,7 +330,6 @@ fn a_uid_that_is_a_path_is_not_a_key() {
         "sub/dir",
         "/absolute",
         "with space",
-        "-leading-dash",
         "",
     ] {
         assert!(
@@ -358,14 +357,33 @@ fn a_uid_that_is_a_path_is_not_a_key() {
 
 /// RFC 8620 §1.2 defines a JMAP `Id` as 1 to 255 characters from
 /// `[A-Za-z0-9_-]`. So `_` and `-` inside a uid are not hostile, unlike a
-/// leading dash or a path separator. An ordinary id using `_` or `-` must
-/// still be cached.
+/// path separator. An ordinary id using `_` or `-` must still be cached.
 #[test]
 fn a_uid_with_underscore_or_dash_is_a_key() {
     let scratch = Scratch::new();
     let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
 
     for uid in ["M_1", "M-1", "under_score", "em-dash-id"] {
+        assert!(cache.store(uid, SOURCE, None), "{uid:?} was not cached");
+        assert_eq!(
+            cache.load(uid, None).as_deref(),
+            Some(SOURCE),
+            "{uid:?} did not read back"
+        );
+    }
+}
+
+/// RFC 8620 §1.2 only asks a server to try to avoid a leading dash; it is not
+/// part of the id's character set. `camel_data_cache` always joins the key
+/// onto its own directory, never a bare argument a leading dash could be
+/// misread as an option for, so a server that ignores the SHOULD must still
+/// be cached.
+#[test]
+fn a_uid_with_a_leading_dash_is_a_key() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+
+    for uid in ["-leading-dash", "-1"] {
         assert!(cache.store(uid, SOURCE, None), "{uid:?} was not cached");
         assert_eq!(
             cache.load(uid, None).as_deref(),

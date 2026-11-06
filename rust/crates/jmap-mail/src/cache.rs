@@ -743,15 +743,15 @@ fn claimed(listed: Option<u32>) -> Option<u32> {
 /// this cache can create.
 ///
 /// This is exactly the grammar of the RFC: one to 255 characters of
-/// `A-Za-z0-9_-`, without a dash at the start. Each part of it is necessary.
-/// The character set keeps a key in one directory. The RFC itself bans the
-/// leading dash, so that an id is not read as a command-line option. The ban on
-/// the empty string stops a key that names the directory itself. The character
-/// set refuses `.` and `..`, the two most dangerous names.
+/// `A-Za-z0-9_-`. Each part of it is necessary. The character set keeps a key
+/// in one directory and refuses `.` and `..`, the two most dangerous names.
+/// The ban on the empty string stops a key that names the directory itself.
+/// The RFC only asks a server to try to avoid a leading dash, so that an id
+/// is not read as a command-line option; this cache never passes a key as a
+/// bare argument, so a leading dash is not refused here.
 fn valid_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 255
-        && !key.starts_with('-')
         && key
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
