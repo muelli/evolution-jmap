@@ -19,6 +19,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::concurrency::ConcurrencyLimiter;
 use crate::error::Error;
 use crate::limits::{self, IdBudget};
 use crate::resolver::{NoSrvResolver, Resolver};
@@ -252,6 +253,8 @@ impl ClientBuilder {
             max_rate_limit_retries: self.max_rate_limit_retries,
             max_retry_after: self.max_retry_after,
             id_budget: self.id_budget,
+            request_limiter: ConcurrencyLimiter::new(None),
+            upload_limiter: ConcurrencyLimiter::new(None),
         };
         client.refresh_session()?;
         Ok(client)
@@ -289,6 +292,8 @@ pub struct Client {
     pub(crate) max_rate_limit_retries: u32,
     pub(crate) max_retry_after: Duration,
     id_budget: IdBudget,
+    pub(crate) request_limiter: ConcurrencyLimiter,
+    pub(crate) upload_limiter: ConcurrencyLimiter,
 }
 
 impl std::fmt::Debug for Client {
@@ -383,6 +388,10 @@ impl Client {
         if let Ok(mut last_state) = self.last_session_state.lock() {
             *last_state = Some(session.state.clone());
         }
+        self.request_limiter
+            .set_limit(session.max_concurrent_requests());
+        self.upload_limiter
+            .set_limit(session.max_concurrent_upload());
         self.session = Some(session);
         Ok(())
     }
@@ -977,7 +986,7 @@ impl Client {
     /// Return the active cancellation flag for the current request.
     ///
     /// Prioritizes thread-local cancel scopes over the client-wide flag.
-    fn cancel_for_request(&self) -> Option<CancelFlag> {
+    pub(crate) fn cancel_for_request(&self) -> Option<CancelFlag> {
         crate::transport::observed().or_else(|| self.cancel.clone())
     }
 
@@ -1023,6 +1032,8 @@ impl Client {
         if cancel.as_ref().is_some_and(CancelFlag::is_cancelled) {
             return Err(Error::Cancelled);
         }
+
+        let _permit = self.request_limiter.acquire(cancel.as_ref())?;
 
         let mut headers: Vec<(String, String)> = vec![("Accept".to_owned(), accept.to_owned())];
         if let Some(content_type) = content_type {

@@ -811,6 +811,9 @@ impl Client {
             return Err(Error::TooLarge { size, limit });
         }
 
+        let cancel = self.cancel_for_request();
+        let _upload_permit = self.upload_limiter.acquire(cancel.as_ref())?;
+
         let url = self
             .session()
             .upload_url

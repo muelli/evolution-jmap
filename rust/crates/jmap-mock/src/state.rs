@@ -60,6 +60,10 @@ pub struct ServerState {
     pub size_request: Option<u64>,
     /// Optional `maxSizeUpload` in bytes; `None` means unlimited.
     pub size_upload: Option<u64>,
+    /// Optional `maxConcurrentRequests`; `None` means unlimited.
+    pub max_concurrent_requests: Option<u64>,
+    /// Optional `maxConcurrentUpload`; `None` means unlimited.
+    pub max_concurrent_upload: Option<u64>,
     /// Route `/.well-known/jmap` to `/jmap/session` in auth redirect tests.
     pub session_via_redirect: bool,
     /// Optional redirect origin for `GET /.well-known/jmap`.
@@ -168,6 +172,8 @@ impl ServerState {
             query_hides_limit: false,
             size_request: Some(crate::DEFAULT_SIZE_REQUEST),
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
+            max_concurrent_requests: Some(4),
+            max_concurrent_upload: Some(4),
             session_via_redirect: false,
             well_known_redirect_to: None,
             advertise_origin: None,

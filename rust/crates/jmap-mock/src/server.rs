@@ -129,6 +129,8 @@ pub struct MockServerBuilder {
     query_page_size: Option<u64>,
     size_request: Option<u64>,
     size_upload: Option<u64>,
+    max_concurrent_requests: Option<u64>,
+    max_concurrent_upload: Option<u64>,
     well_known_redirect_to: Option<String>,
     advertise_origin: Option<String>,
     download_via_redirect_to: Option<String>,
@@ -290,6 +292,18 @@ impl MockServerBuilder {
     /// Omit `maxSizeUpload` and accept any upload size.
     pub fn no_size_upload(mut self) -> Self {
         self.size_upload = None;
+        self
+    }
+
+    /// Set `maxConcurrentRequests` in the core session capability.
+    pub fn max_concurrent_requests(mut self, limit: u64) -> Self {
+        self.max_concurrent_requests = Some(limit);
+        self
+    }
+
+    /// Set `maxConcurrentUpload` in the core session capability.
+    pub fn max_concurrent_upload(mut self, limit: u64) -> Self {
+        self.max_concurrent_upload = Some(limit);
         self
     }
 
@@ -525,6 +539,8 @@ impl MockServerBuilder {
         state.query_hides_limit = self.faults.query_hides_limit;
         state.size_request = self.size_request;
         state.size_upload = self.size_upload;
+        state.max_concurrent_requests = self.max_concurrent_requests;
+        state.max_concurrent_upload = self.max_concurrent_upload;
         state.session_via_redirect = self.faults.session_via_redirect;
         state.well_known_redirect_to = self.well_known_redirect_to.clone();
         state.advertise_origin = self.advertise_origin.clone();
@@ -621,6 +637,8 @@ impl MockServer {
             query_page_size: None,
             size_request: Some(DEFAULT_SIZE_REQUEST),
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
+            max_concurrent_requests: Some(4),
+            max_concurrent_upload: Some(4),
             well_known_redirect_to: None,
             advertise_origin: None,
             download_via_redirect_to: None,
@@ -1353,12 +1371,16 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
 
     // Build `core`. Omit optional limits when unset.
     let mut core = json!({
-        "maxConcurrentUpload": 4,
-        "maxConcurrentRequests": 4,
         "maxObjectsInGet": state.objects_in_get(),
         "maxObjectsInSet": 128,
         "collationAlgorithms": ["i;ascii-casemap"],
     });
+    if let Some(limit) = state.max_concurrent_requests {
+        core["maxConcurrentRequests"] = json!(limit);
+    }
+    if let Some(limit) = state.max_concurrent_upload {
+        core["maxConcurrentUpload"] = json!(limit);
+    }
     if let Some(size_request) = state.size_request {
         core["maxSizeRequest"] = json!(size_request);
     }
