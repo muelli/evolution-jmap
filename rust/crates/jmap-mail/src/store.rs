@@ -657,18 +657,28 @@ impl JmapStore {
     /// nothing, the same way [`crate::cache::MessageCache::open`] relies on
     /// `camel_data_cache_new` to make its own directory rather than assume
     /// Camel already did.
+    ///
+    /// Sets the directory to 0700 and the cache file to 0600, matching
+    /// `camel_data_cache`'s own directories and files (security audit item
+    /// 167(a), row S7-3): a bare `create_dir_all`/`write` would leave both at
+    /// the process umask, typically readable by every local account.
     fn persist_folders_to_disk(&self, state: &State, tree: &FolderTree) {
+        use std::os::unix::fs::PermissionsExt;
+
         let Some(path) = self.folder_tree_cache_path() else {
             return;
         };
         if let Some(directory) = path.parent() {
             let _ = std::fs::create_dir_all(directory);
+            let _ =
+                std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700));
         }
         let mut tmp = path.clone().into_os_string();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
         let json = folder_tree_to_json(state, tree);
         if std::fs::write(&tmp, json)
+            .and_then(|()| std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)))
             .and_then(|()| std::fs::rename(&tmp, &path))
             .is_err()
         {
