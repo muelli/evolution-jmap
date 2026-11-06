@@ -146,6 +146,34 @@ impl MailSync {
         Ok((response.state, FolderTree::from_mailboxes(&response.list)?))
     }
 
+    /// [`MailSync::folder_tree`], merged with every account this login's
+    /// session shares mail from (ROADMAP item 163's next slice after
+    /// [`FolderTree::merge_shared`]).
+    ///
+    /// Reads each shared account's own `Mailbox/get` directly through this
+    /// account's client, the same way [`MailSync::folder_tree`] reads the
+    /// primary account's: a share grants access to the client's session, not
+    /// a separate connection. The returned state is this account's own; a
+    /// shared account's state is not kept, so a later change to a shared
+    /// mailbox needs a fresh call to this function, not
+    /// [`MailSync::folder_tree_since`]. Wiring this into `get_folder_info_sync`
+    /// and the store's refresh loop is its own, later claim.
+    pub fn folder_tree_with_shared(&self) -> Result<(State, FolderTree), SyncError> {
+        let (state, tree) = self.folder_tree()?;
+        let shared = shared_mail_accounts(self.client.session());
+        if shared.is_empty() {
+            return Ok((state, tree));
+        }
+
+        let mut pairs = Vec::with_capacity(shared.len());
+        for account in shared {
+            let response = self.client.mailbox_get(&account.id)?;
+            let shared_tree = FolderTree::from_mailboxes(&response.list)?;
+            pairs.push((account, shared_tree));
+        }
+        Ok((state, tree.merge_shared(&pairs)))
+    }
+
     /// The folder tree again, but only if the mailboxes of the account changed
     /// after `since` (the refresh part of `get_folder_info_sync`).
     ///
