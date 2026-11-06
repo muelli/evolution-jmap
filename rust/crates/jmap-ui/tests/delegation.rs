@@ -12,7 +12,8 @@ use jmap_proto::Id;
 use jmap_proto::principals::Principal;
 use jmap_ui::delegation::{
     AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, PrincipalSearch,
-    account_delegates, apply_address_book_delegation, apply_calendar_delegation, search_principals,
+    account_delegates, apply_address_book_delegation, apply_calendar_delegation,
+    commit_address_book_delegation, commit_calendar_delegation, search_principals,
 };
 
 #[test]
@@ -230,4 +231,85 @@ fn search_principals_falls_back_to_manual_entry_when_the_server_refuses_the_quer
 
     let found = search_principals(&alice, &account_id, "bob").unwrap();
     assert_eq!(found, PrincipalSearch::QueryRefused);
+}
+
+#[test]
+fn committing_a_calendar_level_grants_it_on_every_own_calendar() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .bearer_token("alice-token")
+        .bearer_token_as("bob-token", bob.clone())
+        .start();
+    let account_id = server.account_id();
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.seed_calendar("Work", false);
+        account.seed_calendar("Home", false);
+    }
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+    let bob_client = Client::connect(server.origin(), Credentials::bearer("bob-token")).unwrap();
+
+    commit_calendar_delegation(&alice, &account_id, &bob, CalendarDelegationLevel::Reviewer)
+        .unwrap();
+
+    let bob_calendars = bob_client.calendars(&account_id).unwrap();
+    assert_eq!(bob_calendars.len(), 2, "both calendars must be shared");
+    for calendar in &bob_calendars {
+        let rights = calendar.my_rights.clone().unwrap();
+        assert_eq!(rights.may_read_items, Some(true));
+        assert_ne!(rights.may_write_own, Some(true), "Reviewer is read only");
+    }
+
+    commit_calendar_delegation(&alice, &account_id, &bob, CalendarDelegationLevel::None).unwrap();
+
+    match bob_client.calendars(&account_id) {
+        Err(Error::Method(method_error)) => assert_eq!(method_error.error_type, "forbidden"),
+        other => panic!("expected forbidden after revoke, got {other:?}"),
+    }
+}
+
+#[test]
+fn committing_an_address_book_level_grants_it_on_every_own_book() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .bearer_token("alice-token")
+        .bearer_token_as("bob-token", bob.clone())
+        .start();
+    let account_id = server.account_id();
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.seed_address_book("Work", false);
+        account.seed_address_book("Personal", false);
+    }
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+    let bob_client = Client::connect(server.origin(), Credentials::bearer("bob-token")).unwrap();
+
+    commit_address_book_delegation(
+        &alice,
+        &account_id,
+        &bob,
+        AddressBookDelegationLevel::Author,
+    )
+    .unwrap();
+
+    let bob_books = bob_client.address_books(&account_id).unwrap();
+    assert_eq!(bob_books.len(), 2, "both address books must be shared");
+    for book in &bob_books {
+        let rights = book.my_rights.clone().unwrap();
+        assert_eq!(rights.may_write, Some(true));
+    }
+
+    commit_address_book_delegation(&alice, &account_id, &bob, AddressBookDelegationLevel::None)
+        .unwrap();
+
+    match bob_client.address_books(&account_id) {
+        Err(Error::Method(method_error)) => assert_eq!(method_error.error_type, "forbidden"),
+        other => panic!("expected forbidden after revoke, got {other:?}"),
+    }
 }

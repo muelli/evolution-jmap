@@ -116,6 +116,29 @@ pub fn apply_calendar_delegation(
     )
 }
 
+/// Apply `level` to `principal_id` on every one of `account_id`'s own
+/// calendars (`Calendar/get`, `ids: null`, then one `Calendar/set` update per
+/// calendar).
+///
+/// Section 5.5 of the design note grants a level across the account's own
+/// collections, not one calendar at a time, the write-side counterpart of
+/// how [`list_delegates`] already reads a principal's level back as the
+/// highest found on any of them.
+pub fn commit_calendar_delegation(
+    client: &Client,
+    account_id: &Id,
+    principal_id: &Id,
+    level: CalendarDelegationLevel,
+) -> Result<(), Error> {
+    for calendar in client.calendars(account_id)? {
+        let Some(calendar_id) = calendar.id else {
+            continue;
+        };
+        apply_calendar_delegation(client, account_id, &calendar_id, principal_id, level)?;
+    }
+    Ok(())
+}
+
 /// A delegation level offered for an address book.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AddressBookDelegationLevel {
@@ -179,6 +202,25 @@ pub fn apply_address_book_delegation(
     level: AddressBookDelegationLevel,
 ) -> Result<(), Error> {
     client.address_book_update(account_id, book_id, level.share_with_patch(principal_id))
+}
+
+/// Apply `level` to `principal_id` on every one of `account_id`'s own
+/// address books (`AddressBook/get`, `ids: null`, then one `AddressBook/set`
+/// update per book). The write-side counterpart of how [`list_delegates`]
+/// reads a principal's level back as the highest found on any of them.
+pub fn commit_address_book_delegation(
+    client: &Client,
+    account_id: &Id,
+    principal_id: &Id,
+    level: AddressBookDelegationLevel,
+) -> Result<(), Error> {
+    for book in client.address_books(account_id)? {
+        let Some(book_id) = book.id else {
+            continue;
+        };
+        apply_address_book_delegation(client, account_id, &book_id, principal_id, level)?;
+    }
+    Ok(())
 }
 
 /// One principal's calendar and address book access, read back from
