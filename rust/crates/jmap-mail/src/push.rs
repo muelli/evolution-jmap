@@ -228,6 +228,12 @@ impl FolderRefresh {
     /// for the book-keeping. Thus the pump thread of
     /// [`jmap_backend_core::push`] can safely call it.
     pub fn request(&self, work: Work) {
+        self.request_with(thread::Builder::new(), work);
+    }
+
+    /// The actual work of [`request`](Self::request), with the thread
+    /// builder as a parameter so a test can force a spawn failure.
+    fn request_with(&self, builder: thread::Builder, work: Work) {
         if work.is_empty() {
             return;
         }
@@ -245,8 +251,25 @@ impl FolderRefresh {
         }
         let inner = Arc::clone(&self.inner);
         // Detached, as the EWS update thread is. Nothing joins it, and nothing
-        // must join it (see the module docs).
-        thread::spawn(move || inner.run(work));
+        // must join it (see the module docs). `Builder::spawn`, not the bare
+        // `thread::spawn`, because the bare function panics this call's
+        // caller on failure instead of giving an error this code can recover
+        // from.
+        if let Err(error) = builder.spawn(move || inner.run(work)) {
+            tracing::error!(
+                %error,
+                "could not start a folder refresh worker; push is off for \
+                 this account until the next reconnect"
+            );
+            self.inner.spawn_failed();
+        }
+    }
+
+    /// Asks for a worker with a stack size that always fails to spawn, to
+    /// give tests a real, deterministic spawn failure.
+    #[cfg(test)]
+    fn request_doomed_to_fail_spawn(&self, work: Work) {
+        self.request_with(thread::Builder::new().stack_size(1 << 60), work);
     }
 
     /// Whether a pass runs or is pending. The tests have no other way to see
@@ -296,6 +319,14 @@ impl Inner {
             runs.running = false;
             return;
         }
+    }
+
+    /// Clears the running flag after [`FolderRefresh::request`] marked it but
+    /// the worker then failed to spawn. Without this, `running` stays set
+    /// forever, the same permanent, silent disabling of push that `run`'s own
+    /// `catch_unwind` above exists to avoid for a panic mid-pass.
+    fn spawn_failed(&self) {
+        *lock(&self.runs) = Runs::default();
     }
 }
 
@@ -714,6 +745,35 @@ mod tests {
                 thread::sleep(Duration::from_millis(5));
             }
         }
+
+        // SAFETY: this releases the last reference, which this test owns.
+        unsafe { g_object_unref(object) };
+    }
+
+    /// A worker that never started must not wedge the account's push
+    /// permanently. `request_doomed_to_fail_spawn` asks for a stack this
+    /// large on purpose: on Linux this always fails to spawn (`EAGAIN`),
+    /// the same technique the standard library's own thread tests use, so
+    /// this reproduces a real spawn failure instead of only asserting
+    /// against a mocked one.
+    #[test]
+    fn a_failed_worker_spawn_clears_running_so_a_later_request_still_starts_one() {
+        let object = plain_object();
+        let (gate, pass) = gated();
+        // SAFETY: a new object, and this test holds one reference.
+        let refresh = unsafe { FolderRefresh::new(object, pass) };
+
+        refresh.request_doomed_to_fail_spawn(ANY_WORK);
+        assert!(
+            !refresh.busy(),
+            "a spawn failure must clear `running`, or every later push only \
+             merges into a worker that does not exist"
+        );
+
+        refresh.request(ANY_WORK);
+        gate.await_start();
+        assert_eq!(gate.passes(), 1, "a later request must still start a worker");
+        gate.release_one();
 
         // SAFETY: this releases the last reference, which this test owns.
         unsafe { g_object_unref(object) };
