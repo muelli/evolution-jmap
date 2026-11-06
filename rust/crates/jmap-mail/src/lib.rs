@@ -164,6 +164,7 @@ pub mod message_info;
 pub mod module;
 pub mod oauth2;
 pub mod origin;
+pub mod pending_append_cache;
 pub mod provider;
 pub mod push;
 pub mod quota;

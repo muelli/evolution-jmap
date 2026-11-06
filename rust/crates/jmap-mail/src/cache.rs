@@ -428,152 +428,7 @@ impl MessageCache {
             return false;
         }
         let cache = self.lock();
-
-        // Two implementations of one contract: write `source` under `key`, and
-        // tell if the write succeeded. The 3.52-3.61 arm (see "The atomic
-        // write" in the module docs) writes directly to the final path and
-        // checks the result. The 3.62+ arm writes to a temporary name first.
-        // Thus a failed write leaves nothing under `key`, not a short file.
-
-        #[cfg(not(camel_data_cache_atomic))]
-        // SAFETY: `add` replaces an entry that is already under the key. The
-        // returned reference is ours, and `stream` releases it on each exit
-        // from this scope.
-        let stored = unsafe {
-            let mut error: *mut GError = ptr::null_mut();
-            let Some(stream) = Owned::from_raw(camel_data_cache_add(
-                cache.as_ptr(),
-                MESSAGES.as_ptr(),
-                key.as_ptr(),
-                &mut error,
-            )) else {
-                log_critical_for_message(
-                    uid,
-                    &format!("message {uid} could not be cached: {}", describe(error)),
-                );
-                g_clear_error(&mut error);
-                return false;
-            };
-
-            // The output stream is borrowed from `stream`, `source` is a live
-            // buffer of the given length, and the two out-parameters are
-            // locals.
-            let mut written: usize = 0;
-            let written_all = g_output_stream_write_all(
-                g_io_stream_get_output_stream(stream.as_ptr()),
-                // gio-sys gives the buffer the type `*mut`, but the C function
-                // takes a `const void *`. The cast agrees with the header.
-                source.as_ptr().cast_mut().cast(),
-                source.len(),
-                &mut written,
-                ptr::null_mut(),
-                &mut error,
-            ) != GFALSE;
-            // The close flushes. Thus a successful write with a failed close
-            // is still an incomplete entry. The close error goes into its own
-            // local, because GLib logs a critical when a second `g_set_error`
-            // writes to an out-parameter that is set. Report the write error
-            // first, because it tells the cause.
-            let mut on_close: *mut GError = ptr::null_mut();
-            let closed =
-                g_io_stream_close(stream.as_ptr(), ptr::null_mut(), &mut on_close) != GFALSE;
-            if error.is_null() {
-                error = on_close;
-            } else {
-                g_clear_error(&mut on_close);
-            }
-            let stored = written_all && closed && written == source.len();
-
-            if !stored {
-                log_critical_for_message(
-                    uid,
-                    &format!(
-                        "message {uid} was cached incompletely and has been dropped: {}",
-                        describe(error)
-                    ),
-                );
-                // This code cannot act on a failure of the removal.
-                camel_data_cache_remove(
-                    cache.as_ptr(),
-                    MESSAGES.as_ptr(),
-                    key.as_ptr(),
-                    ptr::null_mut(),
-                );
-            }
-            g_clear_error(&mut error);
-            stored
-        };
-
-        #[cfg(camel_data_cache_atomic)]
-        // SAFETY: `add_atomic` returns a stream open on a temporary file in the
-        // directory of the final file. This code owns the stream until it gives it to
-        // `commit_atomic` or `discard_atomic` below. Each of the two takes
-        // ownership of it: it closes the stream and releases the busy-bag
-        // reservation of `add_atomic`, for either result of the write.
-        let stored = unsafe {
-            let mut error: *mut GError = ptr::null_mut();
-            let Some(stream) = Owned::from_raw(camel_data_cache_add_atomic(
-                cache.as_ptr(),
-                MESSAGES.as_ptr(),
-                key.as_ptr(),
-                &mut error,
-            )) else {
-                log_critical_for_message(
-                    uid,
-                    &format!("message {uid} could not be cached: {}", describe(error)),
-                );
-                g_clear_error(&mut error);
-                return false;
-            };
-
-            // The output stream is borrowed from `stream`, and `source` is a
-            // live buffer of the given length. No close here: both calls
-            // below close the stream when they take ownership of it.
-            let mut written: usize = 0;
-            let written_all = g_output_stream_write_all(
-                g_io_stream_get_output_stream(stream.as_ptr()),
-                source.as_ptr().cast_mut().cast(),
-                source.len(),
-                &mut written,
-                ptr::null_mut(),
-                &mut error,
-            ) != GFALSE
-                && written == source.len();
-
-            let stored = if written_all {
-                // `into_raw` gives the stream to `commit_atomic`, which
-                // consumes it. A second release from the `Drop` of `stream`
-                // would free it twice. `commit_atomic` opens a stream on the
-                // renamed file. Only its presence is necessary, so
-                // `Owned::from_raw(..).is_some()` checks it and drops it.
-                Owned::from_raw(camel_data_cache_commit_atomic(
-                    cache.as_ptr(),
-                    stream.into_raw(),
-                    &mut error,
-                ))
-                .is_some()
-            } else {
-                // `discard_atomic` takes ownership of `stream` in the same
-                // way, closes it, and removes the temporary file. It gives
-                // no error.
-                camel_data_cache_discard_atomic(cache.as_ptr(), stream.into_raw());
-                false
-            };
-
-            if !stored {
-                log_critical_for_message(
-                    uid,
-                    &format!(
-                        "message {uid} was cached incompletely and has been dropped: {}",
-                        describe(error)
-                    ),
-                );
-            }
-            g_clear_error(&mut error);
-            stored
-        };
-
-        stored
+        write_entry(&cache, MESSAGES, &key, source, uid)
     }
 
     /// Whether a valid, undamaged entry for `uid` already exists, without
@@ -680,6 +535,164 @@ impl MessageCache {
     }
 }
 
+/// Writes `source` under `key` in `subdir` of `cache`, and tells if the write
+/// succeeded. Two implementations of one contract: the 3.52-3.61 arm (see
+/// "The atomic write" in the module docs) writes directly to the final path
+/// and checks the result; the 3.62+ arm writes to a temporary name first.
+/// Both leave nothing under `key` on a failed write, not a short file.
+///
+/// `uid` only names the entry in a log line. This is `pub(crate)` so
+/// [`crate::pending_append_cache::PendingAppendCache::store`] can reuse it:
+/// the all-or-nothing write is the same for both kinds of entry, only the
+/// check of what is worth writing differs, and that check stays with each
+/// caller.
+pub(crate) fn write_entry(
+    cache: &Owned<CamelDataCache>,
+    subdir: &CStr,
+    key: &CString,
+    source: &[u8],
+    uid: &str,
+) -> bool {
+    #[cfg(not(camel_data_cache_atomic))]
+    // SAFETY: `add` replaces an entry that is already under the key. The
+    // returned reference is ours, and `stream` releases it on each exit
+    // from this scope.
+    let stored = unsafe {
+        let mut error: *mut GError = ptr::null_mut();
+        let Some(stream) = Owned::from_raw(camel_data_cache_add(
+            cache.as_ptr(),
+            subdir.as_ptr(),
+            key.as_ptr(),
+            &mut error,
+        )) else {
+            log_critical_for_message(
+                uid,
+                &format!("message {uid} could not be cached: {}", describe(error)),
+            );
+            g_clear_error(&mut error);
+            return false;
+        };
+
+        // The output stream is borrowed from `stream`, `source` is a live
+        // buffer of the given length, and the two out-parameters are
+        // locals.
+        let mut written: usize = 0;
+        let written_all = g_output_stream_write_all(
+            g_io_stream_get_output_stream(stream.as_ptr()),
+            // gio-sys gives the buffer the type `*mut`, but the C function
+            // takes a `const void *`. The cast agrees with the header.
+            source.as_ptr().cast_mut().cast(),
+            source.len(),
+            &mut written,
+            ptr::null_mut(),
+            &mut error,
+        ) != GFALSE;
+        // The close flushes. Thus a successful write with a failed close
+        // is still an incomplete entry. The close error goes into its own
+        // local, because GLib logs a critical when a second `g_set_error`
+        // writes to an out-parameter that is set. Report the write error
+        // first, because it tells the cause.
+        let mut on_close: *mut GError = ptr::null_mut();
+        let closed = g_io_stream_close(stream.as_ptr(), ptr::null_mut(), &mut on_close) != GFALSE;
+        if error.is_null() {
+            error = on_close;
+        } else {
+            g_clear_error(&mut on_close);
+        }
+        let stored = written_all && closed && written == source.len();
+
+        if !stored {
+            log_critical_for_message(
+                uid,
+                &format!(
+                    "message {uid} was cached incompletely and has been dropped: {}",
+                    describe(error)
+                ),
+            );
+            // This code cannot act on a failure of the removal.
+            camel_data_cache_remove(
+                cache.as_ptr(),
+                subdir.as_ptr(),
+                key.as_ptr(),
+                ptr::null_mut(),
+            );
+        }
+        g_clear_error(&mut error);
+        stored
+    };
+
+    #[cfg(camel_data_cache_atomic)]
+    // SAFETY: `add_atomic` returns a stream open on a temporary file in the
+    // directory of the final file. This code owns the stream until it gives it to
+    // `commit_atomic` or `discard_atomic` below. Each of the two takes
+    // ownership of it: it closes the stream and releases the busy-bag
+    // reservation of `add_atomic`, for either result of the write.
+    let stored = unsafe {
+        let mut error: *mut GError = ptr::null_mut();
+        let Some(stream) = Owned::from_raw(camel_data_cache_add_atomic(
+            cache.as_ptr(),
+            subdir.as_ptr(),
+            key.as_ptr(),
+            &mut error,
+        )) else {
+            log_critical_for_message(
+                uid,
+                &format!("message {uid} could not be cached: {}", describe(error)),
+            );
+            g_clear_error(&mut error);
+            return false;
+        };
+
+        // The output stream is borrowed from `stream`, and `source` is a
+        // live buffer of the given length. No close here: both calls
+        // below close the stream when they take ownership of it.
+        let mut written: usize = 0;
+        let written_all = g_output_stream_write_all(
+            g_io_stream_get_output_stream(stream.as_ptr()),
+            source.as_ptr().cast_mut().cast(),
+            source.len(),
+            &mut written,
+            ptr::null_mut(),
+            &mut error,
+        ) != GFALSE
+            && written == source.len();
+
+        let stored = if written_all {
+            // `into_raw` gives the stream to `commit_atomic`, which
+            // consumes it. A second release from the `Drop` of `stream`
+            // would free it twice. `commit_atomic` opens a stream on the
+            // renamed file. Only its presence is necessary, so
+            // `Owned::from_raw(..).is_some()` checks it and drops it.
+            Owned::from_raw(camel_data_cache_commit_atomic(
+                cache.as_ptr(),
+                stream.into_raw(),
+                &mut error,
+            ))
+            .is_some()
+        } else {
+            // `discard_atomic` takes ownership of `stream` in the same
+            // way, closes it, and removes the temporary file. It gives
+            // no error.
+            camel_data_cache_discard_atomic(cache.as_ptr(), stream.into_raw());
+            false
+        };
+
+        if !stored {
+            log_critical_for_message(
+                uid,
+                &format!(
+                    "message {uid} was cached incompletely and has been dropped: {}",
+                    describe(error)
+                ),
+            );
+        }
+        g_clear_error(&mut error);
+        stored
+    };
+
+    stored
+}
+
 /// Installs the vfunc on a class whose first member is a `CamelFolderClass`.
 ///
 /// # Safety
@@ -753,7 +766,7 @@ fn claimed(listed: Option<u32>) -> Option<u32> {
 /// The RFC only asks a server to try to avoid a leading dash, so that an id
 /// is not read as a command-line option; this cache never passes a key as a
 /// bare argument, so a leading dash is not refused here.
-fn valid_key(key: &str) -> bool {
+pub(crate) fn valid_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 255
         && key
@@ -773,7 +786,7 @@ fn valid_key(key: &str) -> bool {
 /// # Safety
 ///
 /// `input` must point to a live `GInputStream`.
-unsafe fn read_all(input: *mut gio_sys::GInputStream, uid: &str) -> Option<Vec<u8>> {
+pub(crate) unsafe fn read_all(input: *mut gio_sys::GInputStream, uid: &str) -> Option<Vec<u8>> {
     let mut source: Vec<u8> = Vec::new();
     let mut chunk = [0u8; CHUNK];
     loop {
@@ -819,7 +832,7 @@ unsafe fn read_all(input: *mut gio_sys::GInputStream, uid: &str) -> Option<Vec<u
 /// # Safety
 ///
 /// `error` must be NULL or point to a live `GError`.
-unsafe fn describe(error: *mut GError) -> String {
+pub(crate) unsafe fn describe(error: *mut GError) -> String {
     // SAFETY: the contract above. The message of a live GError is a
     // NUL-terminated string that the GError owns.
     unsafe {
