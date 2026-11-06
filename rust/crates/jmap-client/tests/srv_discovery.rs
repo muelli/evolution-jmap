@@ -223,3 +223,52 @@ fn srv_target_on_port_443_redirecting_to_same_host_without_port_keeps_authorizat
     );
     assert_eq!(client.session().username, "vera@example.com");
 }
+
+#[test]
+fn srv_record_with_url_syntax_or_zero_port_is_ignored_and_falls_back_to_bare_domain() {
+    for bogus in [
+        SrvTarget {
+            host: "evil.example/hijack?".to_owned(),
+            port: 443,
+        },
+        SrvTarget {
+            host: "user@evil.example".to_owned(),
+            port: 443,
+        },
+        SrvTarget {
+            host: "evil.example#frag".to_owned(),
+            port: 443,
+        },
+        SrvTarget {
+            host: "evil.example:8443".to_owned(),
+            port: 443,
+        },
+        SrvTarget {
+            host: ".".to_owned(),
+            port: 443,
+        },
+        SrvTarget {
+            host: "api.example.com".to_owned(),
+            port: 0,
+        },
+    ] {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let transport = FakeTransport {
+            seen: seen.clone(),
+            session_body: session_body(),
+        };
+        let resolver = FakeResolver(Some(bogus.clone()));
+
+        Client::builder()
+            .transport(transport)
+            .resolver(resolver)
+            .connect_domain("example.com", Credentials::none())
+            .expect("bogus SRV target should fall back to bare domain");
+
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            ["https://example.com/.well-known/jmap"],
+            "bogus SRV target {bogus:?} must not be interpolated into discovery URL"
+        );
+    }
+}

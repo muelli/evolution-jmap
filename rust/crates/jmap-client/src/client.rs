@@ -261,9 +261,13 @@ impl ClientBuilder {
     ///
     /// Queries `_jmap._tcp` records and falls back to `https://<domain>`.
     pub fn connect_domain(self, domain: &str, credentials: Credentials) -> Result<Client, Error> {
-        let origin = match self.resolver.lookup_srv(domain) {
-            Some(target) if target.port == 443 => format!("https://{}", target.host),
-            Some(target) => format!("https://{}:{}", target.host, target.port),
+        let srv = self.resolver.lookup_srv(domain);
+        let origin = match srv
+            .as_ref()
+            .and_then(|target| crate::url::valid_srv_target(&target.host, target.port))
+        {
+            Some((host, 443)) => format!("https://{host}"),
+            Some((host, port)) => format!("https://{host}:{port}"),
             None => format!("https://{domain}"),
         };
         self.connect(&origin, credentials)

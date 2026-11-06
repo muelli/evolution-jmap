@@ -104,3 +104,77 @@ fn an_account_id_with_url_syntax_uploads_and_downloads() {
 
     assert_eq!(downloaded, data);
 }
+
+#[test]
+fn dot_and_dot_dot_values_are_percent_encoded_so_they_never_form_dot_segments() {
+    use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError};
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    struct RecordingTransport {
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Transport for RecordingTransport {
+        fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+            self.seen.lock().unwrap().push(request.url.to_owned());
+            let body = if request.url.ends_with("/.well-known/jmap") {
+                serde_json::to_vec(&json!({
+                    "capabilities": {},
+                    "accounts": {},
+                    "primaryAccounts": {},
+                    "username": "vera@example.com",
+                    "apiUrl": "https://jmap.example.com/jmap",
+                    "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?type={type}",
+                    "uploadUrl": "https://jmap.example.com/upload/{accountId}",
+                    "eventSourceUrl": "https://jmap.example.com/events",
+                    "state": "s0",
+                }))
+                .unwrap()
+            } else if request.url.contains("/upload/") {
+                serde_json::to_vec(&json!({
+                    "accountId": "..",
+                    "blobId": "..",
+                    "type": "application/octet-stream",
+                    "size": 4,
+                }))
+                .unwrap()
+            } else {
+                b"data".to_vec()
+            };
+            Ok(HttpResponse {
+                status: 200,
+                content_type: Some("application/json".to_owned()),
+                body,
+                final_url: request.url.to_owned(),
+            })
+        }
+    }
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let client = Client::builder()
+        .transport(RecordingTransport { seen: seen.clone() })
+        .connect("https://jmap.example.com", Credentials::none())
+        .unwrap();
+
+    client
+        .upload_blob_slice(&Id::new(".."), "application/octet-stream", b"data")
+        .unwrap();
+    client
+        .download_blob(&Id::new("."), &Id::new(".."), "..", 1024)
+        .unwrap();
+    client
+        .download_blob(&Id::new("{blobId}"), &Id::new("{name}"), "{type}", 1024)
+        .unwrap();
+
+    let urls = seen.lock().unwrap();
+    assert_eq!(urls[1], "https://jmap.example.com/upload/%2E%2E");
+    assert_eq!(
+        urls[2],
+        "https://jmap.example.com/download/%2E/%2E%2E/%2E%2E?type=application%2Foctet-stream"
+    );
+    assert_eq!(
+        urls[3],
+        "https://jmap.example.com/download/%7BblobId%7D/%7Bname%7D/%7Btype%7D?type=application%2Foctet-stream"
+    );
+}
