@@ -87,8 +87,9 @@ pub const MANAGED_SCRIPT_NAME: &str = "evolution-jmap";
 
 /// The error for a rule with no action.
 pub const NO_ACTION: &CStr = N_(c"Add at least one action.");
-/// The error for a value that holds a newline or a NUL character.
-pub const BAD_VALUE: &CStr = N_(c"The value cannot contain a newline or NUL character.");
+/// The error for a value that holds a newline, a carriage return or a NUL character.
+pub const BAD_VALUE: &CStr =
+    N_(c"The value cannot contain a newline, carriage return or NUL character.");
 /// The error for a header name outside RFC 5322's allowed characters.
 pub const BAD_HEADER_NAME: &CStr =
     N_(c"A header name cannot contain a colon, space, control or non-ASCII character.");
@@ -183,9 +184,13 @@ impl Folder {
     }
 }
 
-/// Whether a value holds neither a newline nor a NUL character.
+/// Whether a value holds none of a newline, a carriage return or a NUL character.
+///
+/// RFC 5228 Section 2.4.2 permits a carriage return in a quoted Sieve string
+/// only as part of a CRLF pair. A bare CR here would reach that quoted
+/// string unescaped, so it is refused along with the newline and the NUL.
 fn no_newline_or_nul(value: &str) -> bool {
-    !value.contains('\n') && !value.contains('\0')
+    !value.contains('\n') && !value.contains('\r') && !value.contains('\0')
 }
 
 /// Whether a name is a valid RFC 5322 §3.6.8 `field-name`: one or more
@@ -384,6 +389,15 @@ mod tests {
         let rule = rule_with_actions(vec![Action::CopyTo(Folder {
             id: "M1".to_owned(),
             name: "In\nbox".to_owned(),
+        })]);
+        assert_eq!(rule.validate(), Err(BAD_VALUE));
+    }
+
+    #[test]
+    fn rejects_a_folder_name_with_a_bare_cr() {
+        let rule = rule_with_actions(vec![Action::CopyTo(Folder {
+            id: "M1".to_owned(),
+            name: "In\rbox".to_owned(),
         })]);
         assert_eq!(rule.validate(), Err(BAD_VALUE));
     }
