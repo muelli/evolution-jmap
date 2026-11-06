@@ -105,6 +105,22 @@ pub struct FolderInfo {
     /// and reading that silence as a refusal would mark every ordinary
     /// folder of every account read-only.
     pub may_add_items: Option<bool>,
+    /// The account this folder belongs to, if not the account that the
+    /// enclosing `MailSync`/`CamelJmapStore` is itself configured for.
+    ///
+    /// `None` for an ordinary folder of the store's own account: the
+    /// common case, and every folder [`FolderTree::from_mailboxes`] builds.
+    /// [`FolderTree::merge_shared`] sets `Some` on each folder of a shared
+    /// account's subtree, so [`FolderTree::owning_account`] can tell a
+    /// caller which account to address for that mailbox (ROADMAP item
+    /// 163's next slice: routing folder, message and flag operations to
+    /// the owning account, not only building the merged tree).
+    ///
+    /// `#[serde(default)]` lets an on-disk cache written before this field
+    /// existed (`folder_tree_to_json`) still deserialise, as a tree with no
+    /// shared folders, rather than being discarded as unreadable.
+    #[serde(default)]
+    pub account_id: Option<Id>,
     pub children: Vec<FolderInfo>,
 }
 
@@ -146,6 +162,7 @@ impl FolderInfo {
             unread: self.unread,
             subscribed: self.subscribed,
             may_add_items: self.may_add_items,
+            account_id: self.account_id.clone(),
             children: Vec::new(),
         }
     }
@@ -275,6 +292,7 @@ impl FolderTree {
                     if account.read_only {
                         lock_read_only(child);
                     }
+                    stamp_account(child, &account.id);
                     let component = child
                         .path
                         .rsplit(SEPARATOR)
@@ -293,6 +311,9 @@ impl FolderTree {
                     unread: 0,
                     subscribed: true,
                     may_add_items: Some(false),
+                    // Not a real mailbox: no operation can ever address this
+                    // synthetic id, so it names no account to route to.
+                    account_id: None,
                     children,
                 }
             })
@@ -307,6 +328,7 @@ impl FolderTree {
             unread: 0,
             subscribed: true,
             may_add_items: Some(false),
+            account_id: None,
             children: owners,
         });
         self
@@ -391,6 +413,18 @@ impl FolderTree {
     /// in the tree.
     pub fn by_id(&self, id: &Id) -> Option<&FolderInfo> {
         self.iter().find(|folder| folder.id == *id)
+    }
+
+    /// The account that owns the mailbox `id`, if it is not the store's own
+    /// account.
+    ///
+    /// `None` both for an id this tree does not have and for an ordinary
+    /// folder of the store's own account: a caller that routes a folder,
+    /// message or flag operation (ROADMAP item 163's next slice) treats
+    /// `None` as "use the account this `MailSync` already addresses", and
+    /// `Some` as "address this account instead, over the same client".
+    pub fn owning_account(&self, id: &Id) -> Option<&Id> {
+        self.by_id(id)?.account_id.as_ref()
     }
 
     /// The folder with a role, if a mailbox of the account has that role.
@@ -692,6 +726,9 @@ impl FolderTree {
                     .my_rights
                     .as_ref()
                     .and_then(|rights| rights.may_add_items),
+                // This listing came from the account's own `Mailbox/get`;
+                // `merge_shared` is what sets `Some` for a shared account.
+                account_id: None,
                 children,
             };
             match parent[index] {
@@ -795,6 +832,16 @@ fn lock_read_only(folder: &mut FolderInfo) {
     let mut stack: Vec<&mut FolderInfo> = vec![folder];
     while let Some(folder) = stack.pop() {
         folder.may_add_items = Some(false);
+        stack.extend(folder.children.iter_mut());
+    }
+}
+
+/// Marks `folder` and every folder below it as belonging to `id`, for
+/// [`FolderTree::owning_account`].
+fn stamp_account(folder: &mut FolderInfo, id: &Id) {
+    let mut stack: Vec<&mut FolderInfo> = vec![folder];
+    while let Some(folder) = stack.pop() {
+        folder.account_id = Some(id.clone());
         stack.extend(folder.children.iter_mut());
     }
 }
@@ -1039,5 +1086,58 @@ mod tests {
         .unwrap();
 
         assert_eq!(before.change_to(&after), FolderListChange::Reshaped);
+    }
+
+    /// An on-disk listing from before this field existed still deserialises,
+    /// as a tree with no shared folders, instead of being discarded as
+    /// unreadable (the `#[serde(default)]` on `FolderInfo::account_id`).
+    #[test]
+    fn folder_tree_from_json_reads_a_listing_with_no_account_id_field() {
+        let json = serde_json::json!({
+            "state": State::new("s1"),
+            "tree": {
+                "roots": [{
+                    "id": "1",
+                    "path": "Inbox",
+                    "display_name": "Inbox",
+                    "role": null,
+                    "total": 3,
+                    "unread": 1,
+                    "subscribed": true,
+                    "may_add_items": null,
+                    "children": [],
+                }],
+            },
+        })
+        .to_string();
+
+        let (_, tree) = folder_tree_from_json(&json).expect("an old-format listing still reads");
+        assert_eq!(tree.by_id(&Id::new("1")).unwrap().account_id, None);
+    }
+
+    /// `folder_tree_to_json`/`folder_tree_from_json` round-trip an
+    /// `account_id`, the same as every other field.
+    #[test]
+    fn folder_tree_json_round_trip_keeps_account_id() {
+        let shared = FolderTree::from_mailboxes(&[mailbox("S1", "Inbox", None, 0, 0)]).unwrap();
+        let tree = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 0, 0)])
+            .unwrap()
+            .merge_shared(&[(
+                SharedMailAccount {
+                    id: Id::new("bob"),
+                    name: "bob@example.com".to_owned(),
+                    read_only: false,
+                },
+                shared,
+            )]);
+
+        let json = folder_tree_to_json(&State::new("s1"), &tree);
+        let (_, read_back) = folder_tree_from_json(&json).expect("a written listing reads back");
+
+        assert_eq!(
+            read_back.owning_account(&Id::new("S1")),
+            Some(&Id::new("bob"))
+        );
+        assert_eq!(read_back.owning_account(&Id::new("1")), None);
     }
 }

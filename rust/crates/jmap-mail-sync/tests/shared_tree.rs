@@ -174,6 +174,38 @@ fn two_shared_accounts_each_get_their_own_branch_in_the_given_order() {
     );
 }
 
+/// `owning_account` is the lookup `jmap-mail`'s store wiring (item 163's next
+/// slice) uses to pick which account to address for a given mailbox id.
+#[test]
+fn owning_account_names_the_shared_account_for_its_own_and_its_childrens_folders() {
+    let primary = tree(&[mailbox("M1", "Inbox")]);
+    let shared = tree(&[mailbox("S1", "Inbox"), child("S2", "Work", "S1")]);
+    let bob = owner("b", "bob@example.com", false);
+
+    let merged = primary.merge_shared(&[(bob.clone(), shared)]);
+
+    assert_eq!(merged.owning_account(&Id::new("S1")), Some(&bob.id));
+    assert_eq!(
+        merged.owning_account(&Id::new("S2")),
+        Some(&bob.id),
+        "a nested child of a shared account is owned by that account too"
+    );
+}
+
+/// The primary account's own folders, and an id the tree has no folder for,
+/// both name no owning account: a caller reads `None` as "this store's own
+/// account".
+#[test]
+fn owning_account_is_none_for_the_primary_accounts_own_folder_and_an_unknown_id() {
+    let primary = tree(&[mailbox("M1", "Inbox")]);
+    let shared = tree(&[mailbox("S1", "Inbox")]);
+
+    let merged = primary.merge_shared(&[(owner("b", "bob@example.com", false), shared)]);
+
+    assert_eq!(merged.owning_account(&Id::new("M1")), None);
+    assert_eq!(merged.owning_account(&Id::new("not-a-folder")), None);
+}
+
 #[test]
 fn an_owner_name_with_a_separator_does_not_split_into_two_path_components() {
     let primary = tree(&[mailbox("M1", "Inbox")]);

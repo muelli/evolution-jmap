@@ -1016,6 +1016,9 @@ impl MailSync {
             // The server was not asked for `myRights` on a create, and the
             // caller who just created the mailbox is its owner.
             may_add_items: None,
+            // `mailbox_create` above always addresses `self.account_id`, the
+            // account this `MailSync` is itself scoped to.
+            account_id: None,
             children: Vec::new(),
         })
     }
