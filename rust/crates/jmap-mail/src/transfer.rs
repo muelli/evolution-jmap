@@ -209,6 +209,13 @@ unsafe extern "C" fn transfer_messages_to_sync(
             let mut changes = Changes::new();
             let mut failure = None;
             for (index, uid) in uids.iter().enumerate() {
+                // A NULL slot in Camel's own array never happens in practice
+                // (see `uid_list`'s doc). There is no uid to file, so this
+                // slot stays unreported, the same as a message this loop
+                // never reached.
+                let Some(uid) = uid else {
+                    continue;
+                };
                 let filed = file_message(source, summary, uid, &filing, moving);
                 // A message that is not on the server is also not in this
                 // folder, for a copy and for a move. A queued filing stays in
@@ -441,16 +448,22 @@ unsafe fn mailbox_of<'a>(folder: *mut CamelFolder) -> Option<&'a Id> {
     unsafe { checked_borrow::<_, JmapFolder>(folder, folder_type())?.mailbox() }
 }
 
-/// A copy of the uids in Camel's array.
+/// A copy of the uids in Camel's array, one slot per input element, in order.
 ///
 /// A copy, not a borrow: the walk removes rows from the summary and makes one
 /// request per uid. The array belongs to the caller, and Camel's vee-folder path
 /// rebuilds it between calls.
 ///
+/// A slot is `None` only for a NULL element of `array`. Camel never puts one
+/// there in practice, but [`Reported::new`] sizes its own output array from
+/// this list's length, which must match the *input* array's length and keep
+/// its positions: dropping a hole instead of keeping its slot would shift
+/// every later uid's reported result one position out of place.
+///
 /// # Safety
 ///
 /// `array` must be NULL or a live `GPtrArray` of NUL-terminated strings.
-unsafe fn uid_list(array: *mut GPtrArray) -> Vec<CString> {
+unsafe fn uid_list(array: *mut GPtrArray) -> Vec<Option<CString>> {
     if array.is_null() {
         return Vec::new();
     }
@@ -458,7 +471,7 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<CString> {
     // array outlives this call, and this code copies each string.
     unsafe {
         (0..(*array).len)
-            .filter_map(|index| {
+            .map(|index| {
                 let uid: *const gchar = (*array).pdata.add(index as usize).read().cast();
                 (!uid.is_null()).then(|| CStr::from_ptr(uid).to_owned())
             })
@@ -541,4 +554,46 @@ unsafe fn name_of(folder: *mut CamelFolder) -> String {
     // SAFETY: the accessor returns a string that the folder owns and that
     // outlives the call. `read_string` copies it.
     unsafe { read_string(camel_folder_get_full_name(folder)).unwrap_or_default() }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+    use std::ptr;
+
+    use glib_sys::{g_free, g_ptr_array_add, g_ptr_array_free, g_ptr_array_new_with_free_func};
+
+    use super::uid_list;
+
+    /// A NULL element of Camel's uid array never happens in practice, but
+    /// `uid_list` must keep its position rather than compact it away:
+    /// `Reported::new` sizes its own output array from this list's length,
+    /// which Camel's contract keys to the *input* array's length and
+    /// positions.
+    #[test]
+    fn a_null_hole_in_camels_array_keeps_its_own_position() {
+        // SAFETY: a `GPtrArray` built and freed entirely within this test,
+        // never shared with another thread or call.
+        unsafe {
+            let array = g_ptr_array_new_with_free_func(Some(g_free));
+            let first = CString::new("E1").unwrap();
+            let third = CString::new("E3").unwrap();
+            g_ptr_array_add(array, glib_sys::g_strdup(first.as_ptr()).cast());
+            g_ptr_array_add(array, ptr::null_mut());
+            g_ptr_array_add(array, glib_sys::g_strdup(third.as_ptr()).cast());
+
+            let uids = uid_list(array);
+
+            g_ptr_array_free(array, glib_sys::GTRUE);
+
+            assert_eq!(
+                uids.len(),
+                3,
+                "a hole must not shorten the list Reported::new sizes from"
+            );
+            assert_eq!(uids[0].as_deref(), Some(first.as_c_str()));
+            assert_eq!(uids[1], None, "the hole stays a hole, at its own index");
+            assert_eq!(uids[2].as_deref(), Some(third.as_c_str()));
+        }
+    }
 }
