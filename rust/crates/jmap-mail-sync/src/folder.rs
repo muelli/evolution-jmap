@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::SyncError;
 use crate::path::{SEPARATOR, encode_component, join};
+use crate::shared::SharedMailAccount;
+
+/// The path of the synthetic root [`FolderTree::merge_shared`] adds.
+const SHARED_ROOT_PATH: &str = "Shared";
 
 /// The maximum depth of a `parentId` chain. A deeper mailbox becomes
 /// top-level.
@@ -232,6 +236,80 @@ impl FolderTree {
         Ok(Self {
             roots: Self::assemble(&nodes, &parent, &roles, &paths, &order),
         })
+    }
+
+    /// Merges other accounts' mail into this tree, the shape evolution-ews
+    /// and stock IMAP both use for a foreign mailbox (`notes/
+    /// SHARED-MAILBOXES-2026-10-30.md` section 4, Option 1): one extra,
+    /// always-present "Shared" root, one child per shared account named for
+    /// its owner, that account's own folders moved below it unchanged
+    /// otherwise.
+    ///
+    /// `shared` pairs each account [`crate::shared_mail_accounts`] found
+    /// with the `FolderTree` that account's own `MailSync` already builds.
+    /// An empty `shared` returns `self` unchanged: no "Shared" root appears
+    /// unless at least one account shares mail.
+    ///
+    /// A merged folder keeps the mailbox id and role its own account's
+    /// listing gave it, so [`FolderTree::by_id`] still finds it by that id.
+    /// But [`FolderTree::role`] and [`FolderTree::find`] then search the
+    /// whole merged tree, including shared accounts: a caller that wires
+    /// this into one `CamelStore` (ROADMAP item 163's next step) must ask
+    /// `self.roots()` directly, before merging, for the account's own
+    /// inbox, trash or junk role, never this merged tree's `role`.
+    ///
+    /// An account whose [`SharedMailAccount::read_only`] is true gets
+    /// `may_add_items: Some(false)` on every one of its folders, even one
+    /// whose own `myRights` said otherwise: the account-level restriction
+    /// cannot be looser than the share itself.
+    pub fn merge_shared(mut self, shared: &[(SharedMailAccount, FolderTree)]) -> Self {
+        if shared.is_empty() {
+            return self;
+        }
+
+        let owners = shared
+            .iter()
+            .map(|(account, tree)| {
+                let mut children = tree.roots.clone();
+                for child in &mut children {
+                    if account.read_only {
+                        lock_read_only(child);
+                    }
+                    let component = child
+                        .path
+                        .rsplit(SEPARATOR)
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
+                    let below = join(Some(&owner_path(account)), &component);
+                    repath(child, below);
+                }
+                FolderInfo {
+                    id: Id::new(format!("shared-owner:{}", account.id)),
+                    path: owner_path(account),
+                    display_name: account.name.clone(),
+                    role: None,
+                    total: 0,
+                    unread: 0,
+                    subscribed: true,
+                    may_add_items: Some(false),
+                    children,
+                }
+            })
+            .collect();
+
+        self.roots.push(FolderInfo {
+            id: Id::new("shared-root"),
+            path: SHARED_ROOT_PATH.to_owned(),
+            display_name: "Shared".to_owned(),
+            role: None,
+            total: 0,
+            unread: 0,
+            subscribed: true,
+            may_add_items: Some(false),
+            children: owners,
+        });
+        self
     }
 
     /// The top-level folders of the account, in sibling order.
@@ -702,6 +780,22 @@ fn repath(folder: &mut FolderInfo, path: String) {
             let below = join(Some(at), &component);
             stack.push((child, below));
         }
+    }
+}
+
+/// The path of the folder [`FolderTree::merge_shared`] adds for one shared
+/// account's branch under [`SHARED_ROOT_PATH`].
+fn owner_path(account: &SharedMailAccount) -> String {
+    join(Some(SHARED_ROOT_PATH), &encode_component(&account.name))
+}
+
+/// Sets `may_add_items` to `Some(false)` on a folder and every folder below
+/// it, for [`FolderTree::merge_shared`]'s read-only accounts.
+fn lock_read_only(folder: &mut FolderInfo) {
+    let mut stack: Vec<&mut FolderInfo> = vec![folder];
+    while let Some(folder) = stack.pop() {
+        folder.may_add_items = Some(false);
+        stack.extend(folder.children.iter_mut());
     }
 }
 
