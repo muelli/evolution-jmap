@@ -772,7 +772,11 @@ mod tests {
 
         refresh.request(ANY_WORK);
         gate.await_start();
-        assert_eq!(gate.passes(), 1, "a later request must still start a worker");
+        assert_eq!(
+            gate.passes(),
+            1,
+            "a later request must still start a worker"
+        );
         gate.release_one();
 
         // SAFETY: this releases the last reference, which this test owns.
