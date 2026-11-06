@@ -106,7 +106,7 @@ use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
 use jmap_mail_sync::MailSync;
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 
@@ -158,7 +158,13 @@ impl Fixture {
     }
 
     fn seeded(messages: usize) -> Self {
-        let server = MockServer::builder().start();
+        Self::seeded_with(messages, MockServer::builder())
+    }
+
+    /// [`Self::seeded`], with a caller-built server instead of the default
+    /// one, for a test against a hostile or edge-case server.
+    fn seeded_with(messages: usize, builder: MockServerBuilder) -> Self {
+        let server = builder.start();
         let account_id = server.account_id();
         let (inbox_id, archive_id, uids) = {
             let state = server.state();
@@ -859,6 +865,58 @@ fn a_message_another_client_deleted_is_reported_and_leaves_the_folder() {
     assert!(
         listed(fixture.inbox).is_empty(),
         "the folder still lists a message the server does not have"
+    );
+}
+
+/// A hostile or merely buggy server can answer `notFound` for an id that it
+/// still lists everywhere else (SECURITY-AUDIT-2026-11-01 row S3-3). This
+/// code cannot tell that apart from the genuine deletion race the test
+/// above covers, so it removes the row the same way, for a copy as much as
+/// for a move: a failed `Email/set` never touches the server's own
+/// `mailboxIds` for the message, so the server's data stays correct.
+///
+/// This does not "self heal" on a later refresh, unlike the audit row's own
+/// first guess. `refresh_info_sync` asks `Email/changes` since the state the
+/// folder already recorded; the failed `Email/set` never moved that state,
+/// so the answer has nothing new to say, and the row stays gone until
+/// something else invalidates the folder's recorded state (`refresh.rs`'s
+/// own module doc: "a folder that has none has never listed this mailbox,
+/// and lists"). A plain reconnect does not do that either: the state lives
+/// in the folder's own summary, not the connection.
+#[test]
+fn a_notfound_copy_from_a_server_that_still_lists_the_message_stays_gone() {
+    let fixture = Fixture::seeded_with(1, MockServer::builder().email_update_always_not_found());
+    let before = fixture.mailboxes_on_server(fixture.uid());
+
+    assert!(
+        !fixture.transfer(&[fixture.uid()], false).ok,
+        "a copy the server answered notFound for was reported as transferred"
+    );
+    assert!(
+        listed(fixture.inbox).is_empty(),
+        "the folder still lists a message the server answered notFound for"
+    );
+    assert_eq!(
+        fixture.mailboxes_on_server(fixture.uid()),
+        before,
+        "a failed Email/set must not have changed the server's own mailboxIds"
+    );
+
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: a live folder of ours, and an out-parameter that is writable
+    // and currently NULL.
+    unsafe {
+        assert_ne!(
+            camel_folder_refresh_info_sync(fixture.inbox, ptr::null_mut(), &mut error),
+            GFALSE,
+            "the inbox would not refresh"
+        );
+    }
+    assert!(
+        listed(fixture.inbox).is_empty(),
+        "the ordinary incremental refresh, Email/changes since a state the \
+         failed Email/set never moved, has nothing to report, so it does \
+         NOT bring the row back; see this test's module-level note"
     );
 }
 

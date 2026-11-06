@@ -122,6 +122,9 @@ pub struct ServerState {
     pub tasks_enabled: bool,
     /// Refuse `Principal/query` with forbidden, modeling Stalwart directory policy.
     pub disable_principal_query: bool,
+    /// Answer every `Email/set` update with `notFound`, without removing the
+    /// email from the account.
+    pub email_update_always_not_found: bool,
     /// Active hostile scenarios for simulating adversarial server conditions.
     pub hostile_scenarios: BTreeSet<crate::hostile::HostileScenario>,
     /// Cached response for `HostileScenario::ReplayedResponse`.
@@ -198,6 +201,7 @@ impl ServerState {
             sieve_validate_long_error: false,
             tasks_enabled: false,
             disable_principal_query: false,
+            email_update_always_not_found: false,
             hostile_scenarios: BTreeSet::new(),
             cached_replayed_response: None,
             hostile_state_calls: 0,

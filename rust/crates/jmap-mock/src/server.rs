@@ -107,6 +107,10 @@ pub struct Faults {
     pub snooze_extension: bool,
     /// Refuse `Principal/query` with `forbidden`, modeling Stalwart directory policy.
     pub disable_principal_query: bool,
+    /// Answer every `Email/set` update with `notFound`, without removing the
+    /// email from the account: models a server that loses track of an id for
+    /// a write while still listing it everywhere else.
+    pub email_update_always_not_found: bool,
     /// Active hostile scenarios.
     pub hostile_scenarios: BTreeSet<crate::hostile::HostileScenario>,
 }
@@ -486,6 +490,13 @@ impl MockServerBuilder {
         self
     }
 
+    /// Answer every `Email/set` update with `notFound`, without removing the
+    /// email from the account.
+    pub fn email_update_always_not_found(mut self) -> Self {
+        self.faults.email_update_always_not_found = true;
+        self
+    }
+
     /// Enable one hostile server scenario for adversarial testing.
     pub fn hostile(mut self, scenario: crate::hostile::HostileScenario) -> Self {
         self.faults.hostile_scenarios.insert(scenario);
@@ -541,6 +552,7 @@ impl MockServerBuilder {
         state.sieve_validate_long_error = self.sieve_validate_long_error;
         state.tasks_enabled = self.tasks_enabled;
         state.disable_principal_query = self.faults.disable_principal_query;
+        state.email_update_always_not_found = self.faults.email_update_always_not_found;
         state.hostile_scenarios = self.faults.hostile_scenarios.clone();
         if !self.tasks_enabled {
             state

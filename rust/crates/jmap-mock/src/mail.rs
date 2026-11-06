@@ -1316,6 +1316,7 @@ pub fn email_set(
 ) -> Result<Value, MethodError> {
     let request: SetRequest<Email> = parse_arguments(arguments)?;
     let snooze_extension = state.snooze_extension;
+    let email_update_always_not_found = state.email_update_always_not_found;
     let account = account_mut(state, &request.account_id)?;
     let is_owner = account_is_owner(account, caller);
     if !is_owner {
@@ -1401,6 +1402,10 @@ pub fn email_set(
     // Patch emails before the transaction, then apply one state bump.
     let mut to_update: Vec<(Id, Email)> = Vec::new();
     for (id, patch) in request.update.unwrap_or_default() {
+        if email_update_always_not_found {
+            not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
+            continue;
+        }
         let Some(existing) = account.emails.get(&id) else {
             not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
             continue;
