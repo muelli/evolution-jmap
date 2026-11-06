@@ -150,6 +150,61 @@ pub struct JmapMessageInfo {
     /// A move or copy that [`crate::transfer`] could not send to the server
     /// yet (offline), or `None` if the row carries no such filing.
     filing: Slot<Mutex<Option<Filing>>>,
+    /// An append that [`crate::append`] could not send to the server yet
+    /// (offline), or `None` if the row carries no such append.
+    append: Slot<Mutex<Option<PendingAppend>>>,
+}
+
+/// An append that could not reach the server while offline: the mailbox the
+/// message is meant to land in, once [`crate::append`]'s byte store gives up
+/// the bytes it kept under this row's own (synthetic) uid.
+///
+/// Unlike [`Filing`], this is not a JMAP wire patch. `Email/import` (RFC 8621
+/// §4.8) takes a mailbox id and an uploaded blob; this struct remembers only
+/// the first of those two, because the second is the row's own uid, already
+/// the cache key the byte store uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAppend {
+    /// The mailbox the message is meant to land in.
+    mailbox: Id,
+}
+
+impl PendingAppend {
+    /// Records an append still waiting to reach `mailbox`.
+    pub fn into_mailbox(mailbox: Id) -> Self {
+        Self { mailbox }
+    }
+
+    /// The mailbox this append is meant to land in.
+    pub fn mailbox(&self) -> &Id {
+        &self.mailbox
+    }
+}
+
+/// The fixed prefix of a uid this provider invents for a message appended
+/// while offline, before the server has assigned a real one.
+///
+/// RFC 8620 §1.2 lets a server choose any id in the same character class
+/// this prefix uses, so the prefix alone, not the character class, is what
+/// makes [`synthetic_uid`]'s result tell apart from a server-chosen id on
+/// sight.
+const SYNTHETIC_UID_PREFIX: &str = "jmap-local-";
+
+/// A uid for a message this provider puts into a folder's summary itself,
+/// before `Email/import` (RFC 8621 §4.8) gives the message a server id.
+///
+/// `crate::append` uses the result both as the row's uid in the summary and
+/// as the key its byte store keeps the not-yet-uploaded message under, so a
+/// restart finds the row and its bytes under the same name.
+pub fn synthetic_uid() -> String {
+    let mut octets = [0u8; 16];
+    getrandom::fill(&mut octets).expect("the operating system's random source is unavailable");
+    let mut uid = String::with_capacity(SYNTHETIC_UID_PREFIX.len() + octets.len() * 2);
+    uid.push_str(SYNTHETIC_UID_PREFIX);
+    for byte in octets {
+        uid.push_str(&format!("{byte:02x}"));
+    }
+    uid
 }
 
 impl JmapMessageInfo {
@@ -215,6 +270,8 @@ unsafe impl ObjectSubclass for JmapMessageInfo {
         unsafe { (*instance).thread.init(Mutex::new(None)) };
         // SAFETY: as above.
         unsafe { (*instance).filing.init(Mutex::new(None)) };
+        // SAFETY: as above.
+        unsafe { (*instance).append.init(Mutex::new(None)) };
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
@@ -226,6 +283,8 @@ unsafe impl ObjectSubclass for JmapMessageInfo {
         unsafe { (*instance).thread.clear() };
         // SAFETY: as above.
         unsafe { (*instance).filing.clear() };
+        // SAFETY: as above.
+        unsafe { (*instance).append.clear() };
     }
 }
 
@@ -394,7 +453,49 @@ pub(crate) unsafe fn set_pending_filing(info: *mut CamelMessageInfo, filing: Opt
     }
 }
 
-/// `CamelMessageInfoClass.save`: appends the three columns to the stored data
+/// The append that [`crate::append`] could not send while offline, if the
+/// row carries one, or `None` if this provider did not build the row or the
+/// row has no pending append.
+///
+/// # Safety
+///
+/// `info` must be NULL or point at a live `CamelMessageInfo`.
+pub unsafe fn pending_append(info: *mut CamelMessageInfo) -> Option<PendingAppend> {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let row = unsafe { JmapMessageInfo::borrow(info) }?;
+    row.append
+        .get()?
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// Records the append that a message could not send while offline, or clears
+/// it once the append lands or the row gives up on it.
+///
+/// For a row of a different type, the function does nothing. This is the same
+/// fallback that [`set_server_keywords`] uses for a row from a summary that is
+/// older than this column.
+///
+/// # Safety
+///
+/// `info` must be NULL or point at a live `CamelMessageInfo`.
+pub(crate) unsafe fn set_pending_append(
+    info: *mut CamelMessageInfo,
+    append: Option<PendingAppend>,
+) {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let Some(row) = (unsafe { JmapMessageInfo::borrow(info) }) else {
+        return;
+    };
+    if let Some(slot) = row.append.get() {
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = append;
+    }
+}
+
+/// `CamelMessageInfoClass.save`: appends the four columns to the stored data
 /// of the row.
 ///
 /// The keyword count comes first, then the names, because [`load`] reads this
@@ -470,11 +571,29 @@ unsafe extern "C" fn save(
                 None => camel_util_bdata_put_number(bdata, 0),
             }
         }
+
+        // SAFETY: `info` is a row of this type, so the field is there.
+        // `bdata` is the same live GString that has the three columns above.
+        // A presence flag and the destination mailbox id, present only for a
+        // pending append. [`read_pending_append`] reads this back in the
+        // same order.
+        unsafe {
+            match pending_append(info.cast_mut()) {
+                Some(append) => {
+                    camel_util_bdata_put_number(bdata, 1);
+                    camel_util_bdata_put_string(
+                        bdata,
+                        c_string(append.mailbox().as_str()).as_ptr(),
+                    );
+                }
+                None => camel_util_bdata_put_number(bdata, 0),
+            }
+        }
         GTRUE
     })
 }
 
-/// `CamelMessageInfoClass.load`: reads the three columns back from the stored
+/// `CamelMessageInfoClass.load`: reads the four columns back from the stored
 /// data.
 ///
 /// If the count goes past the end of the string, the record is truncated or
@@ -544,6 +663,13 @@ unsafe extern "C" fn load(
         let filing = unsafe { read_pending_filing(cursor) };
         // SAFETY: `info` is a row of this type, because of the guard above.
         unsafe { set_pending_filing(info, filing) };
+
+        // SAFETY: after the reads above, the cursor is immediately after the
+        // keywords, thread-id and pending-filing columns. `save` wrote the
+        // pending-append column at that position.
+        let append = unsafe { read_pending_append(cursor) };
+        // SAFETY: `info` is a row of this type, because of the guard above.
+        unsafe { set_pending_append(info, append) };
         GTRUE
     })
 }
@@ -595,7 +721,35 @@ unsafe fn read_pending_filing(cursor: *mut *mut gchar) -> Option<Filing> {
     }
 }
 
-/// `CamelMessageInfoClass.clone`: gives the three columns to the copy.
+/// Reads the pending-append column that [`save`] writes after the
+/// pending-filing column: a presence flag, then the destination mailbox id.
+///
+/// If the record is truncated or older than this column, the presence flag
+/// defaults to 0, so this returns `None`: the same safe degradation
+/// [`read_pending_filing`] already relies on.
+///
+/// # Safety
+///
+/// `cursor` must be the cursor [`load`] receives, already advanced past the
+/// keyword, thread-id and pending-filing columns.
+unsafe fn read_pending_append(cursor: *mut *mut gchar) -> Option<PendingAppend> {
+    // SAFETY: the contract above. `get_string` moves the cursor and returns a
+    // `g_malloc`ed string, or NULL when no data remains.
+    unsafe {
+        if camel_util_bdata_get_number(cursor, 0) == 0 {
+            return None;
+        }
+        let raw = camel_util_bdata_get_string(cursor, ptr::null());
+        if raw.is_null() {
+            return None;
+        }
+        let mailbox = Id::new(CStr::from_ptr(raw).to_string_lossy().into_owned());
+        g_free(raw.cast());
+        Some(PendingAppend::into_mailbox(mailbox))
+    }
+}
+
+/// `CamelMessageInfoClass.clone`: gives the four columns to the copy.
 ///
 /// This function does not select which copies get them. The clone of the parent
 /// builds its result from the *summary* of the copy: it is
@@ -634,6 +788,9 @@ unsafe extern "C" fn clone(
             }
             if let Some(filing) = pending_filing(info.cast_mut()) {
                 set_pending_filing(copy, Some(filing));
+            }
+            if let Some(append) = pending_append(info.cast_mut()) {
+                set_pending_append(copy, Some(append));
             }
         }
         copy
@@ -1400,6 +1557,180 @@ mod pending_filing_tests {
 
     /// Frees the strings that `save` puts in the heap fields of `record`, the
     /// same cleanup `tests/message_info.rs` does for its own round trips.
+    ///
+    /// # Safety
+    ///
+    /// `record` must come from one `camel_message_info_save` call.
+    unsafe fn free_saved_strings(record: &mut CamelSummaryMessageRecord) {
+        for field in [
+            &mut record.part,
+            &mut record.labels,
+            &mut record.usertags,
+            &mut record.cinfo,
+            &mut record.userheaders,
+            &mut record.preview,
+        ] {
+            // SAFETY: `save` allocates each field with GLib, or leaves it NULL.
+            unsafe { g_free((*field).cast()) };
+            *field = ptr::null_mut();
+        }
+    }
+}
+
+/// The pending-append column, the same shape as [`pending_filing_tests`]
+/// above: nothing public builds a row that already carries one (only
+/// [`crate::append`]'s own, crate-private [`set_pending_append`] does).
+#[cfg(test)]
+mod pending_append_tests {
+    use eds_sys::compat::CamelSummaryMessageRecord;
+    use eds_sys::{camel_message_info_get_uid, camel_message_info_load, camel_message_info_save};
+    use glib_sys::{g_free, g_string_free, g_string_new};
+    use gobject_sys::g_object_unref;
+    use jmap_mail_sync::MessageFlags;
+
+    use super::*;
+
+    fn row(uid: &str) -> MessageSummary {
+        MessageSummary {
+            uid: Id::new(uid),
+            blob_id: None,
+            thread_id: None,
+            flags: MessageFlags::default(),
+            tags: Vec::new(),
+            size: 0,
+            received_at: None,
+            sent_at: None,
+            subject: None,
+            from: Vec::new(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            message_id: None,
+            references: Vec::new(),
+            preview: None,
+        }
+    }
+
+    /// A row this crate built always has the slot, so `None` here means no
+    /// append is pending, not "this provider did not build the row" (the
+    /// fallback [`pending_append`]'s own doc names for a foreign row).
+    #[test]
+    fn a_fresh_row_has_no_pending_append() {
+        // SAFETY: NULL is a valid summary; `new_message_info` tolerates it.
+        let info = unsafe { new_message_info(ptr::null_mut(), &row("jmap-local-0100")) };
+        assert!(!info.is_null());
+
+        // SAFETY: `info` is a live message info this test owns.
+        unsafe {
+            assert!(pending_append(info).is_none());
+            g_object_unref(info.cast());
+        }
+    }
+
+    /// What [`set_pending_append`] stores is exactly what [`pending_append`]
+    /// reads back, with no trip through the summary database.
+    #[test]
+    fn a_pending_append_set_on_a_row_is_read_back() {
+        // SAFETY: NULL is a valid summary; `new_message_info` tolerates it.
+        let info = unsafe { new_message_info(ptr::null_mut(), &row("jmap-local-0101")) };
+        assert!(!info.is_null());
+        let append = PendingAppend::into_mailbox(Id::new("Drafts"));
+
+        // SAFETY: `info` is a live message info this test owns.
+        unsafe {
+            set_pending_append(info, Some(append.clone()));
+            assert_eq!(pending_append(info), Some(append));
+            g_object_unref(info.cast());
+        }
+    }
+
+    /// A pending append survives the same round trip through the summary
+    /// database as the keywords, thread-id and pending-filing columns,
+    /// through the same `save` and `load` entry points.
+    #[test]
+    fn a_pending_append_survives_a_trip_through_the_summary_database() {
+        // SAFETY: NULL is a valid summary; `new_message_info` tolerates it.
+        let info = unsafe { new_message_info(ptr::null_mut(), &row("jmap-local-0102")) };
+        let restored = unsafe { new_message_info(ptr::null_mut(), &row("jmap-local-0102")) };
+        assert!(!info.is_null() && !restored.is_null());
+        let append = PendingAppend::into_mailbox(Id::new("Drafts"));
+
+        // SAFETY: both infos are live and owned here. The record is zeroed,
+        // the state Camel hands `save` one in, and every string `save`
+        // leaves in it is read back before it goes out of scope.
+        unsafe {
+            set_pending_append(info, Some(append.clone()));
+
+            let mut record: CamelSummaryMessageRecord = std::mem::zeroed();
+            let bdata = g_string_new(ptr::null());
+            assert_ne!(
+                camel_message_info_save(info, ptr::addr_of_mut!(record), bdata),
+                GFALSE,
+                "the row would not save"
+            );
+
+            record.bdata = (*bdata).str;
+            let mut cursor = record.bdata;
+            assert_ne!(
+                camel_message_info_load(restored, ptr::addr_of!(record), ptr::addr_of_mut!(cursor)),
+                GFALSE,
+                "the row would not load"
+            );
+
+            assert_eq!(pending_append(restored), Some(append));
+            free_saved_strings(&mut record);
+            g_string_free(bdata, GTRUE);
+            g_object_unref(restored.cast());
+            g_object_unref(info.cast());
+        }
+    }
+
+    /// A row stored before this column existed loads as carrying no pending
+    /// append. This is the same conservative fallback the other three
+    /// columns use: `camel_util_bdata_get_number`'s own default for a cursor
+    /// with no data left is 0, which this column reads as "no append
+    /// pending".
+    #[test]
+    fn a_row_stored_without_the_append_column_loads_as_remembering_none() {
+        // SAFETY: NULL is a valid summary; `new_message_info` tolerates it.
+        let info = unsafe { new_message_info(ptr::null_mut(), &row("jmap-local-0103")) };
+        assert!(!info.is_null());
+
+        // SAFETY: a record whose bdata is the empty string, as a summary
+        // that wrote no provider data at all leaves behind.
+        unsafe {
+            let mut record: CamelSummaryMessageRecord = std::mem::zeroed();
+            let bdata = g_string_new(c"".as_ptr());
+            record.uid = camel_message_info_get_uid(info);
+            record.bdata = (*bdata).str;
+            let mut cursor = record.bdata;
+
+            assert_ne!(
+                camel_message_info_load(info, ptr::addr_of!(record), ptr::addr_of_mut!(cursor)),
+                GFALSE,
+                "a row with no provider data would not load"
+            );
+
+            assert!(pending_append(info).is_none());
+            g_string_free(bdata, GTRUE);
+            g_object_unref(info.cast());
+        }
+    }
+
+    /// Two calls never collide: `synthetic_uid`'s own randomness, not a
+    /// counter this test could outrun, keeps a restart from reusing one
+    /// still-pending append's uid for a different message.
+    #[test]
+    fn synthetic_uid_is_fresh_and_tagged_each_time() {
+        let a = synthetic_uid();
+        let b = synthetic_uid();
+        assert_ne!(a, b);
+        for uid in [&a, &b] {
+            assert!(uid.starts_with(SYNTHETIC_UID_PREFIX), "{uid}");
+        }
+    }
+
+    /// Frees the strings that `save` puts in the heap fields of `record`, the
+    /// same cleanup [`pending_filing_tests`]'s own copy does.
     ///
     /// # Safety
     ///

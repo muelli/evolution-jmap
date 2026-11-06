@@ -905,6 +905,7 @@ dependencies = [
  "evolution-jmap-proto",
  "evolution-jmap-test-support",
  "evolution-jmap-tracing-capture",
+ "getrandom 0.3.4",
  "gio-sys",
  "glib-sys",
  "gobject-sys",
