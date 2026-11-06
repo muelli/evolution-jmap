@@ -273,6 +273,20 @@ mod ureq_transport {
                     }
 
                     let same_origin = crate::url::same_origin(&current_url, &next_url);
+                    // A 307 or 308 sends the same body again (RFC 9110
+                    // Section 15.4.8 and 15.4.9). A public OAuth client sends its
+                    // refresh token, or its code and PKCE verifier, in the body,
+                    // so removing `Authorization` does not protect them. Never
+                    // send a POST body to an origin the caller did not name.
+                    if !same_origin
+                        && matches!(status, 307 | 308)
+                        && current_method == HttpMethod::Post
+                    {
+                        return Err(TransportError::Failed(format!(
+                            "refused a {status} redirect of a request body to {}",
+                            crate::url::origin_of(&next_url)
+                        )));
+                    }
                     if !same_origin {
                         // Cross-origin redirect: strip Authorization per RFC 7235
                         current_headers
