@@ -347,9 +347,13 @@ impl MessageCache {
         let source = source?;
         // An empty entry is not a message, and an entry shorter than the
         // message is not one either. A process that stops between `add` and
-        // the write leaves both. RFC 5322 has no zero-octet document. Camel's
-        // parser makes a message from either, and the caller then serves it
-        // and does not fetch, for as long as the entry survives.
+        // the write leaves both. RFC 5322 has no zero-octet document.
+        // `camel_data_cache_get` above already refuses an on-disk empty file
+        // with its own error, silently, before this point: the empty check
+        // here only catches a narrower race, a file its stat found non-empty
+        // that a concurrent write then truncates before this read. Camel's
+        // parser makes a message from the short case, and the caller then
+        // serves it and does not fetch, for as long as the entry survives.
         let damage = if source.is_empty() {
             Some("it has nothing in it".to_owned())
         } else {
