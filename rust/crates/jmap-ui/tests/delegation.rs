@@ -10,8 +10,8 @@ use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_ui::delegation::{
-    AddressBookDelegationLevel, CalendarDelegationLevel, apply_address_book_delegation,
-    apply_calendar_delegation,
+    AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, account_delegates,
+    apply_address_book_delegation, apply_calendar_delegation,
 };
 
 #[test]
@@ -119,4 +119,67 @@ fn an_address_book_delegation_level_grants_and_then_revokes_access() {
         Err(Error::Method(method_error)) => assert_eq!(method_error.error_type, "forbidden"),
         other => panic!("expected forbidden after revoke, got {other:?}"),
     }
+}
+
+#[test]
+fn account_delegates_reads_back_grants_on_a_calendar_and_a_book() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder().bearer_token("alice-token").start();
+    let account_id = server.account_id();
+    let (calendar, book) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        (
+            account.seed_calendar("Work", false),
+            account.seed_address_book("Contacts", false),
+        )
+    };
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+
+    assert_eq!(account_delegates(&alice, &account_id).unwrap(), vec![]);
+
+    apply_calendar_delegation(
+        &alice,
+        &account_id,
+        &calendar,
+        &bob,
+        CalendarDelegationLevel::Reviewer,
+    )
+    .unwrap();
+    apply_address_book_delegation(
+        &alice,
+        &account_id,
+        &book,
+        &bob,
+        AddressBookDelegationLevel::Author,
+    )
+    .unwrap();
+
+    assert_eq!(
+        account_delegates(&alice, &account_id).unwrap(),
+        vec![Delegate {
+            principal_id: bob.clone(),
+            calendar_level: CalendarDelegationLevel::Reviewer,
+            address_book_level: AddressBookDelegationLevel::Author,
+        }]
+    );
+
+    apply_calendar_delegation(
+        &alice,
+        &account_id,
+        &calendar,
+        &bob,
+        CalendarDelegationLevel::None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        account_delegates(&alice, &account_id).unwrap(),
+        vec![Delegate {
+            principal_id: bob,
+            calendar_level: CalendarDelegationLevel::None,
+            address_book_level: AddressBookDelegationLevel::Author,
+        }]
+    );
 }
