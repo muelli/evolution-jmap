@@ -670,8 +670,7 @@ impl JmapStore {
         };
         if let Some(directory) = path.parent() {
             let _ = std::fs::create_dir_all(directory);
-            let _ =
-                std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700));
+            let _ = std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700));
         }
         let mut tmp = path.clone().into_os_string();
         tmp.push(".tmp");
