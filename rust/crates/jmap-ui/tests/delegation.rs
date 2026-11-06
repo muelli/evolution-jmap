@@ -9,9 +9,10 @@
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
+use jmap_proto::principals::Principal;
 use jmap_ui::delegation::{
-    AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, account_delegates,
-    apply_address_book_delegation, apply_calendar_delegation,
+    AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, PrincipalSearch,
+    account_delegates, apply_address_book_delegation, apply_calendar_delegation, search_principals,
 };
 
 #[test]
@@ -182,4 +183,51 @@ fn account_delegates_reads_back_grants_on_a_calendar_and_a_book() {
             address_book_level: AddressBookDelegationLevel::Author,
         }]
     );
+}
+
+#[test]
+fn search_principals_finds_a_matching_principal_by_text() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let bob = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state.account_mut(&account_id).unwrap().seed_principal(
+            Principal::new("Bob Example")
+                .with_type("individual")
+                .with_email("bob@example.com"),
+        )
+    };
+
+    let alice = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let found = search_principals(&alice, &account_id, "bob").unwrap();
+    match found {
+        PrincipalSearch::Found(principals) => {
+            assert_eq!(principals.len(), 1);
+            assert_eq!(principals[0].id.as_ref(), Some(&bob));
+            assert_eq!(principals[0].email.as_deref(), Some("bob@example.com"));
+        }
+        PrincipalSearch::QueryRefused => panic!("expected a match, got QueryRefused"),
+    }
+}
+
+#[test]
+fn search_principals_finds_nothing_for_an_unknown_search() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let alice = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let found = search_principals(&alice, &account_id, "nobody").unwrap();
+    assert_eq!(found, PrincipalSearch::Found(vec![]));
+}
+
+#[test]
+fn search_principals_falls_back_to_manual_entry_when_the_server_refuses_the_query() {
+    let server = MockServer::builder().disable_principal_query().start();
+    let account_id = server.account_id();
+    let alice = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let found = search_principals(&alice, &account_id, "bob").unwrap();
+    assert_eq!(found, PrincipalSearch::QueryRefused);
 }

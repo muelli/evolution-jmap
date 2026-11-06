@@ -7,9 +7,11 @@
 //! delegation as "sharing with a nicer picker": the evo-ews vocabulary
 //! (None, Reviewer, Author, Editor, plus a free/busy-only tier for
 //! calendars) mapped onto the `shareWith` rights `Calendar` and
-//! `AddressBook` already model. This module holds that mapping and the
-//! `shareWith` patch and client calls it drives; the page and the
-//! `Principal/query` picker are later claims.
+//! `AddressBook` already model. This module holds that mapping, the
+//! `shareWith` patch and client calls it drives, and the `Principal/query`
+//! lookup for the picker (falling back to manual id entry when the server
+//! refuses the query, as `stalwart-runner` does); the GTK page itself is a
+//! later claim.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,6 +19,8 @@ use jmap_client::{Client, Error};
 use jmap_proto::Id;
 use jmap_proto::calendars::{Calendar, CalendarRights};
 use jmap_proto::contacts::{AddressBook, AddressBookRights};
+use jmap_proto::error::method::{FORBIDDEN, UNKNOWN_METHOD};
+use jmap_proto::principals::{Principal, PrincipalQueryFilter};
 use jmap_proto::text::escape_pointer_segment;
 use serde_json::{Value, json};
 
@@ -242,6 +246,50 @@ pub fn account_delegates(client: &Client, account_id: &Id) -> Result<Vec<Delegat
     let calendars = client.calendars(account_id)?;
     let address_books = client.address_books(account_id)?;
     Ok(list_delegates(&calendars, &address_books))
+}
+
+/// The result of looking up a principal to delegate to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PrincipalSearch {
+    /// The server answered `Principal/query`; these principals matched
+    /// `text` (possibly none).
+    Found(Vec<Principal>),
+    /// The server refuses `Principal/query` (Stalwart's default directory
+    /// policy). The caller should fall back to a manual principal-id field.
+    QueryRefused,
+}
+
+/// Look up principals matching `text` (`Principal/query` with a free-text
+/// filter, then `Principal/get` on the matching ids), for the Delegates
+/// page's picker. `text` is matched against name, email and other
+/// properties, server-side.
+///
+/// When the server refuses the query with `forbidden` or does not implement
+/// it at all, this returns `QueryRefused` rather than an error, so the page
+/// can offer manual principal-id entry instead (the item 164 design note's
+/// documented fallback for `stalwart-runner`, which disables directory
+/// queries). Any other error still propagates.
+pub fn search_principals(
+    client: &Client,
+    account_id: &Id,
+    text: &str,
+) -> Result<PrincipalSearch, Error> {
+    let ids = match client.principal_query(account_id, PrincipalQueryFilter::default().text(text)) {
+        Ok(ids) => ids,
+        Err(Error::Method(method_error))
+            if method_error.error_type == FORBIDDEN
+                || method_error.error_type == UNKNOWN_METHOD =>
+        {
+            return Ok(PrincipalSearch::QueryRefused);
+        }
+        Err(error) => return Err(error),
+    };
+    if ids.is_empty() {
+        return Ok(PrincipalSearch::Found(vec![]));
+    }
+    Ok(PrincipalSearch::Found(
+        client.principal_get(account_id, &ids)?,
+    ))
 }
 
 #[cfg(test)]
