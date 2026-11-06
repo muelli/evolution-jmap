@@ -29,6 +29,7 @@ pub mod message;
 pub mod path;
 pub(crate) mod pointer;
 pub mod send;
+pub mod shared;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -49,6 +50,7 @@ pub use message::{
     MessageFlags, MessageSummary, SOURCE_PROPERTIES, SUMMARY_PROPERTIES, download_ceiling,
 };
 pub use send::{Outgoing, OutgoingMailboxes};
+pub use shared::{SharedMailAccount, shared_mail_accounts};
 
 /// The result of a folder-list refresh.
 ///
