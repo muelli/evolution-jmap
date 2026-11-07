@@ -5,7 +5,9 @@
 
 use libfuzzer_sys::fuzz_target;
 
-use jmap_client::eventsource::{parse_chunked_stream, parse_response_head, parse_stream};
+use jmap_client::eventsource::{
+    expand_url, parse_chunked_stream, parse_response_head, parse_stream,
+};
 use jmap_client::transport::CancelFlag;
 
 fuzz_target!(|data: &[u8]| {
@@ -19,4 +21,9 @@ fuzz_target!(|data: &[u8]| {
     while rx.try_recv().is_ok() {}
 
     let _ = parse_response_head(std::io::BufReader::new(data));
+
+    if let Ok(s) = std::str::from_utf8(data) {
+        let _ = expand_url(s, &["Email", "Mailbox"], false, 30);
+        let _ = expand_url(s, &[s], true, 0);
+    }
 });

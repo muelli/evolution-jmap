@@ -168,5 +168,10 @@ fn hostile_eventsource_streams_never_panic() {
         while rx.try_recv().is_ok() {}
 
         let _ = parse_response_head(std::io::BufReader::new(*input));
+
+        if let Ok(s) = std::str::from_utf8(input) {
+            let _ = jmap_client::eventsource::expand_url(s, &["Email", "Mailbox"], false, 30);
+            let _ = jmap_client::eventsource::expand_url(s, &[s], true, 0);
+        }
     }
 }
