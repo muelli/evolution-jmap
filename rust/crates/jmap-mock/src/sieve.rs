@@ -121,6 +121,17 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
         on_success_deactivate_script,
         ..
     } = request;
+    if on_success_deactivate_script == Some(true)
+        && on_success_activate_script
+            .as_ref()
+            .is_some_and(|v| !v.is_null())
+    {
+        return Err(
+            MethodError::new(error::method::INVALID_ARGUMENTS).with_description(
+                "onSuccessActivateScript and onSuccessDeactivateScript are mutually exclusive",
+            ),
+        );
+    }
     let account_id = set.account_id.clone();
     let account = account_mut(state, &account_id)?;
 
@@ -197,6 +208,17 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
                 )),
             );
             continue;
+        }
+        if script.name.is_empty() {
+            let mut counter = 1;
+            loop {
+                let candidate = format!("script-{counter}");
+                if !names.values().any(|name| name == &candidate) {
+                    script.name = candidate;
+                    break;
+                }
+                counter += 1;
+            }
         }
         if names.values().any(|name| name == &script.name) {
             not_created.insert(creation_id, SetError::new(error::set::ALREADY_EXISTS));
@@ -359,26 +381,50 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
 }
 
 /// `SieveScript/query` (RFC 9661 §2.5).
-/// Filter by `name` substring, by `isActive`, or both.
+/// Filter by `name` substring (case-insensitively), by `isActive`, or both.
+/// Supports sorting by `name` and `isActive`.
 pub fn sieve_script_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<SieveScriptQueryFilter> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
 
     let filter = request.filter.unwrap_or_default();
-    let ids: Vec<Id> = account
+    let mut matching: Vec<(&Id, &SieveScript)> = account
         .sieve_scripts
         .iter()
         .filter(|(_, script)| sieve_script_matches(script, &filter))
+        .collect();
+
+    if let Some(sort) = &request.sort {
+        for comparator in sort.iter().rev() {
+            let ascending = comparator.is_ascending;
+            match comparator.property.as_str() {
+                "name" => {
+                    matching.sort_by(|(_, a), (_, b)| {
+                        let ord = a.name.cmp(&b.name);
+                        if ascending { ord } else { ord.reverse() }
+                    });
+                }
+                "isActive" => {
+                    matching.sort_by(|(_, a), (_, b)| {
+                        let ord = a.is_active.cmp(&b.is_active);
+                        if ascending { ord } else { ord.reverse() }
+                    });
+                }
+                other => {
+                    return Err(MethodError::new("unsupportedSort")
+                        .with_description(format!("mock cannot sort scripts by {other}")));
+                }
+            }
+        }
+    }
+
+    let total = matching.len() as u64;
+    let ids: Vec<Id> = matching
+        .into_iter()
         .map(|(id, _)| id.clone())
         .skip(request.position.max(0) as usize)
         .take(request.limit.unwrap_or(u64::MAX) as usize)
         .collect();
-
-    let total = account
-        .sieve_scripts
-        .iter()
-        .filter(|(_, script)| sieve_script_matches(script, &filter))
-        .count() as u64;
 
     let mut response = QueryResponse::new(request.account_id, account.sieve_scripts.state(), ids)
         .with_position(request.position.max(0) as u64);
@@ -390,7 +436,7 @@ pub fn sieve_script_query(state: &mut ServerState, arguments: Value) -> Result<V
 
 fn sieve_script_matches(script: &SieveScript, filter: &SieveScriptQueryFilter) -> bool {
     if let Some(name) = &filter.name
-        && !script.name.contains(name.as_str())
+        && !script.name.to_lowercase().contains(&name.to_lowercase())
     {
         return false;
     }
@@ -542,6 +588,16 @@ fn is_invalid_utf8_sieve_error(set_error: &SetError) -> bool {
 }
 
 fn validate_script_name(script: &SieveScript, settings: &SieveSettings) -> Result<(), SetError> {
+    for c in script.name.chars() {
+        if matches!(
+            c,
+            '\u{0000}'..='\u{001F}' | '\u{007F}'..='\u{009F}' | '\u{2028}' | '\u{2029}'
+        ) {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("name contains forbidden control or line separator characters")
+                .with_properties(["name"]));
+        }
+    }
     let octets = script.name.len() as u64;
     if octets > settings.max_size_script_name {
         return Err(

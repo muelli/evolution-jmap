@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::Engine;
 use jmap_proto::Id;
 use jmap_proto::contacts::{
-    AddressBook, AddressBookRights, ContactCard, ContactCardQueryFilter, Media,
+    AddressBook, AddressBookRights, AddressBookSetRequest, ContactCard, ContactCardQueryFilter,
+    Media,
 };
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{
@@ -131,7 +132,9 @@ pub fn address_book_set(
     arguments: Value,
     caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
-    let mut request: SetRequest<AddressBook> = parse_arguments(arguments)?;
+    let full_request: AddressBookSetRequest = parse_arguments(arguments)?;
+    let on_destroy_remove_contents = full_request.on_destroy_remove_contents.unwrap_or(false);
+    let mut request = full_request.set;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
     let terse_collection_create = state.terse_collection_create;
     let id_omitting_collection_create = state.id_omitting_collection_create;
@@ -217,6 +220,7 @@ pub fn address_book_set(
         .collect();
 
     let owner_principal_id = account.current_user_principal_id.clone();
+    let contact_cards = &account.contact_cards;
     let mut response = simple_set_with_validation(
         &mut account.address_books,
         request,
@@ -252,7 +256,21 @@ pub fn address_book_set(
                 owner_principal_id.as_ref(),
             )
         },
-        |_id, _existing| Ok(()),
+        |id, _existing| {
+            if !on_destroy_remove_contents {
+                let has_cards = contact_cards.iter().any(|(_, card)| {
+                    card.address_book_ids
+                        .as_ref()
+                        .is_some_and(|b| b.contains_key(id))
+                });
+                if has_cards {
+                    return Err(SetError::new("addressBookHasContents").with_description(
+                        "cannot destroy non-empty address book without onDestroyRemoveContents: true",
+                    ));
+                }
+            }
+            Ok(())
+        },
     )?;
 
     if !forbidden_created.is_empty() {
@@ -272,6 +290,53 @@ pub fn address_book_set(
             .not_destroyed
             .get_or_insert_with(BTreeMap::new)
             .extend(forbidden_destroyed);
+    }
+
+    if on_destroy_remove_contents && let Some(destroyed) = &response.destroyed {
+        let destroyed_set: BTreeSet<&Id> = destroyed.iter().collect();
+        let card_updates: Vec<(Id, Option<ContactCard>)> = account
+            .contact_cards
+            .iter()
+            .filter_map(|(card_id, card)| {
+                let mut updated_card = card.clone();
+                let mut modified = false;
+                if let Some(books) = updated_card.address_book_ids.as_mut() {
+                    for book_id in &destroyed_set {
+                        if books.remove(*book_id).is_some() {
+                            modified = true;
+                        }
+                    }
+                }
+                if modified {
+                    let is_empty = updated_card
+                        .address_book_ids
+                        .as_ref()
+                        .is_none_or(|books| books.is_empty());
+                    if is_empty {
+                        Some((card_id.clone(), None))
+                    } else {
+                        Some((card_id.clone(), Some(updated_card)))
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !card_updates.is_empty() {
+            account.contact_cards.transaction(|transaction| {
+                for (card_id, maybe_card) in card_updates {
+                    match maybe_card {
+                        Some(updated_card) => {
+                            transaction.update(&card_id, updated_card);
+                        }
+                        None => {
+                            transaction.destroy(&card_id);
+                        }
+                    }
+                }
+            });
+        }
     }
 
     if let Some(updated) = &response.updated {
