@@ -115,3 +115,60 @@ fn zero_duration_trigger_with_custom_param_reaches_fixed_point_stability() {
         "Event_2 and Event_3 must be identical fixed point"
     );
 }
+
+#[test]
+fn data_uri_in_conference_or_attach_reaches_fixed_point_stability() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:test-data-uri-conference\r\nDTSTART:20261110T000000Z\r\nCONFERENCE;VALUE=-CALDAV-CTAG:data:,ctag-42\r\nATTACH;VALUE=-CUSTOM:data:text/plain,hello\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let event1 = ical_to_event(ics).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}
+
+#[test]
+fn raw_backslashes_in_uri_reaches_fixed_point_stability() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:test-backslash-uri\r\nDTSTART:20261110T000000Z\r\nORGANIZER;CN=\"Release Lead\":mailto:release-lead@gnome\\\\\\\\.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let event1 = ical_to_event(ics).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}
+
+#[test]
+fn control_characters_in_uri_reaches_fixed_point_stability() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:test-control-char-uri\r\nDTSTART:20261110T000000Z\r\nORGANIZER;CN=\"Prof. Alicia Vaenc\":mailto:alicia.v\x17ance@example.com\r\nATTENDEE;CN=\"Prof. Alicia Vance\":mailto:alicia.vance@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let event1 = ical_to_event(ics).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}

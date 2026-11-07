@@ -23,6 +23,16 @@ fuzz_target!(|data: &[u8]| {
                     );
                 }
             }
+
+            // Exercise scheduling iCalendar serialization across series and overrides.
+            let _ = jmap_ical::scheduling_ical(&event1, "REQUEST", None);
+            let _ = jmap_ical::scheduling_ical(&event1, "REPLY", None);
+            let _ = jmap_ical::scheduling_ical(&event1, "CANCEL", None);
+            if let Some(ref overrides) = event1.recurrence_overrides {
+                for recurrence_id in overrides.keys() {
+                    let _ = jmap_ical::scheduling_ical(&event1, "REQUEST", Some(recurrence_id));
+                }
+            }
         }
     }
 });

@@ -744,7 +744,7 @@ pub fn drawn_conference(key: &str, location: &Value) -> Option<ICalendarEntry> {
     let uri = location
         .get("uri")?
         .as_str()
-        .filter(|uri| names_a_uri(uri) && !fetched_locally(uri))?;
+        .filter(|uri| names_a_uri(uri) && !fetched_locally(uri) && !is_data_uri(uri))?;
     Some(
         make_uri_entry("CONFERENCE", uri)
             .with_named_param("VALUE", "URI")
@@ -808,7 +808,7 @@ pub fn drawn_link(key: &str, link: &Value) -> Option<ICalendarEntry> {
     let href = link
         .get("href")?
         .as_str()
-        .filter(|href| names_a_uri(href) && !fetched_locally(href))?;
+        .filter(|href| names_a_uri(href) && !fetched_locally(href) && !is_data_uri(href))?;
     let media_type = media_type(link);
     if link.get("rel").and_then(Value::as_str) == Some(ICON_REL) {
         // `VALUE=URI` because RFC 7986 §5.10's `image` grammar makes it REQUIRED
@@ -893,7 +893,7 @@ pub fn calendar_address(participant: &Value) -> Option<&str> {
                 .and_then(|send_to| send_to.get(IMIP))
                 .and_then(Value::as_str)
         })
-        .filter(|address| names_a_uri(address))
+        .filter(|address| names_a_uri(address) && !is_data_uri(address))
 }
 
 /// Whether a value is a URI this mapping will put on a content line: RFC 3986
@@ -907,7 +907,10 @@ pub fn names_a_uri(value: &str) -> bool {
     let Some((_, rest)) = jmap_proto::text::split_uri(value) else {
         return false;
     };
-    !rest.is_empty() && !value.chars().any(char::is_whitespace)
+    !rest.is_empty()
+        && !value
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
 }
 
 /// The `name` an object states, or `None` where it has none to put in a `CN` or
@@ -2807,7 +2810,7 @@ const INVENTED_PARTICIPANT_KEY: &str = "p";
 pub fn read_organizer(vevent: &ICalendarComponent) -> Option<String> {
     component_entry(vevent, "ORGANIZER")
         .map(entry_raw_value)
-        .filter(|address| names_a_uri(address))
+        .filter(|address| names_a_uri(address) && !is_data_uri(address))
 }
 
 /// Parse component participants into a JSCalendar participant map.
@@ -2843,7 +2846,7 @@ pub fn read_participants(vevent: &ICalendarComponent) -> Option<BTreeMap<String,
 
     if let Some(line) = component_entry(vevent, "ORGANIZER") {
         let address = entry_raw_value(line);
-        if names_a_uri(&address) {
+        if names_a_uri(&address) && !is_data_uri(&address) {
             let participant = entry(&mut people, address);
             named(line, participant);
             participant.insert("roles".to_owned(), json!({ OWNER_ROLE: true }));
@@ -2851,7 +2854,7 @@ pub fn read_participants(vevent: &ICalendarComponent) -> Option<BTreeMap<String,
     }
     for line in component_entries(vevent, "ATTENDEE") {
         let address = entry_raw_value(line);
-        if !names_a_uri(&address) {
+        if !names_a_uri(&address) || is_data_uri(&address) {
             continue;
         }
         let participant = entry(&mut people, address);
@@ -2939,7 +2942,7 @@ pub fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<St
     let mut invented = 0;
     for (line, key) in lines.iter().zip(&keys) {
         let value = entry_raw_value(line);
-        if !names_a_uri(&value) || fetched_locally(&value) {
+        if !names_a_uri(&value) || fetched_locally(&value) || is_data_uri(&value) {
             continue;
         }
         let key = match key {
@@ -2995,7 +2998,7 @@ pub fn read_links(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>
     let mut invented = 0;
     for (line, key) in lines.iter().zip(&keys) {
         let href = entry_raw_value(line);
-        if !names_a_uri(&href) || fetched_locally(&href) {
+        if !names_a_uri(&href) || fetched_locally(&href) || is_data_uri(&href) {
             continue;
         }
         let key = match key {
@@ -3037,6 +3040,12 @@ pub fn read_links(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>
 pub fn fetched_locally(href: &str) -> bool {
     href.split_once(':')
         .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
+}
+
+/// Return true if the URI uses the `data:` scheme (RFC 2397).
+pub fn is_data_uri(href: &str) -> bool {
+    href.split_once(':')
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("data"))
 }
 
 /// Parse `CATEGORIES` properties into a JSCalendar keywords set.
