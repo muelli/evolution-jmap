@@ -558,3 +558,86 @@ fn a_file_href_from_the_server_is_not_drawn_as_an_attach_line() {
         "the https: link is lost:\n{ics}"
     );
 }
+
+/// A `file:` virtual location from the server never becomes a `CONFERENCE` line,
+/// because Evolution and EDS read such a path on the local machine.
+#[test]
+fn a_file_href_in_a_virtual_location_is_not_drawn_as_a_conference_line() {
+    let mut places = std::collections::BTreeMap::new();
+    for (key, uri) in [
+        ("zero", "file:///dev/zero"),
+        ("upper", "FILE:///tmp/cache.ics"),
+        ("icon", "File://localhost/home/vera/.cache/room"),
+        ("kept", "https://meet.example.com/standup"),
+    ] {
+        let place = serde_json::json!({
+            "@type": "VirtualLocation",
+            "uri": uri,
+            "name": "Room",
+        });
+        places.insert(key.to_owned(), place);
+    }
+    let ics = event_to_ical(&{
+        let mut event_out = event();
+        event_out.virtual_locations = Some(places);
+        event_out
+    });
+    assert!(
+        !ics.to_ascii_lowercase().contains("file:"),
+        "a file: virtual location reached the component:\n{ics}"
+    );
+    assert!(
+        ics.contains("CONFERENCE;VALUE=URI"),
+        "the https: conference is lost:\n{ics}"
+    );
+    let back = jmap_ical::ical_to_event(&ics).expect("round-trip parses");
+    let back_vlocations = back.virtual_locations.expect("has virtual locations");
+    assert_eq!(back_vlocations.len(), 1);
+    let only = back_vlocations
+        .values()
+        .next()
+        .expect("kept virtual location");
+    assert_eq!(
+        only.get("uri").and_then(|u| u.as_str()),
+        Some("https://meet.example.com/standup")
+    );
+}
+
+/// A `CONFERENCE` line with a `file:` URI is dropped by the iCalendar parser,
+/// so local file URIs never reach JSCalendar virtual locations.
+#[test]
+fn a_file_uri_in_conference_is_dropped_by_ical_parser() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCONFERENCE;VALUE=URI:file:///etc/passwd\r\nCONFERENCE;VALUE=URI:https://meet.example.com/standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let event = jmap_ical::ical_to_event(ics).expect("parses");
+    let vlocations = event.virtual_locations.expect("has virtual locations");
+    assert_eq!(vlocations.len(), 1);
+    let only = vlocations.values().next().expect("one location");
+    assert_eq!(
+        only.get("uri").and_then(|u| u.as_str()),
+        Some("https://meet.example.com/standup")
+    );
+}
+
+/// Scheduling payloads with showWithoutTime must not panic on short or multibyte recurrence-ids.
+#[test]
+fn scheduling_ical_with_show_without_time_and_hostile_recurrence_id_does_not_panic() {
+    let mut event_out = event();
+    event_out.start = Some("2026-01-15T00:00:00".to_owned());
+    event_out.show_without_time = Some(true);
+    event_out.duration = Some("P1D".to_owned());
+    event_out.time_zone = None;
+
+    for hostile in [
+        "",
+        "short",
+        "2026",
+        "2026011",
+        "2026011é",
+        "20260115",
+        "20260115T130000Z",
+    ] {
+        let ics = scheduling_ical(&event_out, "REQUEST", Some(hostile));
+        assert!(ics.contains("BEGIN:VCALENDAR"));
+        assert!(ics.contains("RECURRENCE-ID"));
+    }
+}

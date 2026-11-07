@@ -744,7 +744,7 @@ pub fn drawn_conference(key: &str, location: &Value) -> Option<ICalendarEntry> {
     let uri = location
         .get("uri")?
         .as_str()
-        .filter(|uri| names_a_uri(uri))?;
+        .filter(|uri| names_a_uri(uri) && !fetched_locally(uri))?;
     Some(
         make_uri_entry("CONFERENCE", uri)
             .with_named_param("VALUE", "URI")
@@ -1807,7 +1807,14 @@ pub fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>)
         (true, _) => {
             let vals = values
                 .iter()
-                .map(|value| ICalendarValue::Text(value[..8].to_owned()))
+                .map(|value| {
+                    let date_val = if value.len() >= 8 && value.is_char_boundary(8) {
+                        &value[..8]
+                    } else {
+                        value.as_str()
+                    };
+                    ICalendarValue::Text(date_val.to_owned())
+                })
                 .collect();
             ICalendarEntry::new(prop)
                 .with_values(vals)
@@ -2920,7 +2927,7 @@ pub fn read_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Va
 /// Parse `CONFERENCE` properties into a virtual locations map (RFC 7986 §5.11).
 ///
 /// Read URI, label, and feature parameters for each conference entry.
-/// Drop invalid URIs and return `None` when no entries exist.
+/// Drop invalid URIs and local `file:` schemes, returning `None` when no entries exist.
 pub fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
     let lines: Vec<&ICalendarEntry> = component_entries(vevent, "CONFERENCE").collect();
     let keys: Vec<Option<String>> = lines
@@ -2932,7 +2939,7 @@ pub fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<St
     let mut invented = 0;
     for (line, key) in lines.iter().zip(&keys) {
         let value = entry_raw_value(line);
-        if !names_a_uri(&value) {
+        if !names_a_uri(&value) || fetched_locally(&value) {
             continue;
         }
         let key = match key {
