@@ -80,19 +80,24 @@ pub const SOURCE_PROPERTIES: &[&str] = &["id", "blobId", "size"];
 /// `blobId` refers to. The download returns that data. Thus, the server
 /// limits the memory of one open message before the download starts.
 ///
-/// The ceiling is `size + size / 8 + 64 KiB`. A server that stores bare-LF
-/// line endings and serves CRLF adds one octet per line, and its `size` can
-/// count the stored form. A mail line is usually longer than eight octets, so
-/// one eighth covers this growth. The flat 64 KiB gives a margin to short
-/// messages. The ceiling stays proportional to the advertised size.
+/// The ceiling is `size + size / 8 + 64 KiB`, capped at
+/// [`limits::MAX_BLOB_BYTES`]. A server that stores bare-LF line endings and
+/// serves CRLF adds one octet per line, and its `size` can count the stored
+/// form. A mail line is usually longer than eight octets, so one eighth
+/// covers this growth. The flat 64 KiB gives a margin to short messages. The
+/// ceiling stays proportional to the advertised size, but never above the
+/// largest message this repository opens, so a server that lies about the
+/// size cannot license a larger buffer than a row with no size at all would.
 ///
-/// A row without `size` gets [`limits::MAX_BLOB_BYTES`], the largest message
-/// that this repository opens.
+/// A row without `size` also gets [`limits::MAX_BLOB_BYTES`].
 pub fn download_ceiling(advertised: Option<u64>) -> u64 {
     match advertised {
         // Saturating addition: a size near `u64::MAX` must not wrap to a
-        // small ceiling. No message has that size.
-        Some(size) => size.saturating_add(size / 8).saturating_add(64 * 1024),
+        // small ceiling. The `min` then clamps it to the fallback ceiling.
+        Some(size) => size
+            .saturating_add(size / 8)
+            .saturating_add(64 * 1024)
+            .min(limits::MAX_BLOB_BYTES),
         None => limits::MAX_BLOB_BYTES,
     }
 }
@@ -273,10 +278,10 @@ mod ceiling_tests {
     use super::*;
 
     /// The ceiling is above the advertised size, so a message of exactly that
-    /// size arrives.
+    /// size arrives, for every size this repository ever opens.
     #[test]
     fn the_ceiling_a_row_gets_is_above_the_size_it_states() {
-        for size in [0, 1, 1024, 11 * 1024 * 1024, 900 * 1024 * 1024] {
+        for size in [0, 1, 1024, 11 * 1024 * 1024, 100 * 1024 * 1024] {
             let ceiling = download_ceiling(Some(size));
             assert!(
                 ceiling > size,
@@ -329,6 +334,14 @@ mod ceiling_tests {
     /// An impossible size saturates and does not wrap to a small ceiling.
     #[test]
     fn a_size_no_message_has_saturates_rather_than_wrapping() {
-        assert_eq!(download_ceiling(Some(u64::MAX)), u64::MAX);
+        assert_eq!(download_ceiling(Some(u64::MAX)), limits::MAX_BLOB_BYTES);
+    }
+
+    /// A row that states a size above the fallback ceiling does not license
+    /// a larger buffer than a row with no size at all would get.
+    #[test]
+    fn download_ceiling_never_exceeds_max_blob_bytes() {
+        assert!(download_ceiling(Some(10 * 1024 * 1024 * 1024)) <= limits::MAX_BLOB_BYTES);
+        assert!(download_ceiling(Some(u64::MAX)) <= limits::MAX_BLOB_BYTES);
     }
 }
