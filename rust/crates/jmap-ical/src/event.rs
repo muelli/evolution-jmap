@@ -921,7 +921,8 @@ pub fn names_a_uri(value: &str) -> bool {
 /// the place is named nothing, where leaving it off says only that the value
 /// speaks for itself.
 pub fn stated_name(value: &Value) -> Option<&str> {
-    value.get("name")?.as_str().filter(|name| !name.is_empty())
+    let name = value.get("name")?.as_str()?.trim();
+    (!name.is_empty()).then_some(name)
 }
 
 /// Whether a participant states this RFC 8984 §4.4.6 role. The values of a set
@@ -2168,7 +2169,7 @@ pub fn date_time_text(stamp: &PartialDateTime) -> String {
 
 pub fn param_text(value: &ICalendarParameterValue) -> String {
     match value {
-        ICalendarParameterValue::Text(text) => caret_decoded(text),
+        ICalendarParameterValue::Text(text) => caret_decoded(text).trim().to_owned(),
         ICalendarParameterValue::Integer(number) => number.to_string(),
         ICalendarParameterValue::Bool(true) => "TRUE".to_owned(),
         ICalendarParameterValue::Bool(false) => "FALSE".to_owned(),
@@ -3048,14 +3049,43 @@ pub fn is_data_uri(href: &str) -> bool {
         .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("data"))
 }
 
+/// Normalize a category keyword tag by trimming leading and trailing whitespace
+/// and collapsing consecutive spaces or tabs to match calcard's tokenizer folding rules.
+pub fn normalize_keyword(tag: &str) -> String {
+    let trimmed = tag.trim_matches(|c| c == ' ' || c == '\t');
+    let mut out = String::with_capacity(trimmed.len());
+    let mut last_space = false;
+    let mut last_tab = false;
+    for c in trimmed.chars() {
+        if c == ' ' {
+            if !last_space {
+                out.push(' ');
+                last_space = true;
+            }
+            last_tab = false;
+        } else if c == '\t' {
+            if !last_tab {
+                out.push('\t');
+                last_tab = true;
+            }
+            last_space = false;
+        } else {
+            out.push(c);
+            last_space = false;
+            last_tab = false;
+        }
+    }
+    out
+}
+
 /// Parse `CATEGORIES` properties into a JSCalendar keywords set.
 ///
-/// Split comma-separated values, trim whitespace, and discard empty entries.
+/// Split comma-separated values, trim and normalize whitespace, and discard empty entries.
 /// Return `None` when no keywords exist.
 pub fn read_keywords(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = component_entries(vevent, "CATEGORIES")
         .flat_map(entry_texts)
-        .map(|tag| tag.trim().to_owned())
+        .map(|tag| normalize_keyword(&tag))
         .filter(|tag| !tag.is_empty())
         .map(|tag| (tag, Value::Bool(true)))
         .collect();
@@ -3246,6 +3276,7 @@ pub fn stated_duration(value: &str) -> Option<String> {
     let mut rest = value.strip_prefix(['P', 'p'])?;
     let mut out = String::from("P");
     let mut measured = false;
+    let mut in_time = false;
     let mut time_part = false;
     let mut has_non_zero = false;
     for unit in ['W', 'D', 'T', 'H', 'M', 'S'] {
@@ -3255,7 +3286,11 @@ pub fn stated_duration(value: &str) -> Option<String> {
                 rest = after;
                 measured = false;
                 time_part = true;
+                in_time = true;
             }
+            continue;
+        }
+        if matches!(unit, 'H' | 'M' | 'S') && !in_time {
             continue;
         }
         let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();

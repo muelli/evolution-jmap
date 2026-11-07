@@ -298,9 +298,10 @@ Lossy: the mapping does not map `title`, `cid` and the `FILENAME` parameter
   sorted order. If no tag is drawable, the mapping writes no line.
 - `maps_keyword` refuses these tags: a value other than `true`, an empty tag,
   a tag with only whitespace, and a tag that contains CR.
-- In: every `CATEGORIES` line, split on commas. The mapping trims each tag. It
-  drops empty tags. Duplicates collapse. Trimming on the first read gives the
-  same result as the trim of `calcard` on the second read. The round trip is
+- In: every `CATEGORIES` line, split on commas. The mapping trims each tag and
+  collapses consecutive spaces or tabs. It drops empty tags. Duplicates
+  collapse. Normalising whitespace on the first read gives the same result as
+  the unfolding tokenizer of `calcard` on the second read. The round trip is
   therefore a fixed point.
 - Save (`diff_keywords`): the save replaces the whole set. It copies the tags
   that the line could not show from the set of the server into the new set. A

@@ -34712,6 +34712,13 @@ fn differential_oracle_duration_resolution_and_civil_day_conversion() {
         Some("PT1H15S".to_owned())
     );
     assert_eq!(jmap_ical::event::stated_duration("-PT1H"), None);
+    assert_eq!(jmap_ical::event::stated_duration("P15M"), None);
+    assert_eq!(jmap_ical::event::stated_duration("P15H"), None);
+    assert_eq!(jmap_ical::event::stated_duration("P15S"), None);
+    assert_eq!(
+        jmap_ical::event::stated_duration("PT15M"),
+        Some("PT15M".to_owned())
+    );
     assert_eq!(jmap_ical::event::stated_duration("not-a-duration"), None);
 
     // 4. period_length evaluation:

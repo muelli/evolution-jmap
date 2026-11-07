@@ -172,3 +172,95 @@ fn control_characters_in_uri_reaches_fixed_point_stability() {
         "Event_2 and Event_3 must be identical fixed point"
     );
 }
+
+#[test]
+fn categories_with_tabs_or_whitespace_reaches_fixed_point_stability() {
+    let bytes: &[u8] = &[
+        66, 69, 71, 73, 78, 58, 86, 67, 65, 76, 69, 78, 68, 65, 82, 10, 80, 82, 79, 68, 73, 68, 58,
+        45, 47, 47, 0, 0, 0, 0, 0, 63, 97, 32, 67, 97, 108, 101, 110, 100, 78, 69, 10, 66, 69, 71,
+        73, 78, 58, 86, 69, 86, 69, 78, 84, 10, 85, 73, 68, 58, 100, 67, 76, 65, 83, 58, 48, 10,
+        67, 65, 84, 69, 71, 79, 82, 73, 69, 83, 58, 58, 107, 105, 110, 100, 9, 9, 9, 9, 9, 9, 9, 9,
+        9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+        9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 65, 82, 77,
+        10, 88, 1, 0, 0, 32, 78, 69, 82, 65, 84, 73, 79, 78, 58, 53, 10, 69, 78, 68, 58, 86, 69,
+        86, 69, 78, 84, 10, 69, 78, 68, 58, 86, 67, 65, 76, 69, 78, 68, 65, 82, 10,
+    ];
+    let text = std::str::from_utf8(bytes).expect("Valid UTF-8");
+    let event1 = ical_to_event(text).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}
+
+#[test]
+fn trigger_duration_without_time_prefix_reaches_fixed_point_stability() {
+    let ical = "BEGIN:VCALENDAR\n\
+VERSION:2.0\n\
+PRODID:-//evolution-jmap//Differential Harness Custom Timezone Fixture//EN\n\
+CALSCALE:GREGORIAN\n\
+BEGIN:VEVENT\n\
+UID:custom-tz-sync-2026-c001\n\
+DTSTAMP:20260928T120000Z\n\
+DTSTART:20261015T140000Z\n\
+SUMMARY:Technical Sync\n\
+BEGIN:VALARM\n\
+ACTION:DISPLAY\n\
+TRIGGER;VALUE=DURATIONT:-P15M\n\
+DESCRIPTION:Reminder\n\
+END:VALARM\n\
+END:VEVENT\n\
+END:VCALENDAR\n";
+    let event1 = ical_to_event(ical).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}
+
+#[test]
+fn participant_cn_with_trailing_tab_reaches_fixed_point_stability() {
+    let ical = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//evolution-jmap//Differential Harness DST Spanning Fixture//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:dst-transition-spanning-2026-c001\r\n\
+DTSTART:20261025T010000\r\n\
+SUMMARY:Overnight Database\r\n\
+ORGANIZER;CN=\"Art       \t\":mailto:arthur.dent@earth.example\r\n\
+ATTENDEE;CN=Art\t;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT:mailto:arthur.dent@earth.example\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let event1 = ical_to_event(ical).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}
