@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# A stock Dovecot IMAP server, for ci/gui-scenario's planned JMAP-vs-IMAP
+# comparison (ROADMAP item 175). No TLS, PLAIN auth, Maildir storage: a
+# throwaway test fixture, not a hardened mail server.
+#
+# Build (rootless podman, from the top of the repository):
+#   podman build -t evolution-jmap-dovecot-oracle ci/dovecot-oracle
+# ci/dovecot-oracle.sh builds the image when it is missing.
+
+ARG UBUNTU=docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+
+FROM ${UBUNTU}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends dovecot-core dovecot-imapd \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY entrypoint.sh /usr/local/bin/dovecot-oracle-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/dovecot-oracle-entrypoint.sh"]
