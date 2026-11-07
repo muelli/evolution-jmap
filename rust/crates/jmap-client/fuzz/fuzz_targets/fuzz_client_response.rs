@@ -9,7 +9,7 @@ use jmap_client::transport::{HttpMethod, HttpRequest, HttpResponse, Transport, T
 use jmap_client::{Client, Credentials};
 use jmap_proto::Id;
 
-const MINIMAL_AUTHENTICATED_SESSION: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:calendars":{}},"accounts":{"acc1":{"name":"user","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:calendars":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"acc1","urn:ietf:params:jmap:contacts":"acc1","urn:ietf:params:jmap:calendars":"acc1"},"username":"user","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
+const MINIMAL_AUTHENTICATED_SESSION: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:calendars":{},"urn:ietf:params:jmap:principals":{},"urn:ietf:params:jmap:sieve":{}},"accounts":{"acc1":{"name":"user","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:calendars":{},"urn:ietf:params:jmap:principals":{},"urn:ietf:params:jmap:sieve":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"acc1","urn:ietf:params:jmap:contacts":"acc1","urn:ietf:params:jmap:calendars":"acc1","urn:ietf:params:jmap:principals":"acc1"},"username":"user","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
 
 struct FuzzTransport {
     response_body: Vec<u8>,
@@ -93,15 +93,9 @@ fuzz_target!(|data: &[u8]| {
             &jmap_proto::calendars::Calendar::new("fuzz_cal"),
         );
         let _ = client.calendar_destroy(&account_id, &Id::new("c1"));
-        let _ = client.contact_create(
-            &account_id,
-            &jmap_proto::contacts::ContactCard::new(),
-        );
+        let _ = client.contact_create(&account_id, &jmap_proto::contacts::ContactCard::new());
         let _ = client.contact_destroy(&account_id, &Id::new("card1"));
-        let _ = client.event_create(
-            &account_id,
-            &jmap_proto::calendars::CalendarEvent::new(),
-        );
+        let _ = client.event_create(&account_id, &jmap_proto::calendars::CalendarEvent::new());
         let _ = client.event_destroy(&account_id, &Id::new("ev1"));
         let _ = client.event_parse(&jmap_proto::calendars::CalendarEventParseRequest::new(
             account_id.clone(),
@@ -111,5 +105,17 @@ fuzz_target!(|data: &[u8]| {
             account_id.clone(),
             [Id::new("b1")],
         ));
+        let _ = client.sieve_script_get(&account_id, &Id::new("s1"));
+        let _ = client.sieve_script_active(&account_id);
+        let _ = client.sieve_script_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.principal_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.share_notification_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.calendar_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.event_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.participant_identity_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ =
+            client.calendar_event_notification_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.events(&account_id);
+        let _ = client.contact_cards(&account_id);
     }
 });
