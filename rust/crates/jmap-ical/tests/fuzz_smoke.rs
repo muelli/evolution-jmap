@@ -264,3 +264,33 @@ END:VCALENDAR\r\n";
         "Event_2 and Event_3 must be identical fixed point"
     );
 }
+
+#[test]
+fn tzid_with_tabs_reaches_fixed_point_stability() {
+    let ical = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//evolution-jmap//Differential Harness Fixture//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:tzid-tabs-c001\r\n\
+DTSTART;TZID=America/N{}ew_York:20260915T100000\r\n\
+SUMMARY:TZID with tabs\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+        "\t".repeat(74)
+    );
+    let event1 = ical_to_event(&ical).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}

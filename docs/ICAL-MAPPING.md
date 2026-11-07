@@ -457,7 +457,9 @@ Tests: `jmap-ical/tests/freebusy.rs`.
    `/freeassociation.sourceforge.net/Europe/Berlin` becomes `Europe/Berlin`.
    libical names its built-in zones in this way. Every zoned component that
    Evolution saves therefore needs this step.
-4. The function keeps anything else unchanged.
+4. The function keeps anything else unchanged. Whitespace in `TZID` is trimmed
+   and consecutive spaces or tabs collapse to match calcard's unfolding
+   tokenizer rules.
 
 `resolve_canonical_time_zone` tries these sources in order:
 

@@ -2712,16 +2712,17 @@ pub fn read_observance(component: &ICalendarComponent) -> Option<Value> {
 /// Known zone names take precedence over document `VTIMEZONE` definitions.
 /// Unknown identifiers return unchanged to preserve unresolved zones.
 fn zone_of(tzid: &str, zones: &Zones) -> String {
-    if let Some(name) = zones.get(tzid).and_then(|zone| zone.name.clone()) {
+    let tzid = normalize_keyword(tzid);
+    if let Some(name) = zones.get(&tzid).and_then(|zone| zone.name.clone()) {
         return name;
     }
-    if names_time_zone(tzid) {
-        return tzid.to_owned();
+    if names_time_zone(&tzid) {
+        return tzid;
     }
-    if let Some(iana) = unique_tzid_to_iana(tzid) {
+    if let Some(iana) = unique_tzid_to_iana(&tzid) {
         return iana.to_owned();
     }
-    tzid.to_owned()
+    tzid
 }
 
 /// Convert one `VEVENT` into a JSCalendar event without named instances.
