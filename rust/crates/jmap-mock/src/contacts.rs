@@ -426,6 +426,18 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
                         .with_description(format!("address book {unknown} does not exist")));
                 }
                 card.id = Some(id.clone());
+                if card.created.is_none() {
+                    let seq = id.as_str().parse::<u64>().unwrap_or(1);
+                    let sec = (seq % 60) as u32;
+                    let min = ((seq / 60) % 60) as u32;
+                    let hour = ((seq / 3600) % 24) as u32;
+                    card.created = Some(jmap_proto::state::UtcDate::new(format!(
+                        "2026-01-01T{hour:02}:{min:02}:{sec:02}Z"
+                    )));
+                }
+                if card.updated.is_none() {
+                    card.updated = card.created.clone();
+                }
                 if card.card_type.is_none() {
                     card.card_type = Some("Card".to_owned());
                 }
@@ -711,21 +723,42 @@ pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<V
     let account = account_mut(state, &request.account_id)?;
 
     let filter = request.filter.unwrap_or_default();
-    let (ids, limit) = paging.page(
-        account
-            .contact_cards
-            .iter()
-            .filter(|(_, card)| card_matches(card, &filter))
-            .map(|(id, _)| id.clone()),
-        request.position,
-        request.limit,
-    );
-
-    let total = account
+    let mut matching: Vec<(&Id, &ContactCard)> = account
         .contact_cards
         .iter()
         .filter(|(_, card)| card_matches(card, &filter))
-        .count() as u64;
+        .collect();
+
+    if let Some(sort) = &request.sort {
+        for comparator in sort.iter().rev() {
+            let ascending = comparator.is_ascending;
+            match comparator.property.as_str() {
+                "created" => {
+                    matching.sort_by(|(_, a), (_, b)| {
+                        let ord = a.created.cmp(&b.created);
+                        if ascending { ord } else { ord.reverse() }
+                    });
+                }
+                "updated" => {
+                    matching.sort_by(|(_, a), (_, b)| {
+                        let ord = a.updated.cmp(&b.updated);
+                        if ascending { ord } else { ord.reverse() }
+                    });
+                }
+                other => {
+                    return Err(MethodError::new("unsupportedSort")
+                        .with_description(format!("mock cannot sort contacts by {other}")));
+                }
+            }
+        }
+    }
+
+    let total = matching.len() as u64;
+    let (ids, limit) = paging.page(
+        matching.into_iter().map(|(id, _)| id.clone()),
+        request.position,
+        request.limit,
+    );
 
     let mut response = QueryResponse::new(request.account_id, account.contact_cards.state(), ids)
         .with_position(request.position.max(0) as u64);
@@ -800,26 +833,11 @@ fn card_matches(card: &ContactCard, filter: &ContactCardQueryFilter) -> bool {
     {
         return false;
     }
-    let full_name = card
-        .name
-        .as_ref()
-        .and_then(|name| name.full.clone())
-        .unwrap_or_default();
-    let emails: Vec<&str> = card
-        .emails
-        .iter()
-        .flat_map(|emails| emails.values())
-        .map(|email| email.address.as_str())
-        .collect();
-    if let Some(name) = &filter.name
-        && !full_name.contains(name.as_str())
-    {
-        return false;
-    }
-    if let Some(email) = &filter.email
-        && !emails
-            .iter()
-            .any(|address| address.contains(email.as_str()))
+    if let Some(member_uid) = &filter.has_member
+        && !card
+            .members
+            .as_ref()
+            .is_some_and(|members| members.contains_key(member_uid))
     {
         return false;
     }
@@ -831,9 +849,173 @@ fn card_matches(card: &ContactCard, filter: &ContactCardQueryFilter) -> bool {
     {
         return false;
     }
+    if let Some(before) = &filter.created_before
+        && !card.created.as_ref().is_some_and(|c| c < before)
+    {
+        return false;
+    }
+    if let Some(after) = &filter.created_after
+        && !card.created.as_ref().is_some_and(|c| c >= after)
+    {
+        return false;
+    }
+    if let Some(before) = &filter.updated_before
+        && !card.updated.as_ref().is_some_and(|u| u < before)
+    {
+        return false;
+    }
+    if let Some(after) = &filter.updated_after
+        && !card.updated.as_ref().is_some_and(|u| u >= after)
+    {
+        return false;
+    }
+
+    let full_name = card
+        .name
+        .as_ref()
+        .and_then(|name| name.full.clone())
+        .unwrap_or_default();
+    let emails: Vec<&str> = card
+        .emails
+        .iter()
+        .flat_map(|emails| emails.values())
+        .map(|email| email.address.as_str())
+        .collect();
+    let phones: Vec<&str> = card
+        .phones
+        .iter()
+        .flat_map(|phones| phones.values())
+        .map(|phone| phone.number.as_str())
+        .collect();
+    let nicknames: Vec<&str> = card
+        .nicknames
+        .iter()
+        .flat_map(|nicks| nicks.values())
+        .map(|nick| nick.name.as_str())
+        .collect();
+    let orgs: Vec<&str> = card
+        .organizations
+        .iter()
+        .flat_map(|orgs| orgs.values())
+        .filter_map(|org| org.name.as_deref())
+        .collect();
+    let notes: Vec<&str> = card
+        .notes
+        .iter()
+        .flat_map(|notes| notes.values())
+        .map(|note| note.note.as_str())
+        .collect();
+    let addresses: Vec<&str> = card
+        .addresses
+        .iter()
+        .flat_map(|addrs| addrs.values())
+        .filter_map(|addr| addr.full.as_deref())
+        .collect();
+    let online_services: Vec<&str> = card
+        .online_services
+        .iter()
+        .flat_map(|services| services.values())
+        .flat_map(|svc| {
+            [
+                svc.service.as_deref(),
+                svc.user.as_deref(),
+                svc.uri.as_deref(),
+            ]
+        })
+        .flatten()
+        .collect();
+
+    if let Some(name) = &filter.name
+        && !(full_name.contains(name.as_str())
+            || nicknames.iter().any(|n| n.contains(name.as_str())))
+    {
+        return false;
+    }
+    if let Some(given) = &filter.name_given
+        && !card
+            .name
+            .as_ref()
+            .and_then(|n| n.components.as_ref())
+            .is_some_and(|comps| {
+                comps
+                    .iter()
+                    .any(|c| c.kind == "given" && c.value.contains(given.as_str()))
+            })
+    {
+        return false;
+    }
+    if let Some(surname) = &filter.name_surname
+        && !card
+            .name
+            .as_ref()
+            .and_then(|n| n.components.as_ref())
+            .is_some_and(|comps| {
+                comps
+                    .iter()
+                    .any(|c| c.kind == "surname" && c.value.contains(surname.as_str()))
+            })
+    {
+        return false;
+    }
+    if let Some(surname2) = &filter.name_surname2
+        && !card
+            .name
+            .as_ref()
+            .and_then(|n| n.components.as_ref())
+            .is_some_and(|comps| {
+                comps
+                    .iter()
+                    .any(|c| c.kind == "surname2" && c.value.contains(surname2.as_str()))
+            })
+    {
+        return false;
+    }
+    if let Some(nickname) = &filter.nickname
+        && !nicknames.iter().any(|n| n.contains(nickname.as_str()))
+    {
+        return false;
+    }
+    if let Some(org) = &filter.organization
+        && !orgs.iter().any(|o| o.contains(org.as_str()))
+    {
+        return false;
+    }
+    if let Some(email) = &filter.email
+        && !emails
+            .iter()
+            .any(|address| address.contains(email.as_str()))
+    {
+        return false;
+    }
+    if let Some(phone) = &filter.phone
+        && !phones.iter().any(|number| number.contains(phone.as_str()))
+    {
+        return false;
+    }
+    if let Some(address) = &filter.address
+        && !addresses.iter().any(|a| a.contains(address.as_str()))
+    {
+        return false;
+    }
+    if let Some(service) = &filter.online_service
+        && !online_services.iter().any(|s| s.contains(service.as_str()))
+    {
+        return false;
+    }
+    if let Some(note) = &filter.note
+        && !notes.iter().any(|n| n.contains(note.as_str()))
+    {
+        return false;
+    }
     if let Some(text) = &filter.text
         && !(full_name.contains(text.as_str())
-            || emails.iter().any(|address| address.contains(text.as_str())))
+            || emails.iter().any(|address| address.contains(text.as_str()))
+            || phones.iter().any(|number| number.contains(text.as_str()))
+            || nicknames.iter().any(|n| n.contains(text.as_str()))
+            || orgs.iter().any(|o| o.contains(text.as_str()))
+            || notes.iter().any(|n| n.contains(text.as_str()))
+            || addresses.iter().any(|a| a.contains(text.as_str()))
+            || online_services.iter().any(|s| s.contains(text.as_str())))
     {
         return false;
     }

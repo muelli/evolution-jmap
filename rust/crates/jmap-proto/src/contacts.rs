@@ -1878,6 +1878,21 @@ pub struct ContactCardQueryFilter {
     /// Match only the card with this uid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+    /// Match cards that have a member with this UID (kind == "group").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_member: Option<String>,
+    /// Match only cards created before this date-time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_before: Option<UtcDate>,
+    /// Match only cards created on or after this date-time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_after: Option<UtcDate>,
+    /// Match only cards updated before this date-time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_before: Option<UtcDate>,
+    /// Match only cards updated on or after this date-time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_after: Option<UtcDate>,
     /// Match only cards whose name, nicknames, organization, email, phone,
     /// online service, note or address contain this text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1885,6 +1900,33 @@ pub struct ContactCardQueryFilter {
     /// Match only cards whose name or nicknames contain this text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Match only cards whose given name component contains this text.
+    #[serde(
+        rename = "name/given",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub name_given: Option<String>,
+    /// Match only cards whose surname component contains this text.
+    #[serde(
+        rename = "name/surname",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub name_surname: Option<String>,
+    /// Match only cards whose secondary surname component contains this text.
+    #[serde(
+        rename = "name/surname2",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub name_surname2: Option<String>,
+    /// Match only cards whose nickname contains this text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
+    /// Match only cards whose organization contains this text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
     /// Match only cards with an email address containing this text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
@@ -1897,6 +1939,9 @@ pub struct ContactCardQueryFilter {
     /// Match only cards with a postal address containing this text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+    /// Match only cards with a note containing this text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     /// Match only cards of this [`card_kind`] value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -1917,6 +1962,36 @@ impl ContactCardQueryFilter {
         self
     }
 
+    /// Match only cards that have a member with the given UID.
+    pub fn has_member(mut self, has_member: impl Into<String>) -> Self {
+        self.has_member = Some(has_member.into());
+        self
+    }
+
+    /// Match only cards created before the given date-time.
+    pub fn created_before(mut self, created_before: impl Into<UtcDate>) -> Self {
+        self.created_before = Some(created_before.into());
+        self
+    }
+
+    /// Match only cards created on or after the given date-time.
+    pub fn created_after(mut self, created_after: impl Into<UtcDate>) -> Self {
+        self.created_after = Some(created_after.into());
+        self
+    }
+
+    /// Match only cards updated before the given date-time.
+    pub fn updated_before(mut self, updated_before: impl Into<UtcDate>) -> Self {
+        self.updated_before = Some(updated_before.into());
+        self
+    }
+
+    /// Match only cards updated on or after the given date-time.
+    pub fn updated_after(mut self, updated_after: impl Into<UtcDate>) -> Self {
+        self.updated_after = Some(updated_after.into());
+        self
+    }
+
     /// Match only cards containing the given text.
     pub fn text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
@@ -1926,6 +2001,36 @@ impl ContactCardQueryFilter {
     /// Match only cards whose name or nicknames contain the given text.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Match only cards whose given name component contains the given text.
+    pub fn name_given(mut self, name_given: impl Into<String>) -> Self {
+        self.name_given = Some(name_given.into());
+        self
+    }
+
+    /// Match only cards whose surname component contains the given text.
+    pub fn name_surname(mut self, name_surname: impl Into<String>) -> Self {
+        self.name_surname = Some(name_surname.into());
+        self
+    }
+
+    /// Match only cards whose secondary surname component contains the given text.
+    pub fn name_surname2(mut self, name_surname2: impl Into<String>) -> Self {
+        self.name_surname2 = Some(name_surname2.into());
+        self
+    }
+
+    /// Match only cards whose nickname contains the given text.
+    pub fn nickname(mut self, nickname: impl Into<String>) -> Self {
+        self.nickname = Some(nickname.into());
+        self
+    }
+
+    /// Match only cards whose organization contains the given text.
+    pub fn organization(mut self, organization: impl Into<String>) -> Self {
+        self.organization = Some(organization.into());
         self
     }
 
@@ -1950,6 +2055,12 @@ impl ContactCardQueryFilter {
     /// Match only cards with a postal address containing the given text.
     pub fn address(mut self, address: impl Into<String>) -> Self {
         self.address = Some(address.into());
+        self
+    }
+
+    /// Match only cards with a note containing the given text.
+    pub fn note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
         self
     }
 
