@@ -7,8 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarRights};
-use jmap_proto::error::MethodError;
-use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};
+use jmap_proto::error::{self, MethodError, SetError};
+use jmap_proto::methods::{
+    GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+};
 use jmap_proto::principals::{
     BusyPeriod, GetAvailabilityRequest, GetAvailabilityResponse, Principal, PrincipalQueryFilter,
     ShareNotification, ShareNotificationQueryFilter,
@@ -81,6 +83,118 @@ pub fn principal_get(
     }
 
     to_result(&GetResponse::new(account_id, account_state, list).with_not_found(not_found))
+}
+
+/// Handle `Principal/set` (RFC 9670 §2.3).
+/// Only update is supported; create and destroy are rejected with `forbidden`.
+pub fn principal_set(
+    state: &mut crate::state::ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
+    let request: SetRequest<Principal> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+    let viewer = caller
+        .or(account.current_user_principal_id.as_ref())
+        .cloned();
+    let old_state = account.principals.state();
+    if let Some(expected) = &request.if_in_state
+        && expected != &old_state
+    {
+        return Err(MethodError::new(error::method::STATE_MISMATCH));
+    }
+
+    let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
+    for creation_id in request.create.unwrap_or_default().into_keys() {
+        not_created.insert(
+            creation_id,
+            SetError::new(error::set::FORBIDDEN)
+                .with_description("Principal objects cannot be created via Principal/set"),
+        );
+    }
+
+    let mut not_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
+    for id in request.destroy.unwrap_or_default() {
+        not_destroyed.insert(
+            id,
+            SetError::new(error::set::FORBIDDEN)
+                .with_description("Principal objects cannot be destroyed via Principal/set"),
+        );
+    }
+
+    let mut updated: BTreeMap<Id, Option<Principal>> = BTreeMap::new();
+    let mut not_updated: BTreeMap<Id, SetError> = BTreeMap::new();
+
+    for (id, patch) in request.update.unwrap_or_default() {
+        let is_self =
+            viewer.as_ref() == Some(&id) || account.current_user_principal_id.as_ref() == Some(&id);
+        let existing = account.principals.get(&id).cloned().or_else(|| {
+            if is_self {
+                let mut p = Principal::new(&account.name);
+                p.id = Some(id.clone());
+                p.email = Some(account.name.clone());
+                p.principal_type =
+                    Some(jmap_proto::principals::principal_type::INDIVIDUAL.to_owned());
+                Some(p)
+            } else {
+                None
+            }
+        });
+
+        let Some(existing) = existing else {
+            not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
+            continue;
+        };
+
+        let Some(patch_map) = patch.as_object() else {
+            not_updated.insert(id, SetError::new(error::set::INVALID_PATCH));
+            continue;
+        };
+
+        let mut value = serde_json::to_value(&existing).map_err(|e| {
+            MethodError::new(error::method::SERVER_FAIL).with_description(e.to_string())
+        })?;
+
+        match crate::patch::apply_patch(&mut value, patch_map) {
+            Ok(()) => match serde_json::from_value::<Principal>(value) {
+                Ok(mut patched) => {
+                    patched.id = Some(id.clone());
+                    account.principals.seed_with_id(id.clone(), patched);
+                    account.principals.state();
+                    updated.insert(id, None);
+                }
+                Err(e) => {
+                    not_updated.insert(
+                        id,
+                        SetError::new(error::set::INVALID_PATCH).with_description(e.to_string()),
+                    );
+                }
+            },
+            Err(msg) => {
+                not_updated.insert(
+                    id,
+                    SetError::new(error::set::INVALID_PATCH).with_description(msg),
+                );
+            }
+        }
+    }
+
+    let mut response =
+        SetResponse::<Principal>::new(request.account_id, account.principals.state())
+            .with_old_state(old_state);
+    if !updated.is_empty() {
+        response = response.with_updated(updated);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    to_result(&response)
 }
 
 fn find_foreign_principal(
@@ -401,8 +515,80 @@ pub fn share_notification_get(
     )
 }
 
+/// Handle `ShareNotification/set` (RFC 9670 §3.3).
+/// Only destroy is supported to dismiss notifications.
+pub fn share_notification_set(
+    state: &mut crate::state::ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
+    let request: SetRequest<ShareNotification> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+    let viewer = caller
+        .or(account.current_user_principal_id.as_ref())
+        .cloned();
+
+    let old_state = account.share_notifications.state();
+    if let Some(expected) = &request.if_in_state
+        && expected != &old_state
+    {
+        return Err(MethodError::new(error::method::STATE_MISMATCH));
+    }
+
+    let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
+    for creation_id in request.create.unwrap_or_default().into_keys() {
+        not_created.insert(
+            creation_id,
+            SetError::new(error::set::FORBIDDEN)
+                .with_description("ShareNotification objects are server-created"),
+        );
+    }
+    let mut not_updated: BTreeMap<Id, SetError> = BTreeMap::new();
+    for id in request.update.unwrap_or_default().into_keys() {
+        not_updated.insert(
+            id,
+            SetError::new(error::set::FORBIDDEN)
+                .with_description("ShareNotification objects cannot be updated"),
+        );
+    }
+
+    let mut destroyed: Vec<Id> = Vec::new();
+    let mut not_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
+    account.share_notifications.transaction(|txn| {
+        for id in request.destroy.unwrap_or_default() {
+            let visible = txn
+                .get(&id)
+                .is_some_and(|(recipient, _)| Some(recipient) == viewer.as_ref());
+            if visible && txn.destroy(&id) {
+                destroyed.push(id);
+            } else {
+                not_destroyed.insert(id, SetError::new(error::set::NOT_FOUND));
+            }
+        }
+    });
+
+    let mut response = SetResponse::<ShareNotification>::new(
+        request.account_id,
+        account.share_notifications.state(),
+    )
+    .with_old_state(old_state);
+    if !destroyed.is_empty() {
+        response = response.with_destroyed(destroyed);
+    }
+    if !not_destroyed.is_empty() {
+        response = response.with_not_destroyed(not_destroyed);
+    }
+    if !not_created.is_empty() {
+        response = response.with_not_created(not_created);
+    }
+    if !not_updated.is_empty() {
+        response = response.with_not_updated(not_updated);
+    }
+    to_result(&response)
+}
+
 /// Handle `ShareNotification/query` with [`share_notification_get`] visibility.
-/// Then filter by `objectType`, `before`, and `after`.
+/// Then filter by `objectType`, `objectAccountId`, `before`, and `after`.
 pub fn share_notification_query(
     state: &mut crate::state::ServerState,
     arguments: Value,
@@ -417,20 +603,42 @@ pub fn share_notification_query(
         Some(recipient) == viewer && share_notification_matches(notification, &filter)
     };
 
-    let ids: Vec<Id> = account
+    let mut matching: Vec<(&Id, &ShareNotification)> = account
         .share_notifications
         .iter()
-        .filter(|(_, (recipient, notification))| visible(recipient, notification))
+        .filter_map(|(id, (recipient, notification))| {
+            visible(recipient, notification).then_some((id, notification))
+        })
+        .collect();
+
+    if let Some(sort) = &request.sort {
+        for comparator in sort.iter().rev() {
+            let ascending = comparator.is_ascending;
+            match comparator.property.as_str() {
+                "created" => {
+                    matching.sort_by(|(_, a), (_, b)| {
+                        let ord = a.created.cmp(&b.created);
+                        if ascending { ord } else { ord.reverse() }
+                    });
+                }
+                other => {
+                    return Err(
+                        MethodError::new("unsupportedSort").with_description(format!(
+                            "mock cannot sort share notifications by {other}"
+                        )),
+                    );
+                }
+            }
+        }
+    }
+
+    let total = matching.len() as u64;
+    let ids: Vec<Id> = matching
+        .into_iter()
         .map(|(id, _)| id.clone())
         .skip(request.position.max(0) as usize)
         .take(request.limit.unwrap_or(u64::MAX) as usize)
         .collect();
-
-    let total = account
-        .share_notifications
-        .iter()
-        .filter(|(_, (recipient, notification))| visible(recipient, notification))
-        .count() as u64;
 
     let mut response =
         QueryResponse::new(request.account_id, account.share_notifications.state(), ids)
@@ -446,7 +654,7 @@ fn share_notification_matches(
     filter: &ShareNotificationQueryFilter,
 ) -> bool {
     if let Some(after) = &filter.after
-        && notification.created.as_str() <= after.as_str()
+        && notification.created.as_str() < after.as_str()
     {
         return false;
     }
@@ -457,6 +665,11 @@ fn share_notification_matches(
     }
     if let Some(object_type) = &filter.object_type
         && &notification.object_type != object_type
+    {
+        return false;
+    }
+    if let Some(object_account_id) = &filter.object_account_id
+        && &notification.object_account_id != object_account_id
     {
         return false;
     }
@@ -517,13 +730,35 @@ pub(crate) fn record_share_changes<R>(
 }
 
 fn principal_matches(principal: &Principal, filter: &PrincipalQueryFilter) -> bool {
+    if let Some(account_ids) = &filter.account_ids {
+        let has_matching_account = principal
+            .accounts
+            .as_ref()
+            .is_some_and(|accounts| account_ids.iter().any(|aid| accounts.contains_key(aid)));
+        if !has_matching_account {
+            return false;
+        }
+    }
+    if let Some(principal_type) = &filter.principal_type
+        && principal.principal_type.as_deref() != Some(principal_type.as_str())
+    {
+        return false;
+    }
+    if let Some(time_zone) = &filter.time_zone
+        && principal.time_zone.as_deref() != Some(time_zone.as_str())
+    {
+        return false;
+    }
     if let Some(name) = &filter.name
         && !principal.name.contains(name.as_str())
     {
         return false;
     }
     if let Some(email) = &filter.email
-        && principal.email.as_deref() != Some(email.as_str())
+        && !principal
+            .email
+            .as_deref()
+            .is_some_and(|e| e.contains(email.as_str()))
     {
         return false;
     }
@@ -533,7 +768,11 @@ fn principal_matches(principal: &Principal, filter: &PrincipalQueryFilter) -> bo
             .email
             .as_deref()
             .is_some_and(|email| email.contains(text.as_str()));
-        if !(matches_name || matches_email) {
+        let matches_desc = principal
+            .description
+            .as_deref()
+            .is_some_and(|desc| desc.contains(text.as_str()));
+        if !(matches_name || matches_email || matches_desc) {
             return false;
         }
     }

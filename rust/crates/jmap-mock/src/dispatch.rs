@@ -438,12 +438,16 @@ fn handle_method(
         "ParticipantIdentity/get" => crate::calendars::participant_identity_get(state, arguments),
         "ParticipantIdentity/set" => crate::calendars::participant_identity_set(state, arguments),
         "Principal/get" => crate::principals::principal_get(state, arguments, caller),
+        "Principal/set" => crate::principals::principal_set(state, arguments, caller),
         "Principal/query" => crate::principals::principal_query(state, arguments),
         "Principal/getAvailability" => {
             crate::principals::principal_get_availability(state, arguments, caller)
         }
         "ShareNotification/get" => {
             crate::principals::share_notification_get(state, arguments, caller)
+        }
+        "ShareNotification/set" => {
+            crate::principals::share_notification_set(state, arguments, caller)
         }
         "ShareNotification/query" => {
             crate::principals::share_notification_query(state, arguments, caller)

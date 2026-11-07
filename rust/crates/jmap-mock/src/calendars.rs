@@ -25,7 +25,7 @@ use crate::dispatch::project_properties;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::patch::apply_patch;
 use crate::scheduling::EventChange;
-use crate::setops::{simple_set, simple_set_with_validation};
+use crate::setops::simple_set_with_validation;
 use crate::state::{AccountState, ServerState};
 
 /// Deterministic stand-in for "now". The mock has no clock.
@@ -87,6 +87,23 @@ pub fn calendar_get(
 /// The rights `calendar.share_with` grants `principal`, if any.
 fn calendar_rights_for(calendar: &Calendar, principal: &Id) -> Option<CalendarRights> {
     calendar.share_with.as_ref()?.get(principal).cloned()
+}
+
+/// Reject account owner in shareWith (RFC 9670 §4).
+fn validate_calendar_share_with(
+    share_with: Option<&BTreeMap<Id, CalendarRights>>,
+    owner_principal_id: Option<&Id>,
+) -> Result<(), SetError> {
+    if let Some(map) = share_with {
+        for principal_id in map.keys() {
+            if Some(principal_id) == owner_principal_id {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("The account owner principal MUST NOT be in shareWith")
+                    .with_properties(["shareWith"]));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Owners get calendars unchanged. Shared viewers with `mayReadItems` get granted `myRights`.
@@ -195,25 +212,41 @@ pub fn calendar_set(
         })
         .collect();
 
-    let mut response = simple_set(&mut account.calendars, request, |id, calendar| {
-        if calendar.id.is_some() {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description("id is set by the server and must not be given in a create"));
-        }
-        if calendar.name.is_empty() {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description("name must not be empty"));
-        }
-        if reject_collection_create {
-            return Err(SetError::new(error::set::FORBIDDEN)
-                .with_description("this mock is configured to refuse calendar creates"));
-        }
-        calendar.id = Some(id.clone());
-        if default_unsubscribed && calendar.is_subscribed != Some(true) {
-            calendar.is_subscribed = Some(false);
-        }
-        Ok(())
-    })?;
+    let owner_principal_id = account.current_user_principal_id.clone();
+    let mut response = simple_set_with_validation(
+        &mut account.calendars,
+        request,
+        |id, calendar| {
+            if calendar.id.is_some() {
+                return Err(
+                    SetError::new(error::set::INVALID_PROPERTIES).with_description(
+                        "id is set by the server and must not be given in a create",
+                    ),
+                );
+            }
+            if calendar.name.is_empty() {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("name must not be empty"));
+            }
+            validate_calendar_share_with(
+                calendar.share_with.as_ref(),
+                owner_principal_id.as_ref(),
+            )?;
+            if reject_collection_create {
+                return Err(SetError::new(error::set::FORBIDDEN)
+                    .with_description("this mock is configured to refuse calendar creates"));
+            }
+            calendar.id = Some(id.clone());
+            if default_unsubscribed && calendar.is_subscribed != Some(true) {
+                calendar.is_subscribed = Some(false);
+            }
+            Ok(())
+        },
+        |_id, _before, patched| {
+            validate_calendar_share_with(patched.share_with.as_ref(), owner_principal_id.as_ref())
+        },
+        |_id, _existing| Ok(()),
+    )?;
 
     if !forbidden_created.is_empty() {
         response

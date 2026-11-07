@@ -122,6 +122,7 @@ fn window<T>(store: &Store<T>, since: u64, cap: Option<u64>) -> (u64, bool) {
 /// Accept update and destroy entries as-is.
 ///
 /// Use [`simple_set_with_validation`] when update or destroy need checks.
+#[allow(dead_code)]
 pub(crate) fn simple_set<T>(
     store: &mut Store<T>,
     request: SetRequest<T>,

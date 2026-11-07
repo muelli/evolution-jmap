@@ -102,12 +102,18 @@ fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Opti
     Some(visible)
 }
 
-/// Reject undefined permissions in AddressBookRights (RFC 9610 §2).
+/// Reject undefined permissions in AddressBookRights (RFC 9610 §2) or account owner in shareWith (RFC 9670 §4).
 fn validate_address_book_share_with(
     share_with: Option<&BTreeMap<Id, AddressBookRights>>,
+    owner_principal_id: Option<&Id>,
 ) -> Result<(), SetError> {
     if let Some(map) = share_with {
-        for rights in map.values() {
+        for (principal_id, rights) in map {
+            if Some(principal_id) == owner_principal_id {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("The account owner principal MUST NOT be in shareWith")
+                    .with_properties(["shareWith"]));
+            }
             if let Some(invalid_name) = rights.extra.keys().next() {
                 return Err(SetError::new(error::set::INVALID_PROPERTIES)
                     .with_description(format!("Invalid permission \"{invalid_name}\"."))
@@ -210,6 +216,7 @@ pub fn address_book_set(
         })
         .collect();
 
+    let owner_principal_id = account.current_user_principal_id.clone();
     let mut response = simple_set_with_validation(
         &mut account.address_books,
         request,
@@ -225,7 +232,10 @@ pub fn address_book_set(
                 return Err(SetError::new(error::set::INVALID_PROPERTIES)
                     .with_description("name must not be empty"));
             }
-            validate_address_book_share_with(book.share_with.as_ref())?;
+            validate_address_book_share_with(
+                book.share_with.as_ref(),
+                owner_principal_id.as_ref(),
+            )?;
             if reject_collection_create {
                 return Err(SetError::new(error::set::FORBIDDEN)
                     .with_description("this mock is configured to refuse address book creates"));
@@ -236,7 +246,12 @@ pub fn address_book_set(
             }
             Ok(())
         },
-        |_id, _before, patched| validate_address_book_share_with(patched.share_with.as_ref()),
+        |_id, _before, patched| {
+            validate_address_book_share_with(
+                patched.share_with.as_ref(),
+                owner_principal_id.as_ref(),
+            )
+        },
         |_id, _existing| Ok(()),
     )?;
 
