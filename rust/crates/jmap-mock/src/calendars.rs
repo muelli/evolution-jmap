@@ -859,7 +859,26 @@ pub fn calendar_event_query(
             event_matches(event, &filter)
         })
         .collect();
-    matches.sort_by(|(_, a), (_, b)| a.start.cmp(&b.start));
+
+    if let Some(sort) = &request.sort {
+        for comparator in sort.iter().rev() {
+            let ascending = comparator.is_ascending;
+            match comparator.property.as_str() {
+                "start" => {
+                    matches.sort_by(|(_, a), (_, b)| {
+                        let ord = a.start.cmp(&b.start);
+                        if ascending { ord } else { ord.reverse() }
+                    });
+                }
+                other => {
+                    return Err(MethodError::new(error::method::UNSUPPORTED_SORT)
+                        .with_description(format!("mock cannot sort calendar events by {other}")));
+                }
+            }
+        }
+    } else {
+        matches.sort_by(|(_, a), (_, b)| a.start.cmp(&b.start));
+    }
 
     let total = matches.len() as u64;
     let (ids, limit) = paging.page(
@@ -886,6 +905,34 @@ fn event_matches(event: &CalendarEvent, filter: &CalendarEventQueryFilter) -> bo
             .calendar_ids
             .as_ref()
             .is_some_and(|ids| ids.get(calendar_id).copied().unwrap_or(false))
+    {
+        return false;
+    }
+    if let Some(list) = &filter.in_calendar_list
+        && !event.calendar_ids.as_ref().is_some_and(|ids| {
+            list.iter()
+                .any(|cid| ids.get(cid).copied().unwrap_or(false))
+        })
+    {
+        return false;
+    }
+    if let Some(excluded) = &filter.excluded_from_calendar
+        && event
+            .calendar_ids
+            .as_ref()
+            .is_some_and(|ids| ids.get(excluded).copied().unwrap_or(false))
+    {
+        return false;
+    }
+    if let Some(status) = &filter.participation_status
+        && !event.participants.as_ref().is_some_and(|parts| {
+            parts.values().any(|p| {
+                p.as_object()
+                    .and_then(|obj| obj.get("participationStatus"))
+                    .and_then(|val| val.as_str())
+                    == Some(status.as_str())
+            })
+        })
     {
         return false;
     }
@@ -1030,20 +1077,40 @@ pub fn calendar_event_notification_query(
         Some(recipient) == viewer && notification_matches(notification, &filter)
     };
 
-    let ids: Vec<Id> = account
+    let mut matching: Vec<(&Id, &CalendarEventNotification)> = account
         .calendar_event_notifications
         .iter()
         .filter(|(_, (recipient, notification))| visible(recipient, notification))
+        .map(|(id, (_, notification))| (id, notification))
+        .collect();
+
+    if let Some(sort) = &request.sort {
+        for comparator in sort.iter().rev() {
+            let ascending = comparator.is_ascending;
+            match comparator.property.as_str() {
+                "created" => {
+                    matching.sort_by(|(_, a), (_, b)| {
+                        let ord = a.created.cmp(&b.created);
+                        if ascending { ord } else { ord.reverse() }
+                    });
+                }
+                other => {
+                    return Err(MethodError::new(error::method::UNSUPPORTED_SORT)
+                        .with_description(format!(
+                            "mock cannot sort calendar event notifications by {other}"
+                        )));
+                }
+            }
+        }
+    }
+
+    let total = matching.len() as u64;
+    let ids: Vec<Id> = matching
+        .into_iter()
         .map(|(id, _)| id.clone())
         .skip(request.position.max(0) as usize)
         .take(request.limit.unwrap_or(u64::MAX) as usize)
         .collect();
-
-    let total = account
-        .calendar_event_notifications
-        .iter()
-        .filter(|(_, (recipient, notification))| visible(recipient, notification))
-        .count() as u64;
 
     let mut response = QueryResponse::new(
         request.account_id,
@@ -1062,7 +1129,7 @@ fn notification_matches(
     filter: &CalendarEventNotificationQueryFilter,
 ) -> bool {
     if let Some(after) = &filter.after
-        && notification.created.as_str() <= after.as_str()
+        && notification.created.as_str() < after.as_str()
     {
         return false;
     }
@@ -1280,6 +1347,25 @@ pub fn participant_identity_set(
             );
             continue;
         }
+        if let Some(addr) = identity.calendar_address.as_deref() {
+            let in_use = account
+                .participant_identities
+                .iter()
+                .any(|(_, existing)| existing.calendar_address.as_deref() == Some(addr))
+                || to_create
+                    .iter()
+                    .any(|(_, c)| c.calendar_address.as_deref() == Some(addr));
+            if in_use {
+                not_created.insert(
+                    creation_id,
+                    SetError::new(participant_identity_set_error::CALENDAR_ADDRESS_IN_USE)
+                        .with_description(
+                            "calendarAddress is already in use by another ParticipantIdentity",
+                        ),
+                );
+                continue;
+            }
+        }
         let id = account.participant_identities.alloc_id();
         identity.id = Some(id.clone());
         identity.is_default = Some(!assigned_default);
@@ -1332,6 +1418,30 @@ pub fn participant_identity_set(
                 ),
             );
             continue;
+        }
+        if let Some(addr) = patched.calendar_address.as_deref() {
+            let in_use = account
+                .participant_identities
+                .iter()
+                .any(|(existing_id, existing)| {
+                    existing_id != &id && existing.calendar_address.as_deref() == Some(addr)
+                })
+                || to_create
+                    .iter()
+                    .any(|(_, c)| c.calendar_address.as_deref() == Some(addr))
+                || to_update.iter().any(|(other_id, u)| {
+                    other_id != &id && u.calendar_address.as_deref() == Some(addr)
+                });
+            if in_use {
+                not_updated.insert(
+                    id,
+                    SetError::new(participant_identity_set_error::CALENDAR_ADDRESS_IN_USE)
+                        .with_description(
+                            "calendarAddress is already in use by another ParticipantIdentity",
+                        ),
+                );
+                continue;
+            }
         }
         to_update.push((id, patched));
     }

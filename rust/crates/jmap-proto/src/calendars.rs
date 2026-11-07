@@ -880,6 +880,22 @@ pub struct CalendarEventQueryFilter {
     /// Match the event with this uid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+    /// Match events in any of these calendars.
+    #[serde(
+        default,
+        alias = "inCalendars",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub in_calendar_list: Option<Vec<Id>>,
+    /// Match events not in this calendar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded_from_calendar: Option<Id>,
+    /// Time zone context for evaluating start and end times.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    /// Match events where user has this participation status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participation_status: Option<String>,
 }
 
 impl CalendarEventQueryFilter {
@@ -946,6 +962,59 @@ impl CalendarEventQueryFilter {
     /// Set the uid to match.
     pub fn uid(mut self, uid: impl Into<String>) -> Self {
         self.uid = Some(uid.into());
+        self
+    }
+
+    /// Create a filter matching events in any of the given calendars.
+    pub fn in_calendar_list(calendars: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        Self {
+            in_calendar_list: Some(calendars.into_iter().map(Into::into).collect()),
+            ..Self::default()
+        }
+    }
+
+    /// Set calendars list to match.
+    pub fn with_in_calendar_list(
+        mut self,
+        calendars: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        self.in_calendar_list = Some(calendars.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Set calendar to exclude from matching.
+    pub fn excluded_from_calendar(mut self, calendar_id: impl Into<Id>) -> Self {
+        self.excluded_from_calendar = Some(calendar_id.into());
+        self
+    }
+
+    /// Set calendar to exclude from matching.
+    pub fn with_excluded_from_calendar(mut self, calendar_id: impl Into<Id>) -> Self {
+        self.excluded_from_calendar = Some(calendar_id.into());
+        self
+    }
+
+    /// Set time zone context for evaluating start and end times.
+    pub fn time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    /// Set time zone context for evaluating start and end times.
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    /// Set participation status to match.
+    pub fn participation_status(mut self, status: impl Into<String>) -> Self {
+        self.participation_status = Some(status.into());
+        self
+    }
+
+    /// Set participation status to match.
+    pub fn with_participation_status(mut self, status: impl Into<String>) -> Self {
+        self.participation_status = Some(status.into());
         self
     }
 }
@@ -3094,10 +3163,12 @@ impl ParticipantIdentity {
     }
 }
 
-/// The `SetError` types draft-ietf-jmap-calendars-33 §3.3 adds for `ParticipantIdentity/set`.
+/// The `SetError` types draft-ietf-jmap-calendars-33 §3.3-3.4 add for `ParticipantIdentity/set`.
 pub mod participant_identity_set_error {
     /// The identity is the account's default and cannot be destroyed.
     pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
+    /// The calendarAddress given for an identity is already used by another ParticipantIdentity in this account.
+    pub const CALENDAR_ADDRESS_IN_USE: &str = "calendarAddressInUse";
 }
 
 /// `ParticipantIdentity/set` arguments (draft-ietf-jmap-calendars-33 §3.3).

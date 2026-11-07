@@ -341,7 +341,8 @@ fn handle_method(
         | "TaskList/changes"
         | "Task/changes"
         | "EmailSubmission/changes"
-        | "ParticipantIdentity/changes" => {
+        | "ParticipantIdentity/changes"
+        | "CalendarEventNotification/changes" => {
             let request: jmap_proto::methods::ChangesRequest = parse_arguments(arguments)?;
             let page_size = state.changes_page_size;
             let never_terminates = state.changes_never_terminates;
@@ -398,6 +399,12 @@ fn handle_method(
                 ),
                 "ParticipantIdentity/changes" => crate::setops::store_changes(
                     &account.participant_identities,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
+                "CalendarEventNotification/changes" => crate::setops::store_changes(
+                    &account.calendar_event_notifications,
                     request,
                     page_size,
                     unrecognized_state_shape,
