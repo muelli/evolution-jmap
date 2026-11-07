@@ -10,8 +10,8 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
     CalendarEventQueryFilter, CalendarEventSetRequest, CalendarRights, ParticipantIdentity,
-    ParticipantIdentitySetRequest, calendar_event_notification_type, calendar_event_set_error,
-    participant_identity_set_error,
+    ParticipantIdentitySetRequest, RecurrenceRule, calendar_event_notification_type,
+    calendar_event_set_error, participant_identity_set_error,
 };
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{
@@ -437,6 +437,141 @@ fn version_is_2_0(event: &CalendarEvent) -> Result<(), SetError> {
     Ok(())
 }
 
+/// Validate JSCalendar (RFC 8984) event properties for create and update.
+fn validate_calendar_event_properties(event: &CalendarEvent) -> Result<(), SetError> {
+    // RFC 8984 §4.1.5 showWithoutTime invariants.
+    if event.show_without_time == Some(true) {
+        if event.time_zone.is_some() {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("showWithoutTime requires timeZone to be null or omitted")
+                .with_properties(["showWithoutTime", "timeZone"]));
+        }
+        if let Some(start) = event.start.as_deref()
+            && !start_has_midnight_time(start)
+        {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("showWithoutTime requires start time to be T00:00:00")
+                .with_properties(["showWithoutTime", "start"]));
+        }
+        if let Some(duration) = event.duration.as_deref()
+            && !duration_has_zero_time_components(duration)
+        {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("showWithoutTime requires duration to have zero time components")
+                .with_properties(["showWithoutTime", "duration"]));
+        }
+    }
+
+    // RFC 8984 §4.3.3 RecurrenceRule validation.
+    if let Some(rrule) = &event.recurrence_rule {
+        validate_recurrence_rule(rrule)?;
+    }
+    if let Some(rules) = event.extra.get("recurrenceRules").and_then(Value::as_array) {
+        for rule in rules {
+            validate_recurrence_rule_json(rule)?;
+        }
+    }
+
+    // RFC 8984 §4.4.1 priority range validation (0..=9).
+    if let Some(priority) = event.priority
+        && !(0..=9).contains(&priority)
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("priority {priority} out of range 0..9"))
+            .with_properties(["priority"]));
+    }
+
+    // RFC 8984 §4.4.2 freeBusyStatus vocabulary validation.
+    if let Some(fbs) = event.free_busy_status.as_deref()
+        && fbs != "free"
+        && fbs != "busy"
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid freeBusyStatus: {fbs}"))
+            .with_properties(["freeBusyStatus"]));
+    }
+
+    // RFC 8984 §4.4.3 privacy vocabulary validation.
+    if let Some(privacy) = event.privacy.as_deref()
+        && privacy != "public"
+        && privacy != "private"
+        && privacy != "secret"
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid privacy: {privacy}"))
+            .with_properties(["privacy"]));
+    }
+
+    // RFC 8984 §5.1.3 event status vocabulary validation.
+    if let Some(status) = event.status.as_deref()
+        && status != "confirmed"
+        && status != "tentative"
+        && status != "cancelled"
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid status: {status}"))
+            .with_properties(["status"]));
+    }
+
+    Ok(())
+}
+
+fn start_has_midnight_time(start: &str) -> bool {
+    if let Some((_date, time)) = start.split_once('T') {
+        if time == "00:00:00" {
+            return true;
+        }
+        if let Some(frac) = time.strip_prefix("00:00:00.") {
+            return !frac.chars().any(|c| c.is_ascii_digit() && c != '0');
+        }
+    }
+    false
+}
+
+fn duration_has_zero_time_components(duration: &str) -> bool {
+    if let Some((_date_part, time_part)) = duration.split_once('T') {
+        !time_part.chars().any(|c| c.is_ascii_digit() && c != '0')
+    } else {
+        true
+    }
+}
+
+fn validate_recurrence_rule(rrule: &RecurrenceRule) -> Result<(), SetError> {
+    const VALID_FREQUENCIES: &[&str] = &[
+        "secondly", "minutely", "hourly", "daily", "weekly", "monthly", "yearly",
+    ];
+    if !VALID_FREQUENCIES.contains(&rrule.frequency.as_str()) {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid recurrence frequency: {}", rrule.frequency))
+            .with_properties(["recurrenceRule"]));
+    }
+    if let Some(0) = rrule.interval {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description("recurrence interval must be a non-zero positive integer")
+            .with_properties(["recurrenceRule"]));
+    }
+    Ok(())
+}
+
+fn validate_recurrence_rule_json(rule: &Value) -> Result<(), SetError> {
+    const VALID_FREQUENCIES: &[&str] = &[
+        "secondly", "minutely", "hourly", "daily", "weekly", "monthly", "yearly",
+    ];
+    if let Some(freq) = rule.get("frequency").and_then(Value::as_str)
+        && !VALID_FREQUENCIES.contains(&freq)
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid recurrence frequency: {freq}"))
+            .with_properties(["recurrenceRules"]));
+    }
+    if let Some(0) = rule.get("interval").and_then(Value::as_u64) {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description("recurrence interval must be a non-zero positive integer")
+            .with_properties(["recurrenceRules"]));
+    }
+    Ok(())
+}
+
 /// Draft §5.9.2 requires reachable recipients for scheduling messages.
 fn schedulable(
     event: &CalendarEvent,
@@ -633,6 +768,7 @@ pub fn calendar_event_set(
                     .with_description("start is required"));
             }
             version_is_2_0(event)?;
+            validate_calendar_event_properties(event)?;
             if let Some(uid) = event.uid.as_ref().filter(|uid| taken.contains(*uid)) {
                 return Err(SetError::new(error::set::INVALID_PROPERTIES)
                     .with_description(format!("An event with UID {uid} already exists."))
