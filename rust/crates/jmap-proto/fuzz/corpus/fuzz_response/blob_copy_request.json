@@ -1,0 +1,5 @@
+{
+  "fromAccountId": "acc1",
+  "accountId": "acc2",
+  "blobIds": ["blob1", "blob2"]
+}

@@ -1,0 +1,10 @@
+{
+  "accountId": "acc1",
+  "ids": ["item1", "item2"],
+  "#ids": {
+    "resultOf": "c1",
+    "name": "ids",
+    "path": "/ids"
+  },
+  "properties": ["id", "name"]
+}

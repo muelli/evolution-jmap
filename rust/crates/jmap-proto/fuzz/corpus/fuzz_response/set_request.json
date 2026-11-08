@@ -1,0 +1,15 @@
+{
+  "accountId": "acc1",
+  "ifInState": "state-99",
+  "create": {
+    "c1": {
+      "name": "New Item"
+    }
+  },
+  "update": {
+    "id1": {
+      "name": "Updated Item"
+    }
+  },
+  "destroy": ["id2"]
+}

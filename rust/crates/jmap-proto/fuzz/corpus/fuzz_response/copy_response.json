@@ -1,0 +1,16 @@
+{
+  "fromAccountId": "acc1",
+  "accountId": "acc2",
+  "oldState": "state-1",
+  "newState": "state-2",
+  "created": {
+    "c1": {
+      "id": "new-copy-1"
+    }
+  },
+  "notCreated": {
+    "c2": {
+      "type": "notFound"
+    }
+  }
+}

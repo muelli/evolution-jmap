@@ -1,0 +1,11 @@
+{
+  "fromAccountId": "acc1",
+  "ifFromInState": "state-1",
+  "accountId": "acc2",
+  "ifInState": "state-2",
+  "create": {
+    "c1": "orig-id-1"
+  },
+  "onSuccessDestroyOriginal": true,
+  "destroyFromIfInState": "state-1"
+}

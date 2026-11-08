@@ -714,3 +714,181 @@ fn session_all_capabilities_and_builders_smoke() {
     assert_eq!(session_deser.username, "user@example.com");
     assert_eq!(session_deser.accounts.len(), 1);
 }
+
+#[test]
+fn response_method_envelopes_and_builders_smoke() {
+    use jmap_proto::id::Id;
+    use jmap_proto::methods::{
+        BlobCopyRequest, BlobCopyResponse, Comparator, CopyRequest, CopyResponse, Echo, Filter,
+        GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+        UploadResponse,
+    };
+    use jmap_proto::state::State;
+    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+
+    let get_req = GetRequest::ids("acc1", ["id1", "id2"])
+        .properties(["id", "name"])
+        .ids_ref(ResultReference::new("c0", "Foo/query", "/ids"));
+    let get_req_bytes = serde_json::to_vec(&get_req).expect("GetRequest serializes");
+    let get_req_parsed: GetRequest =
+        serde_json::from_slice(&get_req_bytes).expect("GetRequest parses");
+    assert_eq!(get_req_parsed, get_req);
+
+    let get_all = GetRequest::all("acc1");
+    assert!(get_all.ids.is_none());
+
+    let get_resp = GetResponse::new("acc1", "s1", [json!({"id": "id1"})]).with_not_found(["id2"]);
+    let get_resp_bytes = serde_json::to_vec(&get_resp).expect("GetResponse serializes");
+    let get_resp_parsed: GetResponse<Value> =
+        serde_json::from_slice(&get_resp_bytes).expect("GetResponse parses");
+    assert_eq!(get_resp_parsed, get_resp);
+
+    let set_req = SetRequest::new("acc1")
+        .if_in_state("s0")
+        .create("c1", json!({"name": "Created"}))
+        .update("id1", json!({"name": "Updated"}))
+        .destroy("id2");
+    let set_req_bytes = serde_json::to_vec(&set_req).expect("SetRequest serializes");
+    let set_req_parsed: SetRequest<Value> =
+        serde_json::from_slice(&set_req_bytes).expect("SetRequest parses");
+    assert_eq!(set_req_parsed, set_req);
+
+    let set_err = SetError::new("invalidProperties")
+        .with_description("bad prop")
+        .with_properties(["name"])
+        .with_extra(BTreeMap::from([("vendor".into(), json!(1))]));
+    let set_resp = SetResponse::new("acc1", "s2")
+        .with_old_state("s1")
+        .with_created(BTreeMap::from([("c1".into(), json!({"id": "new1"}))]))
+        .with_updated(BTreeMap::from([(Id::from("id1"), None)]))
+        .with_destroyed(["id2"])
+        .with_not_created(BTreeMap::from([("c2".into(), set_err.clone())]))
+        .with_not_updated(BTreeMap::from([(Id::from("id3"), set_err.clone())]))
+        .with_not_destroyed(BTreeMap::from([(Id::from("id4"), set_err)]));
+    let set_resp_bytes = serde_json::to_vec(&set_resp).expect("SetResponse serializes");
+    let set_resp_parsed: SetResponse<Value> =
+        serde_json::from_slice(&set_resp_bytes).expect("SetResponse parses");
+    assert_eq!(set_resp_parsed, set_resp);
+
+    let f_cond = Filter::condition(json!({"name": "alice"}));
+    let f_tree = Filter::and([
+        f_cond.clone(),
+        Filter::or([f_cond.clone(), Filter::not([f_cond])]),
+    ]);
+    let q_req = QueryRequest::new("acc1")
+        .filter(f_tree)
+        .sort([
+            Comparator::ascending("name").with_collation("i;unicode-casemap"),
+            Comparator::descending("receivedAt"),
+        ])
+        .position(5)
+        .anchor("id1")
+        .anchor_offset(-2)
+        .limit(25)
+        .calculate_total()
+        .collapse_threads();
+    let q_req_bytes = serde_json::to_vec(&q_req).expect("QueryRequest serializes");
+    let q_req_parsed: QueryRequest<Filter<Value>> =
+        serde_json::from_slice(&q_req_bytes).expect("QueryRequest parses");
+    assert_eq!(q_req_parsed, q_req);
+
+    let q_resp = QueryResponse::new("acc1", "qs1", ["id1", "id2"])
+        .with_position(5)
+        .with_total(100)
+        .with_limit(25)
+        .can_calculate_changes(true);
+    let q_resp_bytes = serde_json::to_vec(&q_resp).expect("QueryResponse serializes");
+    let q_resp_parsed: QueryResponse =
+        serde_json::from_slice(&q_resp_bytes).expect("QueryResponse parses");
+    assert_eq!(q_resp_parsed, q_resp);
+
+    let copy_req = CopyRequest::new("acc1", "acc2")
+        .if_from_in_state("s1")
+        .if_in_state("s2")
+        .copy_object("c1", json!({"id": "orig1"}))
+        .on_success_destroy_original()
+        .destroy_from_if_in_state("s1");
+    let copy_req_bytes = serde_json::to_vec(&copy_req).expect("CopyRequest serializes");
+    let copy_req_parsed: CopyRequest<Value> =
+        serde_json::from_slice(&copy_req_bytes).expect("CopyRequest parses");
+    assert_eq!(copy_req_parsed, copy_req);
+
+    let copy_resp = CopyResponse::new("acc1", "acc2", "s3")
+        .with_old_state("s2")
+        .with_created(BTreeMap::from([("c1".into(), json!({"id": "new1"}))]))
+        .with_not_created(BTreeMap::from([(
+            "c2".into(),
+            SetError::new("notFound").with_description("missing"),
+        )]));
+    let copy_resp_bytes = serde_json::to_vec(&copy_resp).expect("CopyResponse serializes");
+    let copy_resp_parsed: CopyResponse<Value> =
+        serde_json::from_slice(&copy_resp_bytes).expect("CopyResponse parses");
+    assert_eq!(copy_resp_parsed, copy_resp);
+
+    let bcopy_req = BlobCopyRequest::new("acc1", "acc2", ["b1", "b2"]);
+    let bcopy_req_bytes = serde_json::to_vec(&bcopy_req).expect("BlobCopyRequest serializes");
+    let bcopy_req_parsed: BlobCopyRequest =
+        serde_json::from_slice(&bcopy_req_bytes).expect("BlobCopyRequest parses");
+    assert_eq!(bcopy_req_parsed, bcopy_req);
+
+    let bcopy_resp = BlobCopyResponse::new("acc1", "acc2")
+        .with_copied(BTreeMap::from([(Id::from("b1"), Id::from("b1_new"))]))
+        .with_not_copied(BTreeMap::from([(
+            Id::from("b2"),
+            SetError::new("notFound"),
+        )]));
+    let bcopy_resp_bytes = serde_json::to_vec(&bcopy_resp).expect("BlobCopyResponse serializes");
+    let bcopy_resp_parsed: BlobCopyResponse =
+        serde_json::from_slice(&bcopy_resp_bytes).expect("BlobCopyResponse parses");
+    assert_eq!(bcopy_resp_parsed, bcopy_resp);
+
+    let up_resp = UploadResponse::new("acc1", "blob1", 4096).with_content_type("text/plain");
+    let up_resp_bytes = serde_json::to_vec(&up_resp).expect("UploadResponse serializes");
+    let up_resp_parsed: UploadResponse =
+        serde_json::from_slice(&up_resp_bytes).expect("UploadResponse parses");
+    assert_eq!(up_resp_parsed, up_resp);
+
+    let echo = Echo::new(json!({"ping": "pong"}));
+    let echo_bytes = serde_json::to_vec(&echo).expect("Echo serializes");
+    let echo_parsed: Echo<Value> = serde_json::from_slice(&echo_bytes).expect("Echo parses");
+    assert_eq!(echo_parsed, echo);
+
+    let req = Request::new(["urn:ietf:params:jmap:core"])
+        .call("Foo/get", &get_req, "c1")
+        .expect("call serializes")
+        .with_created_ids(BTreeMap::from([(Id::from("k1"), Id::from("v1"))]));
+    let req_bytes = serde_json::to_vec(&req).expect("Request serializes");
+    let req_parsed: Request = serde_json::from_slice(&req_bytes).expect("Request parses");
+    assert_eq!(req_parsed, req);
+
+    let inv_err = Invocation::from_value(
+        "error",
+        serde_json::to_value(
+            MethodError::new("invalidArguments")
+                .with_description("bad args")
+                .with_extra(BTreeMap::from([("arg".into(), json!("foo"))])),
+        )
+        .unwrap(),
+        "c2",
+    );
+    assert!(inv_err.is_error());
+    let resp = Response::new(State::from("st1"))
+        .with_method_responses(vec![
+            Invocation::new("Foo/get", &get_resp, "c1").expect("Invocation::new"),
+        ])
+        .with_method_response(inv_err)
+        .with_created_ids(BTreeMap::from([(Id::from("k1"), Id::from("v1"))]));
+    let resp_bytes = serde_json::to_vec(&resp).expect("Response serializes");
+    let resp_parsed: Response = serde_json::from_slice(&resp_bytes).expect("Response parses");
+    assert_eq!(resp_parsed, resp);
+
+    let req_err = RequestError::new("urn:ietf:params:jmap:error:limit")
+        .with_status(400)
+        .with_detail("too large")
+        .with_extra(BTreeMap::from([("limit".into(), json!("maxSizeRequest"))]));
+    let req_err_bytes = serde_json::to_vec(&req_err).expect("RequestError serializes");
+    let req_err_parsed: RequestError =
+        serde_json::from_slice(&req_err_bytes).expect("RequestError parses");
+    assert_eq!(req_err_parsed, req_err);
+}

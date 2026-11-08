@@ -1,0 +1,24 @@
+{
+  "accountId": "acc1",
+  "filter": {
+    "operator": "AND",
+    "conditions": [
+      {
+        "name": "search"
+      }
+    ]
+  },
+  "sort": [
+    {
+      "property": "receivedAt",
+      "isAscending": false,
+      "collation": "i;unicode-casemap"
+    }
+  ],
+  "position": 0,
+  "anchor": "id1",
+  "anchorOffset": 5,
+  "limit": 25,
+  "calculateTotal": true,
+  "collapseThreads": false
+}
