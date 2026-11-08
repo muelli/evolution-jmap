@@ -20,5 +20,5 @@ COPY install-deps-functional.sh install-deps-gui-smoke.sh /tmp/deps/
 
 RUN /tmp/deps/install-deps-functional.sh \
     && /tmp/deps/install-deps-gui-smoke.sh \
-    && apt-get install -y --no-install-recommends at-spi2-core dbus-x11 libglib2.0-bin \
+    && apt-get install -y --no-install-recommends at-spi2-core dbus-x11 libglib2.0-bin libgtksourceview-4-0 \
     && rm -rf /var/lib/apt/lists/* /tmp/deps

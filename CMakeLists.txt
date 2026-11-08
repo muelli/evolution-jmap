@@ -57,6 +57,11 @@ pkg_check_modules(EVOLUTION_SHELL REQUIRED evolution-shell-3.0>=${REQUIRE_EVOLUT
 pkg_check_modules(EVOLUTION_CALENDAR REQUIRED evolution-calendar-3.0>=${REQUIRE_EVOLUTION_VERSION})
 pkg_check_modules(EVOLUTION_MAIL REQUIRED evolution-mail-3.0>=${REQUIRE_EVOLUTION_VERSION})
 pkg_check_modules(LIBECAL REQUIRED libecal-2.0>=${REQUIRE_EVOLUTION_VERSION})
+# The Sieve script editor needs GtkSourceView 4, the GTK3-ABI release
+# (version 5 is GTK4-only). This check fails configure early with a clear
+# message if the package is missing. The pkg-config module is named
+# "gtksourceview-4", with no ".0" suffix, unlike most GNOME libraries.
+pkg_check_modules(GTKSOURCEVIEW REQUIRED gtksourceview-4)
 
 pkg_check_variable(EVOLUTION_MODULE_DIR evolution-shell-3.0 moduledir)
 

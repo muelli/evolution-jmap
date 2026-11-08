@@ -34,5 +34,6 @@ $SUDO dnf -y install \
 	krb5-devel \
 	libadwaita-devel \
 	libsoup3-devel \
+	gtksourceview4-devel \
 	gettext \
 	python3
