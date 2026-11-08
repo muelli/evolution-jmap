@@ -82,14 +82,19 @@ if [ "$host" -eq 0 ]; then
 	# a sibling container's Maildir. The oracle itself must already be
 	# running (`ci/dovecot-oracle.sh start`); this only seeds its mailbox.
 	for scenario in "$@"; do
-		if [ "$scenario" = "mail-imap-oracle-smoke" ]; then
+		fixture=""
+		case "$scenario" in
+		mail-imap-oracle-smoke) fixture="imap-oracle-smoke.eml" ;;
+		mail-imap-vcard-photo-fetch) fixture="imap-vcard-photo.eml" ;;
+		esac
+		if [ -n "$fixture" ]; then
 			if ! "$ROOT/ci/dovecot-oracle.sh" status >/dev/null 2>&1; then
 				echo "gui-scenario: $scenario needs the IMAP oracle running first:" >&2
 				echo "  ci/dovecot-oracle.sh start" >&2
 				exit 2
 			fi
 			"$ROOT/ci/dovecot-oracle.sh" deliver \
-				"$ROOT/ci/gui-scenario/fixtures/imap-oracle-smoke.eml" || exit 2
+				"$ROOT/ci/gui-scenario/fixtures/$fixture" || exit 2
 		fi
 	done
 	# The container runs as root, so that it can install the stage. The trap
