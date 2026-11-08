@@ -78,6 +78,16 @@
 //! queued row, beside the keyword diff above, so one reconnect flush settles
 //! both kinds of unsent change on a row that has both.
 //!
+//! ## An append still waiting for a connection
+//!
+//! [`crate::append`] gives a message appended while offline a synthetic local
+//! uid and a row of its own, instead of the row a listing would otherwise
+//! build. That uid names nothing on the server, so the keyword-diff walk
+//! above skips such a row outright rather than diff it as a keyword change.
+//! This walk calls `crate::append::replay_append` for each queued row
+//! instead, which uploads the message and replaces the row under the uid the
+//! server gives back.
+//!
 //! ## Stopping a synchronisation
 //!
 //! The vfunc [`observe`]s the `cancellable` for the full call, so a stop occurs
@@ -104,11 +114,12 @@ use jmap_backend_core::trampoline::guard_bool;
 use jmap_mail_sync::KeywordChange;
 use jmap_proto::Id;
 
+use crate::append::replay_append;
 use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::expunge::Walk;
 use crate::folder::parent_store;
-use crate::message_info::{row_keywords, server_keywords, set_server_keywords};
+use crate::message_info::{pending_append, row_keywords, server_keywords, set_server_keywords};
 use crate::transfer::replay_filing;
 
 /// Installs the write vfunc of the folder on a class whose first member is a
@@ -174,6 +185,26 @@ unsafe extern "C" fn synchronize_sync(
                         }
                     }
                     Ok(false) => {}
+                    Err(problem) => {
+                        failure.get_or_insert(problem);
+                    }
+                }
+                // A pending append (`crate::append`'s own offline queue)
+                // shares this same walk and work list: the uid this row
+                // carries while the append is unsent is `push_row`'s one
+                // outright skip above.
+                match replay_append(folder, summary, &uid) {
+                    Ok(Some(new_uid)) => {
+                        // SAFETY: a live summary and a uid it holds a row for.
+                        camel_folder_summary_remove_uid(summary, uid.as_ptr());
+                        if let Ok(old_text) = uid.to_str() {
+                            changes.remove(old_text);
+                        }
+                        if let Ok(new_text) = new_uid.to_str() {
+                            changes.add(new_text);
+                        }
+                    }
+                    Ok(None) => {}
                     Err(problem) => {
                         failure.get_or_insert(problem);
                     }
@@ -291,6 +322,15 @@ pub(crate) unsafe fn push_row(
         // There is nothing to send and nothing to clear.
         return Ok(());
     };
+
+    // SAFETY: `info` is still the live row.
+    if unsafe { pending_append(info.as_ptr()) }.is_some() {
+        // This uid is `crate::append`'s own synthetic one: it names nothing
+        // on the server, so there is no keyword state to diff it against.
+        // `crate::append::replay_append`, called later in the same walk, is
+        // the only thing allowed to touch this row until the append lands.
+        return Ok(());
+    }
 
     // SAFETY: `info` is a live row while this function holds its reference.
     let result = unsafe {

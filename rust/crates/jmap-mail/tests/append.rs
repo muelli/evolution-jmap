@@ -77,8 +77,9 @@ use eds_sys::{
     CamelMessageInfo, CamelMimeMessage, camel_data_wrapper_construct_from_data_sync,
     camel_folder_append_message_sync, camel_folder_error_quark, camel_folder_get_folder_summary,
     camel_folder_get_message_sync, camel_folder_refresh_info_sync, camel_folder_summary_get,
-    camel_message_info_new, camel_message_info_set_date_received, camel_message_info_set_flags,
-    camel_message_info_set_user_flag, camel_mime_message_get_subject, camel_store_get_folder_sync,
+    camel_folder_synchronize_sync, camel_message_info_new, camel_message_info_set_date_received,
+    camel_message_info_set_flags, camel_message_info_set_user_flag, camel_mime_message_get_subject,
+    camel_store_get_folder_sync,
 };
 use glib_sys::{GError, GFALSE, GPtrArray, g_free, gboolean, gssize};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
@@ -311,6 +312,41 @@ impl Fixture {
                 "the folder would not refresh"
             );
         }
+    }
+
+    /// Through Camel's own wrapper, the way Evolution's generic reconnect
+    /// flush calls it on every open folder.
+    fn synchronize(&self) -> (bool, *mut GError) {
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: a live folder of ours, and an out-parameter that is writable
+        // and currently NULL.
+        let ok = unsafe {
+            camel_folder_synchronize_sync(self.archive, GFALSE, ptr::null_mut(), &mut error)
+        };
+        (ok != GFALSE, error)
+    }
+
+    /// Through the pointer in the class, skipping what Camel's wrapper does
+    /// on the way in: the wrapper reconnects the service before it
+    /// dispatches, so a call through it while genuinely offline fails at
+    /// that reconnection (these settings name no server), not in the vfunc
+    /// this crate installed. `tests/synchronize.rs`'s own
+    /// `synchronize_straight` is the same shortcut, for the same reason.
+    fn synchronize_straight(&self) -> (bool, *mut GError) {
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: referencing the class runs class_init, which installs the
+        // vfunc. The folder is an instance of that class, and the
+        // out-parameter is writable and currently NULL.
+        let ok = unsafe {
+            let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
+            let vfunc = (*class)
+                .synchronize_sync
+                .expect("the folder cannot be synchronised");
+            let ok = vfunc(self.archive, GFALSE, ptr::null_mut(), &mut error);
+            g_type_class_unref(class.cast());
+            ok
+        };
+        (ok != GFALSE, error)
     }
 }
 
@@ -685,6 +721,118 @@ fn appending_to_a_folder_of_a_disconnected_account_is_queued_and_shown_locally()
         Some(fixture.archive_id.clone()),
         "the queued row must remember which mailbox the append is bound for"
     );
+}
+
+/// ROADMAP item 176(b)'s reconnect walk: synchronising a folder that still
+/// holds an unsent append must not fail. Before the walk learned to skip a
+/// pending-append row, `push_row` read the row's own flags and labels as a
+/// keyword change against its synthetic uid and tried to send it, which
+/// only `Email/set` on a real uid can ever answer.
+#[test]
+fn synchronising_a_folder_with_a_queued_append_still_offline_does_not_fail() {
+    let fixture = Fixture::start();
+    fixture.account.jmap().drop_connection();
+
+    let row = Row::blank()
+        .flags(CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED)
+        .label(c"Work");
+    let appended = fixture.append_straight(&Message::parsed(MESSAGE), row.0);
+    appended.expect_ok();
+    let local_uid = appended.reported().expect("a queued append reports a uid");
+
+    let (ok, error) = fixture.synchronize_straight();
+    assert!(
+        ok,
+        "a still-offline synchronise with a queued append must not fail: {}",
+        if error.is_null() {
+            "no error".to_owned()
+        } else {
+            // SAFETY: a live GError from the call above.
+            unsafe {
+                CStr::from_ptr((*error).message)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        }
+    );
+    // SAFETY: NULL or a GError this function owns.
+    unsafe {
+        if !error.is_null() {
+            glib_sys::g_error_free(error);
+        }
+    }
+    assert_eq!(
+        listed(fixture.archive),
+        vec![local_uid],
+        "the queued row must stay exactly as it was"
+    );
+}
+
+/// The queued append reaches the server once the store reconnects, with no
+/// explicit `Email/import` call from the client beyond the generic
+/// `CamelOfflineStore` reconnect flush: the same flush `transfer.rs`'s own
+/// queued-move test already proves exists for a pending filing.
+#[test]
+fn a_queued_append_lands_once_the_store_reconnects() {
+    let fixture = Fixture::start();
+    fixture.account.jmap().drop_connection();
+
+    let row = Row::blank()
+        .flags(CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED)
+        .label(c"Work");
+    let appended = fixture.append_straight(&Message::parsed(MESSAGE), row.0);
+    appended.expect_ok();
+    let local_uid = appended.reported().expect("a queued append reports a uid");
+
+    let client =
+        Client::connect(fixture.server.origin(), Credentials::none()).expect("connected again");
+    fixture
+        .account
+        .connect(MailSync::new(client, fixture.server.account_id()));
+
+    let (ok, error) = fixture.synchronize();
+    assert!(
+        ok,
+        "the reconnect synchronise failed: {}",
+        if error.is_null() {
+            "no error".to_owned()
+        } else {
+            // SAFETY: a live GError from the call above.
+            unsafe {
+                CStr::from_ptr((*error).message)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        }
+    );
+    // SAFETY: NULL or a GError this function owns.
+    unsafe {
+        if !error.is_null() {
+            glib_sys::g_error_free(error);
+        }
+    }
+
+    assert!(
+        fixture.pending_append(&local_uid).is_none(),
+        "the synthetic row must be gone after the append lands"
+    );
+    let remaining = listed(fixture.archive);
+    assert_eq!(
+        remaining.len(),
+        1,
+        "exactly the one landed row must remain: {remaining:?}"
+    );
+    let new_uid = &remaining[0];
+    assert!(
+        *new_uid != local_uid && !new_uid.starts_with("jmap-local-"),
+        "the landed row must carry the server's own uid, not the synthetic one: {new_uid}"
+    );
+
+    let message = fixture.only();
+    assert_eq!(message.uid.as_str(), new_uid);
+    assert!(message.flags.seen, "the landed append lost its read flag");
+    assert!(message.flags.flagged, "the landed append lost its star");
+    assert_eq!(message.tags, vec!["Work".to_owned()]);
 }
 
 #[test]
