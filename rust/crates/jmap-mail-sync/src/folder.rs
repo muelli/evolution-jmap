@@ -284,9 +284,26 @@ impl FolderTree {
             return self;
         }
 
+        // A personal mailbox named "Shared" already took this path: give the
+        // synthetic root a disambiguated one instead, the same `%23` marker
+        // `paths` uses for a duplicate sibling name (no encoded name ever
+        // contains `%23`, because the encoding escapes `%`).
+        let shared_root_path = if self.roots.iter().any(|root| root.path == SHARED_ROOT_PATH) {
+            format!("{SHARED_ROOT_PATH}%23shared-root")
+        } else {
+            SHARED_ROOT_PATH.to_owned()
+        };
+
+        let mut owner_paths: BTreeSet<String> = BTreeSet::new();
         let owners = shared
             .iter()
             .map(|(account, tree)| {
+                let mut path = join(Some(&shared_root_path), &encode_component(&account.name));
+                if owner_paths.contains(&path) {
+                    path = format!("{path}%23{}", encode_component(account.id.as_str()));
+                }
+                owner_paths.insert(path.clone());
+
                 let mut children = tree.roots.clone();
                 for child in &mut children {
                     if account.read_only {
@@ -299,12 +316,12 @@ impl FolderTree {
                         .next()
                         .unwrap_or_default()
                         .to_owned();
-                    let below = join(Some(&owner_path(account)), &component);
+                    let below = join(Some(&path), &component);
                     repath(child, below);
                 }
                 FolderInfo {
                     id: Id::new(format!("shared-owner:{}", account.id)),
-                    path: owner_path(account),
+                    path,
                     display_name: account.name.clone(),
                     role: None,
                     total: 0,
@@ -321,7 +338,7 @@ impl FolderTree {
 
         self.roots.push(FolderInfo {
             id: Id::new("shared-root"),
-            path: SHARED_ROOT_PATH.to_owned(),
+            path: shared_root_path,
             display_name: "Shared".to_owned(),
             role: None,
             total: 0,
@@ -820,12 +837,6 @@ fn repath(folder: &mut FolderInfo, path: String) {
     }
 }
 
-/// The path of the folder [`FolderTree::merge_shared`] adds for one shared
-/// account's branch under [`SHARED_ROOT_PATH`].
-fn owner_path(account: &SharedMailAccount) -> String {
-    join(Some(SHARED_ROOT_PATH), &encode_component(&account.name))
-}
-
 /// Sets `may_add_items` to `Some(false)` on a folder and every folder below
 /// it, for [`FolderTree::merge_shared`]'s read-only accounts.
 fn lock_read_only(folder: &mut FolderInfo) {
@@ -1139,5 +1150,79 @@ mod tests {
             Some(&Id::new("bob"))
         );
         assert_eq!(read_back.owning_account(&Id::new("1")), None);
+    }
+
+    /// An empty shared `Account.name` must still give a non-empty owner
+    /// path, not the bare "Shared" root with a trailing slash:
+    /// CROSS-PROTOCOL-AUDIT X5-5(a). Before the fix, `encode_component("")`
+    /// returned `""`, so the owner path joined it onto `SHARED_ROOT_PATH` as
+    /// `"Shared/"`.
+    #[test]
+    fn an_empty_shared_account_name_gets_a_non_empty_owner_path() {
+        let shared = FolderTree::from_mailboxes(&[mailbox("s1", "Inbox", None, 0, 0)]).unwrap();
+
+        let tree = FolderTree::from_mailboxes(&[]).unwrap().merge_shared(&[(
+            SharedMailAccount {
+                id: Id::new("acc"),
+                name: String::new(),
+                read_only: false,
+            },
+            shared,
+        )]);
+
+        let owner = tree
+            .iter()
+            .find(|folder| folder.id == Id::new("shared-owner:acc"))
+            .unwrap();
+        assert!(!owner.path.ends_with(SEPARATOR));
+        assert_ne!(owner.path, SHARED_ROOT_PATH);
+    }
+
+    /// A personal mailbox named "Shared" must not collide with the synthetic
+    /// "Shared" root `merge_shared` adds, and two shared accounts with the
+    /// same display name must not collide with each other either:
+    /// CROSS-PROTOCOL-AUDIT X5-5(b).
+    #[test]
+    fn merge_shared_dedupes_against_a_personal_shared_folder_and_duplicate_owner_names() {
+        let team_a = FolderTree::from_mailboxes(&[mailbox("sa1", "Inbox", None, 0, 0)]).unwrap();
+        let team_b = FolderTree::from_mailboxes(&[mailbox("sb1", "Inbox", None, 0, 0)]).unwrap();
+
+        let tree = FolderTree::from_mailboxes(&[mailbox("1", "Shared", None, 0, 0)])
+            .unwrap()
+            .merge_shared(&[
+                (
+                    SharedMailAccount {
+                        id: Id::new("acc-a"),
+                        name: "Team".to_owned(),
+                        read_only: false,
+                    },
+                    team_a,
+                ),
+                (
+                    SharedMailAccount {
+                        id: Id::new("acc-b"),
+                        name: "Team".to_owned(),
+                        read_only: false,
+                    },
+                    team_b,
+                ),
+            ]);
+
+        let mut paths = Vec::new();
+        for folder in tree.iter() {
+            assert!(
+                !paths.contains(&folder.path),
+                "duplicate path: {}",
+                folder.path
+            );
+            paths.push(folder.path.clone());
+        }
+        assert_eq!(tree.by_id(&Id::new("sa1")).unwrap().path, {
+            let owner_a = tree
+                .iter()
+                .find(|folder| folder.id == Id::new("shared-owner:acc-a"))
+                .unwrap();
+            format!("{}/Inbox", owner_a.path)
+        });
     }
 }

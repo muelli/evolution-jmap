@@ -27,9 +27,12 @@ pub(crate) const SEPARATOR: char = '/';
 
 /// Render one mailbox name as one path component.
 pub(crate) fn encode_component(name: &str) -> String {
-    // Encode `.` and `..` only as whole components: `.hidden` is a good
-    // filename. No other name gives these encodings, because `%` is escaped.
+    // Encode `.`, `..` and the empty name only as whole components: `.hidden`
+    // is a good filename, but the empty component makes a path end in a
+    // separator or, at the root, be empty. No other name gives these
+    // encodings, because every `%` the loop below writes is always escaped.
     match name {
+        "" => return "%".to_owned(),
         "." => return "%2E".to_owned(),
         ".." => return "%2E%2E".to_owned(),
         _ => {}
