@@ -47,11 +47,20 @@ under `ENABLE_SMIME` and look up `CamelCipherCertInfo::cert_data`, which a
 PGP signature's validity never carries, so even a real validity pointer
 finds no certificate to act on; forged anyway, same wrong-value shape.
 
-Not covered here, left for a follow-up claim:
+`itip-button` (`modules/itip-formatter/itip-view.c`) registers once the
+message carries any `text/calendar` part: `e-mail-part-itip.c`'s own
+`content_loaded` builds an `ItipView` and calls `itip_view_set_web_view`
+unconditionally, which always ends in `itip_view_register_clicked_
+listener`, with no dependency on the invitation parsing cleanly or a
+matching calendar being configured. This session adds
+`ci/gui-scenario/fixtures/mail-forged-itip-button.eml`, a real
+`METHOD:REQUEST` `VEVENT` addressed to the reader, so the listener
+registers from a genuine invitation. `itip_view_itip_button_clicked_cb`
+checks `value` against `g_strdup_printf("%p:", view->priv->itip_part_ptr)`,
+the same shape as `secure-button`; a plausible-but-wrong value fails the
+prefix check and the handler returns before running any script.
 
-`itip-button` needs a real calendar invitation part
-(`modules/itip-formatter/itip-view.c`), not built this session; same
-`value`-prefix shape as secure-button once a fixture exists.
+Not covered here, left for a follow-up claim:
 
 `org-gnome-vcard-save-button` (`modules/vcard-inline/e-mail-formatter-
 vcard.c`) checks the clicked value with `strstr(part_id, element_value)`,
@@ -130,17 +139,26 @@ SECURE_DETAILS_TEXT = "Forged Secure Button Details"
 SECURE_VIEW_CERT_TEXT = "Forged View Certificate"
 SECURE_IMPORT_CERT_TEXT = "Forged Import Certificate"
 
+ITIP_SUBJECT = "Forged native click targets (invitation)"
+ITIP_FIXTURE = os.path.join(
+    os.path.dirname(__file__), "..", "fixtures", "mail-forged-itip-button.eml"
+)
+ITIP_BUTTON_TEXT = "Forged Itip Button"
+
 
 def write_seed():
     """Write the `--seed` JSON: one HTML message forging three native click
-    targets in its body, and a real OpenPGP-signed message forging the
-    `secure-button` family (`rawSourceBase64`: the mock stores this
-    verbatim as the `message/rfc822` blob a real Camel client downloads,
-    `jmap-mock::EmailSeed::raw_source`, since `rfc5322()` cannot build a
-    `multipart/signed` shape itself).
+    targets in its body, a real OpenPGP-signed message forging the
+    `secure-button` family, and a real calendar invitation forging
+    `itip-button` (`rawSourceBase64`: the mock stores this verbatim as the
+    `message/rfc822` blob a real Camel client downloads, `jmap-
+    mock::EmailSeed::raw_source`, since `rfc5322()` cannot build a
+    `multipart/signed` or `multipart/mixed` shape itself).
     """
     with open(SIGNED_FIXTURE, "rb") as fixture:
         signed_raw = fixture.read()
+    with open(ITIP_FIXTURE, "rb") as fixture:
+        itip_raw = fixture.read()
 
     seed = {
         "accounts": [
@@ -170,6 +188,15 @@ def write_seed():
                         "textBody": "(raw_source overrides this)",
                         "receivedAt": "2026-01-02T03:04:06Z",
                         "rawSourceBase64": base64.b64encode(signed_raw).decode("ascii"),
+                    },
+                    {
+                        "mailboxId": "M1",
+                        "from": {"name": "Sender", "email": "sender@example.test"},
+                        "to": [{"name": "Alice", "email": "alice@example.com"}],
+                        "subject": ITIP_SUBJECT,
+                        "textBody": "(raw_source overrides this)",
+                        "receivedAt": "2026-01-02T03:04:07Z",
+                        "rawSourceBase64": base64.b64encode(itip_raw).decode("ascii"),
                     },
                 ],
             }
@@ -299,6 +326,36 @@ def run():
     if top_level_window_count() != windows_before:
         raise ScenarioFailure("a forged secure-button-import-certificate click opened a window")
     say("secure-button-import-certificate: forged click imports nothing")
+
+    # itip-button: a real calendar invitation so the listener registers
+    # (em-format/e-mail-part-itip.c's content_loaded calls
+    # itip_view_set_web_view unconditionally whenever the part has a
+    # message, regardless of whether the invitation parses cleanly).
+    select_folder(ACCOUNT, "Inbox")
+    select_message(ITIP_SUBJECT)
+    menu_item("Message/Open in New Window")
+    itip_browser = wait_for(
+        lambda: window(ITIP_SUBJECT), "the detached invitation-message window"
+    )
+    time.sleep(WAIT_SECONDS)
+    screenshot("forged-itip-mail-open")
+
+    if find(itip_browser, "push button", ITIP_BUTTON_TEXT, showing=True) is None:
+        raise ScenarioFailure(f"the forged button {ITIP_BUTTON_TEXT!r} never rendered")
+    say("invitation mail reader: the forged itip-button renders")
+
+    windows_before = top_level_window_count()
+
+    # itip-button: `value` must prefix-match `g_strdup_printf("%p:",
+    # view->priv->itip_part_ptr)`, a real in-memory pointer; a
+    # plausible-but-wrong value fails the prefix check before any script runs.
+    itip_button = wait_find(None, ITIP_BUTTON_TEXT, showing=True)
+    do_action(itip_button)
+    time.sleep(2)
+    screenshot("after-forged-itip-button")
+    if top_level_window_count() != windows_before:
+        raise ScenarioFailure("a forged itip-button click opened a window")
+    say("itip-button: forged click with a wrong value does nothing")
 
 
 main(setup, run, mock_args=("--seed", write_seed()))

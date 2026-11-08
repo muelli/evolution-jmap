@@ -1,0 +1,36 @@
+From: Sender <sender@example.test>
+To: Alice <alice@example.com>
+Subject: Forged native click targets (invitation)
+Date: Fri, 02 Jan 2026 03:04:07 +0000
+Message-ID: <item178-itip@mock.invalid>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mock-itip-boundary-item178"
+
+--mock-itip-boundary-item178
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+<p>Forged native click targets test (item 178, calendar invitation).</p>
+<button type="button" class="itip-button" id="0x55fdead0beef:0" value="0x55fdead0beef:0x55fdead0cafe">Forged Itip Button</button>
+
+--mock-itip-boundary-item178
+Content-Type: text/calendar; method=REQUEST; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+BEGIN:VCALENDAR
+PRODID:-//Mock//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:item178-itip-forged@mock.invalid
+DTSTAMP:20260102T030405Z
+DTSTART:20260115T100000Z
+DTEND:20260115T110000Z
+SUMMARY:Forged itip-button test
+ORGANIZER;CN=Sender:mailto:sender@example.test
+ATTENDEE;CN=Alice;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:alice@example.com
+SEQUENCE:0
+END:VEVENT
+END:VCALENDAR
+
+--mock-itip-boundary-item178--
