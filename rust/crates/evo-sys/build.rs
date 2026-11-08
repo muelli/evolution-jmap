@@ -451,6 +451,9 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_source_language_manager_get_default",
     "gtk_source_language_manager_get_language",
     "gtk_source_buffer_set_language",
+    // A test reads the language back to confirm `set_sieve_language` found
+    // and applied it, without needing a display to inspect highlighting.
+    "gtk_source_buffer_get_language",
     // The parent window of the name dialog that Add and Rename open.
     "gtk_widget_get_toplevel",
     // The name dialog's OK button answers Enter too: a default response for

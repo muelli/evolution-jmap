@@ -32,15 +32,17 @@ use eds_sys::ESource;
 use evo_sys::{
     EMailConfigPage, EMailConfigPageInterface, GTK_ORIENTATION_HORIZONTAL,
     GTK_ORIENTATION_VERTICAL, GTK_RESPONSE_CANCEL, GTK_RESPONSE_OK, GTK_SELECTION_BROWSE,
-    GtkCellRenderer, GtkListStore, GtkTextBuffer, GtkTreeModel, GtkTreePath, GtkTreeSelection,
-    GtkWidget, GtkWindow, e_mail_config_page_get_type, gtk_box_new, gtk_box_pack_start,
-    gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new, gtk_check_button_new_with_mnemonic,
-    gtk_container_add, gtk_container_set_border_width, gtk_dialog_add_button,
-    gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response,
-    gtk_entry_new, gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
-    gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
-    gtk_list_store_insert_with_valuesv, gtk_list_store_newv, gtk_scrolled_window_get_type,
-    gtk_text_view_get_buffer, gtk_text_view_new, gtk_text_view_set_editable,
+    GtkCellRenderer, GtkListStore, GtkSourceBuffer, GtkTextBuffer, GtkTreeModel, GtkTreePath,
+    GtkTreeSelection, GtkWidget, GtkWindow, e_mail_config_page_get_type, gtk_box_new,
+    gtk_box_pack_start, gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new,
+    gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_container_set_border_width,
+    gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run,
+    gtk_dialog_set_default_response, gtk_entry_new, gtk_entry_set_activates_default, gtk_label_new,
+    gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
+    gtk_label_set_xalign, gtk_list_store_clear, gtk_list_store_insert_with_valuesv,
+    gtk_list_store_newv, gtk_scrolled_window_get_type, gtk_source_buffer_set_language,
+    gtk_source_language_manager_get_default, gtk_source_language_manager_get_language,
+    gtk_source_view_new, gtk_text_view_get_buffer, gtk_text_view_set_editable,
     gtk_text_view_set_monospace, gtk_tree_path_free, gtk_tree_path_get_indices_with_depth,
     gtk_tree_path_new_from_indicesv, gtk_tree_selection_get_selected_rows,
     gtk_tree_selection_set_mode, gtk_tree_view_append_column, gtk_tree_view_column_add_attribute,
@@ -291,6 +293,29 @@ unsafe impl InterfaceImpl for PageInterface {
     }
 }
 
+/// Looks up this project's "sieve" language definition and tags `buffer`
+/// with it, so GtkSourceView highlights the text-mode editor's content.
+/// Does nothing if the language cannot be found (an install with no
+/// `sieve.lang` in GtkSourceView's search path): the buffer still edits and
+/// saves Sieve text correctly, just without colour, the same fallback a
+/// missing `.lang` file gives any other GtkSourceView application.
+///
+/// # Safety
+///
+/// `buffer` must be a live `GtkSourceBuffer`, on the main thread.
+unsafe fn set_sieve_language(buffer: *mut GtkSourceBuffer) {
+    // SAFETY: the default manager is a process-wide singleton GtkSourceView
+    // owns; the language it returns, if any, is owned by the manager too
+    // and outlives this call.
+    unsafe {
+        let manager = gtk_source_language_manager_get_default();
+        let language = gtk_source_language_manager_get_language(manager, c"sieve".as_ptr());
+        if !language.is_null() {
+            gtk_source_buffer_set_language(buffer, language);
+        }
+    }
+}
+
 /// Builds the only child of the page and stores the [`UiState`]. Every
 /// control starts insensitive; the load makes the usable ones sensitive.
 ///
@@ -361,8 +386,10 @@ unsafe fn build_widgets(page: *mut GObject) {
         let edit_as_text = gtk_check_button_new_with_mnemonic(translate_static(EDIT_AS_TEXT_LABEL));
         gtk_box_pack_start(content.cast(), edit_as_text, GFALSE, GFALSE, 0);
 
-        // The text-mode editor of decision D11: monospace, no highlighting.
-        let source_view = gtk_text_view_new();
+        // The text-mode editor (item 171a): a GtkSourceView, a GtkTextView
+        // subclass, so every call below keeps working against the same
+        // pointer. `set_sieve_language` tags its buffer for highlighting.
+        let source_view = gtk_source_view_new();
         gtk_text_view_set_monospace(source_view.cast(), GTRUE);
         widget::set_enum_named(source_view.cast(), c"wrap-mode", GTK_WRAP_WORD_CHAR);
         gtk_widget_set_vexpand(source_view, GTRUE);
@@ -372,6 +399,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         gtk_box_pack_start(content.cast(), source_label, GFALSE, GFALSE, 0);
         gtk_box_pack_start(content.cast(), source_view, GTRUE, GTRUE, 0);
         let buffer = gtk_text_view_get_buffer(source_view.cast());
+        set_sieve_language(buffer.cast());
 
         // The managed script's rules (step B of D3), shown instead of the
         // text view while it parses and the user has not forced text mode.
@@ -1759,8 +1787,8 @@ mod tests {
     use std::sync::Mutex;
 
     use evo_sys::{
-        gtk_container_get_border_width, gtk_label_get_text, gtk_tree_view_get_column,
-        gtk_window_get_default_widget,
+        gtk_container_get_border_width, gtk_label_get_text, gtk_source_buffer_get_language,
+        gtk_tree_view_get_column, gtk_window_get_default_widget,
     };
     use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free};
     use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
@@ -1907,6 +1935,33 @@ mod tests {
 
             gtk_widget_destroy(dialog);
             gtk_widget_destroy(window);
+        }
+    }
+
+    /// Item 171a: the text-mode editor is a GtkSourceView, and its buffer
+    /// carries the "sieve" language once `sieve.lang` is installed where
+    /// GtkSourceView looks for it (`cmake/Backends.cmake`'s install rule).
+    /// Needs a display; skips without one.
+    #[test]
+    fn the_script_view_gets_the_sieve_language() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: `gtk_source_view_new` returns a live, unowned widget; its
+        // buffer is borrowed from it and outlives this call. Both are
+        // destroyed before returning.
+        unsafe {
+            let view = gtk_source_view_new();
+            let buffer = gtk_text_view_get_buffer(view.cast());
+            set_sieve_language(buffer.cast());
+            assert!(
+                !gtk_source_buffer_get_language(buffer.cast()).is_null(),
+                "the script view's buffer has no \"sieve\" language; is \
+                 sieve.lang installed in GtkSourceView's search path?"
+            );
+            gtk_widget_destroy(view);
         }
     }
 
