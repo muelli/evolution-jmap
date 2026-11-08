@@ -10,7 +10,7 @@ use jmap_client::transport::{HttpMethod, HttpRequest, HttpResponse, Transport, T
 use jmap_client::{Client, Credentials};
 use jmap_proto::Id;
 
-const MINIMAL_AUTHENTICATED_SESSION: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:calendars":{}},"accounts":{"acc1":{"name":"user","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:calendars":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"acc1","urn:ietf:params:jmap:contacts":"acc1","urn:ietf:params:jmap:calendars":"acc1"},"username":"user","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
+const MINIMAL_AUTHENTICATED_SESSION: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:calendars":{},"urn:ietf:params:jmap:principals":{},"urn:ietf:params:jmap:sieve":{},"urn:ietf:params:jmap:quota":{},"urn:ietf:params:jmap:blob":{}},"accounts":{"acc1":{"name":"user","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:mail":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:calendars":{},"urn:ietf:params:jmap:principals":{},"urn:ietf:params:jmap:sieve":{},"urn:ietf:params:jmap:quota":{},"urn:ietf:params:jmap:blob":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"acc1","urn:ietf:params:jmap:contacts":"acc1","urn:ietf:params:jmap:calendars":"acc1","urn:ietf:params:jmap:principals":"acc1"},"username":"user","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
 
 struct MockResponseTransport {
     response_body: Vec<u8>,
@@ -83,6 +83,91 @@ fn exercise_client_with_body(body: &[u8]) {
             account_id.clone(),
             [Id::new("b1")],
         ));
+        let _ = client.sieve_script_get(&account_id, &Id::new("s1"));
+        let _ = client.sieve_script_active(&account_id);
+        let _ = client.sieve_script_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.principal_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.share_notification_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.calendar_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.event_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.participant_identity_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ =
+            client.calendar_event_notification_changes(&account_id, &jmap_proto::State::new("0"));
+        let _ = client.events(&account_id);
+        let _ = client.contact_cards(&account_id);
+        let _ = client.quotas(&account_id);
+        let _ = client.quota_query(&account_id, jmap_proto::quota::QuotaQueryFilter::new());
+        let _ = client.blob_get(&jmap_proto::blob::BlobGetRequest::new(
+            account_id.clone(),
+            [Id::new("b1")],
+        ));
+        let _ = client.blob_lookup(&jmap_proto::blob::BlobLookupRequest::new(
+            account_id.clone(),
+            ["Email"],
+            [Id::new("b1")],
+        ));
+        let _ = client.blob_copy(&jmap_proto::methods::BlobCopyRequest::new(
+            account_id.clone(),
+            account_id.clone(),
+            [Id::new("b1")],
+        ));
+        let _ = client.contact_copy(&jmap_proto::methods::CopyRequest::new(
+            account_id.clone(),
+            account_id.clone(),
+        ));
+        let _ = client.contact_query_changes(&jmap_proto::methods::QueryChangesRequest::new(
+            account_id.clone(),
+            jmap_proto::State::new("0"),
+        ));
+        let _ = client.event_copy(&jmap_proto::methods::CopyRequest::new(
+            account_id.clone(),
+            account_id.clone(),
+        ));
+        let _ = client.event_query_changes(&jmap_proto::methods::QueryChangesRequest::new(
+            account_id.clone(),
+            jmap_proto::State::new("0"),
+        ));
+        let _ = client.calendar_event_notification_query(
+            &account_id,
+            jmap_proto::calendars::CalendarEventNotificationQueryFilter::new(),
+        );
+        let _ = client.calendar_event_notification_destroy(&account_id, &Id::new("notif1"));
+        let _ = client.email_copy(&jmap_proto::methods::CopyRequest::new(
+            account_id.clone(),
+            account_id.clone(),
+        ));
+        let _ = client.search_snippet_get(
+            &account_id,
+            vec![Id::new("e1")],
+            None::<jmap_proto::mail::EmailQueryFilter>,
+        );
+        let _ = client.share_notification_get(&account_id, &[Id::new("sn1")]);
+        let _ = client.share_notification_query(
+            &account_id,
+            jmap_proto::principals::ShareNotificationQueryFilter::new(),
+        );
+        let _ = client.share_notification_query_changes(
+            &jmap_proto::methods::QueryChangesRequest::new(
+                account_id.clone(),
+                jmap_proto::State::new("0"),
+            ),
+        );
+        let _ = client.share_notification_destroy(&account_id, &Id::new("sn1"));
+        let _ = client.sieve_scripts(&account_id);
+        let _ = client.sieve_script_query(
+            &account_id,
+            jmap_proto::sieve::SieveScriptQueryFilter::new(),
+        );
+        let _ = client.get_availability(
+            &account_id,
+            &Id::new("p1"),
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+            false,
+        );
+        let _ = client.snoozed_mailbox(&account_id);
+        let _ = client.is_session_stale();
+        let _ = client.last_session_state();
     }
 }
 
@@ -105,9 +190,14 @@ fn exercise_session_connect_with_body(body: &[u8]) {
     let transport = MockSessionTransport {
         session_body: body.to_vec(),
     };
-    let _ = Client::builder()
+    if let Ok(mut client) = Client::builder()
         .transport(transport)
-        .connect("https://mail.example.internal", Credentials::none());
+        .connect("https://mail.example.internal", Credentials::none())
+    {
+        let _ = client.is_session_stale();
+        let _ = client.last_session_state();
+        let _ = client.refresh_session();
+    }
 }
 
 #[test]
