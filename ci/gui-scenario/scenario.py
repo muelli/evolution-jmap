@@ -663,15 +663,16 @@ def tab_reachable(root, max_presses=120):
     is expected and skipped, not a failure, as long as the chain still
     closes within `max_presses`.
 
-    Not suitable for a window that holds a STATE_MULTI_LINE text view
-    (the Vacation Responder page's message body): confirmed empirically
-    that a plain Tab there inserts a tab character instead of moving
-    focus (GTK's own `accepts-tab` default), and this container has no
-    working way to synthesize the Ctrl+Tab that would normally escape it
-    (AT-SPI's keyboard event generator takes a modifier only as a keysym
-    *string* on a KEY_PRESS/KEY_RELEASE pair, which left Control
-    unobserved as held by the following Tab in every form tried). Callers
-    with such a surface skip this check; see a11y-audit.py's docstring.
+    Not suitable for a window that holds a STATE_MULTI_LINE text view with
+    GTK's own `accepts-tab` default (TRUE): a plain Tab there inserts a tab
+    character instead of moving focus, and this container has no working
+    way to synthesize the Ctrl+Tab that would normally escape it (AT-SPI's
+    keyboard event generator takes a modifier only as a keysym *string* on
+    a KEY_PRESS/KEY_RELEASE pair, which left Control unobserved as held by
+    the following Tab in every form tried). The Vacation Responder page's
+    message body set `accepts-tab` FALSE (item 174(b)) and no longer needs
+    this exclusion; callers with such a surface skip this check; see
+    a11y-audit.py's docstring.
     """
     start = wait_for(lambda: focused_node(root), "a focused widget to start the Tab walk")
     start_key = _tab_key(start)
