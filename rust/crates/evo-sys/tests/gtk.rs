@@ -238,6 +238,12 @@ fn the_widget_handles_carry_no_layout() {
         ("GtkTreeSelection", size_of::<GtkTreeSelection>()),
         ("GtkTreePath", size_of::<GtkTreePath>()),
         ("GtkTreeIter", size_of::<GtkTreeIter>()),
+        // Item 171b's error tag and its table. Unlike `GtkTextIter`
+        // (tests/text_iter.rs), this crate never allocates either: it only
+        // holds the pointers `gtk_text_tag_new` and
+        // `gtk_text_buffer_get_tag_table` return.
+        ("GtkTextTag", size_of::<GtkTextTag>()),
+        ("GtkTextTagTable", size_of::<GtkTextTagTable>()),
     ] {
         assert_eq!(size, 0, "{name} is no longer opaque");
     }

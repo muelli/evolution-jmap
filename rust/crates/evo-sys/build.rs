@@ -454,6 +454,28 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // A test reads the language back to confirm `set_sieve_language` found
     // and applied it, without needing a display to inspect highlighting.
     "gtk_source_buffer_get_language",
+    // Item 171b: a red underline on the line a local Sieve parse rejects.
+    // One anonymous tag, created once and kept, applied to and removed from
+    // a line range as the user types. `GtkTextIter` is the one struct this
+    // crate gives a real layout, not a zero-sized handle: see the comment
+    // on its `raw_line` definition.
+    "gtk_text_tag_new",
+    "gtk_text_buffer_get_tag_table",
+    "gtk_text_tag_table_add",
+    "gtk_text_buffer_get_start_iter",
+    "gtk_text_buffer_get_end_iter",
+    "gtk_text_buffer_get_iter_at_line",
+    "gtk_text_iter_forward_to_line_end",
+    "gtk_text_buffer_apply_tag",
+    "gtk_text_buffer_remove_tag",
+    // Test-only: `GtkTextBuffer` is a plain GObject, not a widget, so
+    // `tests/text_iter.rs` builds one straight from this constructor
+    // instead of going through a display-bound `GtkSourceView`, and reads
+    // an iter's line and offset back to confirm the fields this crate
+    // wrote are the fields GTK reads.
+    "gtk_text_buffer_new",
+    "gtk_text_iter_get_line",
+    "gtk_text_iter_get_offset",
     // The parent window of the name dialog that Add and Rename open.
     "gtk_widget_get_toplevel",
     // The name dialog's OK button answers Enter too: a default response for
@@ -778,6 +800,12 @@ const GTK_HANDLES: &[&str] = &[
     "GtkSourceBuffer",
     "GtkSourceLanguageManager",
     "GtkSourceLanguage",
+    // Item 171b's error tag and its table. This crate never reads a field
+    // of either, only creates the tag once, adds it to the table
+    // `gtk_text_buffer_get_tag_table` returns, and later hands the same
+    // tag pointer back to `gtk_text_buffer_apply_tag`/`remove_tag`.
+    "GtkTextTag",
+    "GtkTextTagTable",
     // Not a GTK type: ATK's accessible object, what `gtk_widget_get_accessible`
     // returns. `gtkwidget.h` includes `atk/atk.h`, so clang sees it in the
     // same translation unit as everything else here. A status label marks
@@ -962,6 +990,43 @@ fn main() {
              user_data: *mut ::std::os::raw::c_void,\n\
              ),\n\
              >;",
+        )
+        // `GtkTextIter` (item 171b). Unlike every other `Gtk.*` type, this
+        // one is not reached only as a pointer: `gtk_text_buffer_get_start_
+        // iter` and its siblings fill a struct the caller allocates, so this
+        // crate must give it GTK's real layout, not the zero-sized handle
+        // `GTK_HANDLES` gives every class. `gtk/gtktextiter.h`'s own struct
+        // comment calls the fields "opaque, ignore them", but their count,
+        // order and type is the public ABI a caller's own allocation relies
+        // on: GTK has kept this struct's layout unchanged since GTK 2, for
+        // exactly this reason. Copied field for field from the installed
+        // `/usr/include/gtk-3.0/gtk/gtktextiter.h`. `tests/text_iter.rs`
+        // exercises every field path this crate uses, so a wrong size here
+        // fails a test instead of corrupting a stack frame silently.
+        .raw_line(
+            "#[repr(C)]\n\
+             #[derive(Clone, Copy)]\n\
+             pub struct GtkTextIter {\n\
+             dummy1: *mut ::std::os::raw::c_void,\n\
+             dummy2: *mut ::std::os::raw::c_void,\n\
+             dummy3: ::std::os::raw::c_int,\n\
+             dummy4: ::std::os::raw::c_int,\n\
+             dummy5: ::std::os::raw::c_int,\n\
+             dummy6: ::std::os::raw::c_int,\n\
+             dummy7: ::std::os::raw::c_int,\n\
+             dummy8: ::std::os::raw::c_int,\n\
+             dummy9: *mut ::std::os::raw::c_void,\n\
+             dummy10: *mut ::std::os::raw::c_void,\n\
+             dummy11: ::std::os::raw::c_int,\n\
+             dummy12: ::std::os::raw::c_int,\n\
+             dummy13: ::std::os::raw::c_int,\n\
+             dummy14: *mut ::std::os::raw::c_void,\n\
+             }\n\
+             impl ::std::default::Default for GtkTextIter {\n\
+             fn default() -> Self {\n\
+             unsafe { ::std::mem::zeroed() }\n\
+             }\n\
+             }",
         );
 
     // Evolution's handles need the struct tag as well as the typedef. A
