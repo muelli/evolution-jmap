@@ -27,6 +27,9 @@
 //!   `EMailConfigPage`.
 //! - [`extension`] is the `EExtension` on `EMailConfigNotebook`. It checks
 //!   the backend name of the account and adds the page.
+//! - [`validate`] is a local, offline syntax check of the text-mode script,
+//!   for the editor to show a problem before the Check button's own round
+//!   trip to the server.
 //!
 //! Only [`page`], [`extension`] and the second half of [`rule_dialog`] have
 //! FFI. Every decision those widgets show belongs to [`form`] or to the
@@ -40,3 +43,4 @@ pub mod rule_dialog;
 pub mod rule_form;
 pub mod rules;
 pub mod script;
+pub mod validate;

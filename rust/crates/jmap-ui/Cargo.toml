@@ -47,6 +47,8 @@ jmap-backend-core = { workspace = true }
 jmap-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The local, offline syntax check in filters::validate (item 171 step (b)).
+sieve = { version = "0.7.3", package = "sieve-rs", default-features = false }
 tracing = { workspace = true }
 
 [dev-dependencies]

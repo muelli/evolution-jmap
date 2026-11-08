@@ -935,6 +935,7 @@ dependencies = [
  "jmap-config",
  "serde",
  "serde_json",
+ "sieve-rs",
  "tracing",
 ]
 
