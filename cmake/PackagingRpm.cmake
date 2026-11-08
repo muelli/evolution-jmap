@@ -51,6 +51,7 @@ set(CPACK_RPM_USER_FILELIST
 	"%attr(-,root,root) ${CAMEL_PROVIDER_DIR}/libcameljmap.urls"
 	"%attr(-,root,root) ${EDS_REGISTRY_MODULE_DIR}/module-jmap-backend.so"
 	"%attr(-,root,root) ${EVOLUTION_MODULE_DIR}/module-jmap-configuration.so"
+	"%attr(-,root,root) ${CMAKE_INSTALL_PREFIX}/share/gtksourceview-4/language-specs/sieve.lang"
 	"%exclude /usr/share/doc/${PACKAGE_NAME}/changelog.gz"
 	"%license /usr/share/doc/${PACKAGE_NAME}/copyright"
 	"%doc /usr/share/doc/${PACKAGE_NAME}/third-party-notices"
