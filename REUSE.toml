@@ -27,6 +27,9 @@ path = [
     "rust/Cargo.lock",
     ".gitignore",
     "rust/crates/*/tests/fixtures/**",
+    # Delivered as-is into the Dovecot oracle's Maildir over `podman cp`; a
+    # comment header would become part of the RFC 5322 message itself.
+    "ci/gui-scenario/fixtures/**",
     # Written by proptest itself (a `cc <hash> # shrinks to ...` line per
     # saved failing case), with its own comment header already.
     "rust/crates/*/proptest-regressions/**",

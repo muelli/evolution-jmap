@@ -17,6 +17,14 @@
 # With --host, the script runs on this machine. Use --host only in a
 # throwaway machine or container: it needs the components installed as root.
 #
+# A scenario that compares against plain IMAP (item 175) needs
+# ci/dovecot-oracle.sh running first: `./ci/dovecot-oracle.sh start`. This
+# script always joins the same podman network the oracle does
+# (DOVECOT_ORACLE_NETWORK, created here if the oracle has not made it yet),
+# so such a scenario reaches the oracle by its container name. A scenario
+# that does not need IMAP is unaffected: joining the network costs nothing
+# and changes no other scenario's behaviour.
+#
 # Each scenario writes to $GUI_SCENARIO_ARTIFACTS/<scenario>/ (default
 # build/gui-scenario/): numbered screenshots of the key steps, the logs of
 # Evolution, of the D-Bus services and of the mock, and the scenario
@@ -30,6 +38,9 @@ BUILD="${GUI_SCENARIO_BUILD:-$ROOT/build}"
 ARTIFACTS="${GUI_SCENARIO_ARTIFACTS:-$ROOT/build/gui-scenario}"
 IMAGE="${GUI_SCENARIO_IMAGE:-localhost/evolution-jmap-gui-scenario}"
 COMPONENTS=(book-backend cal-backend camel-provider collection-backend config-module)
+# Must match ci/dovecot-oracle.sh's own default exactly: the whole point is
+# for both containers to land on the one network.
+DOVECOT_ORACLE_NETWORK="${DOVECOT_ORACLE_NETWORK:-evolution-jmap-gui-scenario}"
 
 usage() {
 	echo "usage: ci/gui-scenario/run.sh [--host] SCENARIO..." >&2
@@ -63,9 +74,28 @@ if [ "$host" -eq 0 ]; then
 		DESTDIR="$stage" cmake --install "$BUILD" --component "$component" >/dev/null || exit 2
 	done
 	mkdir -p "$ARTIFACTS"
+	if ! podman network exists "$DOVECOT_ORACLE_NETWORK" 2>/dev/null; then
+		podman network create "$DOVECOT_ORACLE_NETWORK" >/dev/null || exit 2
+	fi
+	# A scenario against the IMAP oracle needs delivery done from here, on
+	# the host: the inner container below has no podman of its own to reach
+	# a sibling container's Maildir. The oracle itself must already be
+	# running (`ci/dovecot-oracle.sh start`); this only seeds its mailbox.
+	for scenario in "$@"; do
+		if [ "$scenario" = "mail-imap-oracle-smoke" ]; then
+			if ! "$ROOT/ci/dovecot-oracle.sh" status >/dev/null 2>&1; then
+				echo "gui-scenario: $scenario needs the IMAP oracle running first:" >&2
+				echo "  ci/dovecot-oracle.sh start" >&2
+				exit 2
+			fi
+			"$ROOT/ci/dovecot-oracle.sh" deliver \
+				"$ROOT/ci/gui-scenario/fixtures/imap-oracle-smoke.eml" || exit 2
+		fi
+	done
 	# The container runs as root, so that it can install the stage. The trap
 	# gives the artifacts back to the user of the host.
 	podman run --rm --userns=keep-id -u 0 \
+		--network "$DOVECOT_ORACLE_NETWORK" \
 		-v "$ROOT:$ROOT:Z" \
 		-v "$stage:/stage:Z" \
 		-v "$mock:/usr/local/bin/jmap-mockd:ro" \
@@ -75,6 +105,8 @@ if [ "$host" -eq 0 ]; then
 		-e HOST_GID="$(id -g)" \
 		-e GUI_SCENARIO_ARTIFACTS="$ARTIFACTS" \
 		-e JMAP_MOCKD=/usr/local/bin/jmap-mockd \
+		-e JMAP_LIVE_SERVER_IMAP_CONTAINER_HOST \
+		-e JMAP_LIVE_SERVER_IMAP_CONTAINER_PORT \
 		"$IMAGE" \
 		bash -c '
 			trap '\''chown -R "$HOST_UID:$HOST_GID" "$GUI_SCENARIO_ARTIFACTS"'\'' EXIT
@@ -149,6 +181,8 @@ run_scenario() {
 		GUI_SCENARIO_SOURCES="$run_dir/config/evolution/sources"
 		GUI_SCENARIO_MOCK_PORT="$MOCK_PORT"
 		GUI_SCENARIO_JMAP_URL="http://127.0.0.1:$MOCK_PORT"
+		GUI_SCENARIO_IMAP_HOST="${JMAP_LIVE_SERVER_IMAP_CONTAINER_HOST:-}"
+		GUI_SCENARIO_IMAP_PORT="${JMAP_LIVE_SERVER_IMAP_CONTAINER_PORT:-}"
 	)
 
 	# The scenario names the Evolution component to start and the arguments of
