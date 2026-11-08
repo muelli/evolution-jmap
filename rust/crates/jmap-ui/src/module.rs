@@ -16,7 +16,7 @@ use gobject_sys::GTypeModule;
 use jmap_backend_core::module;
 use jmap_backend_core::subclass::register_dynamic;
 
-use crate::{external_photo, filters, send_later, snooze, undo_delete, vacation};
+use crate::{delegates, external_photo, filters, send_later, snooze, undo_delete, vacation};
 
 /// Register the types of this crate against `type_module`.
 ///
@@ -38,6 +38,8 @@ pub unsafe fn load(type_module: *mut GTypeModule) {
             register_dynamic::<vacation::extension::JmapVacationExtension>(type_module);
             register_dynamic::<filters::page::FiltersPage>(type_module);
             register_dynamic::<filters::extension::JmapFiltersExtension>(type_module);
+            register_dynamic::<delegates::page::DelegatesPage>(type_module);
+            register_dynamic::<delegates::extension::JmapDelegatesExtension>(type_module);
             register_dynamic::<send_later::extension::JmapSendLaterExtension>(type_module);
             register_dynamic::<snooze::reader_ext::JmapSnoozeReaderExtension>(type_module);
             register_dynamic::<undo_delete::shell_ext::JmapUndoDeleteShellExtension>(type_module);
@@ -46,7 +48,7 @@ pub unsafe fn load(type_module: *mut GTypeModule) {
             );
         }
         tracing::trace!(
-            "jmap-ui loaded: vacation, server filters, scheduled send, snooze, undo of a delete and the address book external photo placeholder registered"
+            "jmap-ui loaded: vacation, server filters, delegates, scheduled send, snooze, undo of a delete and the address book external photo placeholder registered"
         );
     });
 }
