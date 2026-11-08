@@ -114,6 +114,13 @@ pub const PANGO_WRAP_WORD_CHAR: c_int = 2;
 /// needs no new FFI type.
 pub const PANGO_ELLIPSIZE_END: c_int = 3;
 
+/// Pango's `underline` value that draws a themed error underline (a wavy or
+/// dotted line, GTK's own spell-check style), read by `GtkTextTag`'s
+/// `underline` property (`pango-attributes.h`: NONE = 0, SINGLE = 1,
+/// DOUBLE = 2, LOW = 3, ERROR = 4). A plain integer, so this needs no new
+/// FFI type.
+pub const PANGO_UNDERLINE_ERROR: c_int = 4;
+
 /// Sets a named boolean property, for a widget whose property is not
 /// `active`.
 ///

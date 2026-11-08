@@ -19,11 +19,15 @@
 //! The list is a `GtkTreeView` over a `GtkListStore` of two text columns.
 //! No `GtkTreeIter` is ever allocated here: rows go in through
 //! `gtk_list_store_insert_with_valuesv`, which accepts NULL for its
-//! iterator, and the selection comes back as `GtkTreePath`s. So this crate
-//! still knows the layout of no GTK struct.
+//! iterator, and the selection comes back as `GtkTreePath`s.
+//!
+//! The text-mode editor's error underline (item 171b) is the one exception:
+//! it allocates a `GtkTextIter` to find and tag the line a local Sieve parse
+//! rejects. `evo-sys` gives that one struct a real layout instead of a
+//! zero-sized handle; see the comment on its `build.rs` definition.
 
 use std::cell::RefCell;
-use std::ffi::{CStr, c_int};
+use std::ffi::{CStr, c_int, c_uint};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,9 +36,9 @@ use eds_sys::ESource;
 use evo_sys::{
     EMailConfigPage, EMailConfigPageInterface, GTK_ORIENTATION_HORIZONTAL,
     GTK_ORIENTATION_VERTICAL, GTK_RESPONSE_CANCEL, GTK_RESPONSE_OK, GTK_SELECTION_BROWSE,
-    GtkCellRenderer, GtkListStore, GtkSourceBuffer, GtkTextBuffer, GtkTreeModel, GtkTreePath,
-    GtkTreeSelection, GtkWidget, GtkWindow, e_mail_config_page_get_type, gtk_box_new,
-    gtk_box_pack_start, gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new,
+    GtkCellRenderer, GtkListStore, GtkSourceBuffer, GtkTextBuffer, GtkTextIter, GtkTextTag,
+    GtkTreeModel, GtkTreePath, GtkTreeSelection, GtkWidget, GtkWindow, e_mail_config_page_get_type,
+    gtk_box_new, gtk_box_pack_start, gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new,
     gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_container_set_border_width,
     gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run,
     gtk_dialog_set_default_response, gtk_entry_new, gtk_entry_set_activates_default, gtk_label_new,
@@ -42,7 +46,10 @@ use evo_sys::{
     gtk_label_set_xalign, gtk_list_store_clear, gtk_list_store_insert_with_valuesv,
     gtk_list_store_newv, gtk_scrolled_window_get_type, gtk_source_buffer_set_language,
     gtk_source_language_manager_get_default, gtk_source_language_manager_get_language,
-    gtk_source_view_new, gtk_text_view_get_buffer, gtk_text_view_set_editable,
+    gtk_source_view_new, gtk_text_buffer_apply_tag, gtk_text_buffer_get_end_iter,
+    gtk_text_buffer_get_iter_at_line, gtk_text_buffer_get_start_iter,
+    gtk_text_buffer_get_tag_table, gtk_text_buffer_remove_tag, gtk_text_iter_forward_to_line_end,
+    gtk_text_tag_new, gtk_text_tag_table_add, gtk_text_view_get_buffer, gtk_text_view_set_editable,
     gtk_text_view_set_monospace, gtk_tree_path_free, gtk_tree_path_get_indices_with_depth,
     gtk_tree_path_new_from_indicesv, gtk_tree_selection_get_selected_rows,
     gtk_tree_selection_set_mode, gtk_tree_view_append_column, gtk_tree_view_column_add_attribute,
@@ -50,8 +57,9 @@ use evo_sys::{
     gtk_tree_view_column_set_title, gtk_tree_view_get_selection, gtk_tree_view_new_with_model,
     gtk_tree_view_set_cursor, gtk_tree_view_set_headers_visible, gtk_widget_destroy,
     gtk_widget_get_toplevel, gtk_widget_set_hexpand, gtk_widget_set_sensitive,
-    gtk_widget_set_size_request, gtk_widget_set_vexpand, gtk_widget_set_visible,
-    gtk_widget_show_all, gtk_window_get_type, gtk_window_set_title, gtk_window_set_transient_for,
+    gtk_widget_set_size_request, gtk_widget_set_tooltip_text, gtk_widget_set_vexpand,
+    gtk_widget_set_visible, gtk_widget_show_all, gtk_window_get_type, gtk_window_set_title,
+    gtk_window_set_transient_for,
 };
 use gio_sys::{
     GAsyncReadyCallback, GAsyncResult, GCancellable, GTask, g_io_error_quark, g_task_new,
@@ -59,7 +67,8 @@ use gio_sys::{
     g_task_set_task_data,
 };
 use glib_sys::{
-    GError, GFALSE, GTRUE, GType, g_error_new_literal, g_list_free_full, gboolean, gpointer,
+    G_SOURCE_REMOVE, GError, GFALSE, GTRUE, GType, g_error_new_literal, g_list_free_full,
+    g_source_remove, g_timeout_add, gboolean, gpointer,
 };
 use gobject_sys::{
     G_TYPE_STRING, GObject, GObjectClass, GTypeInstance, GValue, g_object_ref, g_object_unref,
@@ -80,6 +89,7 @@ use crate::filters::rule_dialog;
 use crate::filters::rule_form::{self, NO_RULE_SELECTED, RuleDraft, RulesEditor};
 use crate::filters::rules::MANAGED_SCRIPT_NAME;
 use crate::filters::script;
+use crate::filters::validate;
 use crate::hold::Hold;
 use crate::link::{self, AccountLink, LoadOutcome, SendSource};
 use crate::widget::{self, flag, get_bool, get_text, set_bool, set_text};
@@ -109,6 +119,11 @@ const GTK_TREE_VIEW_COLUMN_FIXED: c_int = 2;
 /// A starting width for a fixed-sizing name column; `expand` on the column
 /// still lets it grow into whatever room the view actually has.
 const NAME_COLUMN_WIDTH: c_int = 160;
+/// How long the text view waits after the last keystroke before running the
+/// local Sieve parse (item 171b). `SieveScript/validate` is a server round
+/// trip and is out of scope here; this only bounds how often the parser
+/// this crate runs locally reparses the whole script.
+const VALIDATE_DEBOUNCE_MS: c_uint = 300;
 
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"Your server does not offer server-side filters.");
@@ -201,6 +216,14 @@ struct UiState {
     /// The generation of the last Check click. A reply tagged with any other
     /// generation is stale and must not overwrite the status label.
     check_generation: u64,
+    /// The tag item 171b applies to the line a local Sieve parse rejects.
+    /// Created once, in [`build_widgets`], and kept for the page's whole
+    /// life.
+    error_tag: *mut GtkTextTag,
+    /// The pending debounce timeout of the last buffer edit, or 0 if none is
+    /// pending. [`Drop`] cancels it, so a page closed mid-debounce never runs
+    /// the callback against a freed page.
+    validate_timeout: c_uint,
 }
 
 /// A fresh generation for one Check click, process-wide so it never repeats.
@@ -218,6 +241,19 @@ impl UiState {
     /// started after it makes this one stale.
     fn check_is_current(&self, generation: u64) -> bool {
         self.check_generation == generation
+    }
+}
+
+impl Drop for UiState {
+    /// Cancels a pending debounce timeout. Without this, closing the account
+    /// editor while a timeout is still pending would run it against a page
+    /// `g_object_set_data_full` is already in the middle of freeing.
+    fn drop(&mut self) {
+        if self.validate_timeout != 0 {
+            // SAFETY: a source id this page itself added with `g_timeout_add`
+            // and has not yet seen fire (it would have cleared the field).
+            unsafe { g_source_remove(self.validate_timeout) };
+        }
     }
 }
 
@@ -401,6 +437,25 @@ unsafe fn build_widgets(page: *mut GObject) {
         let buffer = gtk_text_view_get_buffer(source_view.cast());
         set_sieve_language(buffer.cast());
 
+        // Item 171b: a themed error underline for the line a local Sieve
+        // parse rejects. One anonymous tag, created once and kept for the
+        // page's whole life; `on_script_changed` applies and removes it.
+        let error_tag = gtk_text_tag_new(ptr::null());
+        widget::set_enum_named(
+            error_tag.cast(),
+            c"underline",
+            widget::PANGO_UNDERLINE_ERROR,
+        );
+        gtk_text_tag_table_add(gtk_text_buffer_get_tag_table(buffer), error_tag);
+        g_signal_connect_data(
+            buffer.cast(),
+            c"changed".as_ptr(),
+            gcallback(on_script_changed as unsafe extern "C" fn(*mut GObject, gpointer)),
+            page.cast(),
+            None,
+            0,
+        );
+
         // The managed script's rules (step B of D3), shown instead of the
         // text view while it parses and the user has not forced text mode.
         let rules_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -516,6 +571,8 @@ unsafe fn build_widgets(page: *mut GObject) {
                 rule_enable,
                 rule_disable,
                 check_generation: 0,
+                error_tag,
+                validate_timeout: 0,
             }),
         );
     }
@@ -934,9 +991,10 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
 }
 
 /// Copies the text view back into the script it belongs to. Every action
-/// calls this first, because the page connects to no buffer signal. A no-op
-/// while rules mode shows the managed script: its text is not the buffer's,
-/// and the buffer holds nothing to lose.
+/// calls this first, because the page's own buffer signal (item 171b) only
+/// debounces a local syntax check, not staging into the form. A no-op while
+/// rules mode shows the managed script: its text is not the buffer's, and
+/// the buffer holds nothing to lose.
 ///
 /// # Safety
 ///
@@ -957,6 +1015,88 @@ unsafe fn flush(cell: &RefCell<UiState>) {
     // A script the vacation responder owns refuses the write, which is the
     // wanted answer: its text view is read-only anyway.
     let _ = cell.borrow_mut().form.set_text(row, &text);
+}
+
+/// The `changed` handler of the text-mode editor's buffer (item 171b). Every
+/// edit restarts a debounce timeout; only the last edit in a burst runs the
+/// local Sieve parse.
+///
+/// # Safety
+///
+/// The GLib signal system calls this with the page as the data pointer.
+unsafe extern "C" fn on_script_changed(_buffer: *mut GObject, page: gpointer) {
+    guard("JmapFiltersPage::script-changed", (), || {
+        // SAFETY: the page is live, because its buffer emitted.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        let pending = std::mem::replace(&mut cell.borrow_mut().validate_timeout, 0);
+        if pending != 0 {
+            // SAFETY: a source id this page added, not yet fired (it would
+            // have cleared the field itself).
+            unsafe { g_source_remove(pending) };
+        }
+        // SAFETY: `page` is live for the duration of this call; the timeout
+        // either fires on this same main loop while it still is, or this
+        // page's `Drop` cancels it first.
+        let id = unsafe {
+            g_timeout_add(
+                VALIDATE_DEBOUNCE_MS,
+                Some(on_validate_timeout as unsafe extern "C" fn(gpointer) -> gboolean),
+                page,
+            )
+        };
+        cell.borrow_mut().validate_timeout = id;
+    });
+}
+
+/// The debounce timeout `on_script_changed` schedules. Runs the local Sieve
+/// parse over the whole script and marks the line of its first problem, if
+/// any, with a themed error underline and a tooltip of the message. Fires at
+/// most once per burst of edits.
+///
+/// # Safety
+///
+/// `page` is the data pointer `on_script_changed` gave `g_timeout_add`.
+unsafe extern "C" fn on_validate_timeout(page: gpointer) -> gboolean {
+    guard("JmapFiltersPage::validate-timeout", G_SOURCE_REMOVE, || {
+        let page = page.cast::<GObject>();
+        // SAFETY: the page is live: this callback runs on the main loop this
+        // page's own `Drop` cancels it from before it is freed.
+        let Some(cell) = (unsafe { state(page) }) else {
+            return G_SOURCE_REMOVE;
+        };
+        // The timeout fired: it is no longer pending.
+        cell.borrow_mut().validate_timeout = 0;
+        let (buffer, source_view, error_tag) = {
+            let ui = cell.borrow();
+            (ui.buffer, ui.source_view, ui.error_tag)
+        };
+        // SAFETY: every widget is a live child of the page, and no borrow of
+        // `cell` is held across these calls.
+        unsafe {
+            let text = get_text(buffer.cast());
+            let mut start = GtkTextIter::default();
+            let mut end = GtkTextIter::default();
+            gtk_text_buffer_get_start_iter(buffer, &mut start);
+            gtk_text_buffer_get_end_iter(buffer, &mut end);
+            gtk_text_buffer_remove_tag(buffer, error_tag, &start, &end);
+            match validate::find_problem(&text) {
+                Some(problem) => {
+                    let line = problem.line.saturating_sub(1) as c_int;
+                    let mut line_start = GtkTextIter::default();
+                    gtk_text_buffer_get_iter_at_line(buffer, &mut line_start, line);
+                    let mut line_end = line_start;
+                    gtk_text_iter_forward_to_line_end(&mut line_end);
+                    gtk_text_buffer_apply_tag(buffer, error_tag, &line_start, &line_end);
+                    let message = cstring_lossy(&problem.message);
+                    gtk_widget_set_tooltip_text(source_view.cast(), message.as_ptr());
+                }
+                None => gtk_widget_set_tooltip_text(source_view.cast(), ptr::null()),
+            }
+        }
+        G_SOURCE_REMOVE
+    })
 }
 
 /// What the Name column shows: the script's name, and for the script the
@@ -2026,6 +2166,8 @@ mod tests {
             rule_enable: ptr::null_mut(),
             rule_disable: ptr::null_mut(),
             check_generation: 0,
+            error_tag: ptr::null_mut(),
+            validate_timeout: 0,
         }
     }
 
