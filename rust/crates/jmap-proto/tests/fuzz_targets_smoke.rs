@@ -225,3 +225,103 @@ fn response_and_invocation_and_errors_smoke() {
     let serialized_ref = serde_json::to_vec(&rref).expect("ResultReference serializes");
     assert!(serde_json::from_slice::<ResultReference>(&serialized_ref).is_ok());
 }
+
+#[test]
+fn hostile_bytes_do_not_panic_expanded_proto_parsers() {
+    let hostile_inputs: &[&[u8]] = &[
+        b"",
+        b"{",
+        b"[",
+        b"}",
+        b"]",
+        b"null",
+        b"true",
+        b"12345",
+        b"\"unterminated string",
+        b"{\"name\": null}",
+        b"{\"values\": [1, 2, 3]}",
+        b"mailto:user@example.com?body=^n^n^",
+        b"https://example.com/path?arg=val#fragment",
+        b"\xFF\xFE\x00\x00",
+        b"This is an overlong text line that needs folding into multiple 75-octet segments without split.",
+    ];
+
+    for input in hostile_inputs {
+        if let Ok(ab) = serde_json::from_slice::<jmap_proto::contacts::AddressBook>(input) {
+            let _ = serde_json::to_vec(&ab);
+        }
+        if let Ok(cal) = serde_json::from_slice::<jmap_proto::calendars::Calendar>(input) {
+            let _ = serde_json::to_vec(&cal);
+        }
+        if let Ok(pi) = serde_json::from_slice::<jmap_proto::calendars::ParticipantIdentity>(input)
+        {
+            let _ = serde_json::to_vec(&pi);
+        }
+        if let Ok(cen) =
+            serde_json::from_slice::<jmap_proto::calendars::CalendarEventNotification>(input)
+        {
+            let _ = serde_json::to_vec(&cen);
+        }
+        if let Ok(task) = serde_json::from_slice::<jmap_proto::tasks::Task>(input) {
+            let _ = serde_json::to_vec(&task);
+        }
+        if let Ok(tl) = serde_json::from_slice::<jmap_proto::tasks::TaskList>(input) {
+            let _ = serde_json::to_vec(&tl);
+        }
+        if let Ok(pr) = serde_json::from_slice::<jmap_proto::principals::Principal>(input) {
+            let _ = serde_json::to_vec(&pr);
+        }
+        if let Ok(sn) = serde_json::from_slice::<jmap_proto::principals::ShareNotification>(input) {
+            let _ = serde_json::to_vec(&sn);
+        }
+        if let Ok(identity) = serde_json::from_slice::<jmap_proto::mail::Identity>(input) {
+            let _ = serde_json::to_vec(&identity);
+        }
+        if let Ok(sub) = serde_json::from_slice::<jmap_proto::mail::EmailSubmission>(input) {
+            let _ = serde_json::to_vec(&sub);
+        }
+        if let Ok(th) = serde_json::from_slice::<jmap_proto::mail::Thread>(input) {
+            let _ = serde_json::to_vec(&th);
+        }
+        if let Ok(snip) = serde_json::from_slice::<jmap_proto::mail::SearchSnippet>(input) {
+            let _ = serde_json::to_vec(&snip);
+        }
+        if let Ok(script) = serde_json::from_slice::<jmap_proto::sieve::SieveScript>(input) {
+            let _ = serde_json::to_vec(&script);
+        }
+        if let Ok(quota) = serde_json::from_slice::<jmap_proto::quota::Quota>(input) {
+            let _ = serde_json::to_vec(&quota);
+        }
+        if let Ok(fn_node) = serde_json::from_slice::<jmap_proto::filenode::FileNode>(input) {
+            let _ = serde_json::to_vec(&fn_node);
+        }
+        if let Ok(blob_up) = serde_json::from_slice::<jmap_proto::blob::BlobUploadResponse>(input) {
+            let _ = serde_json::to_vec(&blob_up);
+        }
+        if let Ok(blob_get) = serde_json::from_slice::<jmap_proto::blob::BlobGetResponse>(input) {
+            let _ = serde_json::to_vec(&blob_get);
+        }
+        if let Ok(ps) = serde_json::from_slice::<jmap_proto::push::PushSubscription>(input) {
+            let _ = serde_json::to_vec(&ps);
+        }
+        if let Ok(sc) = serde_json::from_slice::<jmap_proto::push::StateChange>(input) {
+            let _ = serde_json::to_vec(&sc);
+        }
+        if let Ok(ws_req) = serde_json::from_slice::<jmap_proto::websocket::WebSocketRequest>(input)
+        {
+            let _ = serde_json::to_vec(&ws_req);
+        }
+        if let Ok(ws_resp) =
+            serde_json::from_slice::<jmap_proto::websocket::WebSocketResponse>(input)
+        {
+            let _ = serde_json::to_vec(&ws_resp);
+        }
+        if let Ok(s) = std::str::from_utf8(input) {
+            let _ = jmap_proto::text::caret_decoded(s);
+            let _ = jmap_proto::text::caret_encoded(s);
+            let _ = jmap_proto::text::split_uri(s);
+            let _ = jmap_proto::text::fold_overlong_lines(s.to_string());
+            let _ = jmap_proto::text::is_valid_scheme(s);
+        }
+    }
+}
