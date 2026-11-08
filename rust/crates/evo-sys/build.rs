@@ -441,6 +441,9 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // vacation responder owns.
     "gtk_text_view_set_editable",
     "gtk_text_view_set_monospace",
+    // The Vacation Responder's message body: without this, Tab inserts a
+    // tab character instead of moving focus to the next field.
+    "gtk_text_view_set_accepts_tab",
     // The parent window of the name dialog that Add and Rename open.
     "gtk_widget_get_toplevel",
     // The name dialog's OK button answers Enter too: a default response for

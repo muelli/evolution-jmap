@@ -46,8 +46,8 @@ use evo_sys::{
     gtk_grid_new, gtk_grid_set_column_spacing, gtk_grid_set_row_spacing, gtk_label_new,
     gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
     gtk_label_set_xalign, gtk_scrolled_window_get_type, gtk_text_view_get_buffer,
-    gtk_text_view_new, gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_vexpand,
-    gtk_widget_show_all,
+    gtk_text_view_new, gtk_text_view_set_accepts_tab, gtk_widget_set_hexpand,
+    gtk_widget_set_sensitive, gtk_widget_set_vexpand, gtk_widget_show_all,
 };
 use gio_sys::{
     GAsyncReadyCallback, GAsyncResult, GCancellable, GTask, g_io_error_quark, g_task_new,
@@ -295,6 +295,9 @@ unsafe fn build_widgets(page: *mut GObject) {
         attach_row(grid, 2, N_(c"_Subject:"), subject);
         let body = gtk_text_view_new();
         gtk_widget_set_vexpand(body, GTRUE);
+        // Keyboard (item 174(b)): a plain Tab must move focus to the next
+        // field, not insert a tab character into the message.
+        gtk_text_view_set_accepts_tab(body.cast(), GFALSE);
         widget::set_enum_named(body.cast(), c"wrap-mode", GTK_WRAP_WORD_CHAR);
         attach_row(grid, 3, N_(c"_Message:"), body);
         let buffer = gtk_text_view_get_buffer(body.cast());
@@ -756,6 +759,41 @@ mod tests {
             assert_eq!(
                 hscrollbar_policy, GTK_POLICY_NEVER,
                 "the page can still scroll sideways"
+            );
+
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// Keyboard (item 174 (b)): a plain Tab in the message body must move
+    /// focus to the next field, not insert a tab character. GTK's own
+    /// `GtkTextView` default (`accepts-tab: TRUE`) traps keyboard-only
+    /// users, who would need the undiscoverable Ctrl+Tab to escape. Needs
+    /// a display; skips without one.
+    #[test]
+    fn the_message_body_lets_tab_move_focus() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: see `the_message_body_wraps_instead_of_scrolling_sideways`.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+
+            let grid = state(page.cast()).unwrap().borrow().grid;
+            let body = gtk_grid_get_child_at(grid, 1, 3);
+            let mut accepts_tab: gboolean = GTRUE;
+            g_object_get(
+                body.cast(),
+                c"accepts-tab".as_ptr(),
+                &mut accepts_tab as *mut gboolean,
+                ptr::null::<c_char>(),
+            );
+            assert_eq!(
+                accepts_tab, GFALSE,
+                "Tab in the message body inserts a tab character instead of moving focus"
             );
 
             gtk_widget_destroy(page);
