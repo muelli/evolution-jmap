@@ -756,19 +756,29 @@ fn claimed(listed: Option<u32>) -> Option<u32> {
     listed.filter(|listed| *listed != 0)
 }
 
+/// The bytes `camel_data_cache_add_atomic` appends to a key for its temporary
+/// file, `.XXXXXX` (`g_mkstemp`'s own placeholder, `camel-data-cache.c`). A
+/// key at the RFC's own 255-byte limit would make a 262-byte file name on
+/// EDS 3.62+, past most filesystems' 255-byte name limit, so `store` would
+/// fail there alone, forever, for that one message. `valid_key` stays below
+/// this margin so the same key is cacheable on every supported EDS version.
+const ATOMIC_TEMP_SUFFIX_LEN: usize = ".XXXXXX".len();
+
 /// Whether `key` is an id that RFC 8620 §1.2 allows, and thus a file name that
-/// this cache can create.
+/// this cache can create on every supported EDS version.
 ///
-/// This is exactly the grammar of the RFC: one to 255 characters of
-/// `A-Za-z0-9_-`. Each part of it is necessary. The character set keeps a key
-/// in one directory and refuses `.` and `..`, the two most dangerous names.
-/// The ban on the empty string stops a key that names the directory itself.
-/// The RFC only asks a server to try to avoid a leading dash, so that an id
-/// is not read as a command-line option; this cache never passes a key as a
-/// bare argument, so a leading dash is not refused here.
+/// This is almost the grammar of the RFC: one to 255 characters of
+/// `A-Za-z0-9_-`, narrowed to `255 - ATOMIC_TEMP_SUFFIX_LEN` so a key this
+/// module accepts is cacheable whether or not the installed EDS has the
+/// atomic store path. Each part of it is necessary. The character set keeps
+/// a key in one directory and refuses `.` and `..`, the two most dangerous
+/// names. The ban on the empty string stops a key that names the directory
+/// itself. The RFC only asks a server to try to avoid a leading dash, so
+/// that an id is not read as a command-line option; this cache never passes
+/// a key as a bare argument, so a leading dash is not refused here.
 pub(crate) fn valid_key(key: &str) -> bool {
     !key.is_empty()
-        && key.len() <= 255
+        && key.len() <= 255 - ATOMIC_TEMP_SUFFIX_LEN
         && key
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
@@ -840,5 +850,29 @@ pub(crate) unsafe fn describe(error: *mut GError) -> String {
             .as_ref()
             .and_then(|error| jmap_backend_core::marshal::read_string(error.message))
             .unwrap_or_else(|| "(no detail)".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_key;
+
+    /// `255 - ATOMIC_TEMP_SUFFIX_LEN` is the last length a key's temporary
+    /// file still fits in a 255-byte file name on EDS 3.62+.
+    #[test]
+    fn a_key_up_to_the_atomic_margin_is_valid() {
+        assert!(valid_key(&"a".repeat(248)));
+    }
+
+    /// A key past the margin is refused, even though RFC 8620 §1.2 allows it,
+    /// because its atomic temporary file would not fit a 255-byte file name.
+    #[test]
+    fn a_key_past_the_atomic_margin_is_not_valid() {
+        for length in [249, 255] {
+            assert!(
+                !valid_key(&"a".repeat(length)),
+                "a {length}-byte key was accepted"
+            );
+        }
     }
 }
