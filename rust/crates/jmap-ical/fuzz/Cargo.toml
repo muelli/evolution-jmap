@@ -16,6 +16,10 @@ libfuzzer-sys = "0.4"
 [dependencies.evolution-jmap-ical]
 path = ".."
 
+[dependencies.evolution-jmap-proto]
+path = "../../jmap-proto"
+features = ["calendars", "principals"]
+
 # Isolate the fuzzer workspace from the project workspace.
 [workspace]
 members = ["."]

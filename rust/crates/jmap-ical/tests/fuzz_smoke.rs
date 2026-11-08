@@ -349,3 +349,78 @@ fn fuzz_ical_roundtrip_extended_helpers_never_panic() {
         }
     }
 }
+
+#[test]
+fn fuzz_ical_import_extended_helpers_never_panic() {
+    let test_inputs: &[&str] = &[
+        include_str!("fixtures/apple_calendar_export.ics"),
+        include_str!("fixtures/evolution_calendar_export.ics"),
+        "NOT ICAL DATA AT ALL",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:sample-tz\r\nDTSTART;TZID=/custom/zone:20261108T100000\r\nRRULE:FREQ=DAILY;UNTIL=20261115T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+    ];
+
+    for text in test_inputs {
+        let _ = jmap_ical::unique_tzid_to_iana(text);
+        let _ = jmap_ical::windows_time_zone_to_iana(text);
+        let _ = jmap_ical::resolve_canonical_time_zone(text);
+        let _ = jmap_ical::names_time_zone(text);
+        let _ = jmap_ical::free_busy_type(text);
+
+        let date = jmap_proto::state::UtcDate::new(*text);
+        let period = jmap_proto::principals::BusyPeriod::new(date.clone(), date.clone(), *text);
+        let _ = jmap_ical::busy_periods_to_vfreebusy(text, &date, &date, &[period]);
+
+        if let Ok(event) = ical_to_event(text) {
+            let ical2 = event_to_ical(&event);
+            let _ = ical_to_event(&ical2);
+
+            let _ = jmap_ical::scheduling_ical(&event, "REQUEST", None);
+            let _ = jmap_ical::scheduling_ical(&event, "REPLY", None);
+            let _ = jmap_ical::scheduling_ical(&event, "CANCEL", None);
+            let _ = jmap_ical::scheduling_ical(&event, text, None);
+            if let Some(ref overrides) = event.recurrence_overrides {
+                for recurrence_id in overrides.keys() {
+                    let _ = jmap_ical::scheduling_ical(&event, "REQUEST", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event, "REPLY", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event, "CANCEL", Some(recurrence_id));
+                }
+            }
+
+            let _ = jmap_ical::maps_alerts(&event);
+            let _ = jmap_ical::maps_time_zone(&event);
+
+            if let Some(ref tzid) = event.time_zone {
+                let _ = jmap_ical::unique_tzid_to_iana(tzid);
+                let _ = jmap_ical::windows_time_zone_to_iana(tzid);
+                let _ = jmap_ical::resolve_canonical_time_zone(tzid);
+                let _ = jmap_ical::time_zone_definition(&event, tzid);
+                let _ = jmap_ical::names_time_zone(tzid);
+                let _ = jmap_ical::defines_time_zone(&event, tzid);
+            }
+
+            if let Some(ref rule) = event.recurrence_rule {
+                let _ = jmap_ical::unstateable_until(rule);
+                let _ = jmap_ical::maps_recurrence_rule(rule);
+            }
+
+            if let Some(ref locations) = event.locations {
+                let _ = jmap_ical::maps_locations(locations);
+            }
+
+            if let Some(ref vlocations) = event.virtual_locations {
+                let _ = jmap_ical::maps_virtual_locations(vlocations);
+            }
+
+            if let Some(ref overrides) = event.recurrence_overrides {
+                for (recurrence_id, patch) in overrides {
+                    let _ = jmap_ical::maps_recurrence_override(&event, recurrence_id, patch);
+                    let _ = jmap_ical::sends_recurrence_override(&event, recurrence_id, patch);
+                }
+            }
+
+            let mut pruned = event.clone();
+            jmap_ical::prune_time_zones(&mut pruned);
+            let _ = event_to_ical(&pruned);
+        }
+    }
+}
