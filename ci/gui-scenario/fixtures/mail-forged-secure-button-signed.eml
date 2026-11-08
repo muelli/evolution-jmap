@@ -1,0 +1,36 @@
+From: Sender <sender@example.test>
+To: Alice <alice@example.com>
+Subject: Forged native click targets (signed)
+Date: Fri, 02 Jan 2026 03:04:05 +0000
+Message-ID: <item178-signed@mock.invalid>
+MIME-Version: 1.0
+Content-Type: multipart/signed; micalg="pgp-sha256"; protocol="application/pgp-signature"; boundary="mock-signed-boundary-item178"
+
+--mock-signed-boundary-item178
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+<p>Forged native click targets test (item 178, signed mail).</p>
+<button type="button" class="secure-button" id="secure-button" value="0x55fdead0beef:0x55fdead0cafe">Forged Secure Button</button>
+<button type="button" class="secure-button-details" id="0x55fdead0beef:spn" value="secure-button-details-0x55fdead0beef-fake">Forged Secure Button Details</button>
+<button type="button" class="secure-button-view-certificate" id="1.signed.button" value="0x55fdead0beef:0x55fdead0cafe:0x55fdead0face">Forged View Certificate</button>
+<button type="button" class="secure-button-import-certificate" id="1.signed.button.0x55fdead0face" value="0x55fdead0beef:0x55fdead0cafe:0x55fdead0face">Forged Import Certificate</button>
+
+--mock-signed-boundary-item178
+Content-Type: application/pgp-signature; name="signature.asc"
+Content-Description: OpenPGP digital signature
+Content-Disposition: attachment; filename="signature.asc"
+
+-----BEGIN PGP SIGNATURE-----
+
+iQFIBAABCgAyFiEEXaQZt5zRgNMk57tc7SGi/MKhllMFAmrwiUYUHHNlbmRlckBl
+eGFtcGxlLnRlc3QACgkQ7SGi/MKhllMXEQf+Kp/2mgl9zUnRZkBYZ3KhtNzXo/oU
+H4tAyczowy0lqnzVs2KLjehfSExAStWO6de67UDA9ll2fXD2+AHe1zgXQhjfX3E6
+QRbpsbI289lWdjkFe9KEpNloR1skBsJdgFztErj3XYtZ+LKZ6LKG11tEiYmqqdV6
+Q/0Rq12wuOvHt0GBAEpYUtvw0oH9KqhY8lr3JD+j2t4T8gwnB0GN6shF5QxHLaSP
+knxnmWzH/dyKr1Mw+cAShYplgGKqLVOkTYCwMy5UT79HnytrUkFcaLc4KLEPFCyl
+5AKfDUZbNor95hiL+VpIb+6QGVzCyvLQ1awIWT1I7LRIMJinM8CCEHLEaQ==
+=y35B
+-----END PGP SIGNATURE-----
+
+--mock-signed-boundary-item178--

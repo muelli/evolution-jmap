@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine;
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarRights};
@@ -76,6 +77,13 @@ struct SeedEmail {
     headers: Vec<SeedHeader>,
     #[serde(default)]
     attachments: Vec<SeedAttachment>,
+    /// Base64 of a verbatim `message/rfc822` blob, for a MIME shape the
+    /// built-in builder cannot produce (for example `multipart/signed`).
+    /// Overrides `text_body`/`attachments` in the raw blob a real Camel
+    /// client downloads; `text_body` still fills the JMAP structured
+    /// properties.
+    #[serde(default)]
+    raw_source_base64: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -637,6 +645,14 @@ fn seed_from_file(server: &MockServer, path: &str) -> Result<(), String> {
                     attachment.content.into_bytes(),
                 );
                 seed = seed.attachment(blob_id, &attachment.name, &attachment.content_type);
+            }
+            if let Some(encoded) = email_seed.raw_source_base64 {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|error| {
+                        format!("seed email rawSourceBase64 is not base64: {error}")
+                    })?;
+                seed = seed.raw_source(bytes);
             }
             account.seed_email(seed);
         }
