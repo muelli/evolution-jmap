@@ -60,21 +60,23 @@ checks `value` against `g_strdup_printf("%p:", view->priv->itip_part_ptr)`,
 the same shape as `secure-button`; a plausible-but-wrong value fails the
 prefix check and the handler returns before running any script.
 
-Not covered here, left for a follow-up claim:
-
-`org-gnome-vcard-save-button` (`modules/vcard-inline/e-mail-formatter-
-vcard.c`) checks the clicked value with `strstr(part_id, element_value)`,
-true for an empty `value`, so the real button's own `value` is the plain
-`part_id` string, not a secret pointer; a forged copy with no `value`
-attribute at all would pass that check anywhere on the page. This was not
-reproduced here: a debug probe clicking the message's own real "Save To
-Addressbook" button through `click_at` (the synthetic-mouse path the
-in-flight `gtk_dialog_run` requires, since the click reaches it through a
-WebKit accessible node) also failed to open the dialog, so the gap is in
-this harness's click delivery for that specific control, not evidence
-either way about the forged case. Needs a different interaction path
-(for example driving the click through `webkit_web_view_run_javascript`,
-or a real X11 click through the compositor) before it can be measured.
+`org-gnome-vcard-save-button` (`modules/vcard-inline/e-mail-part-vcard.c`)
+checks the clicked value with `strstr(part_id, element_value)`, true for an
+empty `value`, so the real button's own `value` is the plain `part_id`
+string, not a secret pointer. `click_at` (not `do_action`: the handler
+calls `gtk_dialog_run`, the same nested-loop shape as `secure-button`'s own
+dialogs) reaches the real button fine once the message has actually
+rendered and the click waits for the attachment's part to register; an
+earlier session's probe of the real button failed for an unrelated reason,
+not a harness click-delivery gap. A forged button with `value=""`, placed
+in the message body away from the real vCard's own render, opens the same
+"Select destination" address-book picker: a real upstream finding
+(Evolution's own code, not ours), written to `upstream-drafts/` (operator
+files; this repository does not contact upstream). A forged button with no
+`value` attribute at all is worse: confirmed live this session to crash
+Evolution (a NULL `element_value` reaches the unchecked `strstr`), also
+written up, but not exercised here, since a routine CI scenario should not
+crash the real process it drives.
 """
 
 import base64
@@ -84,6 +86,8 @@ import time
 
 from scenario import (
     ScenarioFailure,
+    click_at,
+    click_button,
     do_action,
     evolution,
     find,
@@ -145,6 +149,34 @@ ITIP_FIXTURE = os.path.join(
 )
 ITIP_BUTTON_TEXT = "Forged Itip Button"
 
+# org-gnome-vcard-save-button (modules/vcard-inline/e-mail-part-vcard.c):
+# the real button's own `value` is the plain `part_id`, checked with
+# `strstr(part_id, element_value)`, true for an empty `value` too. A real
+# vCard attachment must be present for the listener to register at all
+# (`mail_part_vcard_content_loaded`); the forged button sits in the body
+# text, away from the attachment's own render, to show the class-name match
+# reaches it from anywhere on the page.
+#
+# This forged button sets `value=""` (present, empty), not an absent
+# `value` attribute: a DOM element with no `value` attribute makes
+# `elem.getAttribute("value")` answer JS `null` (`data/webkit/e-web-view.js`'s
+# own `res["elem-value"] = elem.getAttribute("value")`), and the native side
+# passes that straight to `strstr(part_id, element_value)` with no NULL
+# check, a crash confirmed live this session (reproducer and upstream draft
+# in the harness, not exercised here: a routine CI scenario should not
+# crash the real Evolution process it drives).
+VCARD_SUBJECT = "Forged native click targets (vcard)"
+VCARD_BUTTON_TEXT = "Forged Vcard Save Button"
+VCARD_HTML_BODY = (
+    "<p>Forged native click targets test (item 178), vcard half.</p>"
+    f'<button type="button" class="org-gnome-vcard-save-button" value="">'
+    f"{VCARD_BUTTON_TEXT}</button>"
+)
+VCARD_CONTENT = (
+    "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Forged Vcard Target\r\n"
+    "EMAIL:forged-vcard-target@example.test\r\nEND:VCARD\r\n"
+)
+
 
 def write_seed():
     """Write the `--seed` JSON: one HTML message forging three native click
@@ -197,6 +229,22 @@ def write_seed():
                         "textBody": "(raw_source overrides this)",
                         "receivedAt": "2026-01-02T03:04:07Z",
                         "rawSourceBase64": base64.b64encode(itip_raw).decode("ascii"),
+                    },
+                    {
+                        "mailboxId": "M1",
+                        "from": {"name": "Sender", "email": "sender@example.test"},
+                        "to": [{"name": "Alice", "email": "alice@example.com"}],
+                        "subject": VCARD_SUBJECT,
+                        "textBody": VCARD_HTML_BODY,
+                        "bodyIsHtml": True,
+                        "receivedAt": "2026-01-02T03:04:08Z",
+                        "attachments": [
+                            {
+                                "name": "contact.vcf",
+                                "contentType": "text/vcard",
+                                "content": VCARD_CONTENT,
+                            }
+                        ],
                     },
                 ],
             }
@@ -356,6 +404,39 @@ def run():
     if top_level_window_count() != windows_before:
         raise ScenarioFailure("a forged itip-button click opened a window")
     say("itip-button: forged click with a wrong value does nothing")
+
+    # org-gnome-vcard-save-button: a real vCard attachment registers the
+    # listener; a forged button with `value=""`, placed away from the real
+    # vCard's own render, passes the same weak check (`strstr` against an
+    # empty needle always matches) and opens the real address-book picker.
+    # Unlike every target above, this one is not safe.
+    select_folder(ACCOUNT, "Inbox")
+    select_message(VCARD_SUBJECT)
+    menu_item("Message/Open in New Window")
+    vcard_browser = wait_for(
+        lambda: window(VCARD_SUBJECT), "the detached vcard-message window"
+    )
+    time.sleep(WAIT_SECONDS)
+    screenshot("forged-vcard-mail-open")
+
+    forged_vcard_button = find(vcard_browser, "push button", VCARD_BUTTON_TEXT, showing=True)
+    if forged_vcard_button is None:
+        raise ScenarioFailure(f"the forged button {VCARD_BUTTON_TEXT!r} never rendered")
+    say("vcard mail reader: the forged org-gnome-vcard-save-button renders")
+
+    # The real handler calls gtk_dialog_run, the same nested-loop shape as
+    # secure-button's own dialogs: a synthetic mouse click survives that,
+    # unlike an AT-SPI doAction call on the same stack.
+    click_at(forged_vcard_button)
+    dialog = wait_for(
+        lambda: window("Select destination"), "the address book picker dialog"
+    )
+    screenshot("after-forged-vcard-save-button")
+    say(
+        "org-gnome-vcard-save-button: a forged click with an empty value opens "
+        "the real address book picker (upstream finding, logged, not ours to fix)"
+    )
+    click_button(dialog, "Cancel")
 
 
 main(setup, run, mock_args=("--seed", write_seed()))
