@@ -535,11 +535,26 @@ impl MessageCache {
     }
 }
 
+/// Whether the file at `path` holds exactly `expected_len` bytes.
+///
+/// [`write_entry`]'s 3.62+ arm uses this to tell a cache entry that
+/// `commit_atomic` already renamed into place, complete, from one it never
+/// wrote: both a missing file and a short or long one answer `false`. Plain
+/// Rust, kept outside the `camel_data_cache_atomic` gate so it has unit tests
+/// on every installed EDS, not only 3.62+.
+#[cfg_attr(not(camel_data_cache_atomic), allow(dead_code))]
+fn file_has_len(path: &str, expected_len: usize) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == expected_len as u64)
+}
+
 /// Writes `source` under `key` in `subdir` of `cache`, and tells if the write
 /// succeeded. Two implementations of one contract: the 3.52-3.61 arm (see
 /// "The atomic write" in the module docs) writes directly to the final path
 /// and checks the result; the 3.62+ arm writes to a temporary name first.
-/// Both leave nothing under `key` on a failed write, not a short file.
+/// Both leave nothing under `key` on a failed write, not a short file: on the
+/// 3.62+ arm, a `commit_atomic` failure after a successful rename still
+/// counts as success, because the rename already left the full entry at
+/// `key`; see [`file_has_len`].
 ///
 /// `uid` only names the entry in a log line. This is `pub(crate)` so
 /// [`crate::pending_append_cache::PendingAppendCache::store`] can reuse it:
@@ -663,12 +678,30 @@ pub(crate) fn write_entry(
             // would free it twice. `commit_atomic` opens a stream on the
             // renamed file. Only its presence is necessary, so
             // `Owned::from_raw(..).is_some()` checks it and drops it.
-            Owned::from_raw(camel_data_cache_commit_atomic(
+            let committed = Owned::from_raw(camel_data_cache_commit_atomic(
                 cache.as_ptr(),
                 stream.into_raw(),
                 &mut error,
             ))
-            .is_some()
+            .is_some();
+            // `commit_atomic` can also fail after its own rename already
+            // succeeded, when only its post-rename reopen of the committed
+            // file fails (EACCES, EMFILE and similar, per
+            // `camel-data-cache.c`). Nothing removes the renamed file on
+            // that path, so the entry is complete at `key` either way; a
+            // file of the written length there is that case, not a dropped
+            // write.
+            committed || {
+                let raw =
+                    camel_data_cache_get_filename(cache.as_ptr(), subdir.as_ptr(), key.as_ptr());
+                // SAFETY: `raw` is NULL or a fresh `g_malloc`'d string, read
+                // before the free below.
+                let path = read_string(raw);
+                // SAFETY: `raw` is NULL or a `g_malloc`'d pointer this call
+                // owns. `g_free` on NULL is a defined no-op.
+                g_free(raw.cast());
+                path.is_some_and(|path| file_has_len(&path, source.len()))
+            }
         } else {
             // `discard_atomic` takes ownership of `stream` in the same
             // way, closes it, and removes the temporary file. It gives
@@ -855,7 +888,7 @@ pub(crate) unsafe fn describe(error: *mut GError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::valid_key;
+    use super::{file_has_len, valid_key};
 
     /// `255 - ATOMIC_TEMP_SUFFIX_LEN` is the last length a key's temporary
     /// file still fits in a 255-byte file name on EDS 3.62+.
@@ -874,5 +907,41 @@ mod tests {
                 "a {length}-byte key was accepted"
             );
         }
+    }
+
+    /// A file of exactly the expected length is a complete entry, the shape
+    /// `commit_atomic` leaves behind when its rename succeeds but its own
+    /// post-rename reopen then fails.
+    #[test]
+    fn a_file_of_the_expected_length_has_that_length() {
+        let file = tempfile_with(b"hello");
+        assert!(file_has_len(file.to_str().unwrap(), 5));
+        std::fs::remove_file(file).unwrap();
+    }
+
+    /// A short file is not a complete entry: a genuinely incomplete write,
+    /// not one that only failed to reopen after a full rename.
+    #[test]
+    fn a_short_file_does_not_have_the_expected_length() {
+        let file = tempfile_with(b"hel");
+        assert!(!file_has_len(file.to_str().unwrap(), 5));
+        std::fs::remove_file(file).unwrap();
+    }
+
+    /// A path with nothing at it is not a complete entry either: the rename
+    /// itself failed, the shape `discard_atomic` leaves behind.
+    #[test]
+    fn a_missing_file_does_not_have_the_expected_length() {
+        assert!(!file_has_len("/nonexistent/path/for/jmap-mail-tests", 5));
+    }
+
+    fn tempfile_with(bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "jmap-mail-cache-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        path
     }
 }
