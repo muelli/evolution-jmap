@@ -123,3 +123,11 @@
  * parsing typed dates at all. It is a GtkHBox subclass, so the class struct
  * stays out and the type joins EVO_HANDLES (see build.rs). */
 #include <e-util/e-dateedit.h>
+
+/* The Server Filters page's text mode (item 171a): a syntax-highlighting
+ * text view, and the manager that looks up a named language definition for
+ * it. GtkSourceView 4 is a separate package from Evolution's own libraries,
+ * probed for on its own in build.rs. Its classes are all `Gtk.*`-prefixed,
+ * so build.rs's existing GTK blocklist already keeps them opaque; nothing
+ * here subclasses one, only constructs a view and looks up a language. */
+#include <gtksourceview/gtksource.h>

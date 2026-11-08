@@ -444,6 +444,13 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // The Vacation Responder's message body: without this, Tab inserts a
     // tab character instead of moving focus to the next field.
     "gtk_text_view_set_accepts_tab",
+    // The Server Filters page's text mode (item 171a). GtkSourceView is a
+    // GtkTextView subclass, so the calls above keep working against the
+    // same pointer; only the constructor and the language lookup are new.
+    "gtk_source_view_new",
+    "gtk_source_language_manager_get_default",
+    "gtk_source_language_manager_get_language",
+    "gtk_source_buffer_set_language",
     // The parent window of the name dialog that Add and Rename open.
     "gtk_widget_get_toplevel",
     // The name dialog's OK button answers Enter too: a default response for
@@ -759,6 +766,15 @@ const GTK_HANDLES: &[&str] = &[
     // itself exist.
     "GtkAdjustment",
     "GtkScrolledWindow",
+    // The Server Filters page's text mode (item 171a). `GtkSource.*` already
+    // matches `BLOCKED_GTK_TYPES`'s `Gtk.*` blocklist entry, so these need
+    // no separate blocklisting; this crate still subclasses none of them,
+    // only constructs a view and looks up a language, so they stay opaque
+    // handles like every other GTK class here.
+    "GtkSourceView",
+    "GtkSourceBuffer",
+    "GtkSourceLanguageManager",
+    "GtkSourceLanguage",
     // Not a GTK type: ATK's accessible object, what `gtk_widget_get_accessible`
     // returns. `gtkwidget.h` includes `atk/atk.h`, so clang sees it in the
     // same translation unit as everything else here. A status label marks
@@ -836,6 +852,24 @@ fn main() {
 
     // Colon-separated, like every other library path in the loader's world.
     println!("cargo:libdirs={}", link_paths.join(":"));
+
+    // The Server Filters page's text mode (item 171a). Unlike Evolution's
+    // own libraries, GtkSourceView installs into the system's normal
+    // library directories, so `probe`'s own default link metadata is
+    // enough: no RUNPATH bookkeeping like the loop above needs.
+    //
+    // The package name has no ".0" suffix, unlike most GNOME `.pc` files
+    // (confirmed by reading the installed `gtksourceview-4.pc` directly, not
+    // assumed from the GNOME naming convention).
+    let gtksourceview = pkg_config::Config::new()
+        .probe("gtksourceview-4")
+        .unwrap_or_else(|e| panic!("gtksourceview-4 not found: {e}"));
+    clang_args.extend(
+        gtksourceview
+            .include_paths
+            .iter()
+            .map(|p| format!("-I{}", p.display())),
+    );
 
     // This decides which menu/action layer `wrapper.h`'s
     // `JMAP_EVO_EUI_MANAGER` picks between (see `MIN_EVO_EUI_MANAGER`).
