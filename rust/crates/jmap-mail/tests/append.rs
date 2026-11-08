@@ -51,6 +51,14 @@
 //! with no known history. [`a_message_appended_with_no_row_carries_no_keywords`]
 //! checks this normal case, not a defensive one.
 //!
+//! ## Offline
+//!
+//! [`appending_to_a_folder_of_a_disconnected_account_is_queued_and_shown_locally`]
+//! covers ROADMAP item 176(b)'s pending append: with no connection, the
+//! append does not fail, and unlike the connected case above, a row for the
+//! message appears in the folder right away, because there is no listing to
+//! wait for.
+//!
 //! [`crate::transfer`]: jmap_mail::transfer
 //! [`crate::message`]: jmap_mail::message
 //! [`MailSync::import_message`]: jmap_mail_sync::MailSync::import_message
@@ -65,18 +73,18 @@ use common::Account;
 use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
     CAMEL_FOLDER_ERROR_INSUFFICIENT_PERMISSION, CAMEL_FOLDER_ERROR_INVALID, CAMEL_MESSAGE_FLAGGED,
-    CAMEL_MESSAGE_SEEN, CAMEL_SERVICE_ERROR_NOT_CONNECTED, CAMEL_STORE_FOLDER_NONE,
-    CamelDataWrapper, CamelFolder, CamelFolderClass, CamelMessageInfo, CamelMimeMessage,
-    camel_data_wrapper_construct_from_data_sync, camel_folder_append_message_sync,
-    camel_folder_error_quark, camel_folder_get_message_sync, camel_folder_refresh_info_sync,
+    CAMEL_MESSAGE_SEEN, CAMEL_STORE_FOLDER_NONE, CamelDataWrapper, CamelFolder, CamelFolderClass,
+    CamelMessageInfo, CamelMimeMessage, camel_data_wrapper_construct_from_data_sync,
+    camel_folder_append_message_sync, camel_folder_error_quark, camel_folder_get_folder_summary,
+    camel_folder_get_message_sync, camel_folder_refresh_info_sync, camel_folder_summary_get,
     camel_message_info_new, camel_message_info_set_date_received, camel_message_info_set_flags,
-    camel_message_info_set_user_flag, camel_mime_message_get_subject, camel_service_error_quark,
-    camel_store_get_folder_sync,
+    camel_message_info_set_user_flag, camel_mime_message_get_subject, camel_store_get_folder_sync,
 };
 use glib_sys::{GError, GFALSE, GPtrArray, g_free, gboolean, gssize};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
+use jmap_mail::message_info::pending_append;
 use jmap_mail_sync::{MailSync, MessageSummary};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -255,6 +263,25 @@ impl Fixture {
             .keywords
             .clone()
             .unwrap_or_default()
+    }
+
+    /// The mailbox a local row's pending append is queued for, or `None` if
+    /// the row has none (including no row at all).
+    fn pending_append(&self, uid: &str) -> Option<Id> {
+        let uid = CString::new(uid).expect("a uid with no NUL");
+        // SAFETY: a live folder with a summary, a NUL-terminated uid alive
+        // across the call, and one reference to the row, released here.
+        unsafe {
+            let summary = camel_folder_get_folder_summary(self.archive);
+            assert!(!summary.is_null(), "the folder has no summary");
+            let info: *mut CamelMessageInfo = camel_folder_summary_get(summary, uid.as_ptr());
+            if info.is_null() {
+                return None;
+            }
+            let append = pending_append(info);
+            g_object_unref(info.cast());
+            append.map(|append| append.mailbox().clone())
+        }
     }
 
     /// Removes the mailbox the way another client would.
@@ -616,24 +643,47 @@ fn an_appended_message_does_not_appear_in_the_folder_until_it_is_listed() {
     );
 }
 
+/// ROADMAP item 176(b): an append made with no connection must not fail
+/// outright. `append_message_sync` queues the message on a local row and
+/// reports success, the same way an offline move or an offline Expunge
+/// already succeeds locally ([`crate::transfer`], [`crate::expunge`]). Unlike
+/// a connected append, the row appears at once: there is no listing to wait
+/// for while offline.
 #[test]
-fn appending_to_a_folder_of_a_disconnected_account_fails() {
+fn appending_to_a_folder_of_a_disconnected_account_is_queued_and_shown_locally() {
     let fixture = Fixture::start();
     fixture.account.jmap().drop_connection();
 
     let appended = fixture.append_straight(&Message::parsed(MESSAGE), ptr::null_mut());
-    // SAFETY: no arguments, and the quark registers itself.
-    let quark = unsafe { camel_service_error_quark() };
-    assert_eq!(
-        appended.failure(),
-        (quark, CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32),
-        "{}",
-        appended.message()
+    appended.expect_ok();
+
+    let uid = appended.reported().expect("a queued append reports a uid");
+    assert!(
+        uid.starts_with("jmap-local-"),
+        "a queued append's uid must be tagged as synthetic: {uid}"
     );
     assert_eq!(
-        appended.reported(),
-        None,
-        "an append that failed reported a uid"
+        listed(fixture.archive),
+        vec![uid.clone()],
+        "a queued append must show in the folder right away, with no listing"
+    );
+
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state
+            .account(&fixture.server.account_id())
+            .unwrap()
+            .blobs
+            .is_empty(),
+        "a queued append must not reach the server at all"
+    );
+    drop(state);
+
+    assert_eq!(
+        fixture.pending_append(&uid),
+        Some(fixture.archive_id.clone()),
+        "the queued row must remember which mailbox the append is bound for"
     );
 }
 

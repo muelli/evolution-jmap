@@ -90,6 +90,19 @@
 //! survive a restart for the same reason the keyword column does: the user's
 //! drag already looks done, in this folder's own listing, before the server
 //! has agreed.
+//!
+//! ## A message that is not on the server yet
+//!
+//! A seventh column. [`crate::append`] uploads a `CamelMimeMessage` the
+//! account does not hold with `Email/import`; with no connection, it cannot
+//! upload, so `new_pending_append_row` builds a row for the message itself
+//! (there is no listing to wait for, unlike an ordinary append) and keeps the
+//! destination mailbox here ([`pending_append`]/`set_pending_append`). Unlike
+//! a pending filing, the row does *not* get `CAMEL_MESSAGE_FOLDER_FLAGGED`:
+//! that mark feeds [`crate::synchronize`]'s existing keyword-diff walk, which
+//! would read the new row's uid as a server id and send it a bogus
+//! `Email/set`. The reconnect walk that actually uploads a pending append is
+//! a later claim's own mechanism, not this one.
 
 use std::borrow::Cow;
 use std::ffi::CStr;
@@ -101,8 +114,9 @@ use eds_sys::{
     CAMEL_MESSAGE_ANSWERED, CAMEL_MESSAGE_ATTACHMENTS, CAMEL_MESSAGE_DRAFT, CAMEL_MESSAGE_FLAGGED,
     CAMEL_MESSAGE_FORWARDED, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK, CAMEL_MESSAGE_SEEN,
     CamelAddress, CamelFolderSummary, CamelMessageFlags, CamelMessageInfo, CamelMessageInfoBase,
-    CamelMessageInfoBaseClass, CamelMessageInfoClass, camel_address_format,
-    camel_internet_address_add, camel_internet_address_new, camel_message_info_base_get_type,
+    CamelMessageInfoBaseClass, CamelMessageInfoClass, CamelMimeMessage, camel_address_format,
+    camel_folder_summary_info_new_from_message, camel_internet_address_add,
+    camel_internet_address_new, camel_message_info_base_get_type,
     camel_message_info_dup_user_flags, camel_message_info_freeze_notifications,
     camel_message_info_get_flags, camel_message_info_get_folder_flagged, camel_message_info_set_cc,
     camel_message_info_set_date_received, camel_message_info_set_date_sent,
@@ -493,6 +507,52 @@ pub(crate) unsafe fn set_pending_append(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = append;
     }
+}
+
+/// Builds the local row for a message [`crate::append`] could not upload
+/// while offline, from the message's own headers, and marks it pending for
+/// `mailbox`.
+///
+/// Camel's own `camel_folder_summary_info_new_from_message` reads the columns
+/// the headers answer (subject, addresses, the sent date). This function
+/// writes the two columns the message itself cannot answer, the same two
+/// [`update_message_info`] writes from a listing: the flags and labels of the
+/// row [`crate::append`]'s caller passed, and the arrival date it carries.
+/// The uid is [`synthetic_uid`]'s own, standing in for the id `Email/import`
+/// has not given the message yet.
+///
+/// Returns NULL if Camel could not build a row at all (an invalid summary or
+/// message; see the wrapped function).
+///
+/// # Safety
+///
+/// `summary` must be live, and `message` a live `CamelMimeMessage`.
+pub(crate) unsafe fn new_pending_append_row(
+    summary: *mut CamelFolderSummary,
+    message: *mut CamelMimeMessage,
+    uid: &str,
+    keywords: &Keywords,
+    received_at: Option<i64>,
+    mailbox: Id,
+) -> *mut CamelMessageInfo {
+    // SAFETY: the contract above.
+    let info = unsafe { camel_folder_summary_info_new_from_message(summary, message) };
+    if info.is_null() {
+        return info;
+    }
+    let (flags, tags) = keywords.split();
+    // SAFETY: `info` is the row built above, which this function owns until
+    // it returns it. Every setter below needs only a live row.
+    unsafe {
+        without_queueing(info, || {
+            camel_message_info_set_uid(info, c_string(uid).as_ptr());
+            camel_message_info_set_flags(info, FLAGS_FROM_JMAP, flags_word(&flags));
+            set_user_flags(info, &tags);
+            camel_message_info_set_date_received(info, received_at.unwrap_or(0));
+        });
+        set_pending_append(info, Some(PendingAppend::into_mailbox(mailbox)));
+    }
+    info
 }
 
 /// `CamelMessageInfoClass.save`: appends the four columns to the stored data
