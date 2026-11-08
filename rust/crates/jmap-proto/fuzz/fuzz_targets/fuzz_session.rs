@@ -51,7 +51,7 @@ fuzz_target!(|data: &[u8]| {
         let _ = session.principals_availability_capability();
         let _ = session.webpush_vapid_capability();
 
-        for (_, account) in &session.accounts {
+        for account in session.accounts.values() {
             let _ = account.max_delayed_send();
             let _ = account.has_capability(jmap_proto::session::CAPABILITY_CORE);
             let _ = account.has_capability(jmap_proto::session::CAPABILITY_MAIL);

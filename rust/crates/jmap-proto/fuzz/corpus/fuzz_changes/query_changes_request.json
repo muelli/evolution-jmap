@@ -1,0 +1,8 @@
+{
+  "accountId": "acc1",
+  "sinceQueryState": "qstate1",
+  "maxChanges": 25,
+  "upToId": "id42",
+  "calculateTotal": true,
+  "collapseThreads": true
+}

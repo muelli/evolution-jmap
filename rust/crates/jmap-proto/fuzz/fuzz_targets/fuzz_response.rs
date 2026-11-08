@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #![no_main]
+#![allow(clippy::collapsible_if)]
 
 use libfuzzer_sys::fuzz_target;
 

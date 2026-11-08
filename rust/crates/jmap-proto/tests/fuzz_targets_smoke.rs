@@ -4,7 +4,9 @@
 //! Stable smoke tests for session, response, changes, and queryChanges fuzz targets.
 
 use jmap_proto::error::{MethodError, RequestError, SetError};
-use jmap_proto::methods::{ChangesResponse, QueryChangesResponse};
+use jmap_proto::methods::{
+    AddedItem, ChangesRequest, ChangesResponse, QueryChangesRequest, QueryChangesResponse,
+};
 use jmap_proto::request::{Invocation, Request, ResultReference};
 use jmap_proto::response::Response;
 use jmap_proto::session::Session;
@@ -41,6 +43,15 @@ fn hostile_bytes_do_not_panic_session_or_response_or_changes() {
         }
         if let Ok(qc) = serde_json::from_slice::<QueryChangesResponse>(input) {
             let _ = serde_json::to_vec(&qc);
+        }
+        if let Ok(req) = serde_json::from_slice::<ChangesRequest>(input) {
+            let _ = serde_json::to_vec(&req);
+        }
+        if let Ok(qreq) = serde_json::from_slice::<QueryChangesRequest<serde_json::Value>>(input) {
+            let _ = serde_json::to_vec(&qreq);
+        }
+        if let Ok(item) = serde_json::from_slice::<AddedItem>(input) {
+            let _ = serde_json::to_vec(&item);
         }
         if let Ok(inv) = serde_json::from_slice::<Invocation>(input) {
             let _ = inv.is_error();
@@ -95,6 +106,66 @@ fn changes_and_query_changes_seeds_roundtrip() {
     assert_eq!(qc.account_id.as_str(), "acc1");
     let serialized_qc = serde_json::to_vec(&qc).expect("QueryChangesResponse serializes");
     assert!(serde_json::from_slice::<QueryChangesResponse>(&serialized_qc).is_ok());
+}
+
+#[test]
+fn changes_and_query_changes_requests_smoke() {
+    let changes_request_json = br#"{
+        "accountId": "acc1",
+        "sinceState": "state1",
+        "maxChanges": 100
+    }"#;
+    let req: ChangesRequest =
+        serde_json::from_slice(changes_request_json).expect("ChangesRequest parses");
+    assert_eq!(req.account_id.as_str(), "acc1");
+    assert_eq!(req.since_state.as_str(), "state1");
+    assert_eq!(req.max_changes, Some(100));
+
+    let built_req =
+        ChangesRequest::new(req.account_id.clone(), req.since_state.clone()).max_changes(50);
+    assert_eq!(built_req.max_changes, Some(50));
+    let serialized_req = serde_json::to_vec(&req).expect("ChangesRequest serializes");
+    assert!(serde_json::from_slice::<ChangesRequest>(&serialized_req).is_ok());
+
+    let query_changes_request_json = br#"{
+        "accountId": "acc1",
+        "sinceQueryState": "qstate1",
+        "maxChanges": 25,
+        "upToId": "id42",
+        "calculateTotal": true,
+        "collapseThreads": true
+    }"#;
+    let qreq: QueryChangesRequest<serde_json::Value> =
+        serde_json::from_slice(query_changes_request_json).expect("QueryChangesRequest parses");
+    assert_eq!(qreq.account_id.as_str(), "acc1");
+    assert_eq!(qreq.since_query_state.as_str(), "qstate1");
+    assert_eq!(qreq.max_changes, Some(25));
+    assert_eq!(qreq.up_to_id.as_ref().map(|id| id.as_str()), Some("id42"));
+    assert!(qreq.calculate_total);
+    assert!(qreq.collapse_threads);
+
+    let built_qreq: QueryChangesRequest<serde_json::Value> =
+        QueryChangesRequest::new(qreq.account_id.clone(), qreq.since_query_state.clone())
+            .max_changes(10)
+            .up_to_id("id10")
+            .calculate_total()
+            .collapse_threads();
+    assert_eq!(built_qreq.max_changes, Some(10));
+    assert!(built_qreq.calculate_total);
+    let serialized_qreq = serde_json::to_vec(&qreq).expect("QueryChangesRequest serializes");
+    assert!(
+        serde_json::from_slice::<QueryChangesRequest<serde_json::Value>>(&serialized_qreq).is_ok()
+    );
+
+    let item_json = br#"{"id": "item1", "index": 3}"#;
+    let item: AddedItem = serde_json::from_slice(item_json).expect("AddedItem parses");
+    assert_eq!(item.id.as_str(), "item1");
+    assert_eq!(item.index, 3);
+    let built_item = AddedItem::new("item2", 4);
+    assert_eq!(built_item.id.as_str(), "item2");
+    assert_eq!(built_item.index, 4);
+    let serialized_item = serde_json::to_vec(&item).expect("AddedItem serializes");
+    assert!(serde_json::from_slice::<AddedItem>(&serialized_item).is_ok());
 }
 
 #[test]
