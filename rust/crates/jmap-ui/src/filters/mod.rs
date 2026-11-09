@@ -21,6 +21,9 @@
 //! - [`rule_dialog`] is the modal dialog that edits one rule. Its own pure
 //!   half decides what each combo offers and how an index maps back to the
 //!   model.
+//! - [`completion`] is the pure candidate list for step (c)'s completion:
+//!   commands, tests, tagged arguments and extension names, gated by the
+//!   account's `sieve_extensions` capability.
 //! - [`io`] does the round trips over a connected
 //!   [`jmap_client::Client`]. It runs on worker threads only.
 //! - [`page`] is the `GtkScrolledWindow` subclass that implements
@@ -35,6 +38,7 @@
 //! FFI. Every decision those widgets show belongs to [`form`] or to the
 //! pure half of [`rule_dialog`], both of which have unit tests.
 
+pub mod completion;
 pub mod extension;
 pub mod form;
 pub mod io;
