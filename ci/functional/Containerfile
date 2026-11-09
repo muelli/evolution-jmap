@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This image runs the headless functional tests (ci/functional.sh). It holds
+# the Evolution Data Server 3.52 build headers and runtime daemons of Ubuntu
+# 24.04, a D-Bus daemon, gnome-keyring and build-essential.
+#
+# Build (rootless podman, from the top of the repository):
+#   podman build -f ci/functional/Containerfile -t evolution-jmap-functional ci
+#
+# Run:
+#   podman run --rm --userns=keep-id \
+#     -e HOME="$HOME" \
+#     -e PATH="$HOME/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+#     -v "$PWD:$PWD" -v "$HOME/.rustup:$HOME/.rustup:ro" -v "$HOME/.cargo:$HOME/.cargo" \
+#     -w "$PWD" evolution-jmap-functional \
+#     bash -c 'cmake -S . -B build-func -G Ninja -DENABLE_FUNCTIONAL_TESTS=ON && cmake --build build-func && ctest --test-dir build-func -L functional --output-on-failure'
+
+ARG UBUNTU=docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+
+FROM ${UBUNTU}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUSTC_WRAPPER=""
+
+COPY install-deps.sh install-deps-functional.sh /tmp/deps/
+
+RUN /tmp/deps/install-deps.sh \
+    && /tmp/deps/install-deps-functional.sh \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* /tmp/deps
