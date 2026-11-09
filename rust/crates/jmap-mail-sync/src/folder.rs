@@ -944,6 +944,21 @@ mod tests {
         assert!(!before.same_shape(&after));
     }
 
+    /// A mailbox named with a `\r` or `\n` still gets a path `find` can look
+    /// up by. `jmap-mail`'s `c_string` rewrites either character to U+FFFD
+    /// when the path crosses into Camel (SECURITY-AUDIT item 167(a), Area
+    /// 13); before `encode_component` escaped them here too, the path
+    /// `find` held never matched the one Camel echoed back.
+    #[test]
+    fn a_mailbox_named_with_a_control_character_has_a_path_find_can_use() {
+        let tree = FolderTree::from_mailboxes(&[mailbox("1", "Inbox\r\nX", None, 0, 0)]).unwrap();
+
+        let folder = tree
+            .find("Inbox%0D%0AX")
+            .expect("the escaped path is found");
+        assert_eq!(folder.display_name, "Inbox\r\nX");
+    }
+
     /// A rename changes `display_name` and `path`. Each is a shape change.
     #[test]
     fn same_shape_notices_a_rename() {
