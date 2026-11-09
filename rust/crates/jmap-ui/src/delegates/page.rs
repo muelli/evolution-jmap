@@ -44,11 +44,12 @@ use evo_sys::{
     gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
     gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
     gtk_list_store_insert_with_valuesv, gtk_list_store_newv, gtk_scrolled_window_get_type,
-    gtk_tree_path_free, gtk_tree_path_get_indices_with_depth, gtk_tree_selection_get_selected_rows,
-    gtk_tree_selection_set_mode, gtk_tree_view_append_column, gtk_tree_view_column_add_attribute,
-    gtk_tree_view_column_new, gtk_tree_view_column_pack_start, gtk_tree_view_column_set_title,
-    gtk_tree_view_get_selection, gtk_tree_view_new_with_model, gtk_tree_view_set_headers_visible,
-    gtk_widget_destroy, gtk_widget_get_toplevel, gtk_widget_set_hexpand, gtk_widget_set_sensitive,
+    gtk_scrolled_window_new, gtk_tree_path_free, gtk_tree_path_get_indices_with_depth,
+    gtk_tree_selection_get_selected_rows, gtk_tree_selection_set_mode, gtk_tree_view_append_column,
+    gtk_tree_view_column_add_attribute, gtk_tree_view_column_new, gtk_tree_view_column_pack_start,
+    gtk_tree_view_column_set_title, gtk_tree_view_get_selection, gtk_tree_view_new_with_model,
+    gtk_tree_view_set_headers_visible, gtk_widget_destroy, gtk_widget_get_toplevel,
+    gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_size_request,
     gtk_widget_set_vexpand, gtk_widget_show_all, gtk_window_get_type, gtk_window_set_title,
     gtk_window_set_transient_for,
 };
@@ -71,22 +72,35 @@ use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_proto::Id;
 
 use crate::delegates::io::{self, Loaded};
-use crate::delegation::{AddressBookDelegationLevel, CalendarDelegationLevel};
+use crate::delegation::{AddressBookDelegationLevel, CalendarDelegationLevel, PrincipalSearch};
 use crate::dispatch;
 use crate::link::{self, AccountLink, LoadOutcome, SendSource};
 use crate::widget;
 
 const NAME: &CStr = c"JmapDelegatesPage";
 const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-delegates-page-state");
+const BROWSE_STATE: ObjectData<(Arc<AccountLink>, *mut GtkWidget)> =
+    ObjectData::new(c"jmap-delegates-add-browse-state");
+const PICKER_STATE: ObjectData<RefCell<PickerState>> =
+    ObjectData::new(c"jmap-delegates-picker-state");
 
-/// `GtkScrolledWindow`'s `hscrollbar-policy` value that keeps the page from
-/// ever scrolling sideways (`gtkscrolledwindow.h`: ALWAYS = 0, AUTOMATIC = 1,
-/// NEVER = 2), the same constant [`crate::vacation::page`] defines.
+/// `GtkScrolledWindow`'s `hscrollbar-policy`/`vscrollbar-policy` values
+/// (`gtkscrolledwindow.h`: ALWAYS = 0, AUTOMATIC = 1, NEVER = 2), the same
+/// constants [`crate::vacation::page`] defines.
 const GTK_POLICY_NEVER: c_int = 2;
+const GTK_POLICY_AUTOMATIC: c_int = 1;
 
 const COLUMN_PRINCIPAL: c_int = 0;
 const COLUMN_CALENDAR: c_int = 1;
 const COLUMN_BOOK: c_int = 2;
+
+const PICKER_COLUMN_NAME: c_int = 0;
+const PICKER_COLUMN_EMAIL: c_int = 1;
+
+/// Fixed height of the picker's result list, the same bounded-scroller
+/// shape `crate::filters::rule_dialog`'s `ROWS_HEIGHT` uses, so the dialog
+/// itself never grows with the match count.
+const PICKER_HEIGHT: c_int = 180;
 
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr =
@@ -110,6 +124,20 @@ const ADD_DIALOG_TITLE: &CStr = N_(c"Add Delegate");
 const PRINCIPAL_LABEL: &CStr = N_(c"_Principal:");
 const CALENDAR_LEVEL_LABEL: &CStr = N_(c"_Calendar access:");
 const BOOK_LEVEL_LABEL: &CStr = N_(c"Address _book access:");
+
+const FIND_LABEL: &CStr = N_(c"_Find…");
+const PICKER_DIALOG_TITLE: &CStr = N_(c"Find Delegate");
+const PICKER_SEARCH_LABEL: &CStr = N_(c"_Search:");
+const PICKER_SEARCH_BUTTON: &CStr = N_(c"Search");
+const PICKER_PICK_LABEL: &CStr = N_(c"_Pick");
+const PICKER_NAME_COLUMN_TITLE: &CStr = N_(c"Name");
+const PICKER_EMAIL_COLUMN_TITLE: &CStr = N_(c"Email");
+const PICKER_NO_RESULTS: &CStr = N_(c"No principals matched.");
+const PICKER_NOT_SUPPORTED: &CStr =
+    N_(c"This server does not support directory search. Enter the principal ID directly.");
+const PICKER_SEARCHING: &CStr = N_(c"Searching…");
+// TRANSLATORS: %1$s is the reason the mail server gave.
+const PICKER_SEARCH_FAILED: &CStr = N_(c"The search failed: %1$s");
 
 /// The calendar level combo's items, in the order it offers them.
 const CALENDAR_LEVELS: [CalendarDelegationLevel; 5] = [
@@ -151,6 +179,22 @@ struct UiState {
     /// division [`crate::filters::page`]'s own form keeps between the
     /// widgets and the data they show.
     delegates: Vec<Id>,
+}
+
+/// State of the principal picker dialog ([`ask_for_principal`]), in a box as
+/// qdata of the picker dialog itself, the same `ObjectData` shape [`UiState`]
+/// uses for the page.
+struct PickerState {
+    link: Arc<AccountLink>,
+    status: *mut GtkWidget,
+    view: *mut GtkWidget,
+    store: *mut GtkListStore,
+    search_entry: *mut GtkWidget,
+    search_button: *mut GtkWidget,
+    pick: *mut GtkWidget,
+    /// Parallel to the store's rows: row `i`'s principal id, the same
+    /// division [`UiState::delegates`] keeps.
+    principals: Vec<Id>,
 }
 
 /// The qdata of the page, while the page is alive.
@@ -265,6 +309,37 @@ unsafe fn append_row(store: *mut GtkListStore, principal: &str, calendar: &str, 
             columns.as_mut_ptr(),
             values.as_mut_ptr(),
             3,
+        );
+        for value in values.iter_mut() {
+            g_value_unset(value);
+        }
+    }
+}
+
+/// Appends one row of two string columns (name, email) to the picker's
+/// list store.
+///
+/// # Safety
+///
+/// `store` must be the live two-string-column store of a live picker dialog.
+unsafe fn append_picker_row(store: *mut GtkListStore, name: &str, email: &str) {
+    let name = cstring_lossy(name);
+    let email = cstring_lossy(email);
+    let mut columns = [PICKER_COLUMN_NAME, PICKER_COLUMN_EMAIL];
+    // SAFETY: as `append_row`, with two columns instead of three.
+    unsafe {
+        let mut values: [GValue; 2] = [std::mem::zeroed(), std::mem::zeroed()];
+        for (value, text) in values.iter_mut().zip([&name, &email]) {
+            g_value_init(value, G_TYPE_STRING);
+            g_value_set_string(value, text.as_ptr());
+        }
+        gtk_list_store_insert_with_valuesv(
+            store,
+            ptr::null_mut(),
+            -1,
+            columns.as_mut_ptr(),
+            values.as_mut_ptr(),
+            2,
         );
         for value in values.iter_mut() {
             g_value_unset(value);
@@ -574,7 +649,8 @@ unsafe extern "C" fn on_revoke(_button: *mut GObject, page: gpointer) {
 }
 
 /// Builds the Add dialog, unshown and not yet run. Returns the dialog, the
-/// principal entry and the calendar and address book level combo boxes.
+/// principal entry, the calendar and address book level combo boxes, and
+/// the Find button that opens the principal picker.
 /// Split out from [`ask_for_grant`] so a test can check the dialog's
 /// keyboard behaviour without running its nested main loop, the same split
 /// `crate::filters::page::build_name_dialog`/`ask_for_name` uses.
@@ -585,6 +661,7 @@ unsafe extern "C" fn on_revoke(_button: *mut GObject, page: gpointer) {
 unsafe fn build_add_dialog(
     page: *mut GObject,
 ) -> (
+    *mut GtkWidget,
     *mut GtkWidget,
     *mut GtkWidget,
     *mut GtkWidget,
@@ -626,6 +703,27 @@ unsafe fn build_add_dialog(
         gtk_box_pack_start(principal_row.cast(), principal_label, GFALSE, GFALSE, 0);
         gtk_widget_set_hexpand(principal_entry, GTRUE);
         gtk_box_pack_start(principal_row.cast(), principal_entry, GTRUE, GTRUE, 0);
+
+        let find = gtk_button_new_with_mnemonic(translate_static(FIND_LABEL));
+        gtk_box_pack_start(principal_row.cast(), find, GFALSE, GFALSE, 0);
+        // The picker needs a live link to query with. The Add button itself
+        // is only ever sensitive once the page has one (`fill_list`), so
+        // `None` here only happens in a test building this dialog on a bare
+        // page; disable Find rather than wire a click that can never answer.
+        if let Some(link) = state(page).and_then(|cell| cell.borrow().link.clone()) {
+            BROWSE_STATE.set(dialog.cast(), (link, principal_entry));
+            g_signal_connect_data(
+                find.cast(),
+                c"clicked".as_ptr(),
+                gcallback(on_browse as unsafe extern "C" fn(*mut GObject, gpointer)),
+                dialog.cast(),
+                None,
+                0,
+            );
+        } else {
+            gtk_widget_set_sensitive(find, GFALSE);
+        }
+
         gtk_box_pack_start(content.cast(), principal_row, GFALSE, GFALSE, 0);
 
         let calendar_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -656,8 +754,321 @@ unsafe fn build_add_dialog(
         gtk_box_pack_start(book_row.cast(), book_combo, GTRUE, GTRUE, 0);
         gtk_box_pack_start(content.cast(), book_row, GFALSE, GFALSE, 0);
 
-        (dialog, principal_entry, calendar_combo, book_combo)
+        (dialog, principal_entry, calendar_combo, book_combo, find)
     }
+}
+
+/// Builds the principal picker dialog, unshown and not yet run: a search
+/// entry and button, a status label, and a two-column (name, email) list
+/// of matches. Pick starts insensitive until a row is selected.
+///
+/// # Safety
+///
+/// `parent_dialog` must be the live Add dialog.
+unsafe fn build_picker_dialog(
+    parent_dialog: *mut GtkWidget,
+) -> (
+    *mut GtkWidget,
+    *mut GtkWidget,
+    *mut GtkWidget,
+    *mut GtkWidget,
+    *mut GtkWidget,
+    *mut GtkListStore,
+    *mut GtkWidget,
+) {
+    // SAFETY: `parent_dialog` is live, per the contract (it is itself a
+    // `GtkWindow`, created by `build_add_dialog`). Every widget below is
+    // new, and the caller owns the returned dialog.
+    unsafe {
+        let dialog = gtk_dialog_new();
+        gtk_window_set_title(dialog.cast(), translate_static(PICKER_DIALOG_TITLE));
+        gtk_window_set_transient_for(dialog.cast(), parent_dialog.cast::<GtkWindow>());
+        gtk_dialog_add_button(
+            dialog.cast(),
+            translate_static(N_(c"_Cancel")),
+            GTK_RESPONSE_CANCEL,
+        );
+        let pick = gtk_dialog_add_button(
+            dialog.cast(),
+            translate_static(PICKER_PICK_LABEL),
+            GTK_RESPONSE_OK,
+        );
+        gtk_widget_set_sensitive(pick, GFALSE);
+        gtk_dialog_set_default_response(dialog.cast(), GTK_RESPONSE_OK);
+
+        let content_area = gtk_dialog_get_content_area(dialog.cast());
+        gtk_container_set_border_width(content_area.cast(), 12);
+        let content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+        gtk_container_add(content_area.cast(), content);
+
+        let search_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        let search_label = gtk_label_new_with_mnemonic(translate_static(PICKER_SEARCH_LABEL));
+        let search_entry = gtk_entry_new();
+        gtk_label_set_mnemonic_widget(search_label.cast(), search_entry);
+        gtk_widget_set_hexpand(search_entry, GTRUE);
+        let search_button = gtk_button_new_with_mnemonic(translate_static(PICKER_SEARCH_BUTTON));
+        gtk_box_pack_start(search_row.cast(), search_label, GFALSE, GFALSE, 0);
+        gtk_box_pack_start(search_row.cast(), search_entry, GTRUE, GTRUE, 0);
+        gtk_box_pack_start(search_row.cast(), search_button, GFALSE, GFALSE, 0);
+        gtk_box_pack_start(content.cast(), search_row, GFALSE, GFALSE, 0);
+
+        let status = gtk_label_new(ptr::null());
+        gtk_label_set_xalign(status.cast(), 0.0);
+        widget::set_bool_named(status.cast(), c"wrap", true);
+        widget::set_enum_named(status.cast(), c"wrap-mode", widget::PANGO_WRAP_WORD_CHAR);
+        widget::set_accessible_role(status.cast(), evo_sys::ATK_ROLE_STATUSBAR);
+        gtk_box_pack_start(content.cast(), status, GFALSE, GFALSE, 0);
+
+        let scroller = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+        widget::set_enum_named(scroller.cast(), c"hscrollbar-policy", GTK_POLICY_NEVER);
+        widget::set_enum_named(scroller.cast(), c"vscrollbar-policy", GTK_POLICY_AUTOMATIC);
+        gtk_widget_set_size_request(scroller, -1, PICKER_HEIGHT);
+        gtk_box_pack_start(content.cast(), scroller, GTRUE, GTRUE, 0);
+
+        let mut column_types = [G_TYPE_STRING, G_TYPE_STRING];
+        let store = gtk_list_store_newv(2, column_types.as_mut_ptr());
+        let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
+        // SAFETY: the view owns the only remaining reference once this one
+        // is released, the same pattern [`build_widgets`] uses.
+        g_object_unref(store.cast());
+        gtk_tree_view_set_headers_visible(view.cast(), GTRUE);
+        widget::set_accessible_name(view.cast(), &translate(PICKER_DIALOG_TITLE));
+        add_text_column(view, PICKER_NAME_COLUMN_TITLE, PICKER_COLUMN_NAME);
+        add_text_column(view, PICKER_EMAIL_COLUMN_TITLE, PICKER_COLUMN_EMAIL);
+        let selection = gtk_tree_view_get_selection(view.cast());
+        gtk_tree_selection_set_mode(selection, GTK_SELECTION_BROWSE);
+        gtk_container_add(scroller.cast(), view);
+
+        (
+            dialog,
+            search_entry,
+            search_button,
+            status,
+            view,
+            store,
+            pick,
+        )
+    }
+}
+
+/// Opens the principal picker, modal over the Add dialog, and returns the
+/// chosen principal's id. `None` on Cancel, a closed dialog, or no
+/// selection.
+///
+/// # Safety
+///
+/// `parent_dialog` must be the live Add dialog, on the main thread.
+unsafe fn ask_for_principal(parent_dialog: *mut GtkWidget, link: Arc<AccountLink>) -> Option<Id> {
+    // SAFETY: the parent dialog is live, per the contract. This function
+    // owns the picker dialog it creates and destroys it before returning.
+    unsafe {
+        let (dialog, search_entry, search_button, status, view, store, pick) =
+            build_picker_dialog(parent_dialog);
+        PICKER_STATE.set(
+            dialog.cast(),
+            RefCell::new(PickerState {
+                link,
+                status,
+                view,
+                store,
+                search_entry,
+                search_button,
+                pick,
+                principals: Vec::new(),
+            }),
+        );
+        g_signal_connect_data(
+            search_button.cast(),
+            c"clicked".as_ptr(),
+            gcallback(on_picker_search as unsafe extern "C" fn(*mut GObject, gpointer)),
+            dialog.cast(),
+            None,
+            0,
+        );
+        g_signal_connect_data(
+            search_entry.cast(),
+            c"activate".as_ptr(),
+            gcallback(on_picker_search as unsafe extern "C" fn(*mut GObject, gpointer)),
+            dialog.cast(),
+            None,
+            0,
+        );
+        let selection = gtk_tree_view_get_selection(view.cast());
+        g_signal_connect_data(
+            selection.cast(),
+            c"changed".as_ptr(),
+            gcallback(on_picker_selection_changed as unsafe extern "C" fn(*mut GObject, gpointer)),
+            dialog.cast(),
+            None,
+            0,
+        );
+
+        gtk_widget_show_all(dialog);
+        let response = gtk_dialog_run(dialog.cast());
+        let result = (response == GTK_RESPONSE_OK)
+            .then(|| PICKER_STATE.get(dialog.cast()))
+            .flatten()
+            .and_then(|cell| {
+                let ui = cell.borrow();
+                let selection = gtk_tree_view_get_selection(ui.view.cast());
+                selected_row(selection).and_then(|row| ui.principals.get(row).cloned())
+            });
+        gtk_widget_destroy(dialog);
+        result
+    }
+}
+
+/// The `clicked` handler of the Add dialog's Find button: opens the
+/// picker and, on a choice, writes the chosen principal's id into the
+/// principal entry.
+///
+/// # Safety
+///
+/// The GLib signal system calls this. `dialog` is the data pointer of the
+/// connection: the live Add dialog the Find button belongs to.
+unsafe extern "C" fn on_browse(_button: *mut GObject, dialog: gpointer) {
+    guard("JmapDelegatesPage::find", (), || {
+        // SAFETY: the Add dialog is live, because its own Find button just
+        // emitted.
+        let Some((link, entry)) = (unsafe { BROWSE_STATE.get(dialog.cast::<GObject>()) })
+            .map(|(link, entry)| (link.clone(), *entry))
+        else {
+            return;
+        };
+        // SAFETY: as above; the picker is transient for the Add dialog and
+        // destroys itself before this call returns.
+        let chosen = unsafe { ask_for_principal(dialog.cast::<GtkWidget>(), link) };
+        if let Some(principal_id) = chosen {
+            // SAFETY: `entry` is a live child of the still-open Add dialog.
+            unsafe { widget::set_text(entry.cast(), principal_id.as_str()) };
+        }
+    });
+}
+
+/// The `clicked`/`activate` handler of the picker's Search button and
+/// search entry: runs [`io::search`] on a worker thread and fills the
+/// result list, the same `dispatch::spawn_for` shape [`on_add`] uses for
+/// its own write.
+///
+/// # Safety
+///
+/// The GLib signal system calls this. `dialog` is the data pointer of the
+/// connection: the live picker dialog.
+unsafe extern "C" fn on_picker_search(_emitter: *mut GObject, dialog: gpointer) {
+    guard("JmapDelegatesPicker::search", (), || {
+        let dialog = dialog.cast::<GObject>();
+        // SAFETY: the picker dialog is live, because one of its own
+        // children just emitted.
+        let Some(cell) = (unsafe { PICKER_STATE.get(dialog) }) else {
+            return;
+        };
+        let (link, text, search_entry, search_button, status) = {
+            let ui = cell.borrow();
+            // SAFETY: the search entry is a live child of the picker.
+            let text = unsafe { widget::get_text(ui.search_entry.cast()) };
+            (
+                ui.link.clone(),
+                text,
+                ui.search_entry,
+                ui.search_button,
+                ui.status,
+            )
+        };
+        // SAFETY: both are live children of the picker.
+        unsafe {
+            gtk_widget_set_sensitive(search_entry, GFALSE);
+            gtk_widget_set_sensitive(search_button, GFALSE);
+            let searching = cstring_lossy(&translate(PICKER_SEARCHING));
+            gtk_label_set_text(status.cast(), searching.as_ptr());
+        }
+        let work = move || io::search(&link, &text);
+        let finish = |dialog: *mut GObject, outcome: Result<PrincipalSearch, String>| {
+            // SAFETY: `with_strong` gives the live picker dialog.
+            unsafe { apply_picker_outcome(dialog, outcome) };
+        };
+        // SAFETY: `dialog` is the live picker handling this click.
+        unsafe { dispatch::spawn_for(dialog, work, finish) };
+    });
+}
+
+/// Applies the result of [`on_picker_search`]'s round trip: the matches in
+/// the list, or a status explaining why there are none. The search entry
+/// and button stay disabled only when the server refuses the query
+/// outright, since retrying would answer the same way.
+///
+/// # Safety
+///
+/// `dialog` must be the live picker dialog of the search.
+unsafe fn apply_picker_outcome(dialog: *mut GObject, outcome: Result<PrincipalSearch, String>) {
+    let Some(cell) = (unsafe { PICKER_STATE.get(dialog) }) else {
+        return;
+    };
+    let (store, status, search_entry, search_button) = {
+        let ui = cell.borrow();
+        (ui.store, ui.status, ui.search_entry, ui.search_button)
+    };
+    // SAFETY: the store is a live child of the picker. No borrow of `cell`
+    // is held across this call.
+    unsafe { gtk_list_store_clear(store) };
+    cell.borrow_mut().principals.clear();
+    let (text, refused) = match outcome {
+        Ok(PrincipalSearch::Found(principals)) => {
+            for principal in principals {
+                let Some(id) = principal.id.clone() else {
+                    continue;
+                };
+                // SAFETY: the store is a live child of the picker.
+                unsafe {
+                    append_picker_row(
+                        store,
+                        &principal.name,
+                        principal.email.as_deref().unwrap_or(""),
+                    )
+                };
+                cell.borrow_mut().principals.push(id);
+            }
+            let text = if cell.borrow().principals.is_empty() {
+                translate(PICKER_NO_RESULTS)
+            } else {
+                String::new()
+            };
+            (text, false)
+        }
+        Ok(PrincipalSearch::QueryRefused) => (translate(PICKER_NOT_SUPPORTED), true),
+        Err(message) => (translate_with(PICKER_SEARCH_FAILED, &[&message]), false),
+    };
+    let text = cstring_lossy(&text);
+    // SAFETY: all three are live children of the picker.
+    unsafe {
+        gtk_label_set_text(status.cast(), text.as_ptr());
+        gtk_widget_set_sensitive(search_entry, flag(!refused));
+        gtk_widget_set_sensitive(search_button, flag(!refused));
+    }
+}
+
+/// The `changed` handler of the picker's result selection: only the Pick
+/// button's sensitivity depends on it.
+///
+/// # Safety
+///
+/// The GLib signal system calls this. `dialog` is the data pointer of the
+/// connection: the live picker dialog the selection belongs to.
+unsafe extern "C" fn on_picker_selection_changed(_selection: *mut GObject, dialog: gpointer) {
+    guard("JmapDelegatesPicker::selection-changed", (), || {
+        let dialog = dialog.cast::<GObject>();
+        // SAFETY: the picker dialog is live, because its own list selection
+        // just emitted.
+        let Some(cell) = (unsafe { PICKER_STATE.get(dialog) }) else {
+            return;
+        };
+        let (view, pick) = {
+            let ui = cell.borrow();
+            (ui.view, ui.pick)
+        };
+        // SAFETY: both are live children of the picker.
+        let selected = unsafe { selected_row(gtk_tree_view_get_selection(view.cast())) };
+        unsafe { gtk_widget_set_sensitive(pick, flag(selected.is_some())) };
+    });
 }
 
 /// Asks for a new delegate's principal id and the two access levels to
@@ -673,7 +1084,7 @@ unsafe fn ask_for_grant(
     // SAFETY: the page is live, per the contract. The dialog owns its
     // children, and this function destroys the dialog.
     unsafe {
-        let (dialog, entry, calendar_combo, book_combo) = build_add_dialog(page);
+        let (dialog, entry, calendar_combo, book_combo, _find) = build_add_dialog(page);
         gtk_widget_show_all(dialog);
 
         let response = gtk_dialog_run(dialog.cast());
@@ -1232,8 +1643,12 @@ mod tests {
         // source of `gtk_widget_get_toplevel`.
         unsafe {
             let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            let (dialog, entry, calendar_combo, book_combo) = build_add_dialog(page.cast());
+            let (dialog, entry, calendar_combo, book_combo, find) = build_add_dialog(page.cast());
 
+            assert!(
+                !get_sensitive(find),
+                "Find is usable with no link to query with"
+            );
             assert_eq!(
                 widget::get_text(entry.cast()),
                 "",
@@ -1259,6 +1674,56 @@ mod tests {
                 gtk_combo_box_get_active(book_combo.cast()),
                 0,
                 "the address book level combo does not default to No access"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// The Find button needs a link to query principals with, the same
+    /// gate [`loading_delegates_enables_add`] checks for Add. Needs a
+    /// display; skips without one.
+    #[test]
+    fn the_add_dialog_find_button_is_usable_once_the_page_has_a_link() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = Arc::new(AccountLink::without_refresh(client, features));
+
+        // SAFETY: as the tests above; no network call happens here.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+
+            let (dialog, _entry, _calendar_combo, _book_combo, find) =
+                build_add_dialog(page.cast());
+            assert!(
+                !get_sensitive(find),
+                "Find is usable before the page has a link"
+            );
+            gtk_widget_destroy(dialog);
+
+            let loaded = Loaded {
+                delegates: vec![],
+                offered: true,
+            };
+            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
+
+            let (dialog, _entry, _calendar_combo, _book_combo, find) =
+                build_add_dialog(page.cast());
+            assert!(
+                get_sensitive(find),
+                "Find stays insensitive once the page has a link"
             );
 
             gtk_widget_destroy(dialog);

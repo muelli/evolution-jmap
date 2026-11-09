@@ -9,9 +9,11 @@
 
 use jmap_client::Client;
 use jmap_proto::Id;
-use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS};
+use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_PRINCIPALS};
 
-use crate::delegation::{self, AddressBookDelegationLevel, CalendarDelegationLevel, Delegate};
+use crate::delegation::{
+    self, AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, PrincipalSearch,
+};
 use crate::link::{self, AccountLink};
 
 /// What the load found: the delegates, and whether the account's session
@@ -112,16 +114,36 @@ pub fn revoke(link: &AccountLink, principal_id: &Id) -> Result<Loaded, String> {
     )
 }
 
+/// Looks up principals matching `text` for the Add dialog's picker
+/// (`crate::delegation::search_principals`, on the account the session
+/// resolves for `urn:ietf:params:jmap:principals`). A session with no such
+/// account answers the same `QueryRefused` fallback as a server that
+/// refuses the query, so the dialog always has one fallback to show.
+pub fn search(link: &AccountLink, text: &str) -> Result<PrincipalSearch, String> {
+    link.call(|client| {
+        let session = client.session();
+        let Some(account_id) = session
+            .resolve_primary_account(CAPABILITY_PRINCIPALS)
+            .cloned()
+        else {
+            return Ok(PrincipalSearch::QueryRefused);
+        };
+        delegation::search_principals(client, &account_id, text)
+    })
+    .map_err(|error| link::describe(&error))
+}
+
 #[cfg(test)]
 mod tests {
     use jmap_client::{Client, Credentials};
     use jmap_mock::MockServer;
     use jmap_proto::Id;
+    use jmap_proto::principals::Principal;
 
-    use super::{grant, load, revoke};
+    use super::{grant, load, revoke, search};
     use crate::delegation::{
-        AddressBookDelegationLevel, CalendarDelegationLevel, commit_address_book_delegation,
-        commit_calendar_delegation,
+        AddressBookDelegationLevel, CalendarDelegationLevel, PrincipalSearch,
+        commit_address_book_delegation, commit_calendar_delegation,
     };
     use crate::link::AccountLink;
     use crate::session_cache::AccountFeatures;
@@ -283,5 +305,35 @@ mod tests {
         }
         let loaded = revoke(&link_to(&server), &Id::new("P-nobody")).unwrap();
         assert_eq!(loaded.delegates, vec![]);
+    }
+
+    #[test]
+    fn search_finds_a_seeded_principal_by_name() {
+        let server = MockServer::builder().start();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            state
+                .account_mut(&server.account_id())
+                .unwrap()
+                .seed_principal(Principal::new("Bob Jones").with_email("bob@example.com"));
+        }
+
+        let found = search(&link_to(&server), "Bob").unwrap();
+
+        let PrincipalSearch::Found(principals) = found else {
+            panic!("expected Found, got {found:?}");
+        };
+        assert_eq!(principals.len(), 1);
+        assert_eq!(principals[0].name, "Bob Jones");
+    }
+
+    #[test]
+    fn search_falls_back_when_the_server_refuses_the_query() {
+        let server = MockServer::builder().disable_principal_query().start();
+
+        let found = search(&link_to(&server), "anything").unwrap();
+
+        assert_eq!(found, PrincipalSearch::QueryRefused);
     }
 }
