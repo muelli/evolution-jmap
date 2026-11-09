@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The round trip of the Delegates page, over the [`crate::link`]
-//! connection. [`load`] reads the list; [`revoke`] is the page's first
-//! write (ROADMAP item 164's Revoke button): it clears both delegation
-//! levels for one principal, then lists again.
+//! connection. [`load`] reads the list; [`revoke`] and [`grant`] are the
+//! page's writes (ROADMAP item 164's Revoke and Add buttons): each sets
+//! both delegation levels for one principal, then lists again. [`revoke`]
+//! is [`grant`] with both levels at `None`.
 
 use jmap_client::Client;
 use jmap_proto::Id;
@@ -58,12 +59,17 @@ pub fn load(link: &AccountLink) -> Result<Loaded, String> {
     .map_err(|error| link::describe(&error))
 }
 
-/// Clears `principal_id`'s calendar and address book access (sets both
-/// delegation levels to `None` on every one of the account's own calendars
-/// and address books, the write side of [`crate::delegation::list_delegates`]'s
+/// Sets `principal_id`'s calendar and address book access to `calendar_level`
+/// and `address_book_level` (on every one of the account's own calendars and
+/// address books, the write side of [`crate::delegation::list_delegates`]'s
 /// per-type highest-level read), then lists again so the page shows the
 /// result without a second round trip.
-pub fn revoke(link: &AccountLink, principal_id: &Id) -> Result<Loaded, String> {
+pub fn grant(
+    link: &AccountLink,
+    principal_id: &Id,
+    calendar_level: CalendarDelegationLevel,
+    address_book_level: AddressBookDelegationLevel,
+) -> Result<Loaded, String> {
     link.call(|client| {
         let session = client.session();
         let calendars_account = session
@@ -77,7 +83,7 @@ pub fn revoke(link: &AccountLink, principal_id: &Id) -> Result<Loaded, String> {
                 client,
                 account_id,
                 principal_id,
-                CalendarDelegationLevel::None,
+                calendar_level,
             )?;
         }
         if let Some(account_id) = &contacts_account {
@@ -85,7 +91,7 @@ pub fn revoke(link: &AccountLink, principal_id: &Id) -> Result<Loaded, String> {
                 client,
                 account_id,
                 principal_id,
-                AddressBookDelegationLevel::None,
+                address_book_level,
             )?;
         }
         let offered = calendars_account.is_some() || contacts_account.is_some();
@@ -95,13 +101,24 @@ pub fn revoke(link: &AccountLink, principal_id: &Id) -> Result<Loaded, String> {
     .map_err(|error| link::describe(&error))
 }
 
+/// Clears `principal_id`'s calendar and address book access. [`grant`] with
+/// both levels at `None`.
+pub fn revoke(link: &AccountLink, principal_id: &Id) -> Result<Loaded, String> {
+    grant(
+        link,
+        principal_id,
+        CalendarDelegationLevel::None,
+        AddressBookDelegationLevel::None,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use jmap_client::{Client, Credentials};
     use jmap_mock::MockServer;
     use jmap_proto::Id;
 
-    use super::{load, revoke};
+    use super::{grant, load, revoke};
     use crate::delegation::{
         AddressBookDelegationLevel, CalendarDelegationLevel, commit_address_book_delegation,
         commit_calendar_delegation,
@@ -188,6 +205,70 @@ mod tests {
 
         assert_eq!(loaded.delegates, vec![], "bob should no longer be listed");
         assert_eq!(load(&link_to(&server)).unwrap().delegates, vec![]);
+    }
+
+    #[test]
+    fn grant_adds_a_delegate_with_the_chosen_levels() {
+        let bob = Id::new("P-bob");
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            account.seed_calendar("Work", false);
+            account.seed_address_book("Contacts", false);
+        }
+        assert_eq!(load(&link_to(&server)).unwrap().delegates, vec![]);
+
+        let loaded = grant(
+            &link_to(&server),
+            &bob,
+            CalendarDelegationLevel::Reviewer,
+            AddressBookDelegationLevel::Author,
+        )
+        .unwrap();
+
+        assert_eq!(loaded.delegates.len(), 1);
+        assert_eq!(loaded.delegates[0].principal_id, bob);
+        assert_eq!(
+            loaded.delegates[0].calendar_level,
+            CalendarDelegationLevel::Reviewer
+        );
+        assert_eq!(
+            loaded.delegates[0].address_book_level,
+            AddressBookDelegationLevel::Author
+        );
+        assert_eq!(load(&link_to(&server)).unwrap().delegates.len(), 1);
+    }
+
+    #[test]
+    fn grant_changes_an_existing_delegates_levels() {
+        let bob = Id::new("P-bob");
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            account.seed_calendar("Work", false);
+        }
+        let alice = Client::connect(server.origin(), Credentials::none()).unwrap();
+        commit_calendar_delegation(&alice, &account_id, &bob, CalendarDelegationLevel::Reviewer)
+            .unwrap();
+
+        let loaded = grant(
+            &link_to(&server),
+            &bob,
+            CalendarDelegationLevel::Editor,
+            AddressBookDelegationLevel::None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            loaded.delegates[0].calendar_level,
+            CalendarDelegationLevel::Editor
+        );
     }
 
     #[test]
