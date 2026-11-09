@@ -188,9 +188,23 @@ impl MailSync {
     /// unrecognized state as `invalidArguments`, not as the RFC
     /// `cannotCalculateChanges`. This function also returns the listing for
     /// that error.
+    ///
+    /// `Mailbox/changes` above only ever asks about the primary account, so
+    /// it cannot see a change to a shared account's own mailboxes (ROADMAP
+    /// item 163). This function also rebuilds, with a fresh
+    /// [`MailSync::folder_tree_with_shared`] call, whenever the account has
+    /// any shared mail accounts at all, even if the primary account's own
+    /// state did not move. A later claim can track each shared account's own
+    /// state and skip this when none of them changed either.
     pub fn folder_tree_since(&self, since: &State) -> Result<FolderUpdate, SyncError> {
         match self.client.all_changes(&self.account_id, "Mailbox", since) {
-            Ok(changes) if changes.is_empty() => Ok(FolderUpdate::Unchanged(changes.new_state)),
+            Ok(changes) if changes.is_empty() => {
+                if shared_mail_accounts(self.client.session()).is_empty() {
+                    Ok(FolderUpdate::Unchanged(changes.new_state))
+                } else {
+                    self.rebuild()
+                }
+            }
             Ok(_) => self.rebuild(),
             Err(error) if error.needs_full_resync() => self.rebuild(),
             Err(error) => Err(error.into()),
