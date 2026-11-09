@@ -1170,3 +1170,151 @@ fn changes_domain_filters_and_push_smoke() {
     assert!(is_leap_year(2024));
     assert_eq!(days_in_month(2024, 2), 29);
 }
+
+#[test]
+fn domain_requests_responses_and_groups_smoke() {
+    use jmap_proto::blob::{
+        BlobGetRequest, BlobLookupRequest, BlobLookupResponse, BlobUploadRequest, DataSource,
+        UploadBlob,
+    };
+    use jmap_proto::calendars::{
+        CalendarAlert, CalendarEventParseRequest, CalendarEventParseResponse,
+        CalendarEventSendRequest, CalendarEventSendResponse, CalendarEventSetRequest,
+        CalendarGroup, CalendarPreferences, CalendarSetRequest, GetFreeBusyRequest,
+        GetFreeBusyResponse, ParticipantIdentitySetRequest,
+    };
+    use jmap_proto::contacts::{
+        AddressBookSetRequest, CardGroup, ContactCardParseRequest, ContactCardParseResponse,
+    };
+    use jmap_proto::error::SetError;
+    use jmap_proto::mail::{
+        EmailGetRequest, EmailImportRequest, EmailImportResponse, EmailParseRequest,
+        EmailParseResponse, EmailSubmissionSetRequest, MDN, MDNSendRequest, MDNSendResponse,
+        SearchSnippetGetRequest, SearchSnippetGetResponse, VacationResponse,
+    };
+    use jmap_proto::methods::SetRequest;
+    use jmap_proto::principals::{GetAvailabilityRequest, GetAvailabilityResponse};
+    use jmap_proto::sieve::{
+        SieveScript, SieveScriptSetRequest, SieveScriptValidateRequest, SieveScriptValidateResponse,
+    };
+    use jmap_proto::websocket::{WebSocketPushDisable, WebSocketPushEnable, WebSocketRequestError};
+
+    let ws_err = WebSocketRequestError::new("urn:ietf:params:jmap:error:limit")
+        .with_id("req-1")
+        .with_status(400)
+        .with_detail("limit exceeded");
+    let ws_err_bytes = serde_json::to_vec(&ws_err).expect("WebSocketRequestError serializes");
+    let ws_err_parsed: WebSocketRequestError =
+        serde_json::from_slice(&ws_err_bytes).expect("WebSocketRequestError parses");
+    assert_eq!(ws_err_parsed, ws_err);
+
+    let ws_pe = WebSocketPushEnable::new().with_data_types(["Email", "CalendarEvent"]);
+    let ws_pe_bytes = serde_json::to_vec(&ws_pe).expect("WebSocketPushEnable serializes");
+    let ws_pe_parsed: WebSocketPushEnable =
+        serde_json::from_slice(&ws_pe_bytes).expect("WebSocketPushEnable parses");
+    assert_eq!(ws_pe_parsed, ws_pe);
+
+    let ws_pd = WebSocketPushDisable::new();
+    let ws_pd_bytes = serde_json::to_vec(&ws_pd).expect("WebSocketPushDisable serializes");
+    let ws_pd_parsed: WebSocketPushDisable =
+        serde_json::from_slice(&ws_pd_bytes).expect("WebSocketPushDisable parses");
+    assert_eq!(ws_pd_parsed, ws_pd);
+
+    let sieve_set = SieveScriptSetRequest::new(
+        SetRequest::new("acc1").create("c1", SieveScript::new("filter", "b1")),
+    )
+    .activating("#c1");
+    let sieve_set_bytes = serde_json::to_vec(&sieve_set).expect("SieveScriptSetRequest serializes");
+    let sieve_set_parsed: SieveScriptSetRequest =
+        serde_json::from_slice(&sieve_set_bytes).expect("SieveScriptSetRequest parses");
+    assert_eq!(sieve_set_parsed, sieve_set);
+
+    let sieve_val_req = SieveScriptValidateRequest::new("acc1", "b1");
+    let sieve_val_req_bytes =
+        serde_json::to_vec(&sieve_val_req).expect("SieveScriptValidateRequest serializes");
+    let sieve_val_req_parsed: SieveScriptValidateRequest =
+        serde_json::from_slice(&sieve_val_req_bytes).expect("SieveScriptValidateRequest parses");
+    assert_eq!(sieve_val_req_parsed, sieve_val_req);
+
+    let sieve_val_resp =
+        SieveScriptValidateResponse::invalid("acc1", SetError::new("invalidScript"));
+    let sieve_val_resp_bytes =
+        serde_json::to_vec(&sieve_val_resp).expect("SieveScriptValidateResponse serializes");
+    let sieve_val_resp_parsed: SieveScriptValidateResponse =
+        serde_json::from_slice(&sieve_val_resp_bytes).expect("SieveScriptValidateResponse parses");
+    assert_eq!(sieve_val_resp_parsed, sieve_val_resp);
+
+    let blob_up_req = BlobUploadRequest::new("acc1").create_blob(
+        "c1",
+        UploadBlob::from_text("hello", "text/plain")
+            .with_data_source(DataSource::from_blob_id("b0").with_offset(0).with_length(5)),
+    );
+    let blob_up_req_bytes = serde_json::to_vec(&blob_up_req).expect("BlobUploadRequest serializes");
+    let blob_up_req_parsed: BlobUploadRequest =
+        serde_json::from_slice(&blob_up_req_bytes).expect("BlobUploadRequest parses");
+    assert_eq!(blob_up_req_parsed, blob_up_req);
+
+    let samples: &[&[u8]] = &[
+        br#"{"id":"singleton","isEnabled":true,"subject":"Away"}"#,
+        br#"{"forEmailId":"m1","subject":"Read: test"}"#,
+        br#"{"accountId":"acc1","send":{"k1":{"forEmailId":"m1"}}}"#,
+        br#"{"accountId":"acc1","sent":{"k1":{}}}"#,
+        br#"{"accountId":"acc1","emails":{"c1":{"blobId":"b1","mailboxIds":{"mb1":true}}}}"#,
+        br#"{"accountId":"acc1","oldState":"s1","newState":"s2"}"#,
+        br#"{"accountId":"acc1","ids":["m1"],"fetchTextBodyValues":true}"#,
+        br#"{"accountId":"acc1","blobIds":["b1"]}"#,
+        br#"{"accountId":"acc1","parsed":{"b1":{"subject":"hi"}}}"#,
+        br#"{"accountId":"acc1","emailIds":["m1"]}"#,
+        br#"{"accountId":"acc1","list":[{"emailId":"m1","subject":"hi"}]}"#,
+        br##"{"accountId":"acc1","onSuccessUpdateEmail":{"#s1":{"keywords/$Answered":true}}}"##,
+        br#"{"accountId":"acc1","onDestroyRemoveContents":true}"#,
+        br#"{"uid":"g1","name":"Friends","members":{"u1":true}}"#,
+        br#"{"accountId":"acc1","sendSchedulingMessages":true}"#,
+        br#"{"autoResponderEnabled":false}"#,
+        br#"{"utcStart":"2026-01-01T00:00:00Z","utcEnd":"2026-01-02T00:00:00Z"}"#,
+        br#"{"uid":"cg1","entries":["cal1"]}"#,
+        br#"{"id":"al1","calendarEventId":"ev1","alertId":"a1"}"#,
+        br#"{"accountId":"acc1","send":{"s1":{"calendarEventId":"ev1","method":"request"}}}"#,
+        br#"{"accountId":"acc1","utcStart":"2026-01-01T00:00:00Z","utcEnd":"2026-01-02T00:00:00Z","showDetails":true}"#,
+        br#"{"list":[]}"#,
+        br#"{"accountId":"acc1","ids":["b1"],"offset":0,"length":100}"#,
+        br#"{"accountId":"acc1","typeNames":["Email"],"ids":["b1"]}"#,
+        br#"{"list":[{"id":"b1","matchedIds":{"Email":["m1"]}}]}"#,
+    ];
+
+    for input in samples {
+        let _ = serde_json::from_slice::<VacationResponse>(input);
+        let _ = serde_json::from_slice::<MDN>(input);
+        let _ = serde_json::from_slice::<MDNSendRequest>(input);
+        let _ = serde_json::from_slice::<MDNSendResponse>(input);
+        let _ = serde_json::from_slice::<EmailImportRequest>(input);
+        let _ = serde_json::from_slice::<EmailImportResponse>(input);
+        let _ = serde_json::from_slice::<EmailGetRequest>(input);
+        let _ = serde_json::from_slice::<EmailParseRequest>(input);
+        let _ = serde_json::from_slice::<EmailParseResponse>(input);
+        let _ = serde_json::from_slice::<SearchSnippetGetRequest>(input);
+        let _ = serde_json::from_slice::<SearchSnippetGetResponse>(input);
+        let _ = serde_json::from_slice::<EmailSubmissionSetRequest>(input);
+        let _ = serde_json::from_slice::<AddressBookSetRequest>(input);
+        let _ = serde_json::from_slice::<CardGroup>(input);
+        let _ = serde_json::from_slice::<ContactCardParseRequest>(input);
+        let _ = serde_json::from_slice::<ContactCardParseResponse>(input);
+        let _ = serde_json::from_slice::<CalendarSetRequest>(input);
+        let _ = serde_json::from_slice::<CalendarPreferences>(input);
+        let _ = serde_json::from_slice::<CalendarEventSetRequest>(input);
+        let _ = serde_json::from_slice::<CalendarEventParseRequest>(input);
+        let _ = serde_json::from_slice::<CalendarEventParseResponse>(input);
+        let _ = serde_json::from_slice::<GetFreeBusyRequest>(input);
+        let _ = serde_json::from_slice::<GetFreeBusyResponse>(input);
+        let _ = serde_json::from_slice::<CalendarGroup>(input);
+        let _ = serde_json::from_slice::<CalendarAlert>(input);
+        let _ = serde_json::from_slice::<CalendarEventSendRequest>(input);
+        let _ = serde_json::from_slice::<CalendarEventSendResponse>(input);
+        let _ = serde_json::from_slice::<ParticipantIdentitySetRequest>(input);
+        let _ = serde_json::from_slice::<GetAvailabilityRequest>(input);
+        let _ = serde_json::from_slice::<GetAvailabilityResponse>(input);
+        let _ = serde_json::from_slice::<BlobGetRequest>(input);
+        let _ = serde_json::from_slice::<BlobLookupRequest>(input);
+        let _ = serde_json::from_slice::<BlobLookupResponse>(input);
+    }
+}
