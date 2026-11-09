@@ -199,8 +199,14 @@ impl MailSync {
 
     /// The listing, with its own state and not the state of the delta. The
     /// account can change again between the two calls.
+    ///
+    /// Merges in shared accounts' own mailboxes
+    /// ([`MailSync::folder_tree_with_shared`]): `folder_tree_since` decides
+    /// to rebuild from a change on the primary account alone, but the
+    /// rebuilt tree must still carry whatever shared mailboxes the last
+    /// listing had, not just the primary account's own.
     fn rebuild(&self) -> Result<FolderUpdate, SyncError> {
-        let (state, tree) = self.folder_tree()?;
+        let (state, tree) = self.folder_tree_with_shared()?;
         Ok(FolderUpdate::Rebuilt { state, tree })
     }
 

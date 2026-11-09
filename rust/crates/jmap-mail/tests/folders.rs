@@ -402,6 +402,38 @@ fn the_listing_is_the_connected_accounts() {
     assert_eq!(inbox.id, expected);
 }
 
+/// `get_folder_info_sync`'s first listing (no cached tree yet, so no
+/// `Mailbox/changes` delta to apply) must merge shared mail accounts in the
+/// same way `MailSync::folder_tree_with_shared` does on its own (ROADMAP item
+/// 163's `JmapStore`/Camel wiring slice).
+#[test]
+fn the_first_listing_merges_shared_mail_accounts() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX))
+    });
+    let projects = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(Id::new("shared-a"), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None)
+    };
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+
+    let tree = store.folders(CACHED).expect("listed");
+
+    assert!(
+        paths(&tree).contains(&"Inbox"),
+        "the primary account's own folder stays"
+    );
+    let shared = tree
+        .find("Shared/Bob/Projects")
+        .expect("the shared account's folder merges in under its owner");
+    assert_eq!(shared.id, projects);
+}
+
 // ---------------------------------------------------------------------------
 // which part of the tree the call asks for
 

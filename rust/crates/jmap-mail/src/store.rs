@@ -468,6 +468,12 @@ impl JmapStore {
     /// The first call has no listing, so it lists the account for all flags.
     /// Otherwise, an account opens empty and shows no mail until a refresh.
     ///
+    /// The listing merges in every account the login's session shares mail
+    /// from ([`MailSync::folder_tree_with_shared`]), under one `Shared/<owner>`
+    /// branch per sharing account (ROADMAP item 163). `MailSync::rebuild`
+    /// keeps the merge on every later full relist too, so only the first
+    /// listing needs to ask for it explicitly here.
+    ///
     /// This function does not read the other flags. `SUBSCRIBED` and
     /// `SUBSCRIPTION_LIST` ask for the tree filtered to the subscribed
     /// folders: a filter on the tree, not a different request. `FAST` asks for
@@ -544,7 +550,7 @@ impl JmapStore {
             None => {
                 baseline_generation = None;
                 match retry_once_after(
-                    || sync.folder_tree(),
+                    || sync.folder_tree_with_shared(),
                     SyncError::is_unauthorized,
                     || self.refresh_credentials(sync),
                 ) {
