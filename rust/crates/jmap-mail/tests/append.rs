@@ -86,10 +86,11 @@ use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
 use jmap_mail::message_info::pending_append;
+use jmap_mail::summary::set_summary_state;
 use jmap_mail_sync::{MailSync, MessageSummary};
 use jmap_mock::MockServer;
-use jmap_proto::Id;
 use jmap_proto::mail::MailboxRights;
+use jmap_proto::{Id, State};
 
 /// The RFC 5322 bytes of the message to append: CRLF line endings, a header
 /// block, a blank line, and a body.
@@ -997,4 +998,55 @@ fn a_queued_append_too_large_for_the_server_gives_up_instead_of_wedging_synchron
             glib_sys::g_error_free(error_again);
         }
     }
+}
+
+/// A listing that runs before the reconnect flush has replayed a queued
+/// append must not remove the queued row: it never names the synthetic uid,
+/// since the server does not have the message yet. This can happen for
+/// real: a push, or `MailSync`'s own delta-cost rule, can trigger a
+/// listing-based refresh with no guarantee it runs after
+/// `synchronize_sync`'s reconnect flush has uploaded the append.
+#[test]
+fn a_listing_that_runs_before_a_queued_append_lands_does_not_remove_its_row() {
+    let fixture = Fixture::start();
+    fixture.account.jmap().drop_connection();
+
+    let appended = fixture.append_straight(&Message::parsed(MESSAGE), ptr::null_mut());
+    appended.expect_ok();
+    let local_uid = appended.reported().expect("a queued append reports a uid");
+
+    let client =
+        Client::connect(fixture.server.origin(), Credentials::none()).expect("connected again");
+    fixture
+        .account
+        .connect(MailSync::new(client, fixture.server.account_id()));
+
+    // Force the next refresh to be a full relist rather than a delta
+    // (`tests/refresh.rs`'s own
+    // `a_refresh_from_a_state_the_server_will_not_calculate_from_lists_again`
+    // uses the same trick): a state the mock does not recognize answers
+    // `Email/changes` with `cannotCalculateChanges`, so `messages_since`
+    // falls back to `relist`, the one path that calls `apply_listing` and so
+    // `remove_absent`. The folder's one real message is empty right now
+    // (the queued append never reached the server), so the listing names
+    // nothing, and only the synthetic row is at risk of being swept away.
+    unsafe {
+        set_summary_state(
+            camel_folder_get_folder_summary(fixture.archive),
+            State::new("a state from some other server"),
+        );
+    }
+
+    fixture.refresh();
+
+    assert_eq!(
+        listed(fixture.archive),
+        vec![local_uid.clone()],
+        "a relisting ahead of the reconnect flush must not drop the queued row"
+    );
+    assert_eq!(
+        fixture.pending_append(&local_uid),
+        Some(fixture.archive_id.clone()),
+        "the row must still remember which mailbox the append is bound for"
+    );
 }
