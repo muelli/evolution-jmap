@@ -105,6 +105,25 @@ impl std::fmt::Display for DeleteFailure {
 
 impl std::error::Error for DeleteFailure {}
 
+/// True if `error` is the method-level `invalidArguments` refusal Cyrus's
+/// `Calendar/set` parser gives for the standard `onDestroyRemoveContents`
+/// argument name (CYRUS-RFC-FINDINGS.md Finding 21).
+fn rejects_on_destroy_remove_contents(error: &jmap_client::Error) -> bool {
+    let jmap_client::Error::Method(method_error) = error else {
+        return false;
+    };
+    method_error.error_type == jmap_proto::error::method::INVALID_ARGUMENTS
+        && method_error
+            .extra
+            .get("arguments")
+            .and_then(|value| value.as_array())
+            .is_some_and(|names| {
+                names
+                    .iter()
+                    .any(|name| name.as_str() == Some("onDestroyRemoveContents"))
+            })
+}
+
 /// Destroys `doomed` on the server.
 ///
 /// [`CollectionLayout`] resolves the account, as for a discovery and a create.
@@ -171,11 +190,22 @@ pub fn delete_collection(client: &Client, doomed: &Doomed) -> Result<(), DeleteF
             let mut request = CalendarSetRequest::new(account.id.clone());
             request.destroy = Some(vec![collection.clone()]);
             request.on_destroy_remove_contents = Some(true);
-            let response = client
-                .calendar_set_custom(&request)
-                .inspect_err(|error| {
-                    tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
-                })?;
+            let response = match client.calendar_set_custom(&request) {
+                // Cyrus's Calendar/set parser rejects the standard argument
+                // name outright instead of just ignoring or accepting it
+                // (CYRUS-RFC-FINDINGS.md Finding 21); retry with its
+                // pre-standardization name, onDestroyRemoveEvents.
+                Err(error) if rejects_on_destroy_remove_contents(&error) => {
+                    let mut retry = CalendarSetRequest::new(account.id.clone());
+                    retry.destroy = Some(vec![collection.clone()]);
+                    retry.on_destroy_remove_events = Some(true);
+                    client.calendar_set_custom(&retry)
+                }
+                other => other,
+            }
+            .inspect_err(|error| {
+                tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
+            })?;
             expect_destroyed(&response, &collection).inspect_err(|error| {
                 tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
             })?;

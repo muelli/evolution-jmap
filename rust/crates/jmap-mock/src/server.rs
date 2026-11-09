@@ -111,6 +111,9 @@ pub struct Faults {
     /// email from the account: models a server that loses track of an id for
     /// a write while still listing it everywhere else.
     pub email_update_always_not_found: bool,
+    /// Reject a `Calendar/set` destroy naming `onDestroyRemoveContents` with
+    /// `invalidArguments`, modeling Cyrus's pre-standardization parser.
+    pub calendar_destroy_rejects_remove_contents: bool,
     /// Active hostile scenarios.
     pub hostile_scenarios: BTreeSet<crate::hostile::HostileScenario>,
 }
@@ -511,6 +514,14 @@ impl MockServerBuilder {
         self
     }
 
+    /// Reject a `Calendar/set` destroy naming `onDestroyRemoveContents` with
+    /// `invalidArguments`, modeling Cyrus's pre-standardization parser
+    /// (CYRUS-RFC-FINDINGS.md Finding 21).
+    pub fn calendar_destroy_rejects_remove_contents(mut self) -> Self {
+        self.faults.calendar_destroy_rejects_remove_contents = true;
+        self
+    }
+
     /// Enable one hostile server scenario for adversarial testing.
     pub fn hostile(mut self, scenario: crate::hostile::HostileScenario) -> Self {
         self.faults.hostile_scenarios.insert(scenario);
@@ -569,6 +580,8 @@ impl MockServerBuilder {
         state.tasks_enabled = self.tasks_enabled;
         state.disable_principal_query = self.faults.disable_principal_query;
         state.email_update_always_not_found = self.faults.email_update_always_not_found;
+        state.calendar_destroy_rejects_remove_contents =
+            self.faults.calendar_destroy_rejects_remove_contents;
         state.hostile_scenarios = self.faults.hostile_scenarios.clone();
         if !self.tasks_enabled {
             state

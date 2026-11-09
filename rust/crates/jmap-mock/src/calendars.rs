@@ -127,6 +127,16 @@ pub fn calendar_set(
     arguments: Value,
     caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
+    if state.calendar_destroy_rejects_remove_contents
+        && arguments.get("onDestroyRemoveContents").is_some()
+    {
+        return Err(
+            MethodError::new(error::method::INVALID_ARGUMENTS).with_extra(BTreeMap::from([(
+                "arguments".to_owned(),
+                Value::Array(vec![Value::String("onDestroyRemoveContents".to_owned())]),
+            )])),
+        );
+    }
     let mut request: SetRequest<Calendar> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
     let terse_collection_create = state.terse_collection_create;

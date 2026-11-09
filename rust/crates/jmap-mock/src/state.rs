@@ -129,6 +129,11 @@ pub struct ServerState {
     /// Answer every `Email/set` update with `notFound`, without removing the
     /// email from the account.
     pub email_update_always_not_found: bool,
+    /// Reject a `Calendar/set` destroy that names the standard
+    /// `onDestroyRemoveContents` argument with `invalidArguments`, modeling
+    /// Cyrus's pre-standardization `Calendar/set` parser (CYRUS-RFC-FINDINGS.md
+    /// Finding 21), which instead expects `onDestroyRemoveEvents`.
+    pub calendar_destroy_rejects_remove_contents: bool,
     /// Active hostile scenarios for simulating adversarial server conditions.
     pub hostile_scenarios: BTreeSet<crate::hostile::HostileScenario>,
     /// Cached response for `HostileScenario::ReplayedResponse`.
@@ -208,6 +213,7 @@ impl ServerState {
             tasks_enabled: false,
             disable_principal_query: false,
             email_update_always_not_found: false,
+            calendar_destroy_rejects_remove_contents: false,
             hostile_scenarios: BTreeSet::new(),
             cached_replayed_response: None,
             hostile_state_calls: 0,
