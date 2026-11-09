@@ -35,8 +35,14 @@
 //! message's own headers, [`crate::pending_append_cache::PendingAppendCache`]
 //! keeps the bytes `Email/import` has not seen yet, and
 //! `message_info::set_pending_append` marks the row with the destination
-//! mailbox. The reconnect walk that uploads a pending append is a
-//! separate, later claim; this one only queues it.
+//! mailbox. `replay_append` is the reconnect walk that uploads a pending
+//! append, called from `synchronize.rs`'s own `synchronize_sync`.
+//!
+//! `replay_append` gives up on a pending append that [`Error::TooLarge`]
+//! refuses: the message cannot shrink between retries, so retrying it on
+//! every reconnect would fail this folder's whole synchronise forever, with
+//! no way for the user to give up on the draft. Any other refusal keeps the
+//! row queued, because it may be transient.
 //!
 //! [`Error::TooLarge`]: jmap_client::Error::TooLarge
 //! [`Client::upload_blob`]: jmap_client::Client::upload_blob
@@ -59,6 +65,7 @@ use jmap_backend_core::error::{fail_bool, set_raw_gerror};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::guard_bool;
+use jmap_client::Error;
 use jmap_mail_sync::Keywords;
 use jmap_proto::Id;
 
@@ -338,6 +345,26 @@ pub(crate) unsafe fn replay_append(
             // so there is nothing to restore here.
             // SAFETY: `info` is still the live row.
             unsafe { camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE) };
+            return Ok(None);
+        }
+        Err(StoreError::Client(Error::TooLarge { .. })) => {
+            // The server refuses this message on every attempt: its size
+            // does not change between reconnects. Retrying it would fail
+            // the same way forever, and `Err` here would fail this whole
+            // folder's synchronise on every future reconnect, with no way
+            // for the user to give up on the draft. Give up now instead,
+            // the same restraint the missing-bytes case above uses, but
+            // warn so the loss is not silent.
+            tracing::warn!(
+                uid = text,
+                "a queued append gave up: too large for the server"
+            );
+            cache.remove(text);
+            // SAFETY: `info` is still the live row.
+            unsafe {
+                set_pending_append(info.as_ptr(), None);
+                clear_pending_write(info.as_ptr());
+            }
             return Ok(None);
         }
         Err(other) => return Err(other),

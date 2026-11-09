@@ -940,3 +940,61 @@ fn appending_a_message_over_the_accounts_upload_limit_fails_before_it_is_sent() 
         "a refused append still uploaded the message"
     );
 }
+
+/// ROADMAP item 167(a): the server's permanent refusal of a queued append
+/// (the message is over `maxSizeUpload`) must not wedge this folder's
+/// synchronise forever. The message cannot shrink between retries, so
+/// retrying it on every reconnect can never succeed.
+#[test]
+fn a_queued_append_too_large_for_the_server_gives_up_instead_of_wedging_synchronise() {
+    let fixture = Fixture::started_with(MockServer::builder().size_upload(64));
+    assert!(MESSAGE.len() > 64, "the test message is not over the limit");
+    fixture.account.jmap().drop_connection();
+
+    let appended = fixture.append_straight(&Message::parsed(MESSAGE), ptr::null_mut());
+    appended.expect_ok();
+    let local_uid = appended.reported().expect("a queued append reports a uid");
+
+    let client =
+        Client::connect(fixture.server.origin(), Credentials::none()).expect("connected again");
+    fixture
+        .account
+        .connect(MailSync::new(client, fixture.server.account_id()));
+
+    let (ok, error) = fixture.synchronize();
+    assert!(
+        ok,
+        "a permanently refused append must not fail the whole synchronise: {}",
+        if error.is_null() {
+            "no error".to_owned()
+        } else {
+            // SAFETY: a live GError from the call above.
+            unsafe {
+                CStr::from_ptr((*error).message)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        }
+    );
+    // SAFETY: NULL or a GError this function owns.
+    unsafe {
+        if !error.is_null() {
+            glib_sys::g_error_free(error);
+        }
+    }
+
+    assert!(
+        fixture.pending_append(&local_uid).is_none(),
+        "a permanently refused append must give up, not retry forever"
+    );
+
+    // A second synchronise must stay clean: nothing is left to retry.
+    let (ok_again, error_again) = fixture.synchronize();
+    assert!(ok_again, "synchronise must stay clean after giving up");
+    // SAFETY: NULL or a GError this function owns.
+    unsafe {
+        if !error_again.is_null() {
+            glib_sys::g_error_free(error_again);
+        }
+    }
+}
