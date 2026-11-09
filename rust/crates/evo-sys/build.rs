@@ -476,6 +476,36 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_text_buffer_new",
     "gtk_text_iter_get_line",
     "gtk_text_iter_get_offset",
+    // Item 171c: the completion popup. Finding the word under the cursor
+    // reads the current line up to the cursor's own mark, then moves a
+    // copy of that iter back by the word's own character count to find
+    // where to delete from before inserting the chosen candidate.
+    "gtk_text_buffer_get_insert",
+    "gtk_text_buffer_get_iter_at_mark",
+    "gtk_text_buffer_get_text",
+    "gtk_text_iter_backward_chars",
+    "gtk_text_buffer_delete",
+    "gtk_text_buffer_insert",
+    "gtk_text_buffer_place_cursor",
+    // Item 171c: positioning the popup under the cursor's own line, in
+    // screen coordinates. `GdkRectangle` is the one other struct (besides
+    // `GtkTextIter`) this crate gives a real layout: see its `raw_line`
+    // definition below.
+    "gtk_text_view_get_iter_location",
+    "gtk_text_view_buffer_to_window_coords",
+    "gtk_widget_get_window",
+    "gdk_window_get_origin",
+    // Item 171c: a plain `GTK_WINDOW_POPUP`, moved under the cursor and
+    // shown or hidden as the user asks for completion. Never focused, so
+    // every key still reaches the source view's own handler below.
+    "gtk_window_new",
+    "gtk_window_move",
+    "gtk_window_set_accept_focus",
+    "gtk_widget_hide",
+    // Item 171c: reads the key and modifier state of the source view's own
+    // `key-press-event`, rather than the event struct's fields.
+    "gdk_event_get_keyval",
+    "gdk_event_get_state",
     // The parent window of the name dialog that Add and Rename open.
     "gtk_widget_get_toplevel",
     // The name dialog's OK button answers Enter too: a default response for
@@ -813,6 +843,15 @@ const GTK_HANDLES: &[&str] = &[
     // reader treats a later text change as an announcement; an unlabelled
     // widget gets a name (`atk_object_set_name`) the same way.
     "AtkObject",
+    // Item 171c's completion popup. The text-mode editor's own insert
+    // mark, found back from the buffer and handed straight to
+    // `gtk_text_buffer_get_iter_at_mark`; this crate never reads a field
+    // of it. `GdkWindow`, `GdkEvent`, `GdkEventKey` and `GdkRectangle`
+    // need no such entry here: `Gdk.*` is not in `BLOCKED_GTK_TYPES`
+    // (only `Gtk.*` is), so bindgen already generates their real,
+    // header-derived layout once any allowlisted function's signature
+    // reaches them.
+    "GtkTextMark",
 ];
 
 fn main() {
@@ -974,6 +1013,34 @@ fn main() {
         // always has one selected.
         .raw_line("pub type GtkSelectionMode = ::std::os::raw::c_uint;")
         .raw_line("pub const GTK_SELECTION_BROWSE: GtkSelectionMode = 2;")
+        // Item 171c's completion popup: `gtk_window_new`'s argument.
+        // Copied from `/usr/include/gtk-3.0/gtk/gtkwindow.h`'s own
+        // `GtkWindowType` (`GTK_WINDOW_TOPLEVEL` is 0, unused here).
+        .raw_line("pub type GtkWindowType = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_WINDOW_POPUP: GtkWindowType = 1;")
+        // `gtk_text_view_buffer_to_window_coords`'s argument, naming the
+        // view's own main editing area rather than a border window.
+        // Copied from `gtk/gtktextview.h`'s own `GtkTextWindowType`.
+        .raw_line("pub type GtkTextWindowType = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_TEXT_WINDOW_WIDGET: GtkTextWindowType = 1;")
+        // `GdkModifierType` and `GDK_CONTROL_MASK` need no `raw_line`
+        // here: `Gdk.*` is not in `BLOCKED_GTK_TYPES`, so bindgen already
+        // generates both from the installed `gdk/gdktypes.h`.
+        //
+        // The `GDK_KEY_*` keysym values `on_source_key_press` compares
+        // against are different: `gdk/gdkkeysyms.h`, the header that
+        // `#define`s them, is never included here (`gdk/gdk.h` does not
+        // pull it in on its own, and nothing else in `wrapper.h` needs
+        // it), so bindgen never sees these macros to generate them.
+        // Copied from the installed header, not from memory: every GDK
+        // application compares against these same X11 keysym values,
+        // unchanged since X11.
+        .raw_line("pub const GDK_KEY_space: ::std::os::raw::c_uint = 0x020;")
+        .raw_line("pub const GDK_KEY_Tab: ::std::os::raw::c_uint = 0xff09;")
+        .raw_line("pub const GDK_KEY_Return: ::std::os::raw::c_uint = 0xff0d;")
+        .raw_line("pub const GDK_KEY_Escape: ::std::os::raw::c_uint = 0xff1b;")
+        .raw_line("pub const GDK_KEY_Up: ::std::os::raw::c_uint = 0xff52;")
+        .raw_line("pub const GDK_KEY_Down: ::std::os::raw::c_uint = 0xff54;")
         // `e_web_view_register_element_clicked`'s callback type. Bindgen
         // will not generate this on its own: its signature names
         // `GtkAllocation`, a blocklisted type, so bindgen drops the typedef
@@ -1028,6 +1095,11 @@ fn main() {
              }\n\
              }",
         );
+    // `GdkRectangle` (item 171c, `gtk_text_view_get_iter_location`'s
+    // out-parameter) needs no `raw_line` either: `Gdk.*` is not blocked,
+    // so bindgen generates it from `gdk/gdktypes.h` directly, aliased to
+    // `cairo_rectangle_int_t` with its real `x`/`y`/`width`/`height`
+    // fields, the same type the installed header itself aliases it to.
 
     // Evolution's handles need the struct tag as well as the typedef. A
     // blocklisted `EMailConfigServicePage` comes through as

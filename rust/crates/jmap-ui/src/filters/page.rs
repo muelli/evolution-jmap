@@ -34,31 +34,39 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use eds_sys::ESource;
 use evo_sys::{
-    EMailConfigPage, EMailConfigPageInterface, GTK_ORIENTATION_HORIZONTAL,
+    EMailConfigPage, EMailConfigPageInterface, GDK_CONTROL_MASK, GDK_KEY_Down, GDK_KEY_Escape,
+    GDK_KEY_Return, GDK_KEY_Tab, GDK_KEY_Up, GDK_KEY_space, GTK_ORIENTATION_HORIZONTAL,
     GTK_ORIENTATION_VERTICAL, GTK_RESPONSE_CANCEL, GTK_RESPONSE_OK, GTK_SELECTION_BROWSE,
-    GtkCellRenderer, GtkListStore, GtkSourceBuffer, GtkTextBuffer, GtkTextIter, GtkTextTag,
-    GtkTreeModel, GtkTreePath, GtkTreeSelection, GtkWidget, GtkWindow, e_mail_config_page_get_type,
-    gtk_box_new, gtk_box_pack_start, gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new,
-    gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_container_set_border_width,
-    gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run,
-    gtk_dialog_set_default_response, gtk_entry_new, gtk_entry_set_activates_default, gtk_label_new,
-    gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
-    gtk_label_set_xalign, gtk_list_store_clear, gtk_list_store_insert_with_valuesv,
-    gtk_list_store_newv, gtk_scrolled_window_get_type, gtk_source_buffer_set_language,
-    gtk_source_language_manager_get_default, gtk_source_language_manager_get_language,
-    gtk_source_view_new, gtk_text_buffer_apply_tag, gtk_text_buffer_get_end_iter,
-    gtk_text_buffer_get_iter_at_line, gtk_text_buffer_get_start_iter,
-    gtk_text_buffer_get_tag_table, gtk_text_buffer_remove_tag, gtk_text_iter_forward_to_line_end,
-    gtk_text_tag_new, gtk_text_tag_table_add, gtk_text_view_get_buffer, gtk_text_view_set_editable,
+    GTK_TEXT_WINDOW_WIDGET, GTK_WINDOW_POPUP, GdkEventKey, GdkRectangle, GtkCellRenderer,
+    GtkListStore, GtkSourceBuffer, GtkTextBuffer, GtkTextIter, GtkTextTag, GtkTreeModel,
+    GtkTreePath, GtkTreeSelection, GtkWidget, GtkWindow, e_mail_config_page_get_type,
+    gdk_event_get_keyval, gdk_event_get_state, gdk_window_get_origin, gtk_box_new,
+    gtk_box_pack_start, gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new,
+    gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_container_get_children,
+    gtk_container_set_border_width, gtk_dialog_add_button, gtk_dialog_get_content_area,
+    gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response, gtk_entry_new,
+    gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
+    gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
+    gtk_list_store_insert_with_valuesv, gtk_list_store_newv, gtk_scrolled_window_get_type,
+    gtk_source_buffer_set_language, gtk_source_language_manager_get_default,
+    gtk_source_language_manager_get_language, gtk_source_view_new, gtk_text_buffer_apply_tag,
+    gtk_text_buffer_delete, gtk_text_buffer_get_end_iter, gtk_text_buffer_get_insert,
+    gtk_text_buffer_get_iter_at_line, gtk_text_buffer_get_iter_at_mark,
+    gtk_text_buffer_get_start_iter, gtk_text_buffer_get_tag_table, gtk_text_buffer_get_text,
+    gtk_text_buffer_insert, gtk_text_buffer_place_cursor, gtk_text_buffer_remove_tag,
+    gtk_text_iter_backward_chars, gtk_text_iter_forward_to_line_end, gtk_text_iter_get_line,
+    gtk_text_tag_new, gtk_text_tag_table_add, gtk_text_view_buffer_to_window_coords,
+    gtk_text_view_get_buffer, gtk_text_view_get_iter_location, gtk_text_view_set_editable,
     gtk_text_view_set_monospace, gtk_tree_path_free, gtk_tree_path_get_indices_with_depth,
     gtk_tree_path_new_from_indicesv, gtk_tree_selection_get_selected_rows,
     gtk_tree_selection_set_mode, gtk_tree_view_append_column, gtk_tree_view_column_add_attribute,
     gtk_tree_view_column_new, gtk_tree_view_column_pack_start, gtk_tree_view_column_set_expand,
     gtk_tree_view_column_set_title, gtk_tree_view_get_selection, gtk_tree_view_new_with_model,
     gtk_tree_view_set_cursor, gtk_tree_view_set_headers_visible, gtk_widget_destroy,
-    gtk_widget_get_toplevel, gtk_widget_set_hexpand, gtk_widget_set_sensitive,
-    gtk_widget_set_size_request, gtk_widget_set_tooltip_text, gtk_widget_set_vexpand,
-    gtk_widget_set_visible, gtk_widget_show_all, gtk_window_get_type, gtk_window_set_title,
+    gtk_widget_get_toplevel, gtk_widget_get_window, gtk_widget_hide, gtk_widget_set_hexpand,
+    gtk_widget_set_sensitive, gtk_widget_set_size_request, gtk_widget_set_tooltip_text,
+    gtk_widget_set_vexpand, gtk_widget_set_visible, gtk_widget_show_all, gtk_window_get_type,
+    gtk_window_move, gtk_window_new, gtk_window_set_accept_focus, gtk_window_set_title,
     gtk_window_set_transient_for,
 };
 use gio_sys::{
@@ -67,8 +75,8 @@ use gio_sys::{
     g_task_set_task_data,
 };
 use glib_sys::{
-    G_SOURCE_REMOVE, GError, GFALSE, GTRUE, GType, g_error_new_literal, g_list_free_full,
-    g_source_remove, g_timeout_add, gboolean, gpointer,
+    G_SOURCE_REMOVE, GError, GFALSE, GTRUE, GType, g_error_new_literal, g_list_free,
+    g_list_free_full, g_source_remove, g_timeout_add, gboolean, gpointer,
 };
 use gobject_sys::{
     G_TYPE_STRING, GObject, GObjectClass, GTypeInstance, GValue, g_object_ref, g_object_unref,
@@ -78,11 +86,13 @@ use gobject_sys::{
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
+use jmap_backend_core::marshal::take_string;
 use jmap_backend_core::object_data::ObjectData;
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, TypeSizes};
 use jmap_backend_core::trampoline::{guard, log_critical};
 
 use crate::dispatch;
+use crate::filters::completion;
 use crate::filters::form::{Buttons, FiltersForm, NO_SCRIPT_SELECTED, ScriptEntry};
 use crate::filters::io::{self, Loaded, SavePlan};
 use crate::filters::rule_dialog;
@@ -124,6 +134,10 @@ const NAME_COLUMN_WIDTH: c_int = 160;
 /// trip and is out of scope here; this only bounds how often the parser
 /// this crate runs locally reparses the whole script.
 const VALIDATE_DEBOUNCE_MS: c_uint = 300;
+/// How many matches the completion popup (item 171c) shows at once. A
+/// short, fixed list rather than a scrollable one: this slice's own later
+/// follow-up, not this one.
+const MAX_COMPLETION_ROWS: usize = 15;
 
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"Your server does not offer server-side filters.");
@@ -224,6 +238,21 @@ struct UiState {
     /// pending. [`Drop`] cancels it, so a page closed mid-debounce never runs
     /// the callback against a freed page.
     validate_timeout: c_uint,
+    /// Item 171c's completion popup: a standalone `GTK_WINDOW_POPUP`, never
+    /// a child of this page's own widget tree, so [`Drop`] destroys it
+    /// explicitly. Created once, in [`build_widgets`], and kept for the
+    /// page's whole life, like `error_tag`.
+    completion_window: *mut GtkWidget,
+    /// The one child `completion_window` holds: a vertical box of labels,
+    /// rebuilt from `completion_candidates` each time the list or the
+    /// selection changes.
+    completion_list: *mut GtkWidget,
+    /// The candidates the popup currently shows. Empty means the popup is
+    /// hidden: this is the one flag this page uses to ask "is it open".
+    completion_candidates: Vec<&'static completion::Candidate>,
+    /// The index into `completion_candidates` Up/Down moves, and Tab/Enter
+    /// accepts.
+    completion_selected: usize,
 }
 
 /// A fresh generation for one Check click, process-wide so it never repeats.
@@ -245,14 +274,23 @@ impl UiState {
 }
 
 impl Drop for UiState {
-    /// Cancels a pending debounce timeout. Without this, closing the account
-    /// editor while a timeout is still pending would run it against a page
+    /// Cancels a pending debounce timeout and destroys the completion
+    /// popup. Without the first, closing the account editor while a
+    /// timeout is still pending would run it against a page
     /// `g_object_set_data_full` is already in the middle of freeing.
+    /// Without the second, the popup would leak: it is a standalone
+    /// toplevel window, not a child this page's own container destroys
+    /// for it.
     fn drop(&mut self) {
         if self.validate_timeout != 0 {
             // SAFETY: a source id this page itself added with `g_timeout_add`
             // and has not yet seen fire (it would have cleared the field).
             unsafe { g_source_remove(self.validate_timeout) };
+        }
+        if !self.completion_window.is_null() {
+            // SAFETY: a window this page created in `build_widgets` and
+            // never shares with anything else.
+            unsafe { gtk_widget_destroy(self.completion_window) };
         }
     }
 }
@@ -456,6 +494,27 @@ unsafe fn build_widgets(page: *mut GObject) {
             0,
         );
 
+        // Item 171c: the completion popup. A plain `GTK_WINDOW_POPUP`,
+        // built once and kept hidden until Ctrl+Space. It never accepts
+        // the window manager's own input focus, so every key still
+        // reaches `on_source_key_press` below, the one place that reads
+        // and writes the popup's own state.
+        let completion_window = gtk_window_new(GTK_WINDOW_POPUP);
+        gtk_window_set_accept_focus(completion_window.cast(), GFALSE);
+        let completion_list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_container_add(completion_window.cast(), completion_list);
+        g_signal_connect_data(
+            source_view.cast(),
+            c"key-press-event".as_ptr(),
+            gcallback(
+                on_source_key_press
+                    as unsafe extern "C" fn(*mut GObject, *mut GdkEventKey, gpointer) -> gboolean,
+            ),
+            page.cast(),
+            None,
+            0,
+        );
+
         // The managed script's rules (step B of D3), shown instead of the
         // text view while it parses and the user has not forced text mode.
         let rules_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -573,6 +632,10 @@ unsafe fn build_widgets(page: *mut GObject) {
                 check_generation: 0,
                 error_tag,
                 validate_timeout: 0,
+                completion_window,
+                completion_list,
+                completion_candidates: Vec::new(),
+                completion_selected: 0,
             }),
         );
     }
@@ -1096,6 +1159,303 @@ unsafe extern "C" fn on_validate_timeout(page: gpointer) -> gboolean {
             }
         }
         G_SOURCE_REMOVE
+    })
+}
+
+/// Item 171c's completion popup. The text before `iter` on `iter`'s own
+/// line, the slice [`completion::word_under_cursor`] wants.
+///
+/// # Safety
+///
+/// `buffer` is a live buffer; `iter` is one of its own, valid iters.
+unsafe fn line_prefix(buffer: *mut GtkTextBuffer, iter: &GtkTextIter) -> String {
+    // SAFETY: per the contract. The returned string is a fresh GLib
+    // allocation this call frees through `take_string`.
+    unsafe {
+        let mut line_start = GtkTextIter::default();
+        gtk_text_buffer_get_iter_at_line(buffer, &mut line_start, gtk_text_iter_get_line(iter));
+        let raw = gtk_text_buffer_get_text(buffer, &line_start, iter, GFALSE);
+        take_string(raw).unwrap_or_default()
+    }
+}
+
+/// Replaces the identifier word ending at `cursor` with `replacement`,
+/// placing the cursor mark right after it (item 171c). The core of
+/// [`accept_completion`], factored out so a test can drive it against a
+/// bare `GtkTextBuffer` with no display.
+///
+/// # Safety
+///
+/// `buffer` is a live buffer; `cursor` is one of its own, valid iters, and
+/// nothing else holds a borrow of it.
+unsafe fn replace_word_at(buffer: *mut GtkTextBuffer, cursor: &GtkTextIter, replacement: &str) {
+    // SAFETY: per the contract. `word`'s characters are all ASCII (see
+    // `completion::word_under_cursor`), so its `char` count is exactly how
+    // far back to move to reach its first character, with no byte/char
+    // distinction to get wrong even though the rest of the line may hold
+    // multi-byte UTF-8 this never has to measure.
+    unsafe {
+        let prefix = line_prefix(buffer, cursor);
+        let word = completion::word_under_cursor(&prefix);
+        let mut word_start = *cursor;
+        gtk_text_iter_backward_chars(&mut word_start, word.chars().count() as c_int);
+        let mut cursor_copy = *cursor;
+        let text = cstring_lossy(replacement);
+        gtk_text_buffer_delete(buffer, &mut word_start, &mut cursor_copy);
+        gtk_text_buffer_insert(buffer, &mut word_start, text.as_ptr(), -1);
+        gtk_text_buffer_place_cursor(buffer, &word_start);
+    }
+}
+
+/// Rebuilds the popup's label list from `UiState`'s own candidate list and
+/// selection (item 171c). Destroys the previous labels first: GTK has no
+/// "replace all children" call, and the list is short enough (at most
+/// [`MAX_COMPLETION_ROWS`]) that a full rebuild on every Up/Down keeps this
+/// simple. The selected row is marked with a leading arrow, not a colour,
+/// so the dark and High Contrast themes keep working (item 174c).
+///
+/// # Safety
+///
+/// As [`refresh`].
+unsafe fn fill_completion_list(cell: &RefCell<UiState>) {
+    let (list, candidates, selected) = {
+        let ui = cell.borrow();
+        (
+            ui.completion_list,
+            ui.completion_candidates.clone(),
+            ui.completion_selected,
+        )
+    };
+    // SAFETY: `list` is a live child of the page's own completion window;
+    // no borrow of `cell` is held across these calls.
+    unsafe {
+        let children = gtk_container_get_children(list.cast());
+        let mut node = children;
+        while !node.is_null() {
+            gtk_widget_destroy((*node).data.cast());
+            node = (*node).next;
+        }
+        g_list_free(children);
+        for (index, candidate) in candidates.iter().enumerate() {
+            let marker = if index == selected { "▸ " } else { "  " };
+            let label = gtk_label_new(ptr::null());
+            gtk_label_set_xalign(label.cast(), 0.0);
+            let text = cstring_lossy(&format!("{marker}{}", candidate.text));
+            gtk_label_set_text(label.cast(), text.as_ptr());
+            gtk_box_pack_start(list.cast(), label, GFALSE, GFALSE, 0);
+        }
+        gtk_widget_show_all(list);
+    }
+}
+
+/// Moves the popup to just below the line `cursor` is on, in screen
+/// coordinates (item 171c).
+///
+/// # Safety
+///
+/// `source_view` must be realised (a live child of a mapped page): a key
+/// press cannot otherwise reach `on_source_key_press` to call this.
+unsafe fn position_completion_window(
+    window: *mut GtkWidget,
+    source_view: *mut GtkWidget,
+    cursor: &GtkTextIter,
+) {
+    // SAFETY: per the contract.
+    unsafe {
+        let mut location: GdkRectangle = std::mem::zeroed();
+        gtk_text_view_get_iter_location(source_view.cast(), cursor, &mut location);
+        let mut window_x: c_int = 0;
+        let mut window_y: c_int = 0;
+        gtk_text_view_buffer_to_window_coords(
+            source_view.cast(),
+            GTK_TEXT_WINDOW_WIDGET,
+            location.x,
+            location.y,
+            &mut window_x,
+            &mut window_y,
+        );
+        let mut origin_x: c_int = 0;
+        let mut origin_y: c_int = 0;
+        gdk_window_get_origin(
+            gtk_widget_get_window(source_view),
+            &mut origin_x,
+            &mut origin_y,
+        );
+        gtk_window_move(
+            window.cast(),
+            origin_x + window_x,
+            origin_y + window_y + location.height,
+        );
+    }
+}
+
+/// Opens the completion popup near the cursor (item 171c, Ctrl+Space).
+/// Does nothing if no candidate matches the word being typed: an empty
+/// popup would only be a key away from closing again anyway.
+///
+/// # Safety
+///
+/// As [`refresh`].
+unsafe fn open_completion(cell: &RefCell<UiState>) {
+    let (buffer, source_view, extensions) = {
+        let ui = cell.borrow();
+        (ui.buffer, ui.source_view, ui.form.extensions().to_vec())
+    };
+    // SAFETY: both widgets are live children of the page; no borrow of
+    // `cell` is held across these calls.
+    unsafe {
+        let mark = gtk_text_buffer_get_insert(buffer);
+        let mut cursor = GtkTextIter::default();
+        gtk_text_buffer_get_iter_at_mark(buffer, &mut cursor, mark);
+        let prefix = line_prefix(buffer, &cursor);
+        let word = completion::word_under_cursor(&prefix);
+        let matches: Vec<&'static completion::Candidate> =
+            completion::candidates(word, &extensions)
+                .take(MAX_COMPLETION_ROWS)
+                .collect();
+        if matches.is_empty() {
+            return;
+        }
+        {
+            let mut ui = cell.borrow_mut();
+            ui.completion_candidates = matches;
+            ui.completion_selected = 0;
+        }
+        fill_completion_list(cell);
+        let window = cell.borrow().completion_window;
+        position_completion_window(window, source_view, &cursor);
+        gtk_widget_show_all(window);
+    }
+}
+
+/// Hides the popup and clears its candidate list (item 171c). Safe to call
+/// when it is already hidden.
+///
+/// # Safety
+///
+/// As [`refresh`].
+unsafe fn close_completion(cell: &RefCell<UiState>) {
+    let window = {
+        let mut ui = cell.borrow_mut();
+        ui.completion_candidates.clear();
+        ui.completion_selected = 0;
+        ui.completion_window
+    };
+    // SAFETY: a live child of the page.
+    unsafe { gtk_widget_hide(window) };
+}
+
+/// Moves the popup's own selection by `delta` rows, wrapping at either end
+/// (item 171c, Up/Down). Does nothing if the popup is closed.
+///
+/// # Safety
+///
+/// As [`refresh`].
+unsafe fn move_completion_selection(cell: &RefCell<UiState>, delta: i32) {
+    {
+        let mut ui = cell.borrow_mut();
+        let len = ui.completion_candidates.len();
+        if len == 0 {
+            return;
+        }
+        let selected = ui.completion_selected as i32 + delta;
+        ui.completion_selected = selected.rem_euclid(len as i32) as usize;
+    }
+    // SAFETY: as `fill_completion_list`'s own contract.
+    unsafe { fill_completion_list(cell) };
+}
+
+/// Replaces the word under the cursor with the selected candidate and
+/// closes the popup (item 171c, Tab/Enter).
+///
+/// # Safety
+///
+/// As [`refresh`].
+unsafe fn accept_completion(cell: &RefCell<UiState>) {
+    let accepted = {
+        let ui = cell.borrow();
+        let buffer = ui.buffer;
+        ui.completion_candidates
+            .get(ui.completion_selected)
+            .map(|candidate| (buffer, candidate.text))
+    };
+    if let Some((buffer, text)) = accepted {
+        // SAFETY: `buffer` is a live child of the page.
+        unsafe {
+            let mark = gtk_text_buffer_get_insert(buffer);
+            let mut cursor = GtkTextIter::default();
+            gtk_text_buffer_get_iter_at_mark(buffer, &mut cursor, mark);
+            replace_word_at(buffer, &cursor, text);
+        }
+    }
+    // SAFETY: as `close_completion`'s own contract.
+    unsafe { close_completion(cell) };
+}
+
+/// The text-mode editor's own `key-press-event` handler (item 171c). While
+/// the completion popup is open, Up/Down move its selection, Tab/Enter
+/// accepts the selected candidate, Escape closes it, and any other key
+/// closes it without consuming the event, so the keystroke still reaches
+/// the buffer normally. While it is closed, Ctrl+Space opens it.
+///
+/// # Safety
+///
+/// The GLib signal system calls this with the page as the data pointer and
+/// a live `GdkEventKey` as the event.
+// `GDK_KEY_*` are bindgen's own names for `gdk/gdkkeysyms.h`'s macros,
+// matched as patterns below: GDK's own mixed-case spelling, not a local
+// naming choice to fix.
+#[allow(non_upper_case_globals)]
+unsafe extern "C" fn on_source_key_press(
+    _widget: *mut GObject,
+    event: *mut GdkEventKey,
+    page: gpointer,
+) -> gboolean {
+    guard("JmapFiltersPage::key-press", GFALSE, || {
+        // SAFETY: the view is live, because it emitted the signal.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return GFALSE;
+        };
+        let mut keyval: c_uint = 0;
+        let mut mod_state: c_uint = 0;
+        // SAFETY: `event` is the live `GdkEventKey` this signal emission
+        // passed. `GdkEventKey` is one member of `GdkEvent`'s own C union,
+        // sharing its common header fields, so this cast is the same one
+        // every GTK application reading a key event this way makes.
+        unsafe {
+            gdk_event_get_keyval(event.cast(), &mut keyval);
+            gdk_event_get_state(event.cast(), &mut mod_state);
+        }
+        let showing = !cell.borrow().completion_candidates.is_empty();
+        if showing {
+            match keyval {
+                GDK_KEY_Up => {
+                    unsafe { move_completion_selection(cell, -1) };
+                    GTRUE
+                }
+                GDK_KEY_Down => {
+                    unsafe { move_completion_selection(cell, 1) };
+                    GTRUE
+                }
+                GDK_KEY_Tab | GDK_KEY_Return => {
+                    unsafe { accept_completion(cell) };
+                    GTRUE
+                }
+                GDK_KEY_Escape => {
+                    unsafe { close_completion(cell) };
+                    GTRUE
+                }
+                _ => {
+                    unsafe { close_completion(cell) };
+                    GFALSE
+                }
+            }
+        } else if keyval == GDK_KEY_space && (mod_state & GDK_CONTROL_MASK) != 0 {
+            unsafe { open_completion(cell) };
+            GTRUE
+        } else {
+            GFALSE
+        }
     })
 }
 
@@ -1928,7 +2288,7 @@ mod tests {
 
     use evo_sys::{
         gtk_container_get_border_width, gtk_label_get_text, gtk_source_buffer_get_language,
-        gtk_tree_view_get_column, gtk_window_get_default_widget,
+        gtk_text_buffer_new, gtk_tree_view_get_column, gtk_window_get_default_widget,
     };
     use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free};
     use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
@@ -2105,6 +2465,137 @@ mod tests {
         }
     }
 
+    /// A fresh buffer holding `text`, cursor at its very end. `GtkTextBuffer`
+    /// is a plain GObject, not a widget (as `tests/text_iter.rs` in evo-sys
+    /// notes of its own equivalent helper), so this needs no display: it is
+    /// the one test below that is not display-gated.
+    fn buffer_ending_with(text: &str) -> (*mut GtkTextBuffer, GtkTextIter) {
+        // SAFETY: a fresh buffer and a fresh iter, both local to the caller.
+        unsafe {
+            let buffer = gtk_text_buffer_new(ptr::null_mut());
+            let mut start = GtkTextIter::default();
+            gtk_text_buffer_get_start_iter(buffer, &mut start);
+            let c_text = cstring_lossy(text);
+            gtk_text_buffer_insert(buffer, &mut start, c_text.as_ptr(), -1);
+            let mut end = GtkTextIter::default();
+            gtk_text_buffer_get_end_iter(buffer, &mut end);
+            (buffer, end)
+        }
+    }
+
+    /// Item 171c's own core: replacing the word the cursor sits at the end
+    /// of with the chosen candidate, leaving everything before it alone.
+    #[test]
+    fn replace_word_at_swaps_only_the_trailing_word() {
+        // SAFETY: a fresh, private buffer; destroyed before returning.
+        unsafe {
+            let (buffer, end) = buffer_ending_with("if header :con");
+            replace_word_at(buffer, &end, ":contains");
+            let mut start = GtkTextIter::default();
+            let mut new_end = GtkTextIter::default();
+            gtk_text_buffer_get_start_iter(buffer, &mut start);
+            gtk_text_buffer_get_end_iter(buffer, &mut new_end);
+            let result = take_string(gtk_text_buffer_get_text(buffer, &start, &new_end, GFALSE))
+                .unwrap_or_default();
+            assert_eq!(result, "if header :contains");
+            g_object_unref(buffer.cast());
+        }
+    }
+
+    /// A word right after whitespace, with nothing to replace yet: the
+    /// candidate is inserted, nothing before the cursor is touched.
+    #[test]
+    fn replace_word_at_inserts_after_whitespace_with_no_partial_word() {
+        // SAFETY: as above.
+        unsafe {
+            let (buffer, end) = buffer_ending_with("if ");
+            replace_word_at(buffer, &end, "header");
+            let mut start = GtkTextIter::default();
+            let mut new_end = GtkTextIter::default();
+            gtk_text_buffer_get_start_iter(buffer, &mut start);
+            gtk_text_buffer_get_end_iter(buffer, &mut new_end);
+            let result = take_string(gtk_text_buffer_get_text(buffer, &start, &new_end, GFALSE))
+                .unwrap_or_default();
+            assert_eq!(result, "if header");
+            g_object_unref(buffer.cast());
+        }
+    }
+
+    /// Item 171c: Ctrl+Space opens a matching list, Up/Down moves the
+    /// selection, and accepting a candidate replaces the word under the
+    /// cursor and closes the popup again. Builds a live page, unlike the
+    /// two tests above, because the popup's own widgets live on the
+    /// page's `UiState`, not on a bare buffer. "e" matches three base
+    /// Sieve candidates ("elsif", "else", "exists"), RFC 5228 syntax a
+    /// freshly built page's default (extension-less) form already
+    /// offers, so Up/Down has more than one row to move between. Needs a
+    /// display; skips without one.
+    #[test]
+    fn completion_opens_navigates_and_accepts_a_candidate() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; the window sinks the floating
+        // page and owns its only reference, as the account editor does.
+        // Both are destroyed before returning.
+        unsafe {
+            let window = gtk_window_new(0);
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            gtk_container_add(window.cast(), page.cast());
+            gtk_widget_show_all(window);
+
+            let cell = state(page.cast()).expect("a freshly built page has state");
+            let buffer = cell.borrow().buffer;
+            let text = cstring_lossy("e");
+            let mut start = GtkTextIter::default();
+            gtk_text_buffer_get_start_iter(buffer, &mut start);
+            gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+            let mut end = GtkTextIter::default();
+            gtk_text_buffer_get_end_iter(buffer, &mut end);
+            gtk_text_buffer_place_cursor(buffer, &end);
+
+            open_completion(cell);
+            {
+                let ui = cell.borrow();
+                let texts: Vec<&str> = ui.completion_candidates.iter().map(|c| c.text).collect();
+                assert_eq!(
+                    texts,
+                    vec!["elsif", "else", "exists"],
+                    "\"e\" should match these three base candidates, in table order"
+                );
+            }
+
+            move_completion_selection(cell, 1);
+            assert_eq!(
+                cell.borrow().completion_selected,
+                1,
+                "Down did not move the selection to the second candidate"
+            );
+            move_completion_selection(cell, -1);
+            assert_eq!(
+                cell.borrow().completion_selected,
+                0,
+                "Up did not move the selection back to the first candidate"
+            );
+
+            accept_completion(cell);
+            assert!(
+                cell.borrow().completion_candidates.is_empty(),
+                "accepting a candidate did not close the popup"
+            );
+            let result = get_text(buffer.cast());
+            assert_eq!(
+                result, "elsif",
+                "accept did not replace the partial word with the selected candidate"
+            );
+
+            gtk_widget_destroy(window);
+        }
+    }
+
     /// GNOME HIG: 12px between a dialog's content and its edges. Needs a
     /// display; skips without one.
     #[test]
@@ -2168,6 +2659,10 @@ mod tests {
             check_generation: 0,
             error_tag: ptr::null_mut(),
             validate_timeout: 0,
+            completion_window: ptr::null_mut(),
+            completion_list: ptr::null_mut(),
+            completion_candidates: Vec::new(),
+            completion_selected: 0,
         }
     }
 

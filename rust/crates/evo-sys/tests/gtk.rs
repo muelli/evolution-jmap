@@ -244,9 +244,45 @@ fn the_widget_handles_carry_no_layout() {
         // `gtk_text_buffer_get_tag_table` return.
         ("GtkTextTag", size_of::<GtkTextTag>()),
         ("GtkTextTagTable", size_of::<GtkTextTagTable>()),
+        // Item 171c's completion popup. This crate never reads a field of
+        // `GtkTextMark`, only hands the pointer `gtk_text_buffer_get_
+        // insert` returns straight to `gtk_text_buffer_get_iter_at_mark`.
+        // `GdkWindow`, `GdkEvent` and `GdkEventKey` are not in this list:
+        // `Gdk.*` is not blocked, so bindgen already gives them real,
+        // header-derived layouts (confirmed below for `GdkRectangle`, the
+        // one such type this crate reads fields of).
+        ("GtkTextMark", size_of::<GtkTextMark>()),
     ] {
         assert_eq!(size, 0, "{name} is no longer opaque");
     }
+}
+
+/// `GdkRectangle` (item 171c) is not in `BLOCKED_GTK_TYPES` (only `Gtk.*`
+/// is), so bindgen generates it from the installed `gdk/gdktypes.h`
+/// directly, unlike the hand-written `GtkTextIter`. This test only
+/// confirms this crate reads the four fields `gtk_text_view_get_iter_
+/// location` writes under the names this crate's own callers use. This
+/// file constructs no widget, so it cannot drive that call itself to
+/// confirm the layout dynamically, the way `tests/text_iter.rs` does for
+/// `GtkTextIter` against a bare `GtkTextBuffer`; `jmap_ui::filters::page`'s
+/// own test suite does that, gated on a display.
+#[test]
+fn gdk_rectangle_has_four_int_fields_in_order() {
+    assert_eq!(
+        size_of::<GdkRectangle>(),
+        16,
+        "GdkRectangle grew or shrank: did a field get added, removed, or widened?"
+    );
+    let rect = GdkRectangle {
+        x: 1,
+        y: 2,
+        width: 3,
+        height: 4,
+    };
+    assert_eq!(rect.x, 1);
+    assert_eq!(rect.y, 2);
+    assert_eq!(rect.width, 3);
+    assert_eq!(rect.height, 4);
 }
 
 /// Every call the page needs, named once. The important part of this test
@@ -438,6 +474,54 @@ fn every_widget_entry_point_this_crate_offers_resolves() {
         ),
         ("gtk_container_remove", gtk_container_remove as *const ()),
         ("gtk_widget_get_parent", gtk_widget_get_parent as *const ()),
+        // Item 171c's completion popup.
+        (
+            "gtk_text_buffer_get_insert",
+            gtk_text_buffer_get_insert as *const (),
+        ),
+        (
+            "gtk_text_buffer_get_iter_at_mark",
+            gtk_text_buffer_get_iter_at_mark as *const (),
+        ),
+        (
+            "gtk_text_buffer_get_text",
+            gtk_text_buffer_get_text as *const (),
+        ),
+        (
+            "gtk_text_iter_backward_chars",
+            gtk_text_iter_backward_chars as *const (),
+        ),
+        (
+            "gtk_text_buffer_delete",
+            gtk_text_buffer_delete as *const (),
+        ),
+        (
+            "gtk_text_buffer_insert",
+            gtk_text_buffer_insert as *const (),
+        ),
+        (
+            "gtk_text_buffer_place_cursor",
+            gtk_text_buffer_place_cursor as *const (),
+        ),
+        (
+            "gtk_text_view_get_iter_location",
+            gtk_text_view_get_iter_location as *const (),
+        ),
+        (
+            "gtk_text_view_buffer_to_window_coords",
+            gtk_text_view_buffer_to_window_coords as *const (),
+        ),
+        ("gtk_widget_get_window", gtk_widget_get_window as *const ()),
+        ("gdk_window_get_origin", gdk_window_get_origin as *const ()),
+        ("gtk_window_new", gtk_window_new as *const ()),
+        ("gtk_window_move", gtk_window_move as *const ()),
+        (
+            "gtk_window_set_accept_focus",
+            gtk_window_set_accept_focus as *const (),
+        ),
+        ("gtk_widget_hide", gtk_widget_hide as *const ()),
+        ("gdk_event_get_keyval", gdk_event_get_keyval as *const ()),
+        ("gdk_event_get_state", gdk_event_get_state as *const ()),
     ];
     for (name, address) in entry_points {
         assert!(!address.is_null(), "{name} resolved to NULL");
