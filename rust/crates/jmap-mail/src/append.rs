@@ -245,16 +245,15 @@ unsafe fn queue_append(
 
     // SAFETY: `summary` is live, and `row` is the row this call just built
     // for it. `force_keep_uid` is TRUE: the uid is this row's own synthetic
-    // one, not one the summary's own counter would hand out.
+    // one, not one the summary's own counter would hand out. `add` marks the
+    // row `CAMEL_MESSAGE_FOLDER_FLAGGED`, which must stay set: it is what
+    // tells Camel's own generic reconnect flush, on top of this crate's own
+    // `crate::synchronize` walk, that this folder has unsent work at all.
+    // `crate::synchronize::push_row` already checks `pending_append` first
+    // and skips such a row outright, so the keyword-diff walk never reads
+    // this uid as a server id.
     unsafe {
         camel_folder_summary_add(summary, row.as_ptr(), GTRUE);
-        // `add` marks every new row as data the server has not seen
-        // (`CAMEL_MESSAGE_FOLDER_FLAGGED`). That mark feeds
-        // `crate::synchronize`'s keyword-diff walk, which would read this
-        // row's synthetic uid as a server id and send it a bogus `Email/set`.
-        // Clear it: the reconnect walk for a pending append is a separate,
-        // later mechanism, not that one.
-        clear_pending_write(row.as_ptr());
     }
 
     let mut changes = Changes::new();
