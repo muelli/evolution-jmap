@@ -892,3 +892,281 @@ fn response_method_envelopes_and_builders_smoke() {
         serde_json::from_slice(&req_err_bytes).expect("RequestError parses");
     assert_eq!(req_err_parsed, req_err);
 }
+
+#[test]
+fn changes_domain_filters_and_push_smoke() {
+    use jmap_proto::calendars::{CalendarEventNotificationQueryFilter, CalendarEventQueryFilter};
+    use jmap_proto::contacts::ContactCardQueryFilter;
+    use jmap_proto::date::{civil_from_days, days_from_civil, days_in_month, is_leap_year};
+    use jmap_proto::filenode::FileNodeQueryFilter;
+    use jmap_proto::id::{Id, split_shared_identity};
+    use jmap_proto::mail::{EmailQueryFilter, EmailSubmissionQueryFilter};
+    use jmap_proto::metadata::{MetadataFilterCondition, MetadataTextFilter};
+    use jmap_proto::methods::{Comparator, Filter, QueryChangesRequest};
+    use jmap_proto::principals::{PrincipalQueryFilter, ShareNotificationQueryFilter};
+    use jmap_proto::push::{PushSubscription, PushSubscriptionKeys, PushVerification, StateChange};
+    use jmap_proto::quota::QuotaQueryFilter;
+    use jmap_proto::sieve::SieveScriptQueryFilter;
+    use jmap_proto::state::{State, UtcDate};
+    use jmap_proto::tasks::TaskQueryFilter;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    let email_f = EmailQueryFilter::in_mailbox("mb1")
+        .in_mailbox_other_than(["mb2"])
+        .min_size(100)
+        .max_size(10_000)
+        .has_keyword("$seen")
+        .not_keyword("$draft")
+        .all_in_thread_have_keyword("$flagged")
+        .some_in_thread_have_keyword("$answered")
+        .none_in_thread_have_keyword("$junk")
+        .has_attachment(true)
+        .text("hello")
+        .body("world")
+        .from("alice@example.com")
+        .to("bob@example.com")
+        .cc("carol@example.com")
+        .bcc("dave@example.com")
+        .subject("Greetings")
+        .header("X-Custom", "val")
+        .time_range(
+            Some(UtcDate::new("2026-01-01T00:00:00Z")),
+            Some(UtcDate::new("2026-12-31T23:59:59Z")),
+        )
+        .after("2026-01-01T00:00:00Z")
+        .before("2026-12-31T23:59:59Z")
+        .with_has_smime(true)
+        .with_has_verified_smime(false);
+    let email_qcr = QueryChangesRequest::new("acc1", "qs1")
+        .filter(Filter::and([
+            Filter::condition(email_f.clone()),
+            Filter::not([Filter::from(email_f)]),
+        ]))
+        .sort([Comparator::descending("receivedAt").with_collation("i;ascii-casemap")])
+        .max_changes(50)
+        .up_to_id("m99")
+        .calculate_total()
+        .collapse_threads();
+    let email_qcr_bytes = serde_json::to_vec(&email_qcr).expect("email qcr serializes");
+    let email_qcr_parsed: QueryChangesRequest<Filter<EmailQueryFilter>> =
+        serde_json::from_slice(&email_qcr_bytes).expect("email qcr parses");
+    assert_eq!(email_qcr_parsed, email_qcr);
+
+    let sub_f = EmailSubmissionQueryFilter::new()
+        .with_identity_ids(["id1"])
+        .with_email_ids(["m1"])
+        .with_thread_ids(["t1"])
+        .with_undo_status("pending")
+        .time_range(
+            Some(UtcDate::new("2026-01-01T00:00:00Z")),
+            Some(UtcDate::new("2026-02-01T00:00:00Z")),
+        )
+        .after("2026-01-01T00:00:00Z")
+        .before("2026-02-01T00:00:00Z");
+    let sub_qcr = QueryChangesRequest::new("acc1", "qs2").filter(Filter::condition(sub_f));
+    let sub_qcr_bytes = serde_json::to_vec(&sub_qcr).expect("sub qcr serializes");
+    let sub_qcr_parsed: QueryChangesRequest<Filter<EmailSubmissionQueryFilter>> =
+        serde_json::from_slice(&sub_qcr_bytes).expect("sub qcr parses");
+    assert_eq!(sub_qcr_parsed, sub_qcr);
+
+    let card_f = ContactCardQueryFilter::in_address_book("ab1")
+        .uid("u1")
+        .has_member("m1")
+        .created_before("2026-06-01T00:00:00Z")
+        .created_after("2026-01-01T00:00:00Z")
+        .updated_before("2026-07-01T00:00:00Z")
+        .updated_after("2026-02-01T00:00:00Z")
+        .text("Alice")
+        .name("Alice Smith")
+        .name_given("Alice")
+        .name_surname("Smith")
+        .name_surname2("Jones")
+        .nickname("Ally")
+        .organization("Example Corp")
+        .email("alice@example.com")
+        .phone("+123456789")
+        .online_service("matrix")
+        .address("Main St")
+        .note("vip")
+        .kind("individual");
+    let card_qcr = QueryChangesRequest::new("acc1", "qs3").filter(Filter::condition(card_f));
+    let card_qcr_bytes = serde_json::to_vec(&card_qcr).expect("card qcr serializes");
+    let card_qcr_parsed: QueryChangesRequest<Filter<ContactCardQueryFilter>> =
+        serde_json::from_slice(&card_qcr_bytes).expect("card qcr parses");
+    assert_eq!(card_qcr_parsed, card_qcr);
+
+    let cal_f = CalendarEventQueryFilter::in_calendar("cal1")
+        .with_in_calendar_list(["cal1", "cal2"])
+        .with_time_range("2026-01-01T00:00:00Z", "2026-12-31T23:59:59Z")
+        .after("2026-01-01T00:00:00Z")
+        .before("2026-12-31T23:59:59Z")
+        .text("meeting")
+        .title("Sync")
+        .description("Weekly sync")
+        .location("Room 1")
+        .uid("ev-1")
+        .excluded_from_calendar("cal3")
+        .with_excluded_from_calendar("cal3")
+        .time_zone("Europe/Berlin")
+        .with_time_zone("Europe/Berlin")
+        .participation_status("accepted");
+    let cal_qcr = QueryChangesRequest::new("acc1", "qs4").filter(Filter::condition(cal_f));
+    let cal_qcr_bytes = serde_json::to_vec(&cal_qcr).expect("cal qcr serializes");
+    let cal_qcr_parsed: QueryChangesRequest<Filter<CalendarEventQueryFilter>> =
+        serde_json::from_slice(&cal_qcr_bytes).expect("cal qcr parses");
+    assert_eq!(cal_qcr_parsed, cal_qcr);
+
+    let cen_f = CalendarEventNotificationQueryFilter::new()
+        .with_after("2026-01-01T00:00:00Z")
+        .with_before("2026-02-01T00:00:00Z")
+        .with_types(["created", "updated"]);
+    let cen_qcr = QueryChangesRequest::new("acc1", "qs5").filter(Filter::condition(cen_f));
+    let cen_qcr_bytes = serde_json::to_vec(&cen_qcr).expect("cen qcr serializes");
+    let cen_qcr_parsed: QueryChangesRequest<Filter<CalendarEventNotificationQueryFilter>> =
+        serde_json::from_slice(&cen_qcr_bytes).expect("cen qcr parses");
+    assert_eq!(cen_qcr_parsed, cen_qcr);
+
+    let task_f = TaskQueryFilter::new()
+        .with_task_list_id("tl1")
+        .with_text("todo")
+        .with_status("needs-action")
+        .with_due_before("2026-05-01T00:00:00")
+        .with_has_recurrence(false)
+        .with_extra(BTreeMap::new());
+    let task_qcr = QueryChangesRequest::new("acc1", "qs6").filter(Filter::condition(task_f));
+    let task_qcr_bytes = serde_json::to_vec(&task_qcr).expect("task qcr serializes");
+    let task_qcr_parsed: QueryChangesRequest<Filter<TaskQueryFilter>> =
+        serde_json::from_slice(&task_qcr_bytes).expect("task qcr parses");
+    assert_eq!(task_qcr_parsed, task_qcr);
+
+    let pr_f = PrincipalQueryFilter::email("alice@example.com")
+        .account_ids(["acc1"])
+        .name("Alice")
+        .text("Alice")
+        .principal_type("individual")
+        .time_zone("UTC")
+        .with_extra(BTreeMap::new());
+    let pr_qcr = QueryChangesRequest::new("acc1", "qs7").filter(Filter::condition(pr_f));
+    let pr_qcr_bytes = serde_json::to_vec(&pr_qcr).expect("pr qcr serializes");
+    let pr_qcr_parsed: QueryChangesRequest<Filter<PrincipalQueryFilter>> =
+        serde_json::from_slice(&pr_qcr_bytes).expect("pr qcr parses");
+    assert_eq!(pr_qcr_parsed, pr_qcr);
+
+    let sn_f = ShareNotificationQueryFilter::new()
+        .with_after("2026-01-01T00:00:00Z")
+        .with_before("2026-02-01T00:00:00Z")
+        .with_object_type("Calendar")
+        .with_object_account_id("acc1")
+        .with_extra(BTreeMap::new());
+    let sn_qcr = QueryChangesRequest::new("acc1", "qs8").filter(Filter::condition(sn_f));
+    let sn_qcr_bytes = serde_json::to_vec(&sn_qcr).expect("sn qcr serializes");
+    let sn_qcr_parsed: QueryChangesRequest<Filter<ShareNotificationQueryFilter>> =
+        serde_json::from_slice(&sn_qcr_bytes).expect("sn qcr parses");
+    assert_eq!(sn_qcr_parsed, sn_qcr);
+
+    let sieve_f = SieveScriptQueryFilter::new()
+        .with_name("default")
+        .with_is_active(true)
+        .with_extra(BTreeMap::new());
+    let sieve_qcr = QueryChangesRequest::new("acc1", "qs9").filter(Filter::condition(sieve_f));
+    let sieve_qcr_bytes = serde_json::to_vec(&sieve_qcr).expect("sieve qcr serializes");
+    let sieve_qcr_parsed: QueryChangesRequest<Filter<SieveScriptQueryFilter>> =
+        serde_json::from_slice(&sieve_qcr_bytes).expect("sieve qcr parses");
+    assert_eq!(sieve_qcr_parsed, sieve_qcr);
+
+    let quota_f = QuotaQueryFilter::new()
+        .with_name("Mail")
+        .with_resource_type("octets")
+        .with_scope("account")
+        .with_type("Email")
+        .with_extra(BTreeMap::new());
+    let quota_qcr = QueryChangesRequest::new("acc1", "qs10").filter(Filter::condition(quota_f));
+    let quota_qcr_bytes = serde_json::to_vec(&quota_qcr).expect("quota qcr serializes");
+    let quota_qcr_parsed: QueryChangesRequest<Filter<QuotaQueryFilter>> =
+        serde_json::from_slice(&quota_qcr_bytes).expect("quota qcr parses");
+    assert_eq!(quota_qcr_parsed, quota_qcr);
+
+    let fn_f = FileNodeQueryFilter::new()
+        .with_parent_id("root")
+        .with_descendant_id("sub")
+        .with_has_parent_id(true)
+        .with_name("doc.txt")
+        .with_node_type("file")
+        .with_role("documents")
+        .with_is_executable(false)
+        .with_has_blob(true)
+        .with_extra(BTreeMap::new());
+    let fn_qcr = QueryChangesRequest::new("acc1", "qs11").filter(Filter::condition(fn_f));
+    let fn_qcr_bytes = serde_json::to_vec(&fn_qcr).expect("fn qcr serializes");
+    let fn_qcr_parsed: QueryChangesRequest<Filter<FileNodeQueryFilter>> =
+        serde_json::from_slice(&fn_qcr_bytes).expect("fn qcr parses");
+    assert_eq!(fn_qcr_parsed, fn_qcr);
+
+    let _ = MetadataTextFilter::new("/shared/comment", "hello").with_extra(BTreeMap::new());
+    let meta_f = MetadataFilterCondition::new()
+        .with_metadata_exists("/shared/vendor")
+        .with_metadata_text_contains("/shared/comment", "foo")
+        .with_metadata_text_equals("/shared/tag", "bar")
+        .with_private_metadata_exists("/private/flag")
+        .with_private_metadata_text_contains("/private/note", "secret")
+        .with_private_metadata_text_equals("/private/key", "val")
+        .with_extra(BTreeMap::new());
+    let meta_qcr = QueryChangesRequest::new("acc1", "qs12").filter(Filter::condition(meta_f));
+    let meta_qcr_bytes = serde_json::to_vec(&meta_qcr).expect("meta qcr serializes");
+    let meta_qcr_parsed: QueryChangesRequest<Filter<MetadataFilterCondition>> =
+        serde_json::from_slice(&meta_qcr_bytes).expect("meta qcr parses");
+    assert_eq!(meta_qcr_parsed, meta_qcr);
+
+    let sc = StateChange::new(BTreeMap::new())
+        .with_changed(BTreeMap::new())
+        .with_account_change("acc1", "Email", "s10")
+        .with_extra(BTreeMap::from([("vendor".into(), json!(true))]));
+    let sc_bytes = serde_json::to_vec(&sc).expect("StateChange serializes");
+    let sc_parsed: StateChange = serde_json::from_slice(&sc_bytes).expect("StateChange parses");
+    assert_eq!(sc_parsed, sc);
+
+    let _ = PushSubscriptionKeys::new("p256", "auth")
+        .with_p256dh("p256_2")
+        .with_auth("auth_2");
+    let ps = PushSubscription::new("dev1", "https://push.example.com")
+        .with_id("ps1")
+        .with_device_client_id("dev1")
+        .with_url("https://push.example.com")
+        .with_keys("p256", "auth")
+        .with_expires("2026-12-31T23:59:59Z")
+        .with_types(["Email", "CalendarEvent"])
+        .with_verification_code("code123")
+        .with_extra(BTreeMap::new());
+    let ps_bytes = serde_json::to_vec(&ps).expect("PushSubscription serializes");
+    let ps_parsed: PushSubscription =
+        serde_json::from_slice(&ps_bytes).expect("PushSubscription parses");
+    assert_eq!(ps_parsed, ps);
+
+    let pv = PushVerification::new("ps1", "code123")
+        .with_push_subscription_id("ps1")
+        .with_verification_code("code123")
+        .with_extra(BTreeMap::new());
+    let pv_bytes = serde_json::to_vec(&pv).expect("PushVerification serializes");
+    let pv_parsed: PushVerification =
+        serde_json::from_slice(&pv_bytes).expect("PushVerification parses");
+    assert_eq!(pv_parsed, pv);
+
+    let id = Id::new("acc1/col1");
+    assert!(!id.is_empty());
+    assert_eq!(id.as_str(), "acc1/col1");
+    assert_eq!(split_shared_identity(id.as_ref()), Some(("acc1", "col1")));
+
+    let st = State::new("st1");
+    assert_eq!(st.as_str(), "st1");
+    assert_eq!(st.to_string(), "st1");
+
+    let dt = UtcDate::new("2026-11-09T00:00:00Z");
+    assert_eq!(dt.as_str(), "2026-11-09T00:00:00Z");
+    assert_eq!(dt.to_string(), "2026-11-09T00:00:00Z");
+
+    let days = days_from_civil(2024, 2, 29);
+    assert_eq!(civil_from_days(days), Some((2024, 2, 29)));
+    assert!(is_leap_year(2024));
+    assert_eq!(days_in_month(2024, 2), 29);
+}
