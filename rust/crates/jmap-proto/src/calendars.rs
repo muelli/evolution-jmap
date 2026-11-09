@@ -288,6 +288,9 @@ pub struct CalendarSetRequest {
     /// Whether destroying a calendar also destroys its events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_destroy_remove_contents: Option<bool>,
+    /// Pre-standardization variant accepted by Cyrus IMAP (earlier draft parameter name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_destroy_remove_events: Option<bool>,
     /// Id of the calendar to mark default once the other changes succeed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_success_set_is_default: Option<Id>,
@@ -303,8 +306,21 @@ impl CalendarSetRequest {
             update: None,
             destroy: None,
             on_destroy_remove_contents: None,
+            on_destroy_remove_events: None,
             on_success_set_is_default: None,
         }
+    }
+
+    /// Set whether destroying a calendar also destroys its events.
+    pub fn with_on_destroy_remove_contents(mut self, on_destroy: bool) -> Self {
+        self.on_destroy_remove_contents = Some(on_destroy);
+        self
+    }
+
+    /// Set the Cyrus pre-standardization parameter `onDestroyRemoveEvents`.
+    pub fn with_on_destroy_remove_events(mut self, on_destroy: bool) -> Self {
+        self.on_destroy_remove_events = Some(on_destroy);
+        self
     }
 
     /// Set the calendar to mark default once the request succeeds.

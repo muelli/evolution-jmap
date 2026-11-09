@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use jmap_proto::Id;
-use jmap_proto::calendars::CalendarEventQueryFilter;
+use jmap_proto::calendars::{CalendarEventQueryFilter, CalendarSetRequest};
 use serde_json::json;
 
 #[test]
@@ -55,4 +55,27 @@ fn calendar_event_query_filter_builder_methods() {
         filter.excluded_from_calendar.as_ref().map(Id::as_str),
         Some("cal-c")
     );
+}
+
+#[test]
+fn calendar_set_request_models_on_destroy_remove_variants() {
+    let req = CalendarSetRequest::new("acc1")
+        .with_on_destroy_remove_contents(true)
+        .with_on_destroy_remove_events(true);
+
+    assert_eq!(req.on_destroy_remove_contents, Some(true));
+    assert_eq!(req.on_destroy_remove_events, Some(true));
+
+    let val = serde_json::to_value(&req).unwrap();
+    assert_eq!(val["onDestroyRemoveContents"], true);
+    assert_eq!(val["onDestroyRemoveEvents"], true);
+
+    let parsed: CalendarSetRequest = serde_json::from_value(json!({
+        "accountId": "acc2",
+        "onDestroyRemoveContents": false,
+        "onDestroyRemoveEvents": true
+    }))
+    .unwrap();
+    assert_eq!(parsed.on_destroy_remove_contents, Some(false));
+    assert_eq!(parsed.on_destroy_remove_events, Some(true));
 }

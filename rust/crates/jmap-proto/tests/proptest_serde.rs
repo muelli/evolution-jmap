@@ -1060,6 +1060,7 @@ fn arb_calendar_set_request() -> impl Strategy<Value = CalendarSetRequest> {
         )),
         prop::option::of(prop::collection::vec(arb_id(), 0..2)),
         any::<Option<bool>>(),
+        any::<Option<bool>>(),
         prop::option::of(arb_id()),
     )
         .prop_map(
@@ -1070,6 +1071,7 @@ fn arb_calendar_set_request() -> impl Strategy<Value = CalendarSetRequest> {
                 update,
                 destroy,
                 on_destroy_remove_contents,
+                on_destroy_remove_events,
                 on_success_set_is_default,
             )| {
                 let mut request = CalendarSetRequest::new(account_id);
@@ -1078,6 +1080,7 @@ fn arb_calendar_set_request() -> impl Strategy<Value = CalendarSetRequest> {
                 request.update = update;
                 request.destroy = destroy;
                 request.on_destroy_remove_contents = on_destroy_remove_contents;
+                request.on_destroy_remove_events = on_destroy_remove_events;
                 request.on_success_set_is_default = on_success_set_is_default;
                 request
             },
