@@ -269,11 +269,11 @@ impl FolderTree {
     ///
     /// A merged folder keeps the mailbox id and role its own account's
     /// listing gave it, so [`FolderTree::by_id`] still finds it by that id.
-    /// But [`FolderTree::role`] and [`FolderTree::find`] then search the
-    /// whole merged tree, including shared accounts: a caller that wires
-    /// this into one `CamelStore` (ROADMAP item 163's next step) must ask
-    /// `self.roots()` directly, before merging, for the account's own
-    /// inbox, trash or junk role, never this merged tree's `role`.
+    /// [`FolderTree::find`] then searches the whole merged tree, including
+    /// shared accounts, which is correct: a user clicks a path under
+    /// `Shared/<owner>` the same as any other. [`FolderTree::role`] excludes
+    /// a folder this function stamped with `account_id`, so it still answers
+    /// only for the store's own account, not a shared one.
     ///
     /// An account whose [`SharedMailAccount::read_only`] is true gets
     /// `may_add_items: Some(false)` on every one of its folders, even one
@@ -454,8 +454,15 @@ impl FolderTree {
     /// It reads the role that `claim_roles` assigned, not the `role` property
     /// of the mailbox. `claim_roles` gives a role to the first claimant only,
     /// so this result agrees with the folder types of the listing.
+    ///
+    /// Only the store's own account answers: a folder [`FolderTree::merge_
+    /// shared`] stamped with `account_id` never does, even when the store's
+    /// own account has no mailbox with that role. Reading a shared account's
+    /// role here would file or expunge the user's own mail into a mailbox
+    /// another principal owns (SECURITY-AUDIT Area 13, S13-3).
     pub fn role(&self, role: FolderRole) -> Option<&FolderInfo> {
-        self.iter().find(|folder| folder.role == Some(role))
+        self.iter()
+            .find(|folder| folder.role == Some(role) && folder.account_id.is_none())
     }
 
     /// Sets the subscription of a mailbox. Returns `false` if the tree does not
@@ -1239,5 +1246,36 @@ mod tests {
                 .unwrap();
             format!("{}/Inbox", owner_a.path)
         });
+    }
+
+    /// `role` must never answer with a shared account's folder, even when
+    /// the store's own account has no mailbox with that role: a caller that
+    /// reads it for the account's own Trash or Junk (SECURITY-AUDIT Area 13,
+    /// S13-3) would file or expunge the user's own mail into a mailbox
+    /// another principal owns.
+    #[test]
+    fn role_never_answers_from_a_shared_account() {
+        let own = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 0, 0)]).unwrap();
+        let shared = FolderTree::from_mailboxes(&[with_role(
+            mailbox("s1", "Papierkorb", None, 0, 0),
+            role::TRASH,
+        )])
+        .unwrap();
+
+        let tree = own.merge_shared(&[(
+            SharedMailAccount {
+                id: Id::new("bob"),
+                name: "bob@example.com".to_owned(),
+                read_only: false,
+            },
+            shared,
+        )]);
+
+        assert!(tree.role(FolderRole::Trash).is_none());
+    }
+
+    fn with_role(mut mailbox: Mailbox, role: &str) -> Mailbox {
+        mailbox.role = Some(role.to_owned());
+        mailbox
     }
 }
