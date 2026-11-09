@@ -357,7 +357,9 @@ pub unsafe fn row_keywords(info: *mut CamelMessageInfo) -> Keywords {
         let tags = (0..camel_named_flags_get_length(user_flags))
             .filter_map(|index| {
                 let name = camel_named_flags_get(user_flags, index);
-                (!name.is_null()).then(|| CStr::from_ptr(name).to_string_lossy().into_owned())
+                (!name.is_null()).then(|| {
+                    decode_camel_label(&CStr::from_ptr(name).to_string_lossy()).into_owned()
+                })
             })
             .collect::<Vec<String>>();
         camel_named_flags_free(user_flags);
@@ -1190,7 +1192,7 @@ unsafe fn set_user_flags(info: *mut CamelMessageInfo, tags: &[String]) -> glib_s
     unsafe {
         let flags = camel_named_flags_new();
         for tag in tags {
-            camel_named_flags_insert(flags, c_string(tag).as_ptr());
+            camel_named_flags_insert(flags, c_string(&encode_camel_label(tag)).as_ptr());
         }
         camel_message_info_take_user_flags(info, flags)
     }
@@ -1308,6 +1310,66 @@ fn isolate_if_bidi(text: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(text)
     }
+}
+
+/// A keyword, with a space, `%`, NUL, CR or LF percent-encoded so it survives
+/// Camel's own `labels` summary database column unchanged.
+///
+/// `message_info_save`/`message_info_load` (`camel-message-info.c`) join the
+/// column's names with one literal space and split back on the same
+/// character, so an unescaped space in a keyword reads back as two keywords.
+/// Escaping `%` first keeps the encoding reversible; escaping NUL, CR and LF
+/// here also keeps them out of the string before `c_string` would otherwise
+/// replace them with U+FFFD, a second, unrelated loss the same column had.
+/// [`decode_camel_label`] reverses this.
+fn encode_camel_label(tag: &str) -> Cow<'_, str> {
+    if !tag.contains([' ', '%', '\0', '\r', '\n']) {
+        return Cow::Borrowed(tag);
+    }
+    let mut encoded = String::with_capacity(tag.len());
+    for c in tag.chars() {
+        match c {
+            ' ' => encoded.push_str("%20"),
+            '%' => encoded.push_str("%25"),
+            '\0' => encoded.push_str("%00"),
+            '\r' => encoded.push_str("%0D"),
+            '\n' => encoded.push_str("%0A"),
+            _ => encoded.push(c),
+        }
+    }
+    Cow::Owned(encoded)
+}
+
+/// Reverses [`encode_camel_label`].
+///
+/// A `%` not followed by two hex digits is foreign, not this crate's own
+/// encoding (an older row, or a label another tool wrote); it is kept
+/// verbatim rather than treated as a decode error, so a row this function
+/// does not fully recognise still comes back whole.
+fn decode_camel_label(tag: &str) -> Cow<'_, str> {
+    if !tag.contains('%') {
+        return Cow::Borrowed(tag);
+    }
+    let mut decoded = String::with_capacity(tag.len());
+    let mut chars = tag.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            decoded.push(c);
+            continue;
+        }
+        let rest = chars.as_str();
+        let hex = rest
+            .get(..2)
+            .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()));
+        match hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+            Some(byte) => {
+                decoded.push(byte as char);
+                chars = rest[2..].chars();
+            }
+            None => decoded.push('%'),
+        }
+    }
+    Cow::Owned(decoded)
 }
 
 /// An addr-spec, with any `<`, `>` or `,` replaced.

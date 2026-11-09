@@ -504,6 +504,11 @@ fn a_message_that_threads_on_nothing_stores_nothing() {
 /// at the NUL: a subject line would end where the sender hid a NUL. So this
 /// code replaces the NUL rather than passing it through, the same way it
 /// handles folder names.
+///
+/// A keyword is different: `row_keywords` reads it back as the "after" state
+/// of a flag change, compared against the server's own, unreplaced spelling.
+/// A NUL percent-encoded instead keeps that comparison exact, rather than
+/// comparing a replaced U+FFFD against the server's NUL forever.
 #[test]
 fn a_value_with_a_nul_in_it_does_not_truncate_the_row() {
     let mut message = row("Em0011");
@@ -518,8 +523,12 @@ fn a_value_with_a_nul_in_it_does_not_truncate_the_row() {
             Some("Invoice\u{fffd} attached")
         );
         assert_ne!(
-            camel_message_info_get_user_flag(info, c"to\u{fffd}do".as_ptr()),
+            camel_message_info_get_user_flag(info, c"to%00do".as_ptr()),
             GFALSE
+        );
+        assert_eq!(
+            row_keywords(info),
+            Keywords::new(&message.flags, &message.tags)
         );
         g_object_unref(info.cast());
     }
@@ -1084,6 +1093,52 @@ fn the_keywords_a_row_remembers_survive_a_trip_through_the_summary_database() {
         assert_eq!(
             remembered(restored),
             Keywords::new(&message.flags, &message.tags)
+        );
+        free_saved_strings(&mut record);
+        g_string_free(bdata, GTRUE);
+        g_object_unref(restored.cast());
+        g_object_unref(info.cast());
+    }
+}
+
+/// Camel's own `labels` summary database column, unlike the one
+/// `remembered`/`server_keywords` reads, joins names with one literal space
+/// and splits them back the same way
+/// (`message_info_save`/`message_info_load` in `camel-message-info.c`). The
+/// set `row_keywords` reconstructs the row's "after" state from is built from
+/// that column, through `camel_message_info_dup_user_flags`. A label whose
+/// name has a space must still read back as one label, not two, or an
+/// unrelated flag click recomputes a spurious diff against the server for
+/// every such label.
+#[test]
+fn a_keyword_with_a_space_does_not_split_through_camels_label_column() {
+    let mut message = row("Em0028");
+    message.tags = vec!["Read later".to_owned()];
+    let info = info_of(&message);
+    let restored = info_of(&row("Em0028"));
+
+    // SAFETY: both infos are live and owned here, as in the test above.
+    unsafe {
+        let mut record: CamelSummaryMessageRecord = std::mem::zeroed();
+        let bdata = g_string_new(ptr::null());
+        assert_ne!(
+            camel_message_info_save(info, ptr::addr_of_mut!(record), bdata),
+            GFALSE,
+            "the row would not save"
+        );
+
+        record.bdata = (*bdata).str;
+        let mut cursor = record.bdata;
+        assert_ne!(
+            camel_message_info_load(restored, ptr::addr_of!(record), ptr::addr_of_mut!(cursor)),
+            GFALSE,
+            "the row would not load"
+        );
+
+        assert_eq!(
+            row_keywords(restored),
+            Keywords::new(&message.flags, &message.tags),
+            "a space in the keyword must not split into two labels"
         );
         free_saved_strings(&mut record);
         g_string_free(bdata, GTRUE);
