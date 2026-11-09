@@ -7,17 +7,22 @@
 //! structural decision. Read that file first: it explains the parent
 //! choice, the qdata state box and the asynchronous load.
 //!
-//! This first slice (ROADMAP item 164) is read-only: it lists the
-//! delegates [`crate::delegation::account_delegates`] already finds in the
-//! account's own calendars and address books, one row each, with the
-//! calendar and address book level named in its own column. Nothing here
-//! writes: `submit` always succeeds without a server call. Granting,
-//! revoking and the `Principal/query` picker stay a later claim.
+//! This first slice (ROADMAP item 164) lists the delegates
+//! [`crate::delegation::account_delegates`] already finds in the account's
+//! own calendars and address books, one row each, with the calendar and
+//! address book level named in its own column, and a Revoke button that
+//! clears both levels for the selected row. `submit` still always succeeds
+//! without a server call: Revoke writes at once, on its own click, the same
+//! way the Server Filters page's "Check" button does. Granting and the
+//! `Principal/query` picker stay a later claim.
 //!
 //! The list is a `GtkTreeView` over a `GtkListStore` of three text columns,
 //! the same construction as [`crate::filters::page`]: rows go in through
 //! `gtk_list_store_insert_with_valuesv`, so this file never allocates a
-//! `GtkTreeIter`.
+//! `GtkTreeIter`. The selection is read back as a `GtkTreePath`, the same
+//! way [`crate::filters::page`] reads its own list's selection; the
+//! principal id of the selected row comes from a plain `Vec` kept parallel
+//! to the store's rows, not from the store itself.
 
 use std::cell::RefCell;
 use std::ffi::{CStr, c_int};
@@ -26,30 +31,34 @@ use std::sync::Arc;
 
 use eds_sys::ESource;
 use evo_sys::{
-    EMailConfigPage, EMailConfigPageInterface, GTK_ORIENTATION_VERTICAL, GtkCellRenderer,
-    GtkListStore, GtkTreeModel, GtkWidget, e_mail_config_page_get_type, gtk_box_new,
-    gtk_box_pack_start, gtk_cell_renderer_text_new, gtk_container_add, gtk_label_new,
-    gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
-    gtk_list_store_insert_with_valuesv, gtk_list_store_newv, gtk_scrolled_window_get_type,
-    gtk_tree_view_append_column, gtk_tree_view_column_add_attribute, gtk_tree_view_column_new,
-    gtk_tree_view_column_pack_start, gtk_tree_view_column_set_title, gtk_tree_view_new_with_model,
-    gtk_tree_view_set_headers_visible, gtk_widget_set_hexpand, gtk_widget_set_sensitive,
-    gtk_widget_set_vexpand, gtk_widget_show_all,
+    EMailConfigPage, EMailConfigPageInterface, GTK_ORIENTATION_VERTICAL, GTK_SELECTION_BROWSE,
+    GtkCellRenderer, GtkListStore, GtkTreeModel, GtkTreePath, GtkTreeSelection, GtkWidget,
+    e_mail_config_page_get_type, gtk_box_new, gtk_box_pack_start, gtk_button_new_with_mnemonic,
+    gtk_cell_renderer_text_new, gtk_container_add, gtk_label_new, gtk_label_set_text,
+    gtk_label_set_xalign, gtk_list_store_clear, gtk_list_store_insert_with_valuesv,
+    gtk_list_store_newv, gtk_scrolled_window_get_type, gtk_tree_path_free,
+    gtk_tree_path_get_indices_with_depth, gtk_tree_selection_get_selected_rows,
+    gtk_tree_selection_set_mode, gtk_tree_view_append_column, gtk_tree_view_column_add_attribute,
+    gtk_tree_view_column_new, gtk_tree_view_column_pack_start, gtk_tree_view_column_set_title,
+    gtk_tree_view_get_selection, gtk_tree_view_new_with_model, gtk_tree_view_set_headers_visible,
+    gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_vexpand, gtk_widget_show_all,
 };
 use gio_sys::{
     GAsyncReadyCallback, GAsyncResult, GCancellable, GTask, g_task_new, g_task_propagate_boolean,
     g_task_return_boolean,
 };
-use glib_sys::{GFALSE, GTRUE, GType, gpointer};
+use glib_sys::{GFALSE, GTRUE, GType, g_list_free_full, gpointer};
 use gobject_sys::{
     G_TYPE_STRING, GObject, GObjectClass, GTypeInstance, GValue, g_object_ref, g_object_unref,
-    g_type_from_name, g_value_init, g_value_set_string, g_value_unset,
+    g_signal_connect_data, g_type_from_name, g_value_init, g_value_set_string, g_value_unset,
 };
+use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::object_data::ObjectData;
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, TypeSizes};
 use jmap_backend_core::trampoline::{guard, log_critical};
+use jmap_proto::Id;
 
 use crate::delegates::io::{self, Loaded};
 use crate::delegation::{AddressBookDelegationLevel, CalendarDelegationLevel};
@@ -76,10 +85,14 @@ const NO_DELEGATES: &CStr = N_(c"No delegates yet.");
 const OFFLINE: &CStr = N_(c"You are offline. Delegates cannot be read until you reconnect.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const LOAD_FAILED: &CStr = N_(c"Delegates could not be read: %1$s");
+// TRANSLATORS: %1$s is the reason the mail server gave.
+const REVOKE_FAILED: &CStr = N_(c"The delegate could not be removed: %1$s");
 
 const DELEGATE_COLUMN_TITLE: &CStr = N_(c"Delegate");
 const CALENDAR_COLUMN_TITLE: &CStr = N_(c"Calendars");
 const BOOK_COLUMN_TITLE: &CStr = N_(c"Address Books");
+
+const REVOKE_LABEL: &CStr = N_(c"Re_voke");
 
 /// All page state, in a box as qdata.
 struct UiState {
@@ -87,6 +100,12 @@ struct UiState {
     status: *mut GtkWidget,
     view: *mut GtkWidget,
     store: *mut GtkListStore,
+    revoke: *mut GtkWidget,
+    /// Parallel to the store's rows: row `i`'s principal id. The selected
+    /// row's id comes from here, not from reading the store back, the same
+    /// division [`crate::filters::page`]'s own form keeps between the
+    /// widgets and the data they show.
+    delegates: Vec<Id>,
 }
 
 /// The qdata of the page, while the page is alive.
@@ -208,6 +227,47 @@ unsafe fn append_row(store: *mut GtkListStore, principal: &str, calendar: &str, 
     }
 }
 
+/// Rewrites the list from `loaded`, including the parallel `delegates`
+/// principal-id vector [`on_revoke`] reads the selected row from, and sets
+/// the status label and the list's sensitivity. Used both after the initial
+/// load and after a successful [`on_revoke`] round trip.
+///
+/// # Safety
+///
+/// `cell` must be the state of a live page, on the main thread. No borrow of
+/// it may be held.
+unsafe fn fill_list(cell: &RefCell<UiState>, loaded: &Loaded) {
+    let (status, store, view) = {
+        let ui = cell.borrow();
+        (ui.status, ui.store, ui.view)
+    };
+    // SAFETY: these are live children of the page. No borrow of `cell` is
+    // held during these calls.
+    unsafe {
+        gtk_list_store_clear(store);
+        for delegate in &loaded.delegates {
+            append_row(
+                store,
+                delegate.principal_id.as_str(),
+                &calendar_level_label(delegate.calendar_level),
+                &address_book_level_label(delegate.address_book_level),
+            );
+        }
+        let text = if loaded.delegates.is_empty() {
+            cstring_lossy(&translate(NO_DELEGATES))
+        } else {
+            cstring_lossy("")
+        };
+        gtk_label_set_text(status.cast(), text.as_ptr());
+        gtk_widget_set_sensitive(view, GTRUE);
+    }
+    cell.borrow_mut().delegates = loaded
+        .delegates
+        .iter()
+        .map(|delegate| delegate.principal_id.clone())
+        .collect();
+}
+
 /// The text a calendar delegation level shows in its column.
 fn calendar_level_label(level: CalendarDelegationLevel) -> String {
     translate(match level {
@@ -273,6 +333,13 @@ unsafe fn build_widgets(page: *mut GObject) {
         gtk_widget_set_sensitive(view, GFALSE);
         gtk_box_pack_start(content.cast(), view, GTRUE, GTRUE, 0);
 
+        let selection = gtk_tree_view_get_selection(view.cast());
+        gtk_tree_selection_set_mode(selection, GTK_SELECTION_BROWSE);
+
+        let revoke = gtk_button_new_with_mnemonic(translate_static(REVOKE_LABEL));
+        gtk_box_pack_start(content.cast(), revoke, GFALSE, GFALSE, 0);
+        gtk_widget_set_sensitive(revoke, GFALSE);
+
         gtk_widget_show_all(page.cast());
 
         STATE.set(
@@ -282,8 +349,197 @@ unsafe fn build_widgets(page: *mut GObject) {
                 status,
                 view,
                 store,
+                revoke,
+                delegates: Vec::new(),
             }),
         );
+
+        g_signal_connect_data(
+            selection.cast(),
+            c"changed".as_ptr(),
+            gcallback(on_selection_changed as unsafe extern "C" fn(*mut GObject, gpointer)),
+            page.cast(),
+            None,
+            0,
+        );
+        g_signal_connect_data(
+            revoke.cast(),
+            c"clicked".as_ptr(),
+            gcallback(on_revoke as unsafe extern "C" fn(*mut GObject, gpointer)),
+            page.cast(),
+            None,
+            0,
+        );
+    }
+}
+
+/// The row a `GtkTreePath` from the selection names.
+///
+/// # Safety
+///
+/// `path` must be a live path of the list store's model.
+unsafe fn row_of(path: *mut GtkTreePath) -> Option<usize> {
+    let mut depth: c_int = 0;
+    // SAFETY: the path is live, per the contract. The returned array belongs
+    // to the path and has `depth` entries.
+    let indices = unsafe { gtk_tree_path_get_indices_with_depth(path, &mut depth) };
+    if indices.is_null() || depth < 1 {
+        return None;
+    }
+    // SAFETY: `depth` is at least one, so the first entry is in bounds. A
+    // list store is one level deep, so that entry is the row.
+    let row = unsafe { *indices };
+    usize::try_from(row).ok()
+}
+
+/// Frees one `GtkTreePath` of the list that
+/// `gtk_tree_selection_get_selected_rows` returns.
+///
+/// # Safety
+///
+/// `data` must be a `GtkTreePath *` the caller owns.
+unsafe extern "C" fn free_tree_path(data: gpointer) {
+    // SAFETY: per the contract.
+    unsafe { gtk_tree_path_free(data.cast::<GtkTreePath>()) };
+}
+
+/// The selected row, or `None` when nothing is selected.
+///
+/// # Safety
+///
+/// `selection` must be the live selection of the page's list.
+unsafe fn selected_row(selection: *mut GtkTreeSelection) -> Option<usize> {
+    let mut model: *mut GtkTreeModel = ptr::null_mut();
+    // SAFETY: the selection is live. The caller owns the list and every path
+    // in it, which the free below releases together.
+    unsafe {
+        let rows = gtk_tree_selection_get_selected_rows(selection, &mut model);
+        if rows.is_null() {
+            return None;
+        }
+        let first = (*rows).data.cast::<GtkTreePath>();
+        let row = (!first.is_null()).then(|| row_of(first)).flatten();
+        g_list_free_full(rows, Some(free_tree_path));
+        row
+    }
+}
+
+/// Sets the Revoke button's sensitivity from whether a row is selected and
+/// the account is reachable (a live `link`, the same gate every write in
+/// this crate uses).
+///
+/// # Safety
+///
+/// `cell` must be the state of a live page, on the main thread. No borrow
+/// of it may be held.
+unsafe fn update_revoke_sensitivity(cell: &RefCell<UiState>) {
+    let (revoke, selected, has_link) = {
+        let ui = cell.borrow();
+        // SAFETY: the view is a live child of the page.
+        let selected = unsafe { selected_row(gtk_tree_view_get_selection(ui.view.cast())) };
+        (ui.revoke, selected, ui.link.is_some())
+    };
+    // SAFETY: the button is a live child of the page.
+    unsafe { gtk_widget_set_sensitive(revoke, flag(selected.is_some() && has_link)) };
+}
+
+/// `GFALSE`/`GTRUE` for a `bool`.
+fn flag(value: bool) -> glib_sys::gboolean {
+    if value { GTRUE } else { GFALSE }
+}
+
+/// The `changed` handler of the list selection: only the Revoke button's
+/// sensitivity depends on it, so this never touches the store.
+///
+/// # Safety
+///
+/// The GLib signal system calls this. `page` is the data pointer of the
+/// connection: the page the selection belongs to.
+unsafe extern "C" fn on_selection_changed(_selection: *mut GObject, page: gpointer) {
+    guard("JmapDelegatesPage::selection-changed", (), || {
+        // SAFETY: the page is live, because its descendant emitted.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        // SAFETY: as above.
+        unsafe { update_revoke_sensitivity(cell) };
+    });
+}
+
+/// The `clicked` handler of the Revoke button: clears the selected
+/// delegate's access and reloads the list, both on a worker thread (the
+/// same `dispatch::spawn_for` shape [`create`] uses for the initial load).
+///
+/// # Safety
+///
+/// The GLib signal system calls this. `page` is the data pointer of the
+/// connection: the page the button belongs to.
+unsafe extern "C" fn on_revoke(_button: *mut GObject, page: gpointer) {
+    guard("JmapDelegatesPage::revoke", (), || {
+        // SAFETY: the page is live, because its descendant emitted.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        let (link, principal_id, view, revoke) = {
+            let ui = cell.borrow();
+            let Some(link) = ui.link.clone() else {
+                return;
+            };
+            // SAFETY: the view is a live child of the page.
+            let Some(row) = (unsafe { selected_row(gtk_tree_view_get_selection(ui.view.cast())) })
+            else {
+                return;
+            };
+            let Some(principal_id) = ui.delegates.get(row).cloned() else {
+                return;
+            };
+            (link, principal_id, ui.view, ui.revoke)
+        };
+        // SAFETY: both are live children of the page.
+        unsafe {
+            gtk_widget_set_sensitive(view, GFALSE);
+            gtk_widget_set_sensitive(revoke, GFALSE);
+        }
+        let work = move || io::revoke(&link, &principal_id);
+        let finish = |page: *mut GObject, outcome: Result<Loaded, String>| {
+            // SAFETY: `with_strong` gives the live page.
+            unsafe { apply_revoke_outcome(page, outcome) };
+        };
+        // SAFETY: `page` is the live page handling this click.
+        unsafe { dispatch::spawn_for(page.cast(), work, finish) };
+    });
+}
+
+/// Applies the result of [`on_revoke`]'s round trip: the fresh list on
+/// success, or the status label on failure. Either way, the view and the
+/// Revoke button become usable again.
+///
+/// # Safety
+///
+/// `page` must be the live page of the revoke.
+unsafe fn apply_revoke_outcome(page: *mut GObject, outcome: Result<Loaded, String>) {
+    let Some(cell) = (unsafe { state(page.cast()) }) else {
+        return;
+    };
+    match outcome {
+        Ok(loaded) => {
+            // SAFETY: no borrow of `cell` is held across this call.
+            unsafe { fill_list(cell, &loaded) };
+        }
+        Err(message) => {
+            let text = translate_with(REVOKE_FAILED, &[&message]);
+            let text = cstring_lossy(&text);
+            let status = cell.borrow().status;
+            // SAFETY: the status label is a live child of the page.
+            unsafe { gtk_label_set_text(status.cast(), text.as_ptr()) };
+        }
+    }
+    let view = cell.borrow().view;
+    // SAFETY: the view is a live child of the page. The Revoke button's own
+    // sensitivity depends on the (now cleared) selection, not a flat GTRUE.
+    unsafe {
+        gtk_widget_set_sensitive(view, GTRUE);
+        update_revoke_sensitivity(cell);
     }
 }
 
@@ -355,32 +611,12 @@ unsafe fn apply_outcome(page: *mut GObject, outcome: LoadOutcome<(Arc<AccountLin
     };
     match outcome {
         LoadOutcome::Loaded((link, loaded)) if loaded.offered => {
-            let (status, store, view) = {
-                let ui = cell.borrow();
-                (ui.status, ui.store, ui.view)
-            };
-            // SAFETY: these are live children of the page. No borrow of
-            // `cell` is held during these calls.
-            unsafe {
-                gtk_list_store_clear(store);
-                for delegate in &loaded.delegates {
-                    append_row(
-                        store,
-                        delegate.principal_id.as_str(),
-                        &calendar_level_label(delegate.calendar_level),
-                        &address_book_level_label(delegate.address_book_level),
-                    );
-                }
-                let text = if loaded.delegates.is_empty() {
-                    cstring_lossy(&translate(NO_DELEGATES))
-                } else {
-                    cstring_lossy("")
-                };
-                gtk_label_set_text(status.cast(), text.as_ptr());
-                gtk_widget_set_sensitive(view, GTRUE);
+            {
+                let mut ui = cell.borrow_mut();
+                ui.link = Some(link);
             }
-            let mut ui = cell.borrow_mut();
-            ui.link = Some(link);
+            // SAFETY: no borrow of `cell` is held across this call.
+            unsafe { fill_list(cell, &loaded) };
         }
         LoadOutcome::Loaded(_) => {
             let text = cstring_lossy(&translate(NOT_OFFERED));
@@ -558,10 +794,33 @@ mod tests {
                 sensitive, GFALSE,
                 "the list is usable before the load answers"
             );
+            assert!(
+                !get_sensitive(ui.revoke),
+                "Revoke is usable before any row is selected"
+            );
 
             drop(ui);
             gtk_widget_destroy(page);
         }
+    }
+
+    /// `widget`'s `sensitive` property.
+    ///
+    /// # Safety
+    ///
+    /// `widget` must be a live `GObject` with a `sensitive` property.
+    unsafe fn get_sensitive(widget: *mut GtkWidget) -> bool {
+        let mut sensitive: glib_sys::gboolean = GTRUE;
+        // SAFETY: per the contract.
+        unsafe {
+            g_object_get(
+                widget.cast(),
+                c"sensitive".as_ptr(),
+                &mut sensitive as *mut glib_sys::gboolean,
+                ptr::null::<c_char>(),
+            );
+        }
+        sensitive == GTRUE
     }
 
     /// The offline message, not a generic load-failure sentence: the same
@@ -588,6 +847,66 @@ mod tests {
                 text,
                 translate(OFFLINE),
                 "the status label does not say the account is offline"
+            );
+
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// Selecting a delegate's row makes Revoke usable; the button is
+    /// insensitive again as soon as the list starts a fresh load, before
+    /// anything is selected in it. Needs a display; skips without one.
+    #[test]
+    fn selecting_a_delegate_enables_revoke() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = Arc::new(AccountLink::without_refresh(client, features));
+        let loaded = Loaded {
+            delegates: vec![crate::delegation::Delegate {
+                principal_id: Id::new("P-bob"),
+                calendar_level: CalendarDelegationLevel::Reviewer,
+                address_book_level: AddressBookDelegationLevel::None,
+            }],
+            offered: true,
+        };
+
+        // SAFETY: as the test above; no network call happens here, the
+        // mock client above never makes one outside its own constructor.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+
+            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
+
+            let (view, revoke) = {
+                let ui = state(page.cast()).unwrap().borrow();
+                (ui.view, ui.revoke)
+            };
+            assert!(
+                !get_sensitive(revoke),
+                "Revoke is usable before any row is selected"
+            );
+
+            // Moving the list's cursor to row 0 also selects it (single
+            // selection mode), which emits "changed" on the selection
+            // synchronously, the same way a real click does.
+            let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+            evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+            evo_sys::gtk_tree_path_free(path);
+
+            assert!(
+                get_sensitive(revoke),
+                "Revoke stays insensitive after a row is selected"
             );
 
             gtk_widget_destroy(page);

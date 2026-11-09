@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The round trip of the Delegates page, over the [`crate::link`]
-//! connection. Read-only: this page has no submit yet (ROADMAP item 164's
-//! page skeleton).
+//! connection. [`load`] reads the list; [`revoke`] is the page's first
+//! write (ROADMAP item 164's Revoke button): it clears both delegation
+//! levels for one principal, then lists again.
 
+use jmap_client::Client;
+use jmap_proto::Id;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS};
 
-use crate::delegation::{self, Delegate};
+use crate::delegation::{self, AddressBookDelegationLevel, CalendarDelegationLevel, Delegate};
 use crate::link::{self, AccountLink};
 
 /// What the load found: the delegates, and whether the account's session
@@ -16,6 +19,23 @@ use crate::link::{self, AccountLink};
 pub struct Loaded {
     pub delegates: Vec<Delegate>,
     pub offered: bool,
+}
+
+/// The resolved capability accounts, and the delegate list built from them.
+fn list(
+    client: &Client,
+    calendars_account: &Option<Id>,
+    contacts_account: &Option<Id>,
+) -> Result<Vec<Delegate>, jmap_client::Error> {
+    let calendars = match calendars_account {
+        Some(account_id) => client.calendars(account_id)?,
+        None => Vec::new(),
+    };
+    let address_books = match contacts_account {
+        Some(account_id) => client.address_books(account_id)?,
+        None => Vec::new(),
+    };
+    Ok(delegation::list_delegates(&calendars, &address_books))
 }
 
 /// Lists every delegate the account's own calendars and address books name
@@ -32,18 +52,45 @@ pub fn load(link: &AccountLink) -> Result<Loaded, String> {
             .resolve_primary_account(CAPABILITY_CONTACTS)
             .cloned();
         let offered = calendars_account.is_some() || contacts_account.is_some();
-        let calendars = match &calendars_account {
-            Some(account_id) => client.calendars(account_id)?,
-            None => Vec::new(),
-        };
-        let address_books = match &contacts_account {
-            Some(account_id) => client.address_books(account_id)?,
-            None => Vec::new(),
-        };
-        Ok(Loaded {
-            delegates: delegation::list_delegates(&calendars, &address_books),
-            offered,
-        })
+        let delegates = list(client, &calendars_account, &contacts_account)?;
+        Ok(Loaded { delegates, offered })
+    })
+    .map_err(|error| link::describe(&error))
+}
+
+/// Clears `principal_id`'s calendar and address book access (sets both
+/// delegation levels to `None` on every one of the account's own calendars
+/// and address books, the write side of [`crate::delegation::list_delegates`]'s
+/// per-type highest-level read), then lists again so the page shows the
+/// result without a second round trip.
+pub fn revoke(link: &AccountLink, principal_id: &Id) -> Result<Loaded, String> {
+    link.call(|client| {
+        let session = client.session();
+        let calendars_account = session
+            .resolve_primary_account(CAPABILITY_CALENDARS)
+            .cloned();
+        let contacts_account = session
+            .resolve_primary_account(CAPABILITY_CONTACTS)
+            .cloned();
+        if let Some(account_id) = &calendars_account {
+            delegation::commit_calendar_delegation(
+                client,
+                account_id,
+                principal_id,
+                CalendarDelegationLevel::None,
+            )?;
+        }
+        if let Some(account_id) = &contacts_account {
+            delegation::commit_address_book_delegation(
+                client,
+                account_id,
+                principal_id,
+                AddressBookDelegationLevel::None,
+            )?;
+        }
+        let offered = calendars_account.is_some() || contacts_account.is_some();
+        let delegates = list(client, &calendars_account, &contacts_account)?;
+        Ok(Loaded { delegates, offered })
     })
     .map_err(|error| link::describe(&error))
 }
@@ -54,7 +101,7 @@ mod tests {
     use jmap_mock::MockServer;
     use jmap_proto::Id;
 
-    use super::load;
+    use super::{load, revoke};
     use crate::delegation::{
         AddressBookDelegationLevel, CalendarDelegationLevel, commit_address_book_delegation,
         commit_calendar_delegation,
@@ -111,5 +158,49 @@ mod tests {
             loaded.delegates[0].address_book_level,
             AddressBookDelegationLevel::Reviewer
         );
+    }
+
+    #[test]
+    fn revoke_clears_both_levels_and_the_delegate_drops_from_the_list() {
+        let bob = Id::new("P-bob");
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            account.seed_calendar("Work", false);
+            account.seed_address_book("Contacts", false);
+        }
+        let alice = Client::connect(server.origin(), Credentials::none()).unwrap();
+        commit_calendar_delegation(&alice, &account_id, &bob, CalendarDelegationLevel::Editor)
+            .unwrap();
+        commit_address_book_delegation(
+            &alice,
+            &account_id,
+            &bob,
+            AddressBookDelegationLevel::Author,
+        )
+        .unwrap();
+        assert_eq!(load(&link_to(&server)).unwrap().delegates.len(), 1);
+
+        let loaded = revoke(&link_to(&server), &bob).unwrap();
+
+        assert_eq!(loaded.delegates, vec![], "bob should no longer be listed");
+        assert_eq!(load(&link_to(&server)).unwrap().delegates, vec![]);
+    }
+
+    #[test]
+    fn revoking_an_unknown_principal_is_not_an_error() {
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            account.seed_calendar("Work", false);
+        }
+        let loaded = revoke(&link_to(&server), &Id::new("P-nobody")).unwrap();
+        assert_eq!(loaded.delegates, vec![]);
     }
 }
