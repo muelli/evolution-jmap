@@ -101,6 +101,31 @@ pub unsafe fn rebase_urls(source: *mut ESource) -> bool {
     unsafe { setting_extension::read::<RebaseUrls>(source) }.unwrap_or(false)
 }
 
+/// Writes the rebase opt-in onto `source`, adding `[JMAP Rebase]` if it is not
+/// there yet (ROADMAP item 179(c)): a collection child must carry its
+/// account's own opt-in, not just the account's own `ESource`, or its own
+/// later connect resolves the real host the tunnel hides.
+///
+/// A source with no group already answers `false` (see [`rebase_urls`]'s own
+/// doc), so a `false` write that finds no group does nothing: a plain
+/// account's child keeps no `[JMAP Rebase]` extension, and no extra reference
+/// from one (`e_source_get_extension` adds a reference that is EDS's, not
+/// this caller's, the same fact `adopt_releases_exactly_the_reference_new_
+/// child_handed_over` in `jmap-backend-collection` tests for the settings
+/// `child_source::apply` writes).
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` that stays alive for the call.
+pub unsafe fn write(source: *mut ESource, rebase_urls: bool) {
+    // SAFETY: the contract above; a read does not change the source.
+    if !rebase_urls && unsafe { setting_extension::read::<RebaseUrls>(source) }.is_none() {
+        return;
+    }
+    // SAFETY: the contract above.
+    unsafe { setting_extension::write::<RebaseUrls>(source, rebase_urls) };
+}
+
 #[cfg(test)]
 mod tests {
     use std::ptr;

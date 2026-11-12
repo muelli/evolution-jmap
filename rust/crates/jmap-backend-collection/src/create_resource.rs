@@ -303,15 +303,18 @@ pub fn create_on_server(
 ///    The collection stays on the server. The next populate finds it and writes
 ///    a correct child for it. A visible extra collection is better than a source
 ///    that looks correct but connects to no server.
-/// 2. `parent`, so the source is a child of this account and not a top-level
+/// 2. The account's own rebase opt-in (`jmap_backend_core::rebase::write`),
+///    so a later connect of this child resolves the same host a tunnelled
+///    account resolves, not the real one (ROADMAP item 179(c)).
+/// 3. `parent`, so the source is a child of this account and not a top-level
 ///    source. Also, `child_added` then fires for it when it is published.
-/// 3. `write_directory`, so EDS writes the `.source` file into the cache
+/// 4. `write_directory`, so EDS writes the `.source` file into the cache
 ///    directory of this collection. The children that a fan-out creates are also
 ///    there, and a removal of the account also removes them. Without this step,
 ///    the file stays in the user directory of the registry, where EDS created it.
-/// 4. `writable`, which lets the user rename the address book later.
+/// 5. `writable`, which lets the user rename the address book later.
 ///
-/// Steps 2 to 4 are the steps of `collection_backend_new_source()`, without
+/// Steps 3 to 5 are the steps of `collection_backend_new_source()`, without
 /// `removable = FALSE`. `collection_backend_child_added()` sets that value on
 /// each child when it is published (see the module comment).
 ///
@@ -333,6 +336,7 @@ pub unsafe fn adopt_created(
     connection: &Connection,
     account_uid: &str,
     cache_dir: Option<&str>,
+    rebase_urls: bool,
 ) -> Result<(), UnwritableSetting> {
     tracing::debug!(
         account_uid,
@@ -343,6 +347,12 @@ pub unsafe fn adopt_created(
 
     // SAFETY: a valid source because of the contract of this function.
     unsafe { apply(scratch, &child.settings(connection)) }?;
+
+    // Not one of `child.settings()`: the opt-in is the local account's own
+    // preference, never the server's (ROADMAP item 179(c)). Without it, this
+    // child's own later connect resolves the real host a tunnel hides.
+    // SAFETY: as above.
+    unsafe { jmap_backend_core::rebase::write(scratch, rebase_urls) };
 
     let account_uid = cstring_lossy(account_uid);
     // SAFETY: as above. The string is NUL-terminated, and the setter copies it.

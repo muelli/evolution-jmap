@@ -438,6 +438,48 @@ fn each_child_is_written_with_the_server_the_account_names() {
     });
 }
 
+#[test]
+fn a_child_carries_the_accounts_rebase_opt_in_and_keeps_it_in_step() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    with_timeout(|| {
+        // ROADMAP item 179(c): without this, the child's own later connect
+        // resolves the real host a tunnelled account's `[JMAP Rebase]`
+        // opt-in exists to hide.
+        let resource_id = ChildKind::AddressBook.resource_id(&Id::new("AB1"));
+
+        let collection = Collection::default();
+        // SAFETY: as above.
+        unsafe { adopt(&collection, &resource_id, &[], true, true) };
+        let source = collection.child(&resource_id);
+        assert!(
+            // SAFETY: a source this collection still holds a reference to.
+            unsafe { jmap_backend_core::rebase::rebase_urls(source) },
+            "a newly created child must carry the account's own opt-in"
+        );
+
+        // `adopt` also runs on each rediscovery of an existing child (see
+        // `a_rediscovery_with_changed_rights_updates_remote_deletable_on_the_
+        // existing_child` above). The account's own opt-in must follow the
+        // same rule: a cached child already rebased is not stuck with that
+        // value once the account turns the opt-in off.
+        let previously_rebased = Source::new("jmap-cached-rebase");
+        // SAFETY: a fresh source this test holds the only reference to.
+        unsafe { jmap_backend_core::rebase::write(previously_rebased.0, true) };
+        let cached = Collection {
+            cached: vec![(resource_id.clone(), previously_rebased)],
+            ..Collection::default()
+        };
+        // SAFETY: as above.
+        unsafe { adopt(&cached, &resource_id, &[], true, false) };
+        let cached_source = cached.cached[0].1.0;
+        assert!(
+            // SAFETY: as above.
+            !unsafe { jmap_backend_core::rebase::rebase_urls(cached_source) },
+            "an existing child must follow the account's opt-in when it changes"
+        );
+    });
+}
+
 /// A fan-out of only the address books of one account. A test can then set the
 /// `deletable` field of each `Resource`. `fanout()` always sets `deletable` to
 /// `None`.
@@ -473,6 +515,7 @@ fn a_childs_may_delete_reaches_set_remote_deletable_and_absence_stays_deletable(
                 &collection,
                 &fanout_of(vec![locked, resource("AB2")]),
                 &connection(),
+                false,
             )
         };
 
@@ -505,13 +548,27 @@ fn a_rediscovery_with_changed_rights_updates_remote_deletable_on_the_existing_ch
         let mut deletable = resource("AB1");
         deletable.deletable = Some(true);
         // SAFETY: as above.
-        unsafe { apply_fanout(&collection, &fanout_of(vec![deletable]), &connection()) };
+        unsafe {
+            apply_fanout(
+                &collection,
+                &fanout_of(vec![deletable]),
+                &connection(),
+                false,
+            )
+        };
         assert_eq!(collection.remote_deletable_of(&cached_id), Some(true));
 
         let mut now_locked = resource("AB1");
         now_locked.deletable = Some(false);
         // SAFETY: as above.
-        unsafe { apply_fanout(&collection, &fanout_of(vec![now_locked]), &connection()) };
+        unsafe {
+            apply_fanout(
+                &collection,
+                &fanout_of(vec![now_locked]),
+                &connection(),
+                false,
+            )
+        };
         assert_eq!(
             collection.remote_deletable_of(&cached_id),
             Some(false),
@@ -541,6 +598,7 @@ fn a_child_created_now_is_exported_and_one_drawn_from_the_cache_is_not() {
                 &collection,
                 &fanout(Parts::ALL, &["AB1", "AB2"], &[]),
                 &connection(),
+                false,
             )
         };
 
@@ -583,7 +641,7 @@ fn nothing_is_exported_before_all_of_it_is_written() {
         ];
 
         // SAFETY: as above.
-        let adopted = unsafe { adopt(&collection, "addressbook:AB1", &unwritable, true) };
+        let adopted = unsafe { adopt(&collection, "addressbook:AB1", &unwritable, true, false) };
 
         assert!(
             matches!(adopted, Adopted::Abandoned(_)),
@@ -617,7 +675,7 @@ fn adopt_releases_exactly_the_reference_new_child_handed_over() {
         };
 
         // SAFETY: the collection satisfies the trait's contract.
-        let cached_adopted = unsafe { adopt(&collection, &cached_id, &[], true) };
+        let cached_adopted = unsafe { adopt(&collection, &cached_id, &[], true, false) };
         assert_eq!(cached_adopted, Adopted::Written { published: false });
         let (_, source) = collection
             .cached
@@ -632,7 +690,7 @@ fn adopt_releases_exactly_the_reference_new_child_handed_over() {
         );
 
         // SAFETY: as above.
-        let new_adopted = unsafe { adopt(&collection, &new_id, &[], true) };
+        let new_adopted = unsafe { adopt(&collection, &new_id, &[], true, false) };
         assert_eq!(new_adopted, Adopted::Written { published: true });
         let created = collection.created.borrow();
         let (_, source) = created
@@ -664,6 +722,7 @@ fn a_resource_id_eds_refuses_costs_that_child_and_no_other() {
                 &collection,
                 &fanout(Parts::ALL, &["AB1", "AB2"], &["Cal1"]),
                 &connection(),
+                false,
             )
         };
 
@@ -699,6 +758,7 @@ fn the_children_the_login_no_longer_warrants_are_removed() {
                 &collection,
                 &fanout(Parts::ALL, &["AB1"], &[]),
                 &connection(),
+                false,
             )
         };
 
@@ -730,6 +790,7 @@ fn the_children_a_collection_has_are_listed_before_any_new_one_is_created() {
                 &collection,
                 &fanout(Parts::ALL, &["AB1"], &[]),
                 &connection(),
+                false,
             )
         };
 
@@ -764,6 +825,7 @@ fn a_part_the_user_switched_off_creates_no_child_and_removes_none() {
                 &collection,
                 &fanout(contacts_off, &["AB1"], &[]),
                 &connection(),
+                false,
             )
         };
 

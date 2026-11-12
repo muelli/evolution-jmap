@@ -198,6 +198,7 @@ fn create(server: &MockServer, scratch: &Scratch) -> Child {
             &connection(),
             "jmap-test-account",
             Some("/var/lib/jmap-test-cache"),
+            false,
         )
     }
     .expect("every setting of a child this backend describes is writable");
@@ -308,6 +309,47 @@ fn a_created_calendar_leaves_a_source_this_backend_reads_back_as_its_child() {
             Some(child.resource_id.clone())
         );
         assert_eq!(child.kind, ChildKind::Calendar);
+    });
+}
+
+#[test]
+fn a_created_child_carries_the_accounts_rebase_opt_in() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    with_timeout(|| {
+        // ROADMAP item 179(c): without this, the child's own later connect
+        // resolves the real host a tunnelled account's `[JMAP Rebase]` opt-in
+        // exists to hide, and the account's own calendar or address book
+        // fails with "Name or service not known".
+        let server = MockServer::builder().start();
+        let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+        let requested = requested_kind(&scratch).expect("the scratch source names a kind");
+
+        let child = create_on_server(
+            &ConnectTarget::Origin(server.origin().to_owned()),
+            true,
+            Credentials::none(),
+            &requested,
+        )
+        .expect("the mock creates collections");
+
+        // SAFETY: a live `EServerSideSource` this test holds a reference to.
+        unsafe {
+            adopt_created(
+                scratch.source,
+                &child,
+                &connection(),
+                "jmap-test-account",
+                Some("/var/lib/jmap-test-cache"),
+                true,
+            )
+        }
+        .expect("every setting of a child this backend describes is writable");
+
+        assert!(
+            // SAFETY: a live source this test holds a reference to.
+            unsafe { jmap_backend_core::rebase::rebase_urls(scratch.source) },
+            "a child of a rebased account must rebase its own connect too"
+        );
     });
 }
 

@@ -476,7 +476,8 @@ fn adopt_created_traces_structured_fields() {
         let conn = connection();
 
         let (_, captured) = capture(|| unsafe {
-            adopt_created(scratch.source, &child, &conn, "account-123", None).expect("adopted");
+            adopt_created(scratch.source, &child, &conn, "account-123", None, false)
+                .expect("adopted");
         });
 
         assert!(
