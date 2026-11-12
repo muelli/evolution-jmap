@@ -1847,7 +1847,14 @@ unsafe fn activate_now(page: gpointer) {
 unsafe fn set_script_controls_sensitive(cell: &RefCell<UiState>, sensitive: bool) {
     let controls = {
         let ui = cell.borrow();
-        [ui.add, ui.rename, ui.remove, ui.activate, ui.deactivate, ui.check]
+        [
+            ui.add,
+            ui.rename,
+            ui.remove,
+            ui.activate,
+            ui.deactivate,
+            ui.check,
+        ]
     };
     for control in controls {
         // SAFETY: every widget is a live child of the page.

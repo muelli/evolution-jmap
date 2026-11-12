@@ -1021,9 +1021,7 @@ mod tests {
                     text: "keep;\n".to_owned(),
                 }],
                 destroys: Vec::new(),
-                activation: ActivationChange::Activate(ActivationTarget::Created(
-                    "new".to_owned(),
-                )),
+                activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
                 deactivate_first: false,
                 if_in_state: None,
                 baseline: Baseline::default(),
@@ -1056,9 +1054,7 @@ mod tests {
                     text: "if true {\n".to_owned(),
                 }],
                 destroys: Vec::new(),
-                activation: ActivationChange::Activate(ActivationTarget::Created(
-                    "new".to_owned(),
-                )),
+                activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
                 deactivate_first: false,
                 if_in_state: None,
                 baseline: Baseline::default(),
