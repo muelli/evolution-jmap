@@ -153,11 +153,10 @@ const CALENDAR_LEVELS: [CalendarDelegationLevel; 5] = [
 ];
 
 /// The address book level combo's items, in the order it offers them.
-const BOOK_LEVELS: [AddressBookDelegationLevel; 4] = [
+const BOOK_LEVELS: [AddressBookDelegationLevel; 3] = [
     AddressBookDelegationLevel::None,
     AddressBookDelegationLevel::Reviewer,
     AddressBookDelegationLevel::Author,
-    AddressBookDelegationLevel::Editor,
 ];
 
 /// The item of `items` a combo's active index names. `gtk_combo_box_get_active`
@@ -415,7 +414,6 @@ fn address_book_level_label(level: AddressBookDelegationLevel) -> String {
         AddressBookDelegationLevel::None => N_(c"No access"),
         AddressBookDelegationLevel::Reviewer => N_(c"Reviewer"),
         AddressBookDelegationLevel::Author => N_(c"Author"),
-        AddressBookDelegationLevel::Editor => N_(c"Editor"),
     })
 }
 

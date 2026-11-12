@@ -147,13 +147,12 @@ pub enum AddressBookDelegationLevel {
     /// Full read access to cards.
     Reviewer,
     /// Reviewer, plus create, update and destroy cards.
-    Author,
-    /// Same rights as Author.
     ///
     /// RFC 9610 models one `mayWrite` right, not the separate own/all write
-    /// rights `CalendarRights` has, so this level cannot grant anything
-    /// Author does not already grant.
-    Editor,
+    /// rights `CalendarRights` has, so there is no further level between
+    /// this and full access: an "Editor" level would grant nothing this one
+    /// does not already grant, and so is not offered.
+    Author,
 }
 
 impl AddressBookDelegationLevel {
@@ -162,9 +161,7 @@ impl AddressBookDelegationLevel {
         match self {
             Self::None => None,
             Self::Reviewer => Some(AddressBookRights::read_only()),
-            Self::Author | Self::Editor => {
-                Some(AddressBookRights::read_only().with_may_write(true))
-            }
+            Self::Author => Some(AddressBookRights::read_only().with_may_write(true)),
         }
     }
 
@@ -178,9 +175,7 @@ impl AddressBookDelegationLevel {
     }
 
     /// The level for an existing grant of `rights`, for showing a delegate
-    /// this page did not necessarily create itself. Author and Editor grant
-    /// identical rights (RFC 9610 has no own/all write distinction), so a
-    /// write grant always reads back as `Author`, never `Editor`.
+    /// this page did not necessarily create itself.
     pub fn from_rights(rights: &AddressBookRights) -> Self {
         if rights.may_write == Some(true) {
             Self::Author
@@ -442,14 +437,22 @@ mod tests {
     }
 
     #[test]
-    fn address_book_author_and_editor_grant_identical_rights() {
-        // RFC 9610 has no own/all write distinction, unlike CalendarRights:
-        // record that gap here instead of promising a level this server
-        // cannot tell apart.
-        assert_eq!(
-            AddressBookDelegationLevel::Author.to_rights(),
-            AddressBookDelegationLevel::Editor.to_rights()
-        );
+    fn every_two_address_book_levels_grant_different_rights() {
+        // 179(g): a level this server cannot tell apart from another must
+        // not be offered; each pair here must grant a different right set.
+        let levels = [
+            AddressBookDelegationLevel::Reviewer,
+            AddressBookDelegationLevel::Author,
+        ];
+        for (at, a) in levels.iter().enumerate() {
+            for b in &levels[at + 1..] {
+                assert_ne!(
+                    a.to_rights(),
+                    b.to_rights(),
+                    "{a:?} and {b:?} grant the same rights"
+                );
+            }
+        }
         let rights = AddressBookDelegationLevel::Author.to_rights().unwrap();
         assert_eq!(rights.may_read, Some(true));
         assert!(rights.is_writable());
@@ -460,7 +463,6 @@ mod tests {
         for level in [
             AddressBookDelegationLevel::Reviewer,
             AddressBookDelegationLevel::Author,
-            AddressBookDelegationLevel::Editor,
         ] {
             let rights = level.to_rights().unwrap();
             assert_eq!(rights.may_delete, None);
@@ -540,13 +542,6 @@ mod tests {
             let rights = level.to_rights().unwrap();
             assert_eq!(AddressBookDelegationLevel::from_rights(&rights), level);
         }
-        // Editor grants the identical rights Author does, so it can only
-        // ever read back as Author, never as itself.
-        let editor_rights = AddressBookDelegationLevel::Editor.to_rights().unwrap();
-        assert_eq!(
-            AddressBookDelegationLevel::from_rights(&editor_rights),
-            AddressBookDelegationLevel::Author
-        );
     }
 
     #[test]
