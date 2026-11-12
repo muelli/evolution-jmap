@@ -512,6 +512,11 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // the dialog, and the entry that forwards Enter to it.
     "gtk_dialog_set_default_response",
     "gtk_entry_set_activates_default",
+    // Item 179(e): the Delegates Add dialog's OK response stays insensitive
+    // while the principal is empty or both levels grant nothing. The test
+    // reads the response's own button back by its response id.
+    "gtk_dialog_set_response_sensitive",
+    "gtk_dialog_get_widget_for_response",
     // `jmap-ui`'s test reads the default widget back to confirm one is set.
     "gtk_window_get_default_widget",
     // The rule dialog of the Server Filters page. Each combo is a

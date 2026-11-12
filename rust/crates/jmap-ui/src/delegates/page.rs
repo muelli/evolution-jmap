@@ -40,18 +40,18 @@ use evo_sys::{
     gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new, gtk_combo_box_get_active,
     gtk_combo_box_set_active, gtk_combo_box_text_append, gtk_combo_box_text_new, gtk_container_add,
     gtk_container_set_border_width, gtk_dialog_add_button, gtk_dialog_get_content_area,
-    gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response, gtk_entry_new,
-    gtk_entry_set_activates_default, gtk_label_new, gtk_label_new_with_mnemonic,
-    gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
-    gtk_list_store_insert_with_valuesv, gtk_list_store_newv, gtk_scrolled_window_get_type,
-    gtk_scrolled_window_new, gtk_tree_path_free, gtk_tree_path_get_indices_with_depth,
-    gtk_tree_selection_get_selected_rows, gtk_tree_selection_set_mode, gtk_tree_view_append_column,
-    gtk_tree_view_column_add_attribute, gtk_tree_view_column_new, gtk_tree_view_column_pack_start,
-    gtk_tree_view_column_set_title, gtk_tree_view_get_selection, gtk_tree_view_new_with_model,
-    gtk_tree_view_set_headers_visible, gtk_widget_destroy, gtk_widget_get_toplevel,
-    gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_size_request,
-    gtk_widget_set_vexpand, gtk_widget_show_all, gtk_window_get_type, gtk_window_set_title,
-    gtk_window_set_transient_for,
+    gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response,
+    gtk_dialog_set_response_sensitive, gtk_entry_new, gtk_entry_set_activates_default,
+    gtk_label_new, gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
+    gtk_label_set_xalign, gtk_list_store_clear, gtk_list_store_insert_with_valuesv,
+    gtk_list_store_newv, gtk_scrolled_window_get_type, gtk_scrolled_window_new, gtk_tree_path_free,
+    gtk_tree_path_get_indices_with_depth, gtk_tree_selection_get_selected_rows,
+    gtk_tree_selection_set_mode, gtk_tree_view_append_column, gtk_tree_view_column_add_attribute,
+    gtk_tree_view_column_new, gtk_tree_view_column_pack_start, gtk_tree_view_column_set_title,
+    gtk_tree_view_get_selection, gtk_tree_view_new_with_model, gtk_tree_view_set_headers_visible,
+    gtk_widget_destroy, gtk_widget_get_toplevel, gtk_widget_set_hexpand, gtk_widget_set_sensitive,
+    gtk_widget_set_size_request, gtk_widget_set_vexpand, gtk_widget_show_all, gtk_window_get_type,
+    gtk_window_set_title, gtk_window_set_transient_for,
 };
 use gio_sys::{
     GAsyncReadyCallback, GAsyncResult, GCancellable, GTask, g_task_new, g_task_propagate_boolean,
@@ -81,6 +81,10 @@ const NAME: &CStr = c"JmapDelegatesPage";
 const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-delegates-page-state");
 const BROWSE_STATE: ObjectData<(Arc<AccountLink>, *mut GtkWidget)> =
     ObjectData::new(c"jmap-delegates-add-browse-state");
+/// The Add dialog's own principal entry and level combos, read back by
+/// [`on_add_field_changed`] on each of their `changed` signals (item 179(e)).
+const ADD_FIELDS: ObjectData<(*mut GtkWidget, *mut GtkWidget, *mut GtkWidget)> =
+    ObjectData::new(c"jmap-delegates-add-fields");
 const PICKER_STATE: ObjectData<RefCell<PickerState>> =
     ObjectData::new(c"jmap-delegates-picker-state");
 
@@ -754,6 +758,31 @@ unsafe fn build_add_dialog(
         gtk_box_pack_start(book_row.cast(), book_combo, GTRUE, GTRUE, 0);
         gtk_box_pack_start(content.cast(), book_row, GFALSE, GFALSE, 0);
 
+        // 179(e): OK must not close the dialog on an empty or no-access
+        // delegate. Each field's own `changed` keeps the response's
+        // sensitivity at `add_is_valid`'s answer, read back by its key on
+        // the dialog rather than captured, so one handler serves all three.
+        ADD_FIELDS.set(dialog.cast(), (principal_entry, calendar_combo, book_combo));
+        for field in [principal_entry, calendar_combo, book_combo] {
+            g_signal_connect_data(
+                field.cast(),
+                c"changed".as_ptr(),
+                gcallback(on_add_field_changed as unsafe extern "C" fn(*mut GObject, gpointer)),
+                dialog.cast(),
+                None,
+                0,
+            );
+        }
+        gtk_dialog_set_response_sensitive(
+            dialog.cast(),
+            GTK_RESPONSE_OK,
+            if add_is_valid(principal_entry, calendar_combo, book_combo) {
+                GTRUE
+            } else {
+                GFALSE
+            },
+        );
+
         (dialog, principal_entry, calendar_combo, book_combo, find)
     }
 }
@@ -942,6 +971,68 @@ unsafe extern "C" fn on_browse(_button: *mut GObject, dialog: gpointer) {
             // SAFETY: `entry` is a live child of the still-open Add dialog.
             unsafe { widget::set_text(entry.cast(), principal_id.as_str()) };
         }
+    });
+}
+
+/// Whether the Add dialog's current fields grant anything: a non-empty,
+/// non-whitespace principal, and at least one level above "No access"
+/// (179(e)). A grant of neither level would write nothing, so it is
+/// treated the same as an empty principal.
+///
+/// # Safety
+///
+/// `entry`, `calendar_combo` and `book_combo` must be live children of an
+/// open Add dialog.
+unsafe fn add_is_valid(
+    entry: *mut GtkWidget,
+    calendar_combo: *mut GtkWidget,
+    book_combo: *mut GtkWidget,
+) -> bool {
+    // SAFETY: per the contract.
+    unsafe {
+        if widget::get_text(entry.cast()).trim().is_empty() {
+            return false;
+        }
+        let calendar_level = level_at(
+            &CALENDAR_LEVELS,
+            gtk_combo_box_get_active(calendar_combo.cast()),
+        )
+        .unwrap_or(CalendarDelegationLevel::None);
+        let book_level = level_at(&BOOK_LEVELS, gtk_combo_box_get_active(book_combo.cast()))
+            .unwrap_or(AddressBookDelegationLevel::None);
+        calendar_level != CalendarDelegationLevel::None
+            || book_level != AddressBookDelegationLevel::None
+    }
+}
+
+/// The `changed` handler of the Add dialog's principal entry and its two
+/// level combos: keeps the OK response's sensitivity at [`add_is_valid`]'s
+/// answer, so Enter and the button cannot close the dialog on a delegate
+/// that grants nothing (179(e)).
+///
+/// # Safety
+///
+/// The GLib signal system calls this. `dialog` is the data pointer of each
+/// connection: the live Add dialog the changed field belongs to.
+unsafe extern "C" fn on_add_field_changed(_widget: *mut GObject, dialog: gpointer) {
+    guard("JmapDelegatesPage::add_field_changed", (), || {
+        // SAFETY: the Add dialog is live, because one of its own fields
+        // just emitted.
+        let Some(&(entry, calendar_combo, book_combo)) =
+            (unsafe { ADD_FIELDS.get(dialog.cast::<GObject>()) })
+        else {
+            return;
+        };
+        // SAFETY: as above.
+        let valid = unsafe { add_is_valid(entry, calendar_combo, book_combo) };
+        // SAFETY: `dialog` is the live Add dialog.
+        unsafe {
+            gtk_dialog_set_response_sensitive(
+                dialog.cast(),
+                GTK_RESPONSE_OK,
+                if valid { GTRUE } else { GFALSE },
+            )
+        };
     });
 }
 
@@ -1674,6 +1765,53 @@ mod tests {
                 gtk_combo_box_get_active(book_combo.cast()),
                 0,
                 "the address book level combo does not default to No access"
+            );
+
+            gtk_widget_destroy(dialog);
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// 179(e): the Add dialog's OK response stays insensitive while the
+    /// principal is empty, whitespace-only, or both levels are "No
+    /// access", so Enter and the button cannot close it on a delegate
+    /// that grants nothing. Needs a display; skips without one.
+    #[test]
+    fn the_add_dialog_refuses_an_empty_or_no_access_delegate() {
+        use evo_sys::gtk_dialog_get_widget_for_response;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: as `the_add_dialog_defaults_to_no_access_for_both_levels`.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            let (dialog, entry, calendar_combo, _book_combo, _find) = build_add_dialog(page.cast());
+            let ok = gtk_dialog_get_widget_for_response(dialog.cast(), GTK_RESPONSE_OK);
+
+            assert!(
+                !get_sensitive(ok),
+                "OK is usable with an empty principal and no access granted"
+            );
+
+            widget::set_text(entry.cast(), "bob@example.com");
+            assert!(
+                !get_sensitive(ok),
+                "OK is usable for a principal with no access granted"
+            );
+
+            gtk_combo_box_set_active(calendar_combo.cast(), 1);
+            assert!(
+                get_sensitive(ok),
+                "OK stays insensitive once a principal and a level are set"
+            );
+
+            widget::set_text(entry.cast(), "  ");
+            assert!(
+                !get_sensitive(ok),
+                "OK is usable for a whitespace-only principal"
             );
 
             gtk_widget_destroy(dialog);
