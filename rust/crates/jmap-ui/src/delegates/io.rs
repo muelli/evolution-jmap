@@ -7,6 +7,8 @@
 //! both delegation levels for one principal, then lists again. [`revoke`]
 //! is [`grant`] with both levels at `None`.
 
+use std::collections::BTreeMap;
+
 use jmap_client::Client;
 use jmap_proto::Id;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_PRINCIPALS};
@@ -16,12 +18,34 @@ use crate::delegation::{
 };
 use crate::link::{self, AccountLink};
 
-/// What the load found: the delegates, and whether the account's session
-/// offers either capability `shareWith` delegation needs. A session with
-/// neither is not an error; the page shows a status instead of a list.
+/// What the load found: the delegates, whether the account's session offers
+/// either capability `shareWith` delegation needs, and a best-effort
+/// principal id to display label map (item 179(f)). A session with neither
+/// capability is not an error; the page shows a status instead of a list. A
+/// principal id missing from `labels` (no principals capability, or the
+/// server could not resolve it) falls back to showing the raw id.
 pub struct Loaded {
     pub delegates: Vec<Delegate>,
     pub offered: bool,
+    pub labels: BTreeMap<Id, String>,
+}
+
+/// Best-effort name/email labels for `delegates`' principal ids, on the
+/// session's principals capability account. Returns an empty map when the
+/// session offers no such account or there is nothing to resolve.
+fn resolve_labels(client: &Client, delegates: &[Delegate]) -> BTreeMap<Id, String> {
+    if delegates.is_empty() {
+        return BTreeMap::new();
+    }
+    let Some(account_id) = client
+        .session()
+        .resolve_primary_account(CAPABILITY_PRINCIPALS)
+        .cloned()
+    else {
+        return BTreeMap::new();
+    };
+    let ids: Vec<Id> = delegates.iter().map(|d| d.principal_id.clone()).collect();
+    delegation::resolve_principal_labels(client, &account_id, &ids)
 }
 
 /// The resolved capability accounts, and the delegate list built from them.
@@ -56,7 +80,12 @@ pub fn load(link: &AccountLink) -> Result<Loaded, String> {
             .cloned();
         let offered = calendars_account.is_some() || contacts_account.is_some();
         let delegates = list(client, &calendars_account, &contacts_account)?;
-        Ok(Loaded { delegates, offered })
+        let labels = resolve_labels(client, &delegates);
+        Ok(Loaded {
+            delegates,
+            offered,
+            labels,
+        })
     })
     .map_err(|error| link::describe(&error))
 }
@@ -98,7 +127,12 @@ pub fn grant(
         }
         let offered = calendars_account.is_some() || contacts_account.is_some();
         let delegates = list(client, &calendars_account, &contacts_account)?;
-        Ok(Loaded { delegates, offered })
+        let labels = resolve_labels(client, &delegates);
+        Ok(Loaded {
+            delegates,
+            offered,
+            labels,
+        })
     })
     .map_err(|error| link::describe(&error))
 }
@@ -196,6 +230,53 @@ mod tests {
         assert_eq!(
             loaded.delegates[0].address_book_level,
             AddressBookDelegationLevel::Reviewer
+        );
+    }
+
+    #[test]
+    fn load_resolves_a_delegates_name_and_email_from_the_server() {
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        let bob = {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            account.seed_calendar("Work", false);
+            account.seed_principal(Principal::new("Bob Jones").with_email("bob@example.com"))
+        };
+        let alice = Client::connect(server.origin(), Credentials::none()).unwrap();
+        commit_calendar_delegation(&alice, &account_id, &bob, CalendarDelegationLevel::Author)
+            .unwrap();
+
+        let loaded = load(&link_to(&server)).unwrap();
+
+        assert_eq!(
+            loaded.labels.get(&bob).map(String::as_str),
+            Some("Bob Jones <bob@example.com>")
+        );
+    }
+
+    #[test]
+    fn load_leaves_an_unresolvable_principal_out_of_the_labels_map() {
+        let bob = Id::new("P-bob");
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&account_id).unwrap();
+            account.seed_calendar("Work", false);
+        }
+        let alice = Client::connect(server.origin(), Credentials::none()).unwrap();
+        commit_calendar_delegation(&alice, &account_id, &bob, CalendarDelegationLevel::Author)
+            .unwrap();
+
+        let loaded = load(&link_to(&server)).unwrap();
+
+        assert_eq!(loaded.delegates.len(), 1, "the delegate itself still lists");
+        assert!(
+            !loaded.labels.contains_key(&bob),
+            "no principal record exists for this id, so no label"
         );
     }
 

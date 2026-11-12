@@ -370,9 +370,14 @@ unsafe fn fill_list(cell: &RefCell<UiState>, loaded: &Loaded) {
     unsafe {
         gtk_list_store_clear(store);
         for delegate in &loaded.delegates {
+            let principal_text = loaded
+                .labels
+                .get(&delegate.principal_id)
+                .map(String::as_str)
+                .unwrap_or_else(|| delegate.principal_id.as_str());
             append_row(
                 store,
-                delegate.principal_id.as_str(),
+                principal_text,
                 &calendar_level_label(delegate.calendar_level),
                 &address_book_level_label(delegate.address_book_level),
             );
@@ -1638,6 +1643,7 @@ mod tests {
                 address_book_level: AddressBookDelegationLevel::None,
             }],
             offered: true,
+            labels: Default::default(),
         };
 
         // SAFETY: as the test above; no network call happens here, the
@@ -1694,6 +1700,7 @@ mod tests {
         let loaded = Loaded {
             delegates: vec![],
             offered: true,
+            labels: Default::default(),
         };
 
         // SAFETY: as the test above; no network call happens here.
@@ -1854,6 +1861,7 @@ mod tests {
             let loaded = Loaded {
                 delegates: vec![],
                 offered: true,
+                labels: Default::default(),
             };
             apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 

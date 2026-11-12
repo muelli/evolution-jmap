@@ -290,6 +290,43 @@ pub fn account_delegates(client: &Client, account_id: &Id) -> Result<Vec<Delegat
     Ok(list_delegates(&calendars, &address_books))
 }
 
+/// A display label for a principal, built from its `name` and `email`
+/// (item 179(f): the Delegates list must not show only a raw principal id).
+/// `"Name <email>"` when both are present, the one present alone when only
+/// one is, `None` when neither, so the caller falls back to the raw id.
+pub fn principal_label(name: &str, email: Option<&str>) -> Option<String> {
+    let name = name.trim();
+    let email = email.map(str::trim).filter(|email| !email.is_empty());
+    match (name.is_empty(), email) {
+        (false, Some(email)) => Some(format!("{name} <{email}>")),
+        (false, None) => Some(name.to_string()),
+        (true, Some(email)) => Some(email.to_string()),
+        (true, None) => None,
+    }
+}
+
+/// Best-effort name/email lookup for `ids` (`Principal/get`), for the
+/// Delegates list. A server error, or an id it cannot resolve, just leaves
+/// that id out of the map; the caller falls back to the raw id row by row,
+/// so no lookup failure here can block the list from showing.
+pub fn resolve_principal_labels(
+    client: &Client,
+    account_id: &Id,
+    ids: &[Id],
+) -> BTreeMap<Id, String> {
+    let Ok(principals) = client.principal_get(account_id, ids) else {
+        return BTreeMap::new();
+    };
+    principals
+        .into_iter()
+        .filter_map(|principal| {
+            let id = principal.id.clone()?;
+            let label = principal_label(&principal.name, principal.email.as_deref())?;
+            Some((id, label))
+        })
+        .collect()
+}
+
 /// The result of looking up a principal to delegate to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PrincipalSearch {
@@ -621,5 +658,35 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn principal_label_prefers_name_and_email_together() {
+        assert_eq!(
+            principal_label("Bob Jones", Some("bob@example.com")),
+            Some("Bob Jones <bob@example.com>".to_string())
+        );
+    }
+
+    #[test]
+    fn principal_label_falls_back_to_email_alone_with_no_name() {
+        assert_eq!(
+            principal_label("", Some("bob@example.com")),
+            Some("bob@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn principal_label_falls_back_to_name_alone_with_no_email() {
+        assert_eq!(
+            principal_label("Bob Jones", None),
+            Some("Bob Jones".to_string())
+        );
+    }
+
+    #[test]
+    fn principal_label_is_none_with_neither_name_nor_email() {
+        assert_eq!(principal_label("", None), None);
+        assert_eq!(principal_label("  ", Some("  ")), None);
     }
 }
