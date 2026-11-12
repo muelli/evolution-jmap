@@ -322,6 +322,21 @@ impl FiltersForm {
         Ok(())
     }
 
+    /// The row the user currently has active, if any.
+    pub fn active_row(&self) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.active)
+    }
+
+    /// Makes `index` the only active row (none, when `index` is `None`),
+    /// with no other check. For the Activate button's instant apply (item
+    /// 180(a)): undoes a staged [`FiltersForm::activate`]/
+    /// [`FiltersForm::deactivate`] the server refused to write.
+    pub fn restore_active(&mut self, index: Option<usize>) {
+        for (row, entry) in self.entries.iter_mut().enumerate() {
+            entry.active = Some(row) == index;
+        }
+    }
+
     /// True when a submit has anything to write.
     pub fn dirty(&self) -> bool {
         !self.destroys.is_empty()
@@ -744,6 +759,27 @@ mod tests {
 
         assert!(!form.dirty());
         assert!(form.plan().unwrap().is_none());
+    }
+
+    #[test]
+    fn active_row_finds_the_one_active_script() {
+        let form = form(vec![script("a", "work", false), script("b", "spam", true)]);
+
+        assert_eq!(form.active_row(), Some(1));
+    }
+
+    #[test]
+    fn restore_active_undoes_a_staged_activation() {
+        let mut form = form(vec![script("a", "work", true), script("b", "spam", false)]);
+        let previous = form.active_row();
+
+        form.activate(1).unwrap();
+        assert_eq!(form.active_row(), Some(1));
+
+        form.restore_active(previous);
+
+        assert_eq!(form.active_row(), Some(0));
+        assert!(!form.entries()[1].active);
     }
 
     #[test]

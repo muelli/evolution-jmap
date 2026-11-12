@@ -8,9 +8,12 @@
 //! state box, the asynchronous load and the `GTask` submit.
 //!
 //! This page shows the account's Sieve scripts as a list, and the source of
-//! the selected one in a text view. Everything the user does is staged in a
-//! [`FiltersForm`] and written when the account editor saves. "Check" is the
-//! one exception: it asks the server at once, and writes nothing.
+//! the selected one in a text view. Most of what the user does is staged in
+//! a [`FiltersForm`] and written when the account editor saves. Two actions
+//! are instant instead (item 180(a)'s apply-at-once sweep, one action per
+//! commit): "Check" asks the server at once and writes nothing; "Activate"
+//! (see [`activate_now`]) writes the account's current plan at once and
+//! reloads the list from the server.
 //!
 //! The widgets hold no decisions. The form answers which buttons are usable
 //! and what one submit writes, and it has unit tests. This file reads the
@@ -94,7 +97,7 @@ use jmap_backend_core::trampoline::{guard, log_critical};
 use crate::dispatch;
 use crate::filters::completion;
 use crate::filters::form::{Buttons, FiltersForm, NO_SCRIPT_SELECTED, ScriptEntry};
-use crate::filters::io::{self, Loaded, SavePlan};
+use crate::filters::io::{self, ActivateOutcome, Loaded, SavePlan};
 use crate::filters::rule_dialog;
 use crate::filters::rule_form::{self, NO_RULE_SELECTED, RuleDraft, RulesEditor};
 use crate::filters::rules::MANAGED_SCRIPT_NAME;
@@ -158,6 +161,12 @@ const RENAME_LABEL: &CStr = N_(c"_Rename…");
 const NAME_LABEL: &CStr = N_(c"_Name:");
 const CHECKING: &CStr = N_(c"Checking the script…");
 const SCRIPT_VALID: &CStr = N_(c"The script is valid.");
+const ACTIVATING: &CStr = N_(c"Activating…");
+// TRANSLATORS: %1$s is the reason the mail server gave.
+const ACTIVATE_FAILED: &CStr = N_(c"The script could not be activated: %1$s");
+// TRANSLATORS: %1$s is the reason the mail server gave. The activation
+// already took effect; only the list on this page could not be refreshed.
+const ACTIVATE_RELOAD_FAILED: &CStr = N_(c"Activated. The list could not be refreshed: %1$s");
 // Neither list has a visible label of its own to name it for a screen
 // reader through a `labelled-by` relation (item 174d), unlike the text
 // view below, which has "_Script:".
@@ -1692,7 +1701,6 @@ enum Action {
     Add,
     Rename,
     Remove,
-    Activate,
     Deactivate,
 }
 
@@ -1713,7 +1721,138 @@ unsafe extern "C" fn on_remove(_button: *mut GObject, page: gpointer) {
 
 unsafe extern "C" fn on_activate(_button: *mut GObject, page: gpointer) {
     // SAFETY: as above.
-    unsafe { act(page, Action::Activate) };
+    unsafe { activate_now(page) };
+}
+
+/// Activates the selected script at once instead of staging it for the
+/// account editor's OK (item 180(a)): stages the activation, writes the
+/// account's current plan on a worker thread, and reloads the list from the
+/// server, the same worker round trip the Delegates page's Add and Revoke
+/// use. The script list and buttons stay insensitive meanwhile. A write the
+/// server refuses restores the previous activation; nothing else staged is
+/// touched either way.
+///
+/// # Safety
+///
+/// `page` must be the live page the Activate button belongs to.
+unsafe fn activate_now(page: gpointer) {
+    guard("JmapFiltersPage::activate", (), || {
+        // SAFETY: the page is live, because its button emitted.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        // SAFETY: the widgets are live, and no borrow is held.
+        unsafe { flush(cell) };
+        let Some(row) = cell.borrow().form.selected() else {
+            return refuse(cell, NO_SCRIPT_SELECTED);
+        };
+        let previous_active = cell.borrow().form.active_row();
+        if let Err(reason) = cell.borrow_mut().form.activate(row) {
+            return refuse(cell, reason);
+        }
+
+        let planned = {
+            let ui = cell.borrow();
+            (ui.link.clone(), ui.form.plan())
+        };
+        let (link, plan) = match planned {
+            // The activation above always makes the form dirty, so a `None`
+            // plan or link is not expected; leave nothing written either way.
+            (_, Ok(None)) | (None, Ok(Some(_))) => {
+                cell.borrow_mut().form.restore_active(previous_active);
+                // SAFETY: as above.
+                unsafe { refresh(cell) };
+                return;
+            }
+            (_, Err(reason)) => {
+                cell.borrow_mut().form.restore_active(previous_active);
+                let text = translate_with(ACTIVATE_FAILED, &[&reason]);
+                // SAFETY: as above.
+                unsafe {
+                    set_status(cell, &text);
+                    refresh(cell);
+                }
+                return;
+            }
+            (Some(link), Ok(Some(plan))) => (link, plan),
+        };
+
+        // SAFETY: the widgets are live, and no borrow is held.
+        unsafe {
+            set_script_controls_sensitive(cell, false);
+            set_status(cell, &translate(ACTIVATING));
+        }
+
+        let work = move || io::activate_now(&link, &plan);
+        let finish = move |page: *mut GObject, outcome: Result<ActivateOutcome, String>| {
+            // SAFETY: `with_strong` gives the live page.
+            let Some(cell) = (unsafe { state(page) }) else {
+                return;
+            };
+            match outcome {
+                Ok(ActivateOutcome::Reloaded(loaded)) => {
+                    let name = cell
+                        .borrow()
+                        .form
+                        .entries()
+                        .get(row)
+                        .map(|entry| entry.name.clone());
+                    {
+                        let mut ui = cell.borrow_mut();
+                        ui.form = FiltersForm::from_loaded(loaded);
+                        if let Some(name) = name {
+                            let found = ui.form.entries().iter().position(|e| e.name == name);
+                            ui.form.select(found);
+                        }
+                    }
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, "");
+                        refresh(cell);
+                    }
+                }
+                Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    let text = translate_with(ACTIVATE_RELOAD_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+                Err(reason) => {
+                    cell.borrow_mut().form.restore_active(previous_active);
+                    let text = translate_with(ACTIVATE_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+            }
+        };
+        // SAFETY: the page is live and the signal emission holds a reference
+        // to it for all of this call.
+        unsafe { dispatch::spawn_for(page.cast(), work, finish) };
+    });
+}
+
+/// Sets every script-list control's sensitivity, overriding whatever the
+/// form's own [`crate::filters::form::Buttons`] last computed. Used while an
+/// instant-apply write (item 180(a)) is in flight; the next [`refresh`]
+/// restores the real sensitivity once it answers.
+///
+/// # Safety
+///
+/// As [`refresh`].
+unsafe fn set_script_controls_sensitive(cell: &RefCell<UiState>, sensitive: bool) {
+    let controls = {
+        let ui = cell.borrow();
+        [ui.add, ui.rename, ui.remove, ui.activate, ui.deactivate, ui.check]
+    };
+    for control in controls {
+        // SAFETY: every widget is a live child of the page.
+        unsafe { gtk_widget_set_sensitive(control, flag(sensitive)) };
+    }
 }
 
 unsafe extern "C" fn on_deactivate(_button: *mut GObject, page: gpointer) {
@@ -1781,10 +1920,6 @@ unsafe fn act(page: gpointer, action: Action) {
             Action::Remove => match selected {
                 None => return refuse(cell, NO_SCRIPT_SELECTED),
                 Some(row) => cell.borrow_mut().form.remove(row).map(|()| true),
-            },
-            Action::Activate => match selected {
-                None => return refuse(cell, NO_SCRIPT_SELECTED),
-                Some(row) => cell.borrow_mut().form.activate(row).map(|()| true),
             },
             Action::Deactivate => match selected {
                 None => return refuse(cell, NO_SCRIPT_SELECTED),
