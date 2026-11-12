@@ -67,6 +67,10 @@ pub struct ScriptEntry {
     pub active: bool,
     /// True for the script the vacation responder owns.
     pub protected: bool,
+    /// True once [`FiltersForm::set_text`] changed this script's text. The
+    /// external-edit banner never shows again for this script once this is
+    /// set: a text edit in this page is not an edit outside Evolution.
+    pub edited_as_text: bool,
 }
 
 impl ScriptEntry {
@@ -146,6 +150,7 @@ impl FiltersForm {
                 name: script.script.name,
                 text: script.text,
                 active: script.script.is_active,
+                edited_as_text: false,
             });
         }
         form.selected = (!form.entries.is_empty()).then_some(0);
@@ -254,6 +259,7 @@ impl FiltersForm {
             text,
             active: false,
             protected: false,
+            edited_as_text: false,
         });
         let index = self.entries.len() - 1;
         self.selected = Some(index);
@@ -269,8 +275,16 @@ impl FiltersForm {
     }
 
     /// Replaces the Sieve source of row `index` with what the text view holds.
+    ///
+    /// Marks the entry [`ScriptEntry::edited_as_text`] if `text` differs from
+    /// the text already staged, so a flush with no real change (for example,
+    /// a reselection that just flushes the same buffer back) does not count
+    /// as a text edit.
     pub fn set_text(&mut self, index: usize, text: &str) -> Result<(), &'static CStr> {
         self.writable(index)?;
+        if self.entries[index].text != text {
+            self.entries[index].edited_as_text = true;
+        }
         self.entries[index].text = text.to_owned();
         Ok(())
     }
@@ -608,6 +622,21 @@ mod tests {
             }
             ScriptWrite::Create { .. } => panic!("an existing script must be an update"),
         }
+    }
+
+    #[test]
+    fn set_text_marks_the_entry_edited_only_when_the_text_changes() {
+        let mut form = form(vec![script("a", "work", false)]);
+        assert!(!form.entries()[0].edited_as_text);
+
+        // The same text a flush sends when the user made no edit: not a
+        // text edit, so the banner must still be free to show again.
+        let same_text = form.entries()[0].text.clone();
+        form.set_text(0, &same_text).unwrap();
+        assert!(!form.entries()[0].edited_as_text);
+
+        form.set_text(0, "discard;\n").unwrap();
+        assert!(form.entries()[0].edited_as_text);
     }
 
     #[test]

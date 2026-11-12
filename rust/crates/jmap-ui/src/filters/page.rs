@@ -184,7 +184,7 @@ const DEACTIVATE_LABEL: &CStr = N_(c"Deact_ivate");
 const ACTIVATE_LABEL: &CStr = N_(c"Acti_vate");
 // GNOME HIG: a button that opens a dialog gets a trailing ellipsis.
 const RULE_ADD_LABEL: &CStr = N_(c"A_dd…");
-const EXTERNAL_EDIT: &CStr = N_(c"This script was changed outside Evolution. It shows as text.");
+const EXTERNAL_EDIT: &CStr = N_(c"Not in Evolution's rules format, so it shows as text.");
 
 /// All page state, in a box as qdata. It holds the widget pointers (main
 /// thread only), the staged scripts, and the account link from the load.
@@ -858,7 +858,9 @@ struct ShowPlan {
     /// Set the first time the selection lands on a managed script that does
     /// not parse, so the user learns why rules mode is not available. Later
     /// redraws of the same script leave the status label to whatever the
-    /// last action or Check wrote there.
+    /// last action or Check wrote there. Never set once the user has edited
+    /// this script's text in this page ([`ScriptEntry::edited_as_text`]): a
+    /// text edit made here is not an edit from outside Evolution.
     status_note: Option<&'static CStr>,
     rule_rows: Vec<(String, String)>,
     rule_selected: Option<usize>,
@@ -887,6 +889,7 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
         let script_text = entry.map(|entry| entry.text.clone()).unwrap_or_default();
         let is_managed =
             entry.is_some_and(|entry| entry.name == MANAGED_SCRIPT_NAME && !entry.protected);
+        let edited_as_text = entry.is_some_and(|entry| entry.edited_as_text);
         let has_mailboxid = ui.form.has_mailboxid();
         let parsed = is_managed
             .then(|| script::load(&script_text, has_mailboxid))
@@ -933,7 +936,8 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             edit_as_text_visible: is_managed,
             edit_as_text_sensitive: is_managed && can_parse,
             edit_as_text_checked: is_managed && (!can_parse || ui.force_text),
-            status_note: (script_changed && is_managed && !can_parse).then_some(EXTERNAL_EDIT),
+            status_note: (script_changed && is_managed && !can_parse && !edited_as_text)
+                .then_some(EXTERNAL_EDIT),
             rule_rows,
             rule_selected,
             rule_buttons,
