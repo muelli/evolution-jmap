@@ -139,6 +139,16 @@ pub(crate) unsafe extern "C" fn refresh_info_sync(
                     StoreError::to_gerror,
                 );
             };
+
+            // A synthetic "Shared" root or owner heading names no mailbox a
+            // server has ever heard of (ROADMAP item 179(b), finding F2). It
+            // never has messages and never changes, so the right refresh is
+            // to do nothing: asking the server would send it a mailbox id it
+            // cannot resolve.
+            if jmap_mail_sync::is_synthetic_folder_id(mailbox) {
+                return GTRUE;
+            }
+
             let Some(store) = parent_store(folder) else {
                 return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };

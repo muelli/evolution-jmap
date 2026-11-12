@@ -42,7 +42,7 @@ use jmap_proto::{Id, State, UtcDate};
 pub use error::SyncError;
 pub use folder::{
     FolderDelta, FolderInfo, FolderListChange, FolderRole, FolderTree, folder_tree_from_json,
-    folder_tree_to_json,
+    folder_tree_to_json, is_synthetic_folder_id,
 };
 pub use keywords::{KeywordChange, Keywords};
 pub use mailboxes::Filing;

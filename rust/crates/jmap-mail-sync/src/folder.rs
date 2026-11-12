@@ -17,6 +17,20 @@ use crate::shared::SharedMailAccount;
 /// The path of the synthetic root [`FolderTree::merge_shared`] adds.
 const SHARED_ROOT_PATH: &str = "Shared";
 
+/// Whether `id` names a synthetic folder [`FolderTree::merge_shared`] adds:
+/// the "Shared" root, or an owner heading below it.
+///
+/// Neither is a real mailbox. The id routes to no account and no server has
+/// ever heard of it (ROADMAP item 179(b), finding F2: a real Evolution sent
+/// one to a real JMAP server and got back `invalidArguments: invalid JMAP
+/// ID`). A caller that is about to ask the server about a mailbox id must
+/// check this first and treat a match as an always-empty folder that never
+/// changes.
+pub fn is_synthetic_folder_id(id: &Id) -> bool {
+    let id = id.as_str();
+    id == "shared-root" || id.starts_with("shared-owner:")
+}
+
 /// The maximum depth of a `parentId` chain. A deeper mailbox becomes
 /// top-level.
 ///

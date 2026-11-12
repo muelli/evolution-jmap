@@ -363,6 +363,50 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
     }
 }
 
+/// ROADMAP item 179(b), finding F2: a real Evolution refreshed the synthetic
+/// "Shared" root or an owner heading below it, and the mailbox id this store
+/// invented for the node ("shared-root", "shared-owner:<id>") reached a real
+/// JMAP server as if it named a mailbox there ("invalidArguments: invalid
+/// JMAP ID"). Neither node is a mailbox any server has ever heard of, so a
+/// refresh of either must never touch the connection.
+///
+/// The mock does not reject a made-up mailbox id (it just matches nothing),
+/// so a refresh while connected would pass today whether or not the fix is in
+/// place. This test proves the no-op instead: with the connection dropped,
+/// refreshing a real folder reports `Disconnected` (the test above), so a
+/// refresh of a synthetic node that still succeeds can only mean it never
+/// asked the store for a connection at all.
+#[test]
+fn a_refresh_of_a_synthetic_shared_folder_never_asks_the_server() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX))
+    });
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(Id::new("shared-a"), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None);
+    }
+
+    let account = Account::open();
+    account.connect(sync_against(&server));
+    let shared_root = open(&account, "Shared");
+    let shared_owner = open(&account, "Shared/Bob");
+
+    assert!(account.jmap().drop_connection());
+
+    Refreshed::straight(shared_root).expect_ok();
+    Refreshed::straight(shared_owner).expect_ok();
+
+    // SAFETY: the references this test took from `get_folder_sync`.
+    unsafe {
+        g_object_unref(shared_root.cast());
+        g_object_unref(shared_owner.cast());
+    }
+}
+
 /// A listing comes with the state it was taken at. That state serves the
 /// *next* refresh: `Email/changes` asked from it costs one round trip, while a
 /// full listing costs one round trip per page of the mailbox. A refresh that
