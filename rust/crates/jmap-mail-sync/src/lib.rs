@@ -736,12 +736,33 @@ impl MailSync {
         keywords: &Keywords,
         received_at: Option<i64>,
     ) -> Result<Id, SyncError> {
-        let account_id = self.account_id().to_string();
+        self.import_message_as(&self.account_id, mailbox, source, keywords, received_at)
+    }
+
+    /// [`Self::import_message`], against `account` instead of this sync's
+    /// own account.
+    ///
+    /// `Email/import` is a JMAP method call under one `accountId`, and the
+    /// blob it names must belong to that same account (RFC 8620 §6.1). A
+    /// mailbox [`FolderTree::owning_account`] names as a shared account's
+    /// (ROADMAP item 179(d), the append-path slice) needs its write to carry
+    /// that account, not the account this `MailSync` addresses by default:
+    /// the caller resolves `account` from the held folder tree and passes it
+    /// here instead of assuming `self.account_id`.
+    pub fn import_message_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+        source: Vec<u8>,
+        keywords: &Keywords,
+        received_at: Option<i64>,
+    ) -> Result<Id, SyncError> {
+        let account_id = account.to_string();
         let mailbox_id = mailbox.to_string();
         tracing::debug!(account_id, mailbox_id, "importing message");
         let upload = self
             .client
-            .upload_blob(&self.account_id, MESSAGE_MEDIA_TYPE, source)
+            .upload_blob(account, MESSAGE_MEDIA_TYPE, source)
             .map_err(|error| {
                 tracing::warn!(account_id, mailbox_id, %error, "message import failed");
                 error
@@ -757,7 +778,7 @@ impl MailSync {
 
         let imported = self
             .client
-            .email_import(&self.account_id, &import)
+            .email_import(account, &import)
             .map_err(|error| {
                 tracing::warn!(account_id, mailbox_id, %error, "message import failed");
                 error

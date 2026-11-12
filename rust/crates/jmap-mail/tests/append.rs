@@ -889,6 +889,65 @@ fn appending_to_a_mailbox_without_add_rights_is_refused_locally() {
     );
 }
 
+/// ROADMAP item 179(d), the append-path slice: a mailbox
+/// [`jmap_mail_sync::FolderTree::merge_shared`] merges in from a shared
+/// account is a mailbox of a *different* JMAP account, and `Email/import` is
+/// a method call under one `accountId`. Appending to it must reach the
+/// mailbox's own account, not the account this store otherwise addresses.
+#[test]
+fn appending_to_a_shared_mailbox_lands_in_its_owning_account() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None);
+    }
+
+    let account = Account::open();
+    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
+    account.connect(MailSync::new(client, account_id.clone()));
+
+    let shared = open(&account, "Shared/Bob/Projects");
+
+    let mut uid: *mut glib_sys::gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    let message = Message::parsed(MESSAGE);
+    // SAFETY: a live folder of ours, a live message, a NULL row, and
+    // out-parameters that are writable and currently NULL.
+    let ok = unsafe {
+        camel_folder_append_message_sync(
+            shared,
+            message.0,
+            ptr::null_mut(),
+            &mut uid,
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+    let appended = Appended::new(ok, uid, error);
+    appended.expect_ok();
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state.account(&account_id).unwrap().emails.is_empty(),
+        "the message must not land in this store's own account"
+    );
+    assert_eq!(
+        state.account(&shared_account_id).unwrap().emails.len(),
+        1,
+        "the message must land in the shared mailbox's own account"
+    );
+
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(shared.cast()) };
+}
+
 /// A message larger than the account's `maxSizeUpload` (RFC 8620 §6.1) is
 /// refused before a byte of it is sent. The folder states the reason.
 ///
