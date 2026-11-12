@@ -12,8 +12,8 @@
 //! a [`FiltersForm`] and written when the account editor saves. Two actions
 //! are instant instead (item 180(a)'s apply-at-once sweep, one action per
 //! commit): "Check" asks the server at once and writes nothing; "Activate"
-//! (see [`activate_now`]) writes the account's current plan at once and
-//! reloads the list from the server.
+//! writes the account's current plan at once and reloads the list from the
+//! server.
 //!
 //! The widgets hold no decisions. The form answers which buttons are usable
 //! and what one submit writes, and it has unit tests. This file reads the
