@@ -38,11 +38,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use eds_sys::ESource;
 use evo_sys::{
     EMailConfigPage, EMailConfigPageInterface, GDK_CONTROL_MASK, GDK_KEY_Down, GDK_KEY_Escape,
-    GDK_KEY_Return, GDK_KEY_Tab, GDK_KEY_Up, GDK_KEY_space, GTK_ORIENTATION_HORIZONTAL,
-    GTK_ORIENTATION_VERTICAL, GTK_RESPONSE_CANCEL, GTK_RESPONSE_OK, GTK_SELECTION_BROWSE,
-    GTK_TEXT_WINDOW_WIDGET, GTK_WINDOW_POPUP, GdkEventKey, GdkRectangle, GtkCellRenderer,
-    GtkListStore, GtkSourceBuffer, GtkTextBuffer, GtkTextIter, GtkTextTag, GtkTreeModel,
-    GtkTreePath, GtkTreeSelection, GtkWidget, GtkWindow, e_mail_config_page_get_type,
+    GDK_KEY_Return, GDK_KEY_Right, GDK_KEY_Tab, GDK_KEY_Up, GDK_KEY_space,
+    GTK_ORIENTATION_HORIZONTAL, GTK_ORIENTATION_VERTICAL, GTK_RESPONSE_CANCEL, GTK_RESPONSE_OK,
+    GTK_SELECTION_BROWSE, GTK_TEXT_WINDOW_WIDGET, GTK_WINDOW_POPUP, GdkEventKey, GdkRectangle,
+    GtkCellRenderer, GtkListStore, GtkSourceBuffer, GtkTextBuffer, GtkTextIter, GtkTextTag,
+    GtkTreeModel, GtkTreePath, GtkTreeSelection, GtkWidget, GtkWindow, e_mail_config_page_get_type,
     gdk_event_get_keyval, gdk_event_get_state, gdk_window_get_origin, gtk_box_new,
     gtk_box_pack_start, gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new,
     gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_container_get_children,
@@ -1439,20 +1439,58 @@ unsafe fn accept_completion(cell: &RefCell<UiState>) {
     unsafe { close_completion(cell) };
 }
 
+/// What one key press asks the completion popup to do (item 171c, the
+/// Right arrow row added by item 180(e)). Pure dispatch on the keyval and
+/// modifiers alone, factored out of [`on_source_key_press`] so a test can
+/// drive it with no live `GdkEventKey`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionKey {
+    MoveSelection(i32),
+    Accept,
+    Close,
+    /// Closes the popup and lets the keystroke still reach the buffer.
+    CloseAndPropagate,
+    Open,
+    /// Not a completion key: let the buffer handle it as usual.
+    Ignore,
+}
+
+// `GDK_KEY_*` are bindgen's own names for `gdk/gdkkeysyms.h`'s macros,
+// matched as patterns below: GDK's own mixed-case spelling, not a local
+// naming choice to fix.
+#[allow(non_upper_case_globals)]
+fn completion_key_action(keyval: c_uint, mod_state: c_uint, showing: bool) -> CompletionKey {
+    if showing {
+        match keyval {
+            GDK_KEY_Up => CompletionKey::MoveSelection(-1),
+            GDK_KEY_Down => CompletionKey::MoveSelection(1),
+            // Right arrow accepts the same way Tab and Enter do (item
+            // 180(e)): the popup only ever shows with the cursor right
+            // after the word it matched, so there is no "elsewhere" case
+            // to tell apart from this one while it is open.
+            GDK_KEY_Tab | GDK_KEY_Return | GDK_KEY_Right => CompletionKey::Accept,
+            GDK_KEY_Escape => CompletionKey::Close,
+            _ => CompletionKey::CloseAndPropagate,
+        }
+    } else if keyval == GDK_KEY_space && (mod_state & GDK_CONTROL_MASK) != 0 {
+        CompletionKey::Open
+    } else {
+        CompletionKey::Ignore
+    }
+}
+
 /// The text-mode editor's own `key-press-event` handler (item 171c). While
-/// the completion popup is open, Up/Down move its selection, Tab/Enter
-/// accepts the selected candidate, Escape closes it, and any other key
-/// closes it without consuming the event, so the keystroke still reaches
-/// the buffer normally. While it is closed, Ctrl+Space opens it.
+/// the completion popup is open, Up/Down move its selection, Tab/Enter/
+/// Right arrow accepts the selected candidate (item 180(e)), Escape closes
+/// it, and any other key closes it without consuming the event, so the
+/// keystroke still reaches the buffer normally. While it is closed,
+/// Ctrl+Space opens it, and every other key reaches the buffer as usual,
+/// Right arrow included.
 ///
 /// # Safety
 ///
 /// The GLib signal system calls this with the page as the data pointer and
 /// a live `GdkEventKey` as the event.
-// `GDK_KEY_*` are bindgen's own names for `gdk/gdkkeysyms.h`'s macros,
-// matched as patterns below: GDK's own mixed-case spelling, not a local
-// naming choice to fix.
-#[allow(non_upper_case_globals)]
 unsafe extern "C" fn on_source_key_press(
     _widget: *mut GObject,
     event: *mut GdkEventKey,
@@ -1474,34 +1512,28 @@ unsafe extern "C" fn on_source_key_press(
             gdk_event_get_state(event.cast(), &mut mod_state);
         }
         let showing = !cell.borrow().completion_candidates.is_empty();
-        if showing {
-            match keyval {
-                GDK_KEY_Up => {
-                    unsafe { move_completion_selection(cell, -1) };
-                    GTRUE
-                }
-                GDK_KEY_Down => {
-                    unsafe { move_completion_selection(cell, 1) };
-                    GTRUE
-                }
-                GDK_KEY_Tab | GDK_KEY_Return => {
-                    unsafe { accept_completion(cell) };
-                    GTRUE
-                }
-                GDK_KEY_Escape => {
-                    unsafe { close_completion(cell) };
-                    GTRUE
-                }
-                _ => {
-                    unsafe { close_completion(cell) };
-                    GFALSE
-                }
+        match completion_key_action(keyval, mod_state, showing) {
+            CompletionKey::MoveSelection(delta) => {
+                unsafe { move_completion_selection(cell, delta) };
+                GTRUE
             }
-        } else if keyval == GDK_KEY_space && (mod_state & GDK_CONTROL_MASK) != 0 {
-            unsafe { open_completion(cell) };
-            GTRUE
-        } else {
-            GFALSE
+            CompletionKey::Accept => {
+                unsafe { accept_completion(cell) };
+                GTRUE
+            }
+            CompletionKey::Close => {
+                unsafe { close_completion(cell) };
+                GTRUE
+            }
+            CompletionKey::CloseAndPropagate => {
+                unsafe { close_completion(cell) };
+                GFALSE
+            }
+            CompletionKey::Open => {
+                unsafe { open_completion(cell) };
+                GTRUE
+            }
+            CompletionKey::Ignore => GFALSE,
         }
     })
 }
@@ -3188,6 +3220,35 @@ mod tests {
 
             gtk_widget_destroy(window);
         }
+    }
+
+    /// Item 180(e): while the popup is open, Right arrow accepts the
+    /// selected candidate the same way Tab and Enter do. No display
+    /// needed: `completion_key_action` is a pure function.
+    #[test]
+    fn right_arrow_accepts_like_tab_and_enter_while_the_popup_is_open() {
+        assert_eq!(
+            completion_key_action(GDK_KEY_Right, 0, true),
+            CompletionKey::Accept
+        );
+        assert_eq!(
+            completion_key_action(GDK_KEY_Tab, 0, true),
+            CompletionKey::Accept
+        );
+        assert_eq!(
+            completion_key_action(GDK_KEY_Return, 0, true),
+            CompletionKey::Accept
+        );
+    }
+
+    /// Item 180(e): with the popup closed, Right arrow is not a completion
+    /// key, so the buffer moves the cursor as usual.
+    #[test]
+    fn right_arrow_with_no_popup_is_left_to_the_buffer() {
+        assert_eq!(
+            completion_key_action(GDK_KEY_Right, 0, false),
+            CompletionKey::Ignore
+        );
     }
 
     /// Item 182(c): the completion popup's open/close/accept states are

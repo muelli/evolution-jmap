@@ -1045,6 +1045,7 @@ fn main() {
         .raw_line("pub const GDK_KEY_Return: ::std::os::raw::c_uint = 0xff0d;")
         .raw_line("pub const GDK_KEY_Escape: ::std::os::raw::c_uint = 0xff1b;")
         .raw_line("pub const GDK_KEY_Up: ::std::os::raw::c_uint = 0xff52;")
+        .raw_line("pub const GDK_KEY_Right: ::std::os::raw::c_uint = 0xff53;")
         .raw_line("pub const GDK_KEY_Down: ::std::os::raw::c_uint = 0xff54;")
         // `e_web_view_register_element_clicked`'s callback type. Bindgen
         // will not generate this on its own: its signature names
