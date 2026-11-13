@@ -966,6 +966,59 @@ fn expunge_message_destroys_in_the_shared_mailboxs_owning_account() {
     );
 }
 
+/// ROADMAP item 179(d): trashing a message of a
+/// [`jmap_mail_sync::FolderTree::merge_shared`] mailbox must write into that
+/// mailbox's own account, not the account this store otherwise addresses,
+/// the same reason [`expunge_message_destroys_in_the_shared_mailboxs_owning_account`]
+/// gives for the expunge write. This goes through [`JmapStore::trash_message`]
+/// directly, for the same reason that test does.
+#[test]
+fn trash_message_moves_into_the_shared_mailboxs_own_trash() {
+    let server = MockServer::builder().start();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    let (shared_inbox_id, shared_trash_id, shared_uid) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let inbox = sharer.seed_mailbox("Inbox", None);
+        let trash = sharer.seed_mailbox("Trash", None);
+        let uid = sharer.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        (inbox, trash, uid)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+
+    store
+        .trash_message(&shared_uid, &shared_inbox_id, &shared_trash_id)
+        .expect("the trash to reach the shared mailbox's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let mailboxes = state
+        .account(&shared_account_id)
+        .unwrap()
+        .emails
+        .get(&shared_uid)
+        .unwrap()
+        .mailbox_ids
+        .clone()
+        .unwrap_or_default();
+    assert_eq!(
+        mailboxes.keys().collect::<Vec<_>>(),
+        vec![&shared_trash_id],
+        "the message must move into the shared mailbox's own trash"
+    );
+}
+
 #[test]
 fn an_expunge_the_user_stopped_destroys_nothing() {
     // The vfunc itself, not Camel's wrapper: the wrapper tests the cancellable

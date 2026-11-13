@@ -699,32 +699,54 @@ impl MailSync {
     /// the race window are the same as in [`MailSync::expunge_message`]. A
     /// message that is not in `mailbox` is left as it is.
     pub fn trash_message(&self, uid: &Id, mailbox: &Id, trash: &Id) -> Result<(), SyncError> {
-        let account_id = self.account_id().to_string();
+        self.trash_message_as(&self.account_id, uid, mailbox, trash)
+    }
+
+    /// [`Self::trash_message`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Email/get` and `Email/set` are method calls under one `accountId`,
+    /// and `mailbox` and `trash` can both be mailboxes of a shared account
+    /// merged into this account's folder tree
+    /// ([`crate::FolderTree::merge_shared`]). The caller resolves `account`
+    /// from the held folder tree ([`crate::FolderTree::owning_account`]) and
+    /// passes it here instead of assuming `self.account_id` (ROADMAP item
+    /// 179(d)), the same way [`Self::expunge_message_as`] already does.
+    pub fn trash_message_as(
+        &self,
+        account: &Id,
+        uid: &Id,
+        mailbox: &Id,
+        trash: &Id,
+    ) -> Result<(), SyncError> {
+        let account_id = account.to_string();
         let message_uid = uid.to_string();
         let mailbox_id = mailbox.to_string();
-        let result = self.message_mailboxes(uid).and_then(|filed_in| {
-            if !filed_in.contains(mailbox) {
-                return Ok(());
-            }
-            tracing::debug!(
-                account_id,
-                uid = message_uid,
-                mailbox_id,
-                "trashing message"
-            );
-            let patch = if filed_in.len() > 1 {
-                mailboxes::out_of(mailbox)
-            } else {
-                Filing::moved(mailbox.clone(), trash.clone()).patch()
-            };
-            self.update_email(uid, patch)
-        });
+        let result = self
+            .message_mailboxes_as(account, uid)
+            .and_then(|filed_in| {
+                if !filed_in.contains(mailbox) {
+                    return Ok(());
+                }
+                tracing::debug!(
+                    account_id,
+                    uid = message_uid,
+                    mailbox_id,
+                    "trashing message"
+                );
+                let patch = if filed_in.len() > 1 {
+                    mailboxes::out_of(mailbox)
+                } else {
+                    Filing::moved(mailbox.clone(), trash.clone()).patch()
+                };
+                self.update_email_as(account, uid, patch)
+            });
         result.inspect_err(|error| {
             tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message trash failed");
         })
     }
 
-    /// The mailboxes that hold one message.
+    /// The mailboxes that hold one message, under `account`.
     ///
     /// The request names one property. The default property set of `Email/get`
     /// is large and includes body parts (RFC 8621 §4.2).
@@ -736,12 +758,6 @@ impl MailSync {
     /// is a protocol violation, and no write is safe to select from it. Thus
     /// this function refuses it, as `identity_for` refuses an identity without
     /// an id. It does not count the value as membership or as absence.
-    fn message_mailboxes(&self, uid: &Id) -> Result<BTreeSet<Id>, SyncError> {
-        self.message_mailboxes_as(&self.account_id, uid)
-    }
-
-    /// [`Self::message_mailboxes`], against `account` instead of this sync's
-    /// own account.
     fn message_mailboxes_as(&self, account: &Id, uid: &Id) -> Result<BTreeSet<Id>, SyncError> {
         let found = self.client.email_get(
             account,

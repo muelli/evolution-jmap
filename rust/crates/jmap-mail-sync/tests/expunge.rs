@@ -348,3 +348,53 @@ fn expunge_message_as_destroys_in_the_named_account_not_the_syncs_own() {
         "the message must be destroyed in the named shared account"
     );
 }
+
+/// ROADMAP item 179(d): `Email/get` and `Email/set` are method calls under
+/// one `accountId`, so trashing a message of a shared account must carry
+/// that account, not the sync's own one. `trash_message_as` is the entry
+/// point a caller that resolved the owning account
+/// (`FolderTree::owning_account`) uses instead of `trash_message`.
+#[test]
+fn trash_message_as_moves_into_the_named_accounts_own_trash() {
+    let fixture = Fixture::start();
+
+    let shared = Id::new("A2");
+    let (shared_inbox, shared_trash, shared_uid) = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+        let inbox = sharer.seed_mailbox("Inbox", None);
+        let trash = sharer.seed_mailbox("Trash", None);
+        let uid = sharer.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        (inbox, trash, uid)
+    };
+
+    fixture
+        .sync()
+        .trash_message_as(&shared, &shared_uid, &shared_inbox, &shared_trash)
+        .expect("the trash writes into the named account");
+
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    let mailboxes = state
+        .account(&shared)
+        .unwrap()
+        .emails
+        .get(&shared_uid)
+        .unwrap()
+        .mailbox_ids
+        .clone()
+        .unwrap_or_default();
+    assert_eq!(
+        mailboxes.keys().collect::<Vec<_>>(),
+        vec![&shared_trash],
+        "the message must move into the named shared account's own trash"
+    );
+}

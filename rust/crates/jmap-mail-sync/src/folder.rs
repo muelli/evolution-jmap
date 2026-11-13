@@ -487,6 +487,20 @@ impl FolderTree {
             .find(|folder| folder.role == Some(role) && folder.account_id.is_none())
     }
 
+    /// The folder with a role, in a shared account's own part of the tree.
+    ///
+    /// [`Self::role`] answers only for the store's own account, by design
+    /// (S13-3 above). A write that must land in `account`'s own trash or
+    /// junk, not the store's own, needs this instead: a caller that
+    /// resolves a mailbox's owner with [`Self::owning_account`] and finds
+    /// that it is shared uses this to find that same account's trash
+    /// (ROADMAP item 179(d), `trash_message`), rather than the store's own
+    /// trash or no trash at all.
+    pub fn shared_role(&self, account: &Id, role: FolderRole) -> Option<&FolderInfo> {
+        self.iter()
+            .find(|folder| folder.role == Some(role) && folder.account_id.as_ref() == Some(account))
+    }
+
     /// Sets the subscription of a mailbox. Returns `false` if the tree does not
     /// have the mailbox.
     ///
@@ -1346,6 +1360,47 @@ mod tests {
         )]);
 
         assert!(tree.role(FolderRole::Trash).is_none());
+    }
+
+    /// `shared_role` is `role`'s counterpart for a shared account: it finds
+    /// that account's own trash, not the store's, and answers `None` for a
+    /// different account or for the store's own account.
+    #[test]
+    fn shared_role_finds_only_the_named_accounts_folder() {
+        let own = FolderTree::from_mailboxes(&[with_role(
+            mailbox("1", "Trash", None, 0, 0),
+            role::TRASH,
+        )])
+        .unwrap();
+        let shared = FolderTree::from_mailboxes(&[with_role(
+            mailbox("s1", "Papierkorb", None, 0, 0),
+            role::TRASH,
+        )])
+        .unwrap();
+        let bob = Id::new("bob");
+
+        let tree = own.merge_shared(&[(
+            SharedMailAccount {
+                id: bob.clone(),
+                name: "bob@example.com".to_owned(),
+                read_only: false,
+            },
+            shared,
+        )]);
+
+        assert_eq!(
+            tree.shared_role(&bob, FolderRole::Trash).unwrap().id,
+            Id::new("s1"),
+            "bob's own trash, not the store's"
+        );
+        assert!(
+            tree.shared_role(&Id::new("nobody"), FolderRole::Trash)
+                .is_none()
+        );
+        assert!(
+            tree.shared_role(&bob, FolderRole::Junk).is_none(),
+            "bob has no mailbox with that role"
+        );
     }
 
     fn with_role(mut mailbox: Mailbox, role: &str) -> Mailbox {
