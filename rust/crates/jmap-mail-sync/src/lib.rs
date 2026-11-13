@@ -1004,7 +1004,26 @@ impl MailSync {
     /// delete the folder, and the subscription is then not necessary. All
     /// other refusals stay [`SyncError::Client`].
     pub fn set_subscribed(&self, mailbox: &Id, subscribed: bool) -> Result<(), SyncError> {
-        let account_id = self.account_id().to_string();
+        self.set_subscribed_as(&self.account_id, mailbox, subscribed)
+    }
+
+    /// [`Self::set_subscribed`], against `account` instead of this sync's
+    /// own account.
+    ///
+    /// `Mailbox/set` is a method call under one `accountId`, and `mailbox`
+    /// can be a mailbox of a shared account merged into this account's
+    /// folder tree ([`crate::FolderTree::merge_shared`]). The caller resolves
+    /// `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) and passes it here instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::file_message_as`] already does.
+    pub fn set_subscribed_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+        subscribed: bool,
+    ) -> Result<(), SyncError> {
+        let account_id = account.to_string();
         let mailbox_id = mailbox.to_string();
         tracing::debug!(
             account_id,
@@ -1014,7 +1033,7 @@ impl MailSync {
         );
         self.client
             .mailbox_update(
-                &self.account_id,
+                account,
                 mailbox,
                 serde_json::json!({ "isSubscribed": subscribed }),
             )

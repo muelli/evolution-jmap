@@ -43,6 +43,51 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 
+/// ROADMAP item 179(d): `Mailbox/set` is a method call under one `accountId`,
+/// so subscribing to a shared mailbox must reach that mailbox's own account,
+/// not the account this store otherwise addresses. Unlike
+/// `expunge.rs`'s `expunge_message_destroys_in_the_shared_mailboxs_owning_account`,
+/// this lists first (`store.folders(CACHED)`): `set_subscribed` resolves the
+/// owner from the held listing, not a fresh one, so
+/// `a_store_that_has_not_listed_yet_does_not_gain_a_listing` above still
+/// holds; a real `subscribe_folder_sync` call only ever names a mailbox
+/// Camel already saw in a listing.
+#[test]
+fn set_subscribed_reaches_the_shared_mailboxs_owning_account() {
+    let server = MockServer::builder().start();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    let shared_inbox_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Inbox", None)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    store.folders(CACHED).expect("listed");
+
+    store
+        .set_subscribed(&shared_inbox_id, false)
+        .expect("the subscription to reach the shared mailbox's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert_eq!(
+        state
+            .account(&shared_account_id)
+            .unwrap()
+            .mailboxes
+            .get(&shared_inbox_id)
+            .unwrap()
+            .is_subscribed,
+        Some(false),
+        "the subscription must change in the shared account, not this store's own"
+    );
+}
+
 /// No flags: the tree the store already has, with no new request.
 /// This matches the reach of the non-blocking `folder_is_subscribed` method.
 const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;

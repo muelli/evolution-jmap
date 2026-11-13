@@ -125,3 +125,41 @@ fn a_mailbox_the_account_does_not_have_is_no_such_folder() {
         other => panic!("expected a missing folder, got {other}"),
     }
 }
+
+/// ROADMAP item 179(d): `Mailbox/set` is a method call under one `accountId`,
+/// so subscribing to a shared mailbox must carry that account, not the
+/// sync's own one. `set_subscribed_as` is the entry point a caller that
+/// resolved the owning account (`FolderTree::owning_account`) uses instead
+/// of `set_subscribed`.
+#[test]
+fn set_subscribed_as_writes_into_the_named_account_not_the_syncs_own() {
+    let fixture = Fixture::start();
+
+    let shared = Id::new("A2");
+    let shared_inbox = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Inbox", None)
+    };
+
+    fixture
+        .sync()
+        .set_subscribed_as(&shared, &shared_inbox, false)
+        .expect("the subscription writes into the named account");
+
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert_eq!(
+        state
+            .account(&shared)
+            .unwrap()
+            .mailboxes
+            .get(&shared_inbox)
+            .unwrap()
+            .is_subscribed,
+        Some(false),
+        "the subscription must change in the named shared account"
+    );
+}
