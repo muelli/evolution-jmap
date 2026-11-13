@@ -1335,6 +1335,11 @@ unsafe fn open_completion(cell: &RefCell<UiState>) {
         if matches.is_empty() {
             return;
         }
+        tracing::trace!(
+            word,
+            candidate_count = matches.len(),
+            "sieve completion: popup opened"
+        );
         {
             let mut ui = cell.borrow_mut();
             ui.completion_candidates = matches;
@@ -1354,12 +1359,16 @@ unsafe fn open_completion(cell: &RefCell<UiState>) {
 ///
 /// As [`refresh`].
 unsafe fn close_completion(cell: &RefCell<UiState>) {
-    let window = {
+    let (window, was_open) = {
         let mut ui = cell.borrow_mut();
+        let was_open = !ui.completion_candidates.is_empty();
         ui.completion_candidates.clear();
         ui.completion_selected = 0;
-        ui.completion_window
+        (ui.completion_window, was_open)
     };
+    if was_open {
+        tracing::trace!("sieve completion: popup closed");
+    }
     // SAFETY: a live child of the page.
     unsafe { gtk_widget_hide(window) };
 }
@@ -1399,6 +1408,7 @@ unsafe fn accept_completion(cell: &RefCell<UiState>) {
             .map(|candidate| (buffer, candidate.text))
     };
     if let Some((buffer, text)) = accepted {
+        tracing::trace!(accepted = text, "sieve completion: candidate accepted");
         // SAFETY: `buffer` is a live child of the page.
         unsafe {
             let mark = gtk_text_buffer_get_insert(buffer);
@@ -2552,6 +2562,8 @@ mod tests {
     use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
     use jmap_backend_core::marshal::read_string;
     use jmap_backend_core::subclass::register_static;
+    use jmap_tracing_capture::{capture, has};
+    use tracing::Level;
 
     use super::*;
 
@@ -2848,6 +2860,56 @@ mod tests {
             assert_eq!(
                 result, "elsif",
                 "accept did not replace the partial word with the selected candidate"
+            );
+
+            gtk_widget_destroy(window);
+        }
+    }
+
+    /// Item 182(c): the completion popup's open/close/accept states are
+    /// invisible to AT-SPI, so they trace instead. Needs a display; skips
+    /// without one.
+    #[test]
+    fn completion_open_close_and_accept_trace_their_state() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: as `completion_opens_navigates_and_accepts_a_candidate`.
+        unsafe {
+            let window = gtk_window_new(0);
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            gtk_container_add(window.cast(), page.cast());
+            gtk_widget_show_all(window);
+
+            let cell = state(page.cast()).expect("a freshly built page has state");
+            let buffer = cell.borrow().buffer;
+            let text = cstring_lossy("e");
+            let mut start = GtkTextIter::default();
+            gtk_text_buffer_get_start_iter(buffer, &mut start);
+            gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+            let mut end = GtkTextIter::default();
+            gtk_text_buffer_get_end_iter(buffer, &mut end);
+            gtk_text_buffer_place_cursor(buffer, &end);
+
+            let (_, captured) = capture(|| {
+                open_completion(cell);
+                accept_completion(cell);
+            });
+
+            assert!(
+                has(&captured, Level::TRACE, "word", "e"),
+                "expected a traced word=\"e\" on open, got {captured:?}"
+            );
+            assert!(
+                has(&captured, Level::TRACE, "candidate_count", "3"),
+                "expected a traced candidate_count=3 on open, got {captured:?}"
+            );
+            assert!(
+                has(&captured, Level::TRACE, "accepted", "elsif"),
+                "expected a traced accepted=\"elsif\" on accept, got {captured:?}"
             );
 
             gtk_widget_destroy(window);

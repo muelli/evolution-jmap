@@ -31,17 +31,32 @@ pub struct SieveProblem {
 /// capabilities or server-side limits.
 pub fn find_problem(source: &str) -> Option<SieveProblem> {
     match Compiler::new().compile(source.as_bytes()) {
-        Ok(_) => None,
-        Err(error) => Some(SieveProblem {
-            line: error.line_num(),
-            column: error.line_pos(),
-            message: error.to_string(),
-        }),
+        Ok(_) => {
+            tracing::trace!("sieve local parse: no problem, any shown tooltip clears");
+            None
+        }
+        Err(error) => {
+            let problem = SieveProblem {
+                line: error.line_num(),
+                column: error.line_pos(),
+                message: error.to_string(),
+            };
+            tracing::trace!(
+                line = problem.line,
+                column = problem.column,
+                error = %problem.message,
+                "sieve local parse: problem found"
+            );
+            Some(problem)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use jmap_tracing_capture::{capture, has};
+    use tracing::Level;
+
     use super::*;
 
     #[test]
@@ -79,5 +94,39 @@ mod tests {
         // reaches the next token, the "stop" on line 2.
         let problem = find_problem("keep\nstop;\n").expect("should not parse");
         assert_eq!(problem.line, 2);
+    }
+
+    #[test]
+    fn a_found_problem_traces_its_line_column_and_error() {
+        let (_, captured) = capture(|| {
+            find_problem("keep\nstop;\n").expect("should not parse");
+        });
+
+        assert!(
+            has(&captured, Level::TRACE, "line", "2"),
+            "expected a traced line=2, got {captured:?}"
+        );
+        assert!(
+            captured.iter().any(|(_, name, _)| name == "column"),
+            "expected a traced column field, got {captured:?}"
+        );
+        assert!(
+            captured.iter().any(|(_, name, _)| name == "error"),
+            "expected a traced error field, got {captured:?}"
+        );
+    }
+
+    #[test]
+    fn a_clean_script_traces_no_line_or_column_or_error() {
+        let (_, captured) = capture(|| {
+            assert_eq!(find_problem("keep;\n"), None);
+        });
+
+        assert!(
+            captured
+                .iter()
+                .all(|(_, name, _)| name != "line" && name != "column" && name != "error"),
+            "a clean script must not trace a problem field, got {captured:?}"
+        );
     }
 }

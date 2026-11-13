@@ -927,6 +927,7 @@ dependencies = [
  "evolution-jmap-mail-sync",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-tracing-capture",
  "getrandom 0.3.4",
  "gio-sys",
  "glib-sys",

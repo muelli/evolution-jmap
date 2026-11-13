@@ -58,3 +58,4 @@ jmap-backend-core = { workspace = true, features = ["testing"] }
 # `tests/send_later.rs` tests the full scheduled-send exchange against the
 # stateful mock, including the HOLDFOR gate.
 evolution-jmap-mock = { workspace = true }
+evolution-jmap-tracing-capture = { workspace = true }
