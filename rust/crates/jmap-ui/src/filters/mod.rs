@@ -33,6 +33,9 @@
 //! - [`validate`] is a local, offline syntax check of the text-mode script,
 //!   for the editor to show a problem before the Check button's own round
 //!   trip to the server.
+//! - [`external_editor`] picks the command for step (d)'s "Edit in External
+//!   Editor…" button: the External Editor plugin's GSettings key, then
+//!   `$VISUAL`, then `$EDITOR`, else the desktop's default handler.
 //!
 //! Only [`page`], [`extension`] and the second half of [`rule_dialog`] have
 //! FFI. Every decision those widgets show belongs to [`form`] or to the
@@ -40,6 +43,7 @@
 
 pub mod completion;
 pub mod extension;
+pub mod external_editor;
 pub mod form;
 pub mod io;
 pub mod page;
