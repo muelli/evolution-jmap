@@ -786,16 +786,34 @@ impl JmapStore {
     /// A folder without a state calls this: on the first refresh of a
     /// mailbox, and to recover when the server cannot calculate a delta from
     /// a state.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Email/query`
+    /// and `Email/get` are method calls under one `accountId`, so this
+    /// resolves the mailbox's real owner first ([`FolderTree::owning_account`])
+    /// and lists under that account instead of this store's own (ROADMAP
+    /// item 179(d)). The resolve reads [`Self::held_folders`], the cached
+    /// tree, not [`Self::folders`]: a mailbox id reaches this function only
+    /// once Camel has already listed the account that showed it, the same
+    /// reason [`Self::set_subscribed`] gives, and unlike that reason
+    /// `disconnect_window.rs` also requires it here: `folders(0)` would hold
+    /// the connection's read lock across a network round trip on a store
+    /// with no listing yet, which is exactly the wait this function's own
+    /// disconnect-window test forbids.
     pub fn messages(&self, mailbox: &Id) -> Result<(State, Vec<MessageSummary>), StoreError> {
+        let account = self
+            .held_folders()
+            .and_then(|tree| tree.owning_account(mailbox).cloned());
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = account.unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(mailbox_id = mailbox.as_str(), "listing messages in mailbox");
         match retry_once_after(
-            || sync.messages(mailbox),
+            || sync.messages_as(&account, mailbox),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
@@ -835,18 +853,30 @@ impl JmapStore {
     /// `MailSync::messages_since`, which uses it for one decision: when a
     /// delta is so large that a full listing costs less. The folder counts its
     /// summary at no cost; the layer below must ask the server.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Email/changes`
+    /// and `Email/get` are method calls under one `accountId`, so this
+    /// resolves the mailbox's real owner first ([`FolderTree::owning_account`])
+    /// and asks that account instead of this store's own (ROADMAP item
+    /// 179(d)). The resolve reads [`Self::held_folders`], not
+    /// [`Self::folders`], for the same reason [`Self::messages`] does.
     pub fn messages_since(
         &self,
         mailbox: &Id,
         since: &State,
         held: usize,
     ) -> Result<MessageUpdate, StoreError> {
+        let account = self
+            .held_folders()
+            .and_then(|tree| tree.owning_account(mailbox).cloned());
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = account.unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             mailbox_id = mailbox.as_str(),
             since = since.as_str(),
@@ -854,7 +884,7 @@ impl JmapStore {
             "fetching message changes"
         );
         match retry_once_after(
-            || sync.messages_since(mailbox, since, held),
+            || sync.messages_since_as(&account, mailbox, since, held),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {

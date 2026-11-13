@@ -249,13 +249,31 @@ impl MailSync {
     /// that this listing already has. That is safe: the result is only a
     /// repeated lookup and an identical row write.
     pub fn messages(&self, mailbox: &Id) -> Result<(State, Vec<MessageSummary>), SyncError> {
-        let state = self.client.email_state(&self.account_id)?;
-        let ids = self.message_ids(mailbox)?;
+        self.messages_as(&self.account_id, mailbox)
+    }
+
+    /// [`Self::messages`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Email/query` and `Email/get` are method calls under one `accountId`,
+    /// and `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`crate::FolderTree::merge_shared`]). The
+    /// caller resolves `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) and passes it here instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::file_message_as`] already does.
+    pub fn messages_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+    ) -> Result<(State, Vec<MessageSummary>), SyncError> {
+        let state = self.client.email_state(account)?;
+        let ids = self.message_ids(account, mailbox)?;
 
         // `/get` can answer in any order (RFC 8620 §5.1). The code below puts
         // the rows back in the query order.
         let mut by_uid: BTreeMap<Id, MessageSummary> = BTreeMap::new();
-        for email in self.fetch(&ids, SUMMARY_PROPERTIES)? {
+        for email in self.fetch(account, &ids, SUMMARY_PROPERTIES)? {
             let summary = MessageSummary::from_email(&email)?;
             by_uid.insert(summary.uid.clone(), summary);
         }
@@ -301,12 +319,32 @@ impl MailSync {
         since: &State,
         held: usize,
     ) -> Result<MessageUpdate, SyncError> {
-        let changes = match self.client.all_changes(&self.account_id, "Email", since) {
+        self.messages_since_as(&self.account_id, mailbox, since, held)
+    }
+
+    /// [`Self::messages_since`], against `account` instead of this sync's
+    /// own account.
+    ///
+    /// `Email/changes` and `Email/get` are method calls under one
+    /// `accountId`, and `mailbox` can be a mailbox of a shared account
+    /// merged into this account's folder tree
+    /// ([`crate::FolderTree::merge_shared`]). The caller resolves `account`
+    /// from the held folder tree ([`crate::FolderTree::owning_account`]) and
+    /// passes it here instead of assuming `self.account_id` (ROADMAP item
+    /// 179(d)), the same way [`Self::file_message_as`] already does.
+    pub fn messages_since_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+        since: &State,
+        held: usize,
+    ) -> Result<MessageUpdate, SyncError> {
+        let changes = match self.client.all_changes(account, "Email", since) {
             Ok(changes) if changes.is_empty() => {
                 return Ok(MessageUpdate::Unchanged(changes.new_state));
             }
             Ok(changes) => changes,
-            Err(error) if error.needs_full_resync() => return self.relist(mailbox),
+            Err(error) if error.needs_full_resync() => return self.relist_as(account, mailbox),
             Err(error) => return Err(error.into()),
         };
 
@@ -326,12 +364,12 @@ impl MailSync {
         // `destroyed` does not count, because this function does not fetch
         // those ids.
         if touched.len() > catch_up_limit(held, self.objects_in_get()) {
-            return self.relist(mailbox);
+            return self.relist_as(account, mailbox);
         }
 
         let mut absent = changes.destroyed;
         let mut present = Vec::new();
-        for email in self.fetch(&touched, &filing_properties())? {
+        for email in self.fetch(account, &touched, &filing_properties())? {
             // RFC 8621 §4.1.1 sets each `mailboxIds` value to `true`. A `false`
             // entry for this mailbox is a protocol violation. Refuse it, as
             // `message_mailboxes` does; do not read it as absence.
@@ -390,23 +428,26 @@ impl MailSync {
 
     /// The full mailbox listing, with its own state and not the state of the
     /// delta. [`MailSync::rebuild`] does the same for the folder tree.
-    fn relist(&self, mailbox: &Id) -> Result<MessageUpdate, SyncError> {
-        let (state, messages) = self.messages(mailbox)?;
+    fn relist_as(&self, account: &Id, mailbox: &Id) -> Result<MessageUpdate, SyncError> {
+        let (state, messages) = self.messages_as(account, mailbox)?;
         Ok(MessageUpdate::Relisted { state, messages })
     }
 
-    /// The `Email` objects for `ids`, in the server order. This function uses
-    /// as many `Email/get` calls as the account limit makes necessary.
+    /// The `Email` objects for `ids`, in the server order, under `account`.
+    /// This function uses as many `Email/get` calls as the account limit
+    /// makes necessary.
     ///
     /// An empty list causes no calls. A delta with only destroyed messages
     /// gives an empty list.
-    fn fetch(&self, ids: &[Id], properties: &[&str]) -> Result<Vec<Email>, SyncError> {
+    fn fetch(
+        &self,
+        account: &Id,
+        ids: &[Id],
+        properties: &[&str],
+    ) -> Result<Vec<Email>, SyncError> {
         let mut emails = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(self.objects_in_get()) {
-            emails.extend(
-                self.client
-                    .email_get(&self.account_id, chunk, Some(properties))?,
-            );
+            emails.extend(self.client.email_get(account, chunk, Some(properties))?);
         }
         Ok(emails)
     }
@@ -1252,12 +1293,13 @@ impl MailSync {
             })
     }
 
-    /// The message ids of a mailbox, oldest first, from all pages of the
-    /// server answer.
-    fn message_ids(&self, mailbox: &Id) -> Result<Vec<Id>, SyncError> {
-        self.paged_query(Filter::condition(EmailQueryFilter::in_mailbox(
-            mailbox.clone(),
-        )))
+    /// The message ids of a mailbox under `account`, oldest first, from all
+    /// pages of the server answer.
+    fn message_ids(&self, account: &Id, mailbox: &Id) -> Result<Vec<Id>, SyncError> {
+        self.paged_query(
+            account,
+            Filter::condition(EmailQueryFilter::in_mailbox(mailbox.clone())),
+        )
     }
 
     /// The message ids of a mailbox that agree with `filter`, for a search on
@@ -1265,28 +1307,40 @@ impl MailSync {
     /// expression). `Email/query` has no mailbox limit of its own. Thus this
     /// function adds the mailbox condition with an AND, as
     /// `message_ids` does.
+    ///
+    /// This always queries this sync's own account; `mailbox` of a shared
+    /// account merged into the folder tree (ROADMAP item 179(d)) is a
+    /// separate, unclaimed gap, same as [`Self::messages`] had before
+    /// [`Self::messages_as`].
     pub fn search(
         &self,
         mailbox: &Id,
         filter: Filter<EmailQueryFilter>,
     ) -> Result<Vec<Id>, SyncError> {
-        self.paged_query(Filter::and([
-            Filter::condition(EmailQueryFilter::in_mailbox(mailbox.clone())),
-            filter,
-        ]))
+        self.paged_query(
+            &self.account_id,
+            Filter::and([
+                Filter::condition(EmailQueryFilter::in_mailbox(mailbox.clone())),
+                filter,
+            ]),
+        )
     }
 
-    /// Gets all pages of `Email/query` for `filter`, oldest first. It stops
-    /// when the server does not report a limit, or returns an empty page.
-    /// It fails when the ids go past the id budget of the client, or do not
-    /// agree with the `total` of the server. EDS removes each cached message
-    /// that a partial list does not have.
-    fn paged_query(&self, filter: Filter<EmailQueryFilter>) -> Result<Vec<Id>, SyncError> {
+    /// Gets all pages of `Email/query` for `filter` under `account`, oldest
+    /// first. It stops when the server does not report a limit, or returns
+    /// an empty page. It fails when the ids go past the id budget of the
+    /// client, or do not agree with the `total` of the server. EDS removes
+    /// each cached message that a partial list does not have.
+    fn paged_query(
+        &self,
+        account: &Id,
+        filter: Filter<EmailQueryFilter>,
+    ) -> Result<Vec<Id>, SyncError> {
         let mut ids: Vec<Id> = Vec::new();
         let mut budget = self.client.id_budget();
 
         for _ in 0..MAX_QUERY_PAGES {
-            let mut request = QueryRequest::new(self.account_id.clone()).filter(filter.clone());
+            let mut request = QueryRequest::new(account.clone()).filter(filter.clone());
             request.sort = Some(vec![Comparator::ascending("receivedAt")]);
             request.position = ids.len() as i64;
             request.calculate_total = true;
