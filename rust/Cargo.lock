@@ -843,6 +843,7 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-core",
  "libc",
+ "serde_json",
  "tracing",
  "tracing-journald",
  "tracing-subscriber",

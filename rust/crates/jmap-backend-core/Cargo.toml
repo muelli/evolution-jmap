@@ -42,6 +42,7 @@ libc = "0.2.189"
 # a real server. The mock needs no EDS headers of its own.
 evolution-jmap-mock = { workspace = true }
 evolution-jmap-tracing-capture = { workspace = true }
+serde_json = { workspace = true }
 # Self dev-dependency that enables `testing` (and thus `instance::zeroed_box`)
 # only for this crate's own test builds. The five consumer crates use the
 # same method to enable this feature from their own.

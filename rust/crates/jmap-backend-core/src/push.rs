@@ -54,6 +54,7 @@ use jmap_client::{Client, EventSourceSubscription};
 use jmap_proto::Id;
 use jmap_proto::State;
 use jmap_proto::push::StateChange;
+use jmap_proto::session::{CAPABILITY_CYRUS_MAIL, Session};
 
 use crate::weak::WeakBackend;
 
@@ -76,7 +77,10 @@ const PING_SECONDS: u32 = 120;
 /// Starts to push refreshes at `backend` if its server advertises a location
 /// to listen to (`eventSourceUrl`, RFC 8620 §7.3). If not, returns `None`
 /// without an error: on a server without push, the periodic refresh of EDS
-/// stays the only trigger.
+/// stays the only trigger. Also returns `None`, the same way, when the
+/// account's server is Cyrus: Cyrus holds its own lock for the whole
+/// lifetime of an EventSource stream, which deadlocks every other JMAP call
+/// the session makes meanwhile.
 ///
 /// `schedule_refresh` is the EDS call to make, which is per backend
 /// (`e_book_meta_backend_schedule_refresh` and its calendar twin). The call
@@ -126,6 +130,15 @@ pub unsafe fn start_for_with(
     types: &[&str],
     action: impl Fn(*mut GObject, &[String]) + Send + Sync + 'static,
 ) -> Option<PushRefresh> {
+    if is_cyrus_account(client.session(), account_id) {
+        tracing::debug!(
+            account_id = account_id.as_str(),
+            "the account is on a Cyrus server; Cyrus holds its own lock for the whole \
+             lifetime of an EventSource stream, which would deadlock every other JMAP \
+             call this session makes, so push stays off for it"
+        );
+        return None;
+    }
     let template = client.session().event_source_url.trim();
     if template.is_empty() {
         tracing::debug!("the server advertises no eventSourceUrl; push is unavailable");
@@ -152,6 +165,16 @@ pub unsafe fn start_for_with(
             weak.with_strong(|object| action(object, matched));
         },
     ))
+}
+
+/// Whether `account_id` advertises Cyrus's mail vendor capability in
+/// `session`, meaning the server is Cyrus. An unknown account id is not
+/// Cyrus.
+fn is_cyrus_account(session: &Session, account_id: &Id) -> bool {
+    session
+        .accounts
+        .get(account_id)
+        .is_some_and(|account| account.has_capability(CAPABILITY_CYRUS_MAIL))
 }
 
 /// A live JMAP Push subscription that refreshes one backend.
@@ -324,6 +347,64 @@ mod tests {
 
     fn names(types: &[&str]) -> Vec<String> {
         types.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// Cyrus holds its own lock across the whole lifetime of an EventSource
+    /// stream, which deadlocks every other JMAP call the session makes
+    /// meanwhile. The account must be recognised so that [`start_for_with`]
+    /// can skip opening a push subscription against such a server.
+    #[test]
+    fn a_cyrus_account_is_recognised_by_its_vendor_capability() {
+        use jmap_proto::session::{Account, CAPABILITY_CYRUS_MAIL, Session};
+
+        let cyrus_account = Id::new("a1");
+        let session = Session::new(
+            "user",
+            "https://x/api",
+            "https://x/dl",
+            "https://x/up",
+            "s1",
+        )
+        .with_accounts(BTreeMap::from([(
+            cyrus_account.clone(),
+            Account::new("Cyrus").with_capability(CAPABILITY_CYRUS_MAIL, serde_json::json!({})),
+        )]));
+
+        assert!(is_cyrus_account(&session, &cyrus_account));
+    }
+
+    #[test]
+    fn an_account_with_no_cyrus_capability_is_not_mistaken_for_one() {
+        use jmap_proto::session::{Account, Session};
+
+        let plain_account = Id::new("a1");
+        let session = Session::new(
+            "user",
+            "https://x/api",
+            "https://x/dl",
+            "https://x/up",
+            "s1",
+        )
+        .with_accounts(BTreeMap::from([(
+            plain_account.clone(),
+            Account::new("Stalwart"),
+        )]));
+
+        assert!(!is_cyrus_account(&session, &plain_account));
+    }
+
+    #[test]
+    fn an_unknown_account_id_is_not_mistaken_for_cyrus() {
+        use jmap_proto::session::Session;
+
+        let session = Session::new(
+            "user",
+            "https://x/api",
+            "https://x/dl",
+            "https://x/up",
+            "s1",
+        );
+        assert!(!is_cyrus_account(&session, &Id::new("missing")));
     }
 
     #[test]
