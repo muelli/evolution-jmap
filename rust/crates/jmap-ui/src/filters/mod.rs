@@ -24,6 +24,9 @@
 //! - [`completion`] is the pure candidate list for step (c)'s completion:
 //!   commands, tests, tagged arguments and extension names, gated by the
 //!   account's `sieve_extensions` capability.
+//! - [`cache`] reads and writes the on-disk cache of step (c)'s cold-start
+//!   half: the last loaded scripts, shown read-only when a page opens
+//!   already offline.
 //! - [`io`] does the round trips over a connected
 //!   [`jmap_client::Client`]. It runs on worker threads only.
 //! - [`page`] is the `GtkScrolledWindow` subclass that implements
@@ -41,6 +44,7 @@
 //! FFI. Every decision those widgets show belongs to [`form`] or to the
 //! pure half of [`rule_dialog`], both of which have unit tests.
 
+pub mod cache;
 pub mod completion;
 pub mod extension;
 pub mod external_editor;
