@@ -1350,18 +1350,32 @@ impl MailSync {
     /// expression). `Email/query` has no mailbox limit of its own. Thus this
     /// function adds the mailbox condition with an AND, as
     /// `message_ids` does.
-    ///
-    /// This always queries this sync's own account; `mailbox` of a shared
-    /// account merged into the folder tree (ROADMAP item 179(d)) is a
-    /// separate, unclaimed gap, same as [`Self::messages`] had before
-    /// [`Self::messages_as`].
     pub fn search(
         &self,
         mailbox: &Id,
         filter: Filter<EmailQueryFilter>,
     ) -> Result<Vec<Id>, SyncError> {
+        self.search_as(&self.account_id, mailbox, filter)
+    }
+
+    /// [`Self::search`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Email/query` is a method call under one `accountId`, and `mailbox`
+    /// can be a mailbox of a shared account merged into this account's
+    /// folder tree ([`crate::FolderTree::merge_shared`]). The caller resolves
+    /// `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) and passes it here instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::messages_as`] already does.
+    pub fn search_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+        filter: Filter<EmailQueryFilter>,
+    ) -> Result<Vec<Id>, SyncError> {
         self.paged_query(
-            &self.account_id,
+            account,
             Filter::and([
                 Filter::condition(EmailQueryFilter::in_mailbox(mailbox.clone())),
                 filter,

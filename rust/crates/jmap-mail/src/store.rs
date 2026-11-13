@@ -1065,6 +1065,13 @@ impl JmapStore {
     /// calculates them. This is the request of `search_by_expression` and
     /// `search_by_uids` of a folder, after translation of the Camel search
     /// expression.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Email/query` is
+    /// a method call under one `accountId`, so this resolves the mailbox's
+    /// real owner first ([`FolderTree::owning_account`]) and searches under
+    /// that account instead of this store's own, the same way
+    /// [`Self::messages`] already does (ROADMAP item 179(d)).
     pub fn search(
         &self,
         mailbox: &Id,
@@ -1076,9 +1083,14 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = self
+            .folders(0)
+            .ok()
+            .and_then(|tree| tree.owning_account(mailbox).cloned())
+            .unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(mailbox_id = mailbox.as_str(), "searching mailbox");
         match retry_once_after(
-            || sync.search(mailbox, filter.clone()),
+            || sync.search_as(&account, mailbox, filter.clone()),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
