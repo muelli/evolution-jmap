@@ -346,6 +346,30 @@ impl FiltersForm {
         }
     }
 
+    /// Removes row `index`, with no other check. For the Add button's
+    /// instant apply (item 180(a)): undoes a staged [`FiltersForm::add`] the
+    /// server refused to write. The row never carries a server id (a script
+    /// this session added), so nothing joins the destroy list.
+    pub fn restore_added(&mut self, index: usize) {
+        if index >= self.entries.len() {
+            return;
+        }
+        self.entries.remove(index);
+        self.selected = (!self.entries.is_empty()).then(|| index.min(self.entries.len() - 1));
+    }
+
+    /// Puts `entry` back at row `index`, with no other check. For the Remove
+    /// button's instant apply (item 180(a)): undoes a staged
+    /// [`FiltersForm::remove`] the server refused to write.
+    pub fn restore_removed(&mut self, index: usize, entry: ScriptEntry) {
+        if entry.id.is_some() {
+            self.destroys.pop();
+        }
+        let index = index.min(self.entries.len());
+        self.entries.insert(index, entry);
+        self.selected = Some(index);
+    }
+
     /// True when a submit has anything to write.
     pub fn dirty(&self) -> bool {
         !self.destroys.is_empty()
@@ -801,6 +825,36 @@ mod tests {
         form.restore_name(0, "work".to_owned());
 
         assert_eq!(form.entries()[0].name, "work");
+    }
+
+    #[test]
+    fn restore_added_undoes_a_staged_add() {
+        let mut form = form(vec![script("a", "work", false)]);
+
+        let row = form.add("new one").unwrap();
+        assert_eq!(form.entries().len(), 2);
+
+        form.restore_added(row);
+
+        assert_eq!(form.entries().len(), 1);
+        assert_eq!(form.entries()[0].name, "work");
+        assert!(!form.dirty());
+    }
+
+    #[test]
+    fn restore_removed_undoes_a_staged_removal() {
+        let mut form = form(vec![script("a", "work", false), script("b", "spam", false)]);
+        let removed = form.entries()[0].clone();
+
+        form.remove(0).unwrap();
+        assert_eq!(form.entries().len(), 1);
+
+        form.restore_removed(0, removed);
+
+        assert_eq!(form.entries().len(), 2);
+        assert_eq!(form.entries()[0].name, "work");
+        assert_eq!(form.entries()[1].name, "spam");
+        assert!(!form.dirty());
     }
 
     #[test]

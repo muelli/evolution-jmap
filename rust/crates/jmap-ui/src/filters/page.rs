@@ -179,6 +179,18 @@ const RENAME_FAILED: &CStr = N_(c"The script could not be renamed: %1$s");
 // TRANSLATORS: %1$s is the reason the mail server gave. The rename already
 // took effect; only the list on this page could not be refreshed.
 const RENAME_RELOAD_FAILED: &CStr = N_(c"Renamed. The list could not be refreshed: %1$s");
+const ADDING: &CStr = N_(c"Adding…");
+// TRANSLATORS: %1$s is the reason the mail server gave.
+const ADD_FAILED: &CStr = N_(c"The script could not be added: %1$s");
+// TRANSLATORS: %1$s is the reason the mail server gave. The script was
+// already created; only the list on this page could not be refreshed.
+const ADD_RELOAD_FAILED: &CStr = N_(c"Added. The list could not be refreshed: %1$s");
+const REMOVING: &CStr = N_(c"Removing…");
+// TRANSLATORS: %1$s is the reason the mail server gave.
+const REMOVE_FAILED: &CStr = N_(c"The script could not be removed: %1$s");
+// TRANSLATORS: %1$s is the reason the mail server gave. The script was
+// already removed; only the list on this page could not be refreshed.
+const REMOVE_RELOAD_FAILED: &CStr = N_(c"Removed. The list could not be refreshed: %1$s");
 // Neither list has a visible label of its own to name it for a screen
 // reader through a `labelled-by` relation (item 174d), unlike the text
 // view below, which has "_Script:".
@@ -1718,15 +1730,9 @@ unsafe extern "C" fn on_edit_as_text_toggled(_button: *mut GObject, page: gpoint
     });
 }
 
-/// What one button press asks the form to do.
-enum Action {
-    Add,
-    Remove,
-}
-
 unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
     // SAFETY: the page is live, because its button emitted.
-    unsafe { act(page, Action::Add) };
+    unsafe { add_now(page) };
 }
 
 unsafe extern "C" fn on_rename(_button: *mut GObject, page: gpointer) {
@@ -1736,7 +1742,7 @@ unsafe extern "C" fn on_rename(_button: *mut GObject, page: gpointer) {
 
 unsafe extern "C" fn on_remove(_button: *mut GObject, page: gpointer) {
     // SAFETY: as above.
-    unsafe { act(page, Action::Remove) };
+    unsafe { remove_now(page) };
 }
 
 unsafe extern "C" fn on_activate(_button: *mut GObject, page: gpointer) {
@@ -2126,14 +2132,19 @@ unsafe fn rename_now(page: gpointer) {
     });
 }
 
-/// Runs one staged action and shows the list again. A refusal goes to the
-/// status label; nothing reaches the server here.
+/// Adds a new script at once instead of staging it for the account
+/// editor's OK (item 180(a)): asks for the name in the same modal dialog
+/// the staged add used, then writes the account's current plan on a
+/// worker thread and reloads the list from the server, the same round
+/// trip [`rename_now`] uses. The script list and buttons stay insensitive
+/// meanwhile. A write the server refuses removes the added script again;
+/// nothing else staged is touched either way.
 ///
 /// # Safety
 ///
-/// `page` must be the live page the button belongs to.
-unsafe fn act(page: gpointer, action: Action) {
-    guard("JmapFiltersPage::action", (), || {
+/// `page` must be the live page the Add button belongs to.
+unsafe fn add_now(page: gpointer) {
+    guard("JmapFiltersPage::add", (), || {
         // SAFETY: the page is live, per the contract. The hold keeps the
         // page and its state alive through the dialog below.
         let hold = unsafe { Hold::new(page.cast()) };
@@ -2143,51 +2154,214 @@ unsafe fn act(page: gpointer, action: Action) {
         };
         // SAFETY: the widgets are live, and no borrow is held.
         unsafe { flush(cell) };
-        let selected = cell.borrow().form.selected();
+
+        // Suggests the managed name so that naming a script this opens it
+        // straight into rules mode (`FiltersForm::add`), unless a script
+        // already has that name.
+        let unused = cell
+            .borrow()
+            .form
+            .entries()
+            .iter()
+            .all(|entry| entry.name != MANAGED_SCRIPT_NAME);
+        let suggested = if unused { MANAGED_SCRIPT_NAME } else { "" };
 
         // The name dialog runs a nested main loop, so it must run with no
         // borrow of the state held: the handlers it lets through take their
         // own.
-        let changed = match action {
-            Action::Add => {
-                // Suggests the managed name so that naming a script this
-                // opens it straight into rules mode (`FiltersForm::add`),
-                // unless a script already has that name.
-                let unused = cell
-                    .borrow()
-                    .form
-                    .entries()
-                    .iter()
-                    .all(|entry| entry.name != MANAGED_SCRIPT_NAME);
-                let suggested = if unused { MANAGED_SCRIPT_NAME } else { "" };
-                // SAFETY: the page is live, per the contract.
-                match unsafe { ask_for_name(page.cast(), ADD_TITLE, suggested) } {
-                    None => Ok(false),
-                    Some(name) => cell.borrow_mut().form.add(&name).map(|_| true),
-                }
-            }
-            Action::Remove => match selected {
-                None => return refuse(cell, NO_SCRIPT_SELECTED),
-                Some(row) => cell.borrow_mut().form.remove(row).map(|()| true),
-            },
-        };
+        // SAFETY: the page is live, per the contract.
+        let typed = unsafe { ask_for_name(page.cast(), ADD_TITLE, suggested) };
         // The shell can destroy the page while the dialog runs. Its children
         // are then gone.
         if hold.disposed() {
             return;
         }
+        let Some(name) = typed else {
+            return;
+        };
+        let row = match cell.borrow_mut().form.add(&name) {
+            Ok(row) => row,
+            Err(reason) => return refuse(cell, reason),
+        };
 
-        match changed {
-            Ok(false) => {}
-            Ok(true) => {
-                // SAFETY: the widgets are live, and no borrow is held.
+        let planned = {
+            let ui = cell.borrow();
+            (ui.link.clone(), ui.form.plan())
+        };
+        let (link, plan) = match planned {
+            // The add above always makes the form dirty, so a `None` plan
+            // or link is not expected; leave nothing written either way.
+            (_, Ok(None)) | (None, Ok(Some(_))) => {
+                cell.borrow_mut().form.restore_added(row);
+                // SAFETY: as above.
+                unsafe { refresh(cell) };
+                return;
+            }
+            (_, Err(reason)) => {
+                cell.borrow_mut().form.restore_added(row);
+                let text = translate_with(ADD_FAILED, &[&reason]);
+                // SAFETY: as above.
                 unsafe {
-                    set_status(cell, "");
+                    set_status(cell, &text);
                     refresh(cell);
                 }
+                return;
             }
-            Err(reason) => refuse(cell, reason),
+            (Some(link), Ok(Some(plan))) => (link, plan),
+        };
+
+        // SAFETY: the widgets are live, and no borrow is held.
+        unsafe {
+            set_script_controls_sensitive(cell, false);
+            set_status(cell, &translate(ADDING));
         }
+
+        let work = move || io::activate_now(&link, &plan);
+        let finish = move |page: *mut GObject, outcome: Result<ActivateOutcome, String>| {
+            // SAFETY: `with_strong` gives the live page.
+            let Some(cell) = (unsafe { state(page) }) else {
+                return;
+            };
+            match outcome {
+                Ok(ActivateOutcome::Reloaded(loaded)) => {
+                    {
+                        let mut ui = cell.borrow_mut();
+                        ui.form = FiltersForm::from_loaded(loaded);
+                        let found = ui.form.entries().iter().position(|e| e.name == name);
+                        ui.form.select(found);
+                    }
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, "");
+                        refresh(cell);
+                    }
+                }
+                Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    let text = translate_with(ADD_RELOAD_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+                Err(reason) => {
+                    cell.borrow_mut().form.restore_added(row);
+                    let text = translate_with(ADD_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+            }
+        };
+        // SAFETY: the page is live and the signal emission holds a reference
+        // to it for all of this call.
+        unsafe { dispatch::spawn_for(page.cast(), work, finish) };
+    });
+}
+
+/// Removes the selected script at once instead of staging it for the
+/// account editor's OK (item 180(a)): writes the account's current plan
+/// on a worker thread and reloads the list from the server, the same
+/// round trip [`rename_now`] uses. The script list and buttons stay
+/// insensitive meanwhile. A write the server refuses puts the script back;
+/// nothing else staged is touched either way.
+///
+/// # Safety
+///
+/// `page` must be the live page the Remove button belongs to.
+unsafe fn remove_now(page: gpointer) {
+    guard("JmapFiltersPage::remove", (), || {
+        // SAFETY: the page is live, because its button emitted.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        // SAFETY: the widgets are live, and no borrow is held.
+        unsafe { flush(cell) };
+        let Some(row) = cell.borrow().form.selected() else {
+            return refuse(cell, NO_SCRIPT_SELECTED);
+        };
+        let Some(removed) = cell.borrow().form.entries().get(row).cloned() else {
+            return refuse(cell, NO_SCRIPT_SELECTED);
+        };
+        if let Err(reason) = cell.borrow_mut().form.remove(row) {
+            return refuse(cell, reason);
+        }
+
+        let planned = {
+            let ui = cell.borrow();
+            (ui.link.clone(), ui.form.plan())
+        };
+        let (link, plan) = match planned {
+            // The removal above always makes the form dirty, so a `None`
+            // plan or link is not expected; leave nothing written either
+            // way.
+            (_, Ok(None)) | (None, Ok(Some(_))) => {
+                cell.borrow_mut().form.restore_removed(row, removed);
+                // SAFETY: as above.
+                unsafe { refresh(cell) };
+                return;
+            }
+            (_, Err(reason)) => {
+                cell.borrow_mut().form.restore_removed(row, removed);
+                let text = translate_with(REMOVE_FAILED, &[&reason]);
+                // SAFETY: as above.
+                unsafe {
+                    set_status(cell, &text);
+                    refresh(cell);
+                }
+                return;
+            }
+            (Some(link), Ok(Some(plan))) => (link, plan),
+        };
+
+        // SAFETY: the widgets are live, and no borrow is held.
+        unsafe {
+            set_script_controls_sensitive(cell, false);
+            set_status(cell, &translate(REMOVING));
+        }
+
+        let work = move || io::activate_now(&link, &plan);
+        let finish = move |page: *mut GObject, outcome: Result<ActivateOutcome, String>| {
+            // SAFETY: `with_strong` gives the live page.
+            let Some(cell) = (unsafe { state(page) }) else {
+                return;
+            };
+            match outcome {
+                Ok(ActivateOutcome::Reloaded(loaded)) => {
+                    {
+                        let mut ui = cell.borrow_mut();
+                        ui.form = FiltersForm::from_loaded(loaded);
+                    }
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, "");
+                        refresh(cell);
+                    }
+                }
+                Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    let text = translate_with(REMOVE_RELOAD_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+                Err(reason) => {
+                    cell.borrow_mut().form.restore_removed(row, removed);
+                    let text = translate_with(REMOVE_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+            }
+        };
+        // SAFETY: the page is live and the signal emission holds a reference
+        // to it for all of this call.
+        unsafe { dispatch::spawn_for(page.cast(), work, finish) };
     });
 }
 
@@ -3180,7 +3354,7 @@ mod tests {
             // Both run inside the nested main loop of the dialog, in order.
             g_idle_add(Some(close_window), window.cast());
             g_idle_add(Some(answer_ok), ptr::null_mut());
-            act(page.cast(), Action::Add);
+            add_now(page.cast());
         }
         note("action returned");
         assert_eq!(
@@ -3579,6 +3753,182 @@ mod tests {
                 text,
                 translate(RENAMING),
                 "the status label does not show progress while Rename's write is in flight"
+            );
+
+            gtk_widget_destroy(page.cast());
+        }
+    }
+
+    /// Item 180(a)'s Add mirrors Rename once the name dialog answers: it
+    /// writes at once instead of waiting for the account editor's OK, with
+    /// every script-list control insensitive and a progress status while
+    /// that write is in flight. Needs a display; skips without one.
+    #[test]
+    fn adding_asks_for_a_name_then_disables_the_controls_before_the_worker_answers() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = AccountLink::without_refresh(client, features);
+
+        // Loads with no script at all: Add needs none, unlike Rename and
+        // Deactivate's seeded fixtures.
+        let loaded = match io::activate_now(
+            &link,
+            &SavePlan {
+                writes: Vec::new(),
+                destroys: Vec::new(),
+                activation: io::ActivationChange::Keep,
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: io::Baseline::default(),
+            },
+        )
+        .unwrap()
+        {
+            ActivateOutcome::Reloaded(loaded) => loaded,
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("seeding the empty account failed: {reason}")
+            }
+        };
+
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens here: the load above already ran.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+
+            let (status, add, rename, remove, activate, deactivate, check) = {
+                let ui = state(page).unwrap().borrow();
+                (
+                    ui.status,
+                    ui.add,
+                    ui.rename,
+                    ui.remove,
+                    ui.activate,
+                    ui.deactivate,
+                    ui.check,
+                )
+            };
+
+            // Runs inside the dialog's own nested main loop: answers OK with
+            // the suggested name left as is, the way `answer_ok` answers
+            // every other dialog with no change needed.
+            g_idle_add(Some(answer_ok), ptr::null_mut());
+            add_now(page.cast());
+
+            for control in [add, rename, remove, activate, deactivate, check] {
+                assert!(
+                    !get_sensitive(control),
+                    "a control stayed usable while Add's write was in flight"
+                );
+            }
+            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                text,
+                translate(ADDING),
+                "the status label does not show progress while Add's write is in flight"
+            );
+
+            gtk_widget_destroy(page.cast());
+        }
+    }
+
+    /// Item 180(a)'s Remove mirrors Deactivate exactly: clicking it writes
+    /// at once instead of waiting for the account editor's OK, and every
+    /// script-list control stays insensitive, with a progress status, while
+    /// that write is in flight. Needs a display; skips without one.
+    #[test]
+    fn removing_disables_the_controls_before_the_worker_answers() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = AccountLink::without_refresh(client, features);
+
+        // Seeds one inactive script, the same way `renaming_asks_for_a_name_
+        // then_disables_the_controls_before_the_worker_answers` does: a
+        // removal needs no active script.
+        let loaded = match io::activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![io::ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "evolution-jmap".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: io::ActivationChange::Keep,
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: io::Baseline::default(),
+            },
+        )
+        .unwrap()
+        {
+            ActivateOutcome::Reloaded(loaded) => loaded,
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("seeding the script failed: {reason}")
+            }
+        };
+
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens here: the load above already ran.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+
+            let (view, status, add, rename, remove, activate, deactivate, check) = {
+                let ui = state(page).unwrap().borrow();
+                (
+                    ui.view,
+                    ui.status,
+                    ui.add,
+                    ui.rename,
+                    ui.remove,
+                    ui.activate,
+                    ui.deactivate,
+                    ui.check,
+                )
+            };
+
+            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+            gtk_tree_path_free(path);
+
+            remove_now(page.cast());
+
+            for control in [add, rename, remove, activate, deactivate, check] {
+                assert!(
+                    !get_sensitive(control),
+                    "a control stayed usable while Remove's write was in flight"
+                );
+            }
+            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                text,
+                translate(REMOVING),
+                "the status label does not show progress while Remove's write is in flight"
             );
 
             gtk_widget_destroy(page.cast());
