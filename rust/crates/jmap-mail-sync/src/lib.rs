@@ -1130,13 +1130,31 @@ impl MailSync {
         parent: Option<&FolderInfo>,
         name: &str,
     ) -> Result<FolderInfo, SyncError> {
+        self.create_folder_as(&self.account_id.clone(), parent, name)
+    }
+
+    /// [`Self::create_folder`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Mailbox/set` is a method call under one `accountId`, and `parent` can
+    /// be a folder of a shared account merged into this account's folder
+    /// tree ([`crate::FolderTree::merge_shared`]). The caller resolves
+    /// `account` from the parent's own [`FolderInfo::account_id`] instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::set_subscribed_as`] already does.
+    pub fn create_folder_as(
+        &self,
+        account: &Id,
+        parent: Option<&FolderInfo>,
+        name: &str,
+    ) -> Result<FolderInfo, SyncError> {
         let mut requested = Mailbox::new(name).is_subscribed(true);
         if let Some(parent) = parent {
             requested = requested.with_parent_id(parent.id.clone());
         }
-        let account_id = self.account_id().to_string();
+        let account_id = account.to_string();
         tracing::debug!(account_id, name, "creating mail folder");
-        let created = match self.client.mailbox_create(&self.account_id, &requested) {
+        let created = match self.client.mailbox_create(account, &requested) {
             Ok(created) => created,
             Err(error) => {
                 tracing::warn!(account_id, name, %error, "mail folder create failed");
@@ -1162,9 +1180,10 @@ impl MailSync {
             // The server was not asked for `myRights` on a create, and the
             // caller who just created the mailbox is its owner.
             may_add_items: None,
-            // `mailbox_create` above always addresses `self.account_id`, the
-            // account this `MailSync` is itself scoped to.
-            account_id: None,
+            // `None` when `account` is this `MailSync`'s own account, the
+            // common case; `Some` keeps the shared owner so a later lookup
+            // by this mailbox's id (`FolderTree::owning_account`) finds it.
+            account_id: (account != self.account_id()).then(|| account.clone()),
             children: Vec::new(),
         })
     }
@@ -1191,10 +1210,19 @@ impl MailSync {
     /// different client removed the folder first, the result is what the user
     /// asked for. It is not a failure.
     pub fn delete_folder(&self, mailbox: &Id) -> Result<(), SyncError> {
-        let account_id = self.account_id().to_string();
+        self.delete_folder_as(&self.account_id.clone(), mailbox)
+    }
+
+    /// [`Self::delete_folder`], against `account` instead of this sync's own
+    /// account. The caller resolves `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) instead of assuming
+    /// `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::set_subscribed_as`] already does.
+    pub fn delete_folder_as(&self, account: &Id, mailbox: &Id) -> Result<(), SyncError> {
+        let account_id = account.to_string();
         let mailbox_id = mailbox.to_string();
         tracing::debug!(account_id, mailbox_id, "deleting mail folder");
-        if let Err(error) = self.client.mailbox_destroy(&self.account_id, mailbox) {
+        if let Err(error) = self.client.mailbox_destroy(account, mailbox) {
             tracing::warn!(account_id, mailbox_id, %error, "mail folder delete failed");
             return Err(folder_error(mailbox, error));
         }
@@ -1242,12 +1270,27 @@ impl MailSync {
         parent: Option<&FolderInfo>,
         name: &str,
     ) -> Result<String, SyncError> {
-        let account_id = self.account_id().to_string();
+        self.rename_folder_as(&self.account_id.clone(), folder, parent, name)
+    }
+
+    /// [`Self::rename_folder`], against `account` instead of this sync's own
+    /// account. The caller resolves `account` from the renamed folder's own
+    /// [`FolderInfo::account_id`] (held by the listing above this crate)
+    /// instead of assuming `self.account_id` (ROADMAP item 179(d)), the same
+    /// way [`Self::set_subscribed_as`] already does.
+    pub fn rename_folder_as(
+        &self,
+        account: &Id,
+        folder: &Id,
+        parent: Option<&FolderInfo>,
+        name: &str,
+    ) -> Result<String, SyncError> {
+        let account_id = account.to_string();
         let mailbox_id = folder.to_string();
         tracing::debug!(account_id, mailbox_id, name, "renaming mail folder");
         self.client
             .mailbox_update(
-                &self.account_id,
+                account,
                 folder,
                 serde_json::json!({
                     "name": name,

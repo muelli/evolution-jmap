@@ -1348,21 +1348,32 @@ impl JmapStore {
     /// If no listing exists yet, nothing is added, and the state of the
     /// listing does not change. [`JmapStore::set_subscribed`] gives the
     /// reasons for both.
+    ///
+    /// `parent` can be a folder of a shared account merged into this
+    /// store's folder tree ([`FolderTree::merge_shared`]). `Mailbox/set` is
+    /// a method call under one `accountId`, so a new child of a shared
+    /// folder must be created in the parent's own account, not this
+    /// store's (ROADMAP item 179(d)). `parent`'s own
+    /// [`FolderInfo::account_id`] already names that account; no
+    /// [`FolderTree::owning_account`] lookup is needed, unlike
+    /// [`Self::set_subscribed`], which only has a mailbox id to resolve.
     pub fn create_folder(
         &self,
         parent: Option<&FolderInfo>,
         name: &str,
     ) -> Result<FolderInfo, StoreError> {
+        let account = parent.and_then(|parent| parent.account_id.clone());
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let account = account.unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             parent_id = parent.map(|p| p.id.as_str()),
             name,
             "creating mail folder"
         );
         let created = match retry_once_after(
-            || sync.create_folder(parent, name),
+            || sync.create_folder_as(&account, parent, name),
             SyncError::is_unauthorized,
             || self.refresh_credentials(sync),
         ) {
@@ -1400,13 +1411,23 @@ impl JmapStore {
     /// It takes a mailbox id, not a path. The caller got the folder from a
     /// listing, and a rename by a different client can make that path
     /// incorrect.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// store's folder tree ([`FolderTree::merge_shared`]); this resolves
+    /// its real owner first and deletes under that account instead of this
+    /// store's own, the same way [`Self::set_subscribed`] does (ROADMAP
+    /// item 179(d)).
     pub fn delete_folder(&self, mailbox: &Id) -> Result<(), StoreError> {
+        let account = self
+            .held_folders()
+            .and_then(|tree| tree.owning_account(mailbox).cloned());
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let account = account.unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(mailbox_id = mailbox.as_str(), "deleting mail folder");
         if let Err(failure) = retry_once_after(
-            || sync.delete_folder(mailbox),
+            || sync.delete_folder_as(&account, mailbox),
             SyncError::is_unauthorized,
             || self.refresh_credentials(sync),
         ) {
@@ -1451,6 +1472,12 @@ impl JmapStore {
     /// the caller found the folder. Then the result is the given folder at its
     /// new path, without children: only the tree edit knows their paths. This
     /// result is incomplete, not wrong, and the account is listed again.
+    ///
+    /// `folder` can be a mailbox of a shared account merged into this
+    /// store's folder tree ([`FolderTree::merge_shared`]); its own
+    /// [`FolderInfo::account_id`] names that account, so the rename goes
+    /// there instead of this store's own (ROADMAP item 179(d)), the same
+    /// way [`Self::create_folder`] uses `parent`'s.
     pub fn rename_folder(
         &self,
         folder: &FolderInfo,
@@ -1460,6 +1487,10 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let account = folder
+            .account_id
+            .clone()
+            .unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             mailbox_id = folder.id.as_str(),
             parent_id = parent.map(|p| p.id.as_str()),
@@ -1467,7 +1498,7 @@ impl JmapStore {
             "renaming mail folder"
         );
         let path = match retry_once_after(
-            || sync.rename_folder(&folder.id, parent, name),
+            || sync.rename_folder_as(&account, &folder.id, parent, name),
             SyncError::is_unauthorized,
             || self.refresh_credentials(sync),
         ) {

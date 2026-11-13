@@ -203,6 +203,48 @@ fn a_name_a_sibling_already_has_is_refused() {
     assert_eq!(fixture.folder_count(), before);
 }
 
+/// ROADMAP item 179(d): `Mailbox/set` is a method call under one `accountId`,
+/// so a child of a shared mailbox must be created in that mailbox's own
+/// account, not the sync's own one. `create_folder_as` is the entry point a
+/// caller that resolved the owning account uses instead of `create_folder`,
+/// the same way `set_subscribed_as` does in `subscriptions.rs`.
+#[test]
+fn create_folder_as_writes_into_the_named_account_not_the_syncs_own() {
+    let fixture = Fixture::start();
+
+    let shared = Id::new("A2");
+    {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+    }
+
+    let created = fixture
+        .sync()
+        .create_folder_as(&shared, None, "Projects")
+        .expect("the create writes into the named account");
+
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state
+            .account(&shared)
+            .unwrap()
+            .mailboxes
+            .contains(&created.id),
+        "the folder must exist in the named shared account"
+    );
+    assert!(
+        !state
+            .account(&fixture.account_id)
+            .unwrap()
+            .mailboxes
+            .contains(&created.id),
+        "the folder must not exist in the sync's own account"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // delete
 
@@ -279,6 +321,39 @@ fn the_other_refusals_are_not_read_as_a_missing_folder() {
     let failure = fixture.sync().delete_folder(&full).unwrap_err();
 
     assert_ne!(refusal(failure), NOT_FOUND);
+}
+
+/// ROADMAP item 179(d), the delete side of the create test above.
+/// `delete_folder_as` is the entry point a caller that resolved the owning
+/// account uses instead of `delete_folder`.
+#[test]
+fn delete_folder_as_deletes_in_the_named_account_not_the_syncs_own() {
+    let fixture = Fixture::start();
+
+    let shared = Id::new("A2");
+    let shared_folder = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None)
+    };
+
+    fixture
+        .sync()
+        .delete_folder_as(&shared, &shared_folder)
+        .expect("the delete reaches the named account");
+
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        !state
+            .account(&shared)
+            .unwrap()
+            .mailboxes
+            .contains(&shared_folder),
+        "the folder must be gone from the named shared account"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -422,4 +497,40 @@ fn renaming_a_mailbox_the_account_does_not_have_is_no_such_folder() {
         SyncError::NoSuchFolder(id) => assert_eq!(id.as_str(), "M404"),
         other => panic!("expected a missing folder, got {other}"),
     }
+}
+
+/// ROADMAP item 179(d), the rename side of the create and delete tests
+/// above. `rename_folder_as` is the entry point a caller that resolved the
+/// owning account uses instead of `rename_folder`.
+#[test]
+fn rename_folder_as_renames_in_the_named_account_not_the_syncs_own() {
+    let fixture = Fixture::start();
+
+    let shared = Id::new("A2");
+    let shared_folder = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None)
+    };
+
+    fixture
+        .sync()
+        .rename_folder_as(&shared, &shared_folder, None, "Work")
+        .expect("the rename reaches the named account");
+
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert_eq!(
+        state
+            .account(&shared)
+            .unwrap()
+            .mailboxes
+            .get(&shared_folder)
+            .unwrap()
+            .name,
+        "Work",
+        "the rename must change the name in the named shared account"
+    );
 }
