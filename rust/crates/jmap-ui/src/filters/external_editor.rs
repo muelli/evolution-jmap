@@ -4,15 +4,17 @@
 //! Which command opens the script text in an external editor (item 180
 //! step (d)).
 //!
-//! Pure precedence, argv and temp-file logic only: no GSettings read,
-//! process spawn or file monitor here. A later step wires
+//! Pure precedence, argv, temp-file and spawn logic only: no GSettings
+//! read, button or file monitor here. A later step wires
 //! [`choose_command`] to the External Editor plugin's own
 //! `org.gnome.evolution.plugin.external-editor` GSettings key and to
-//! `$VISUAL`/`$EDITOR`, adds the button, and spawns [`build_argv`]'s
-//! result on [`write_temp_file`]'s path.
+//! `$VISUAL`/`$EDITOR`, adds the button, and watches
+//! [`write_temp_file`]'s path with a file monitor so an edit reaches
+//! the script buffer.
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Child;
 
 /// The external editor command to run, or [`EditorCommand::Default`] to
 /// hand the file to the desktop's default handler for text instead of
@@ -105,6 +107,19 @@ pub fn write_temp_file(dir: &Path, script_text: &str) -> io::Result<PathBuf> {
         io::ErrorKind::AlreadyExists,
         "could not create a unique external-editor temp file",
     ))
+}
+
+/// Starts `argv` as a child process: `argv[0]` is the program, the rest
+/// are its arguments. Returns the running [`Child`] so the caller can
+/// wait for it to finish editing before reloading the temp file.
+///
+/// Returns an error when `argv` is empty or the program cannot start
+/// (not found, not executable, and so on).
+pub fn spawn(argv: &[String]) -> io::Result<Child> {
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty external editor argv"))?;
+    std::process::Command::new(program).args(args).spawn()
 }
 
 #[cfg(test)]
@@ -242,6 +257,25 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn spawn_starts_the_program_with_its_arguments() {
+        let argv = build_argv("true", Path::new("/dev/null")).unwrap();
+        let mut child = spawn(&argv).unwrap();
+        let status = child.wait().unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn spawn_reports_a_program_that_cannot_start() {
+        let argv = vec!["evolution-jmap-no-such-editor-binary".to_string()];
+        assert!(spawn(&argv).is_err());
+    }
+
+    #[test]
+    fn spawn_refuses_an_empty_argv() {
+        assert_eq!(spawn(&[]).unwrap_err().kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
