@@ -175,6 +175,7 @@ set(EXPECTED_PACKAGE_FILES
 	${CAMEL_PROVIDER_DIR}/libcameljmap.urls
 	${EDS_REGISTRY_MODULE_DIR}/module-jmap-backend.so
 	${EVOLUTION_MODULE_DIR}/module-jmap-configuration.so
+	${CMAKE_INSTALL_PREFIX}/share/gtksourceview-4/language-specs/sieve.lang
 	/usr/share/doc/${PACKAGE_NAME}/changelog.gz
 	/usr/share/doc/${PACKAGE_NAME}/copyright
 	/usr/share/doc/${PACKAGE_NAME}/third-party-notices

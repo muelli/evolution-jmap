@@ -66,3 +66,47 @@ fn a_search_finds_the_matches_in_its_own_mailbox_only() {
         Vec::<Id>::new()
     );
 }
+
+/// ROADMAP item 179(d): `Email/query` is a method call under one
+/// `accountId`, so searching a shared mailbox must carry that account, not
+/// the sync's own one. `search_as` is the entry point a caller that
+/// resolved the owning account (`FolderTree::owning_account`) uses instead
+/// of `search`.
+#[test]
+fn search_as_searches_the_named_account_not_the_syncs_own() {
+    let server = MockServer::builder().start();
+
+    let shared = Id::new("agent-shared-owner");
+    let (shared_inbox, wanted) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+        let inbox = sharer.seed_mailbox("Inbox", None);
+        let wanted = sharer.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Invoice 42",
+            "text",
+            "2026-01-15T09:00:00Z",
+        ));
+        sharer.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "text",
+            "2026-01-15T09:00:00Z",
+        ));
+        (inbox, wanted)
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let sync = MailSync::new(client, server.account_id());
+
+    assert_eq!(
+        sync.search_as(&shared, &shared_inbox, subject_is("Invoice"))
+            .expect("the search to reach the named shared account"),
+        vec![wanted],
+        "the match lives in the shared account, not this sync's own"
+    );
+}

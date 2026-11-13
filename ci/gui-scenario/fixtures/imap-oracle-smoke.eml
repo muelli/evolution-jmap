@@ -1,0 +1,10 @@
+From: Sender <sender@example.test>
+To: Alice <alice@example.com>
+Subject: IMAP oracle smoke test
+Date: Fri, 02 Jan 2026 03:04:05 +0000
+Message-ID: <imap-oracle-smoke@example.test>
+Content-Type: text/plain; charset=utf-8
+
+A message delivered straight into the Dovecot oracle's Maildir, for
+ci/gui-scenario/scenarios/mail-imap-oracle-smoke.py to find over real
+IMAP (ROADMAP item 175's own comparison leg).

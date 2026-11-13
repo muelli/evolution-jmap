@@ -1,0 +1,5 @@
+{
+  "type": "invalidProperties",
+  "description": "Property value is invalid",
+  "properties": ["name", "email"]
+}

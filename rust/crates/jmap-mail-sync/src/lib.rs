@@ -29,6 +29,7 @@ pub mod message;
 pub mod path;
 pub(crate) mod pointer;
 pub mod send;
+pub mod shared;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,7 +42,7 @@ use jmap_proto::{Id, State, UtcDate};
 pub use error::SyncError;
 pub use folder::{
     FolderDelta, FolderInfo, FolderListChange, FolderRole, FolderTree, folder_tree_from_json,
-    folder_tree_to_json,
+    folder_tree_to_json, is_synthetic_folder_id,
 };
 pub use keywords::{KeywordChange, Keywords};
 pub use mailboxes::Filing;
@@ -49,6 +50,7 @@ pub use message::{
     MessageFlags, MessageSummary, SOURCE_PROPERTIES, SUMMARY_PROPERTIES, download_ceiling,
 };
 pub use send::{Outgoing, OutgoingMailboxes};
+pub use shared::{SharedMailAccount, shared_mail_accounts};
 
 /// The result of a folder-list refresh.
 ///
@@ -144,6 +146,34 @@ impl MailSync {
         Ok((response.state, FolderTree::from_mailboxes(&response.list)?))
     }
 
+    /// [`MailSync::folder_tree`], merged with every account this login's
+    /// session shares mail from (ROADMAP item 163's next slice after
+    /// [`FolderTree::merge_shared`]).
+    ///
+    /// Reads each shared account's own `Mailbox/get` directly through this
+    /// account's client, the same way [`MailSync::folder_tree`] reads the
+    /// primary account's: a share grants access to the client's session, not
+    /// a separate connection. The returned state is this account's own; a
+    /// shared account's state is not kept, so a later change to a shared
+    /// mailbox needs a fresh call to this function, not
+    /// [`MailSync::folder_tree_since`]. Wiring this into `get_folder_info_sync`
+    /// and the store's refresh loop is its own, later claim.
+    pub fn folder_tree_with_shared(&self) -> Result<(State, FolderTree), SyncError> {
+        let (state, tree) = self.folder_tree()?;
+        let shared = shared_mail_accounts(self.client.session());
+        if shared.is_empty() {
+            return Ok((state, tree));
+        }
+
+        let mut pairs = Vec::with_capacity(shared.len());
+        for account in shared {
+            let response = self.client.mailbox_get(&account.id)?;
+            let shared_tree = FolderTree::from_mailboxes(&response.list)?;
+            pairs.push((account, shared_tree));
+        }
+        Ok((state, tree.merge_shared(&pairs)))
+    }
+
     /// The folder tree again, but only if the mailboxes of the account changed
     /// after `since` (the refresh part of `get_folder_info_sync`).
     ///
@@ -158,9 +188,23 @@ impl MailSync {
     /// unrecognized state as `invalidArguments`, not as the RFC
     /// `cannotCalculateChanges`. This function also returns the listing for
     /// that error.
+    ///
+    /// `Mailbox/changes` above only ever asks about the primary account, so
+    /// it cannot see a change to a shared account's own mailboxes (ROADMAP
+    /// item 163). This function also rebuilds, with a fresh
+    /// [`MailSync::folder_tree_with_shared`] call, whenever the account has
+    /// any shared mail accounts at all, even if the primary account's own
+    /// state did not move. A later claim can track each shared account's own
+    /// state and skip this when none of them changed either.
     pub fn folder_tree_since(&self, since: &State) -> Result<FolderUpdate, SyncError> {
         match self.client.all_changes(&self.account_id, "Mailbox", since) {
-            Ok(changes) if changes.is_empty() => Ok(FolderUpdate::Unchanged(changes.new_state)),
+            Ok(changes) if changes.is_empty() => {
+                if shared_mail_accounts(self.client.session()).is_empty() {
+                    Ok(FolderUpdate::Unchanged(changes.new_state))
+                } else {
+                    self.rebuild()
+                }
+            }
             Ok(_) => self.rebuild(),
             Err(error) if error.needs_full_resync() => self.rebuild(),
             Err(error) => Err(error.into()),
@@ -169,8 +213,14 @@ impl MailSync {
 
     /// The listing, with its own state and not the state of the delta. The
     /// account can change again between the two calls.
+    ///
+    /// Merges in shared accounts' own mailboxes
+    /// ([`MailSync::folder_tree_with_shared`]): `folder_tree_since` decides
+    /// to rebuild from a change on the primary account alone, but the
+    /// rebuilt tree must still carry whatever shared mailboxes the last
+    /// listing had, not just the primary account's own.
     fn rebuild(&self) -> Result<FolderUpdate, SyncError> {
-        let (state, tree) = self.folder_tree()?;
+        let (state, tree) = self.folder_tree_with_shared()?;
         Ok(FolderUpdate::Rebuilt { state, tree })
     }
 
@@ -199,13 +249,31 @@ impl MailSync {
     /// that this listing already has. That is safe: the result is only a
     /// repeated lookup and an identical row write.
     pub fn messages(&self, mailbox: &Id) -> Result<(State, Vec<MessageSummary>), SyncError> {
-        let state = self.client.email_state(&self.account_id)?;
-        let ids = self.message_ids(mailbox)?;
+        self.messages_as(&self.account_id, mailbox)
+    }
+
+    /// [`Self::messages`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Email/query` and `Email/get` are method calls under one `accountId`,
+    /// and `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`crate::FolderTree::merge_shared`]). The
+    /// caller resolves `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) and passes it here instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::file_message_as`] already does.
+    pub fn messages_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+    ) -> Result<(State, Vec<MessageSummary>), SyncError> {
+        let state = self.client.email_state(account)?;
+        let ids = self.message_ids(account, mailbox)?;
 
         // `/get` can answer in any order (RFC 8620 §5.1). The code below puts
         // the rows back in the query order.
         let mut by_uid: BTreeMap<Id, MessageSummary> = BTreeMap::new();
-        for email in self.fetch(&ids, SUMMARY_PROPERTIES)? {
+        for email in self.fetch(account, &ids, SUMMARY_PROPERTIES)? {
             let summary = MessageSummary::from_email(&email)?;
             by_uid.insert(summary.uid.clone(), summary);
         }
@@ -251,12 +319,32 @@ impl MailSync {
         since: &State,
         held: usize,
     ) -> Result<MessageUpdate, SyncError> {
-        let changes = match self.client.all_changes(&self.account_id, "Email", since) {
+        self.messages_since_as(&self.account_id, mailbox, since, held)
+    }
+
+    /// [`Self::messages_since`], against `account` instead of this sync's
+    /// own account.
+    ///
+    /// `Email/changes` and `Email/get` are method calls under one
+    /// `accountId`, and `mailbox` can be a mailbox of a shared account
+    /// merged into this account's folder tree
+    /// ([`crate::FolderTree::merge_shared`]). The caller resolves `account`
+    /// from the held folder tree ([`crate::FolderTree::owning_account`]) and
+    /// passes it here instead of assuming `self.account_id` (ROADMAP item
+    /// 179(d)), the same way [`Self::file_message_as`] already does.
+    pub fn messages_since_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+        since: &State,
+        held: usize,
+    ) -> Result<MessageUpdate, SyncError> {
+        let changes = match self.client.all_changes(account, "Email", since) {
             Ok(changes) if changes.is_empty() => {
                 return Ok(MessageUpdate::Unchanged(changes.new_state));
             }
             Ok(changes) => changes,
-            Err(error) if error.needs_full_resync() => return self.relist(mailbox),
+            Err(error) if error.needs_full_resync() => return self.relist_as(account, mailbox),
             Err(error) => return Err(error.into()),
         };
 
@@ -276,12 +364,12 @@ impl MailSync {
         // `destroyed` does not count, because this function does not fetch
         // those ids.
         if touched.len() > catch_up_limit(held, self.objects_in_get()) {
-            return self.relist(mailbox);
+            return self.relist_as(account, mailbox);
         }
 
         let mut absent = changes.destroyed;
         let mut present = Vec::new();
-        for email in self.fetch(&touched, &filing_properties())? {
+        for email in self.fetch(account, &touched, &filing_properties())? {
             // RFC 8621 §4.1.1 sets each `mailboxIds` value to `true`. A `false`
             // entry for this mailbox is a protocol violation. Refuse it, as
             // `message_mailboxes` does; do not read it as absence.
@@ -340,23 +428,26 @@ impl MailSync {
 
     /// The full mailbox listing, with its own state and not the state of the
     /// delta. [`MailSync::rebuild`] does the same for the folder tree.
-    fn relist(&self, mailbox: &Id) -> Result<MessageUpdate, SyncError> {
-        let (state, messages) = self.messages(mailbox)?;
+    fn relist_as(&self, account: &Id, mailbox: &Id) -> Result<MessageUpdate, SyncError> {
+        let (state, messages) = self.messages_as(account, mailbox)?;
         Ok(MessageUpdate::Relisted { state, messages })
     }
 
-    /// The `Email` objects for `ids`, in the server order. This function uses
-    /// as many `Email/get` calls as the account limit makes necessary.
+    /// The `Email` objects for `ids`, in the server order, under `account`.
+    /// This function uses as many `Email/get` calls as the account limit
+    /// makes necessary.
     ///
     /// An empty list causes no calls. A delta with only destroyed messages
     /// gives an empty list.
-    fn fetch(&self, ids: &[Id], properties: &[&str]) -> Result<Vec<Email>, SyncError> {
+    fn fetch(
+        &self,
+        account: &Id,
+        ids: &[Id],
+        properties: &[&str],
+    ) -> Result<Vec<Email>, SyncError> {
         let mut emails = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(self.objects_in_get()) {
-            emails.extend(
-                self.client
-                    .email_get(&self.account_id, chunk, Some(properties))?,
-            );
+            emails.extend(self.client.email_get(account, chunk, Some(properties))?);
         }
         Ok(emails)
     }
@@ -469,16 +560,36 @@ impl MailSync {
     /// [`MailSync::set_keywords`] gives. The patch changes only the named
     /// members, so it does not conflict with changes to other members.
     pub fn file_message(&self, uid: &Id, filing: &Filing) -> Result<(), SyncError> {
+        self.file_message_as(&self.account_id, uid, filing)
+    }
+
+    /// [`Self::file_message`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Email/set` is a JMAP method call under one `accountId`, and both
+    /// mailboxes a [`Filing`] names belong to the message's own account
+    /// (RFC 8620 §5.3). A mailbox [`FolderTree::owning_account`] names as a
+    /// shared account's (ROADMAP item 179(d)) needs its filing write to
+    /// carry that account, not the account this `MailSync` addresses by
+    /// default: the caller resolves `account` from the held folder tree and
+    /// passes it here instead of assuming `self.account_id`.
+    pub fn file_message_as(
+        &self,
+        account: &Id,
+        uid: &Id,
+        filing: &Filing,
+    ) -> Result<(), SyncError> {
         if filing.is_empty() {
             return Ok(());
         }
-        let account_id = self.account_id().to_string();
+        let account_id = account.to_string();
         let message_uid = uid.to_string();
         tracing::debug!(account_id, uid = message_uid, "filing message");
-        self.update_email(uid, filing.patch()).map_err(|error| {
-            tracing::warn!(account_id, uid = message_uid, %error, "message filing failed");
-            error
-        })
+        self.update_email_as(account, uid, filing.patch())
+            .map_err(|error| {
+                tracing::warn!(account_id, uid = message_uid, %error, "message filing failed");
+                error
+            })
     }
 
     /// Removes one message from a mailbox permanently (`expunge_sync`).
@@ -521,10 +632,29 @@ impl MailSync {
     /// writes have this window. To close it, the server must supply a "destroy
     /// if in no other mailbox" operation, and JMAP has none.
     pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), SyncError> {
-        let account_id = self.account_id().to_string();
+        self.expunge_message_as(&self.account_id, uid, mailbox)
+    }
+
+    /// [`Self::expunge_message`], against `account` instead of this sync's
+    /// own account.
+    ///
+    /// `Email/get` and `Email/set` are method calls under one `accountId`,
+    /// and `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`crate::FolderTree::merge_shared`]). The
+    /// caller resolves `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) and passes it here instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::file_message_as`] already does.
+    pub fn expunge_message_as(
+        &self,
+        account: &Id,
+        uid: &Id,
+        mailbox: &Id,
+    ) -> Result<(), SyncError> {
+        let account_id = account.to_string();
         let message_uid = uid.to_string();
         let mailbox_id = mailbox.to_string();
-        let filed_in = self.message_mailboxes(uid).map_err(|error| {
+        let filed_in = self.message_mailboxes_as(account, uid).map_err(|error| {
             tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message expunge failed");
             error
         })?;
@@ -539,14 +669,14 @@ impl MailSync {
         );
         if filed_in.len() > 1 {
             return self
-                .update_email(uid, mailboxes::out_of(mailbox))
+                .update_email_as(account, uid, mailboxes::out_of(mailbox))
                 .map_err(|error| {
                     tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message expunge failed");
                     error
                 });
         }
         self.client
-            .email_destroy(&self.account_id, uid)
+            .email_destroy(account, uid)
             .map_err(|error| match &error {
                 jmap_client::Error::Set(set_error)
                     if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>
@@ -569,32 +699,54 @@ impl MailSync {
     /// the race window are the same as in [`MailSync::expunge_message`]. A
     /// message that is not in `mailbox` is left as it is.
     pub fn trash_message(&self, uid: &Id, mailbox: &Id, trash: &Id) -> Result<(), SyncError> {
-        let account_id = self.account_id().to_string();
+        self.trash_message_as(&self.account_id, uid, mailbox, trash)
+    }
+
+    /// [`Self::trash_message`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Email/get` and `Email/set` are method calls under one `accountId`,
+    /// and `mailbox` and `trash` can both be mailboxes of a shared account
+    /// merged into this account's folder tree
+    /// ([`crate::FolderTree::merge_shared`]). The caller resolves `account`
+    /// from the held folder tree ([`crate::FolderTree::owning_account`]) and
+    /// passes it here instead of assuming `self.account_id` (ROADMAP item
+    /// 179(d)), the same way [`Self::expunge_message_as`] already does.
+    pub fn trash_message_as(
+        &self,
+        account: &Id,
+        uid: &Id,
+        mailbox: &Id,
+        trash: &Id,
+    ) -> Result<(), SyncError> {
+        let account_id = account.to_string();
         let message_uid = uid.to_string();
         let mailbox_id = mailbox.to_string();
-        let result = self.message_mailboxes(uid).and_then(|filed_in| {
-            if !filed_in.contains(mailbox) {
-                return Ok(());
-            }
-            tracing::debug!(
-                account_id,
-                uid = message_uid,
-                mailbox_id,
-                "trashing message"
-            );
-            let patch = if filed_in.len() > 1 {
-                mailboxes::out_of(mailbox)
-            } else {
-                Filing::moved(mailbox.clone(), trash.clone()).patch()
-            };
-            self.update_email(uid, patch)
-        });
+        let result = self
+            .message_mailboxes_as(account, uid)
+            .and_then(|filed_in| {
+                if !filed_in.contains(mailbox) {
+                    return Ok(());
+                }
+                tracing::debug!(
+                    account_id,
+                    uid = message_uid,
+                    mailbox_id,
+                    "trashing message"
+                );
+                let patch = if filed_in.len() > 1 {
+                    mailboxes::out_of(mailbox)
+                } else {
+                    Filing::moved(mailbox.clone(), trash.clone()).patch()
+                };
+                self.update_email_as(account, uid, patch)
+            });
         result.inspect_err(|error| {
             tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message trash failed");
         })
     }
 
-    /// The mailboxes that hold one message.
+    /// The mailboxes that hold one message, under `account`.
     ///
     /// The request names one property. The default property set of `Email/get`
     /// is large and includes body parts (RFC 8621 §4.2).
@@ -606,9 +758,9 @@ impl MailSync {
     /// is a protocol violation, and no write is safe to select from it. Thus
     /// this function refuses it, as `identity_for` refuses an identity without
     /// an id. It does not count the value as membership or as absence.
-    fn message_mailboxes(&self, uid: &Id) -> Result<BTreeSet<Id>, SyncError> {
+    fn message_mailboxes_as(&self, account: &Id, uid: &Id) -> Result<BTreeSet<Id>, SyncError> {
         let found = self.client.email_get(
-            &self.account_id,
+            account,
             std::slice::from_ref(uid),
             Some(&[mailboxes::MAILBOX_IDS]),
         )?;
@@ -686,12 +838,33 @@ impl MailSync {
         keywords: &Keywords,
         received_at: Option<i64>,
     ) -> Result<Id, SyncError> {
-        let account_id = self.account_id().to_string();
+        self.import_message_as(&self.account_id, mailbox, source, keywords, received_at)
+    }
+
+    /// [`Self::import_message`], against `account` instead of this sync's
+    /// own account.
+    ///
+    /// `Email/import` is a JMAP method call under one `accountId`, and the
+    /// blob it names must belong to that same account (RFC 8620 §6.1). A
+    /// mailbox [`FolderTree::owning_account`] names as a shared account's
+    /// (ROADMAP item 179(d), the append-path slice) needs its write to carry
+    /// that account, not the account this `MailSync` addresses by default:
+    /// the caller resolves `account` from the held folder tree and passes it
+    /// here instead of assuming `self.account_id`.
+    pub fn import_message_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+        source: Vec<u8>,
+        keywords: &Keywords,
+        received_at: Option<i64>,
+    ) -> Result<Id, SyncError> {
+        let account_id = account.to_string();
         let mailbox_id = mailbox.to_string();
         tracing::debug!(account_id, mailbox_id, "importing message");
         let upload = self
             .client
-            .upload_blob(&self.account_id, MESSAGE_MEDIA_TYPE, source)
+            .upload_blob(account, MESSAGE_MEDIA_TYPE, source)
             .map_err(|error| {
                 tracing::warn!(account_id, mailbox_id, %error, "message import failed");
                 error
@@ -707,7 +880,7 @@ impl MailSync {
 
         let imported = self
             .client
-            .email_import(&self.account_id, &import)
+            .email_import(account, &import)
             .map_err(|error| {
                 tracing::warn!(account_id, mailbox_id, %error, "message import failed");
                 error
@@ -888,7 +1061,26 @@ impl MailSync {
     /// delete the folder, and the subscription is then not necessary. All
     /// other refusals stay [`SyncError::Client`].
     pub fn set_subscribed(&self, mailbox: &Id, subscribed: bool) -> Result<(), SyncError> {
-        let account_id = self.account_id().to_string();
+        self.set_subscribed_as(&self.account_id, mailbox, subscribed)
+    }
+
+    /// [`Self::set_subscribed`], against `account` instead of this sync's
+    /// own account.
+    ///
+    /// `Mailbox/set` is a method call under one `accountId`, and `mailbox`
+    /// can be a mailbox of a shared account merged into this account's
+    /// folder tree ([`crate::FolderTree::merge_shared`]). The caller resolves
+    /// `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) and passes it here instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::file_message_as`] already does.
+    pub fn set_subscribed_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+        subscribed: bool,
+    ) -> Result<(), SyncError> {
+        let account_id = account.to_string();
         let mailbox_id = mailbox.to_string();
         tracing::debug!(
             account_id,
@@ -898,7 +1090,7 @@ impl MailSync {
         );
         self.client
             .mailbox_update(
-                &self.account_id,
+                account,
                 mailbox,
                 serde_json::json!({ "isSubscribed": subscribed }),
             )
@@ -954,13 +1146,31 @@ impl MailSync {
         parent: Option<&FolderInfo>,
         name: &str,
     ) -> Result<FolderInfo, SyncError> {
+        self.create_folder_as(&self.account_id.clone(), parent, name)
+    }
+
+    /// [`Self::create_folder`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Mailbox/set` is a method call under one `accountId`, and `parent` can
+    /// be a folder of a shared account merged into this account's folder
+    /// tree ([`crate::FolderTree::merge_shared`]). The caller resolves
+    /// `account` from the parent's own [`FolderInfo::account_id`] instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::set_subscribed_as`] already does.
+    pub fn create_folder_as(
+        &self,
+        account: &Id,
+        parent: Option<&FolderInfo>,
+        name: &str,
+    ) -> Result<FolderInfo, SyncError> {
         let mut requested = Mailbox::new(name).is_subscribed(true);
         if let Some(parent) = parent {
             requested = requested.with_parent_id(parent.id.clone());
         }
-        let account_id = self.account_id().to_string();
+        let account_id = account.to_string();
         tracing::debug!(account_id, name, "creating mail folder");
-        let created = match self.client.mailbox_create(&self.account_id, &requested) {
+        let created = match self.client.mailbox_create(account, &requested) {
             Ok(created) => created,
             Err(error) => {
                 tracing::warn!(account_id, name, %error, "mail folder create failed");
@@ -986,6 +1196,10 @@ impl MailSync {
             // The server was not asked for `myRights` on a create, and the
             // caller who just created the mailbox is its owner.
             may_add_items: None,
+            // `None` when `account` is this `MailSync`'s own account, the
+            // common case; `Some` keeps the shared owner so a later lookup
+            // by this mailbox's id (`FolderTree::owning_account`) finds it.
+            account_id: (account != self.account_id()).then(|| account.clone()),
             children: Vec::new(),
         })
     }
@@ -1012,10 +1226,19 @@ impl MailSync {
     /// different client removed the folder first, the result is what the user
     /// asked for. It is not a failure.
     pub fn delete_folder(&self, mailbox: &Id) -> Result<(), SyncError> {
-        let account_id = self.account_id().to_string();
+        self.delete_folder_as(&self.account_id.clone(), mailbox)
+    }
+
+    /// [`Self::delete_folder`], against `account` instead of this sync's own
+    /// account. The caller resolves `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) instead of assuming
+    /// `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::set_subscribed_as`] already does.
+    pub fn delete_folder_as(&self, account: &Id, mailbox: &Id) -> Result<(), SyncError> {
+        let account_id = account.to_string();
         let mailbox_id = mailbox.to_string();
         tracing::debug!(account_id, mailbox_id, "deleting mail folder");
-        if let Err(error) = self.client.mailbox_destroy(&self.account_id, mailbox) {
+        if let Err(error) = self.client.mailbox_destroy(account, mailbox) {
             tracing::warn!(account_id, mailbox_id, %error, "mail folder delete failed");
             return Err(folder_error(mailbox, error));
         }
@@ -1063,12 +1286,27 @@ impl MailSync {
         parent: Option<&FolderInfo>,
         name: &str,
     ) -> Result<String, SyncError> {
-        let account_id = self.account_id().to_string();
+        self.rename_folder_as(&self.account_id.clone(), folder, parent, name)
+    }
+
+    /// [`Self::rename_folder`], against `account` instead of this sync's own
+    /// account. The caller resolves `account` from the renamed folder's own
+    /// [`FolderInfo::account_id`] (held by the listing above this crate)
+    /// instead of assuming `self.account_id` (ROADMAP item 179(d)), the same
+    /// way [`Self::set_subscribed_as`] already does.
+    pub fn rename_folder_as(
+        &self,
+        account: &Id,
+        folder: &Id,
+        parent: Option<&FolderInfo>,
+        name: &str,
+    ) -> Result<String, SyncError> {
+        let account_id = account.to_string();
         let mailbox_id = folder.to_string();
         tracing::debug!(account_id, mailbox_id, name, "renaming mail folder");
         self.client
             .mailbox_update(
-                &self.account_id,
+                account,
                 folder,
                 serde_json::json!({
                     "name": name,
@@ -1087,11 +1325,23 @@ impl MailSync {
         ))
     }
 
-    /// One `Email/set` update. A `notFound` refusal gives
-    /// [`SyncError::NoSuchMessage`], because the message is gone.
+    /// One `Email/set` update, against this sync's own account. A `notFound`
+    /// refusal gives [`SyncError::NoSuchMessage`], because the message is
+    /// gone.
     fn update_email(&self, uid: &Id, patch: serde_json::Value) -> Result<(), SyncError> {
+        self.update_email_as(&self.account_id, uid, patch)
+    }
+
+    /// [`Self::update_email`], against `account` instead of this sync's own
+    /// account.
+    fn update_email_as(
+        &self,
+        account: &Id,
+        uid: &Id,
+        patch: serde_json::Value,
+    ) -> Result<(), SyncError> {
         self.client
-            .email_update(&self.account_id, uid, patch)
+            .email_update(account, uid, patch)
             .map_err(|error| match &error {
                 jmap_client::Error::Set(set_error)
                     if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>
@@ -1102,12 +1352,13 @@ impl MailSync {
             })
     }
 
-    /// The message ids of a mailbox, oldest first, from all pages of the
-    /// server answer.
-    fn message_ids(&self, mailbox: &Id) -> Result<Vec<Id>, SyncError> {
-        self.paged_query(Filter::condition(EmailQueryFilter::in_mailbox(
-            mailbox.clone(),
-        )))
+    /// The message ids of a mailbox under `account`, oldest first, from all
+    /// pages of the server answer.
+    fn message_ids(&self, account: &Id, mailbox: &Id) -> Result<Vec<Id>, SyncError> {
+        self.paged_query(
+            account,
+            Filter::condition(EmailQueryFilter::in_mailbox(mailbox.clone())),
+        )
     }
 
     /// The message ids of a mailbox that agree with `filter`, for a search on
@@ -1120,23 +1371,49 @@ impl MailSync {
         mailbox: &Id,
         filter: Filter<EmailQueryFilter>,
     ) -> Result<Vec<Id>, SyncError> {
-        self.paged_query(Filter::and([
-            Filter::condition(EmailQueryFilter::in_mailbox(mailbox.clone())),
-            filter,
-        ]))
+        self.search_as(&self.account_id, mailbox, filter)
     }
 
-    /// Gets all pages of `Email/query` for `filter`, oldest first. It stops
-    /// when the server does not report a limit, or returns an empty page.
-    /// It fails when the ids go past the id budget of the client, or do not
-    /// agree with the `total` of the server. EDS removes each cached message
-    /// that a partial list does not have.
-    fn paged_query(&self, filter: Filter<EmailQueryFilter>) -> Result<Vec<Id>, SyncError> {
+    /// [`Self::search`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Email/query` is a method call under one `accountId`, and `mailbox`
+    /// can be a mailbox of a shared account merged into this account's
+    /// folder tree ([`crate::FolderTree::merge_shared`]). The caller resolves
+    /// `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) and passes it here instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::messages_as`] already does.
+    pub fn search_as(
+        &self,
+        account: &Id,
+        mailbox: &Id,
+        filter: Filter<EmailQueryFilter>,
+    ) -> Result<Vec<Id>, SyncError> {
+        self.paged_query(
+            account,
+            Filter::and([
+                Filter::condition(EmailQueryFilter::in_mailbox(mailbox.clone())),
+                filter,
+            ]),
+        )
+    }
+
+    /// Gets all pages of `Email/query` for `filter` under `account`, oldest
+    /// first. It stops when the server does not report a limit, or returns
+    /// an empty page. It fails when the ids go past the id budget of the
+    /// client, or do not agree with the `total` of the server. EDS removes
+    /// each cached message that a partial list does not have.
+    fn paged_query(
+        &self,
+        account: &Id,
+        filter: Filter<EmailQueryFilter>,
+    ) -> Result<Vec<Id>, SyncError> {
         let mut ids: Vec<Id> = Vec::new();
         let mut budget = self.client.id_budget();
 
         for _ in 0..MAX_QUERY_PAGES {
-            let mut request = QueryRequest::new(self.account_id.clone()).filter(filter.clone());
+            let mut request = QueryRequest::new(account.clone()).filter(filter.clone());
             request.sort = Some(vec![Comparator::ascending("receivedAt")]);
             request.position = ids.len() as i64;
             request.calculate_total = true;

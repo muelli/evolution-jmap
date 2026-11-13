@@ -131,7 +131,7 @@ use jmap_proto::{Id, State};
 use crate::changes::Changes;
 use crate::folder_info::{c_string, sanitized};
 use crate::message_info::{
-    clear_pending_write, message_info_type, new_message_info, update_message_info,
+    clear_pending_write, message_info_type, new_message_info, pending_append, update_message_info,
 };
 
 /// The format number of the stored header. Increase it when the meaning of the
@@ -800,6 +800,17 @@ unsafe fn remove_absent(
             // listing names, so its row is removed too.
             let text = std::ffi::CStr::from_ptr(uid).to_str();
             if text.is_ok_and(|uid| listed.contains(uid)) {
+                continue;
+            }
+            // A listing never names `crate::append`'s own synthetic uid: the
+            // server does not have that message yet. Removing the row here
+            // would orphan the queued append, since nothing else refers to
+            // the bytes still sitting in the pending-append cache.
+            // `crate::append::replay_append` removes the row itself once the
+            // upload lands and the real row takes its uid.
+            if let Some(info) = Owned::from_raw(camel_folder_summary_get(summary, uid))
+                && pending_append(info.as_ptr()).is_some()
+            {
                 continue;
             }
             camel_folder_summary_remove_uid(summary, uid);

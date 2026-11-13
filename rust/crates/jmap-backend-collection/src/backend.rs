@@ -734,6 +734,7 @@ unsafe extern "C" fn create_resource_sync(
                 &login.server.connection,
                 &account_uid,
                 cache_dir.as_deref(),
+                login.server.rebase_urls,
             )
         } {
             // The collection is on the server, but this child is not written,

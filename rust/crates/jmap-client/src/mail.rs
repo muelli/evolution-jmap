@@ -86,6 +86,26 @@ fn backfill_submission_created(
     arguments
 }
 
+/// Refuse an envelope with a control character in an address.
+///
+/// RFC 5321 Section 4.1.2 permits no control character in a `Mailbox`, not
+/// even in a quoted local part. A server that copies the string into its SMTP
+/// session would send a CRLF and a second command. The check occurs before
+/// the request, so the server never sees the string. Spaces and angle
+/// brackets are not refused, because a quoted local part can hold them.
+fn check_envelope(envelope: &Envelope) -> Result<(), Error> {
+    let addresses = std::iter::once(&envelope.mail_from).chain(envelope.rcpt_to.iter());
+    for address in addresses {
+        if address.email.chars().any(|c| c.is_ascii_control()) {
+            return Err(Error::Protocol(format!(
+                "envelope address {:?} contains a control character",
+                address.email
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Build an `EmailSubmission/set` request.
 ///
 /// `email_id` is either a `#draft` reference or an existing message ID.
@@ -670,6 +690,9 @@ impl Client {
     ) -> Result<EmailSubmission, Error> {
         const SUBMISSION: &str = "submission";
 
+        if let Some(envelope) = &envelope {
+            check_envelope(envelope)?;
+        }
         let submission_set = submission_request(
             account_id,
             identity_id,
@@ -787,6 +810,9 @@ impl Client {
         {
             return Err(Error::TooLarge { size, limit });
         }
+
+        let cancel = self.cancel_for_request();
+        let _upload_permit = self.upload_limiter.acquire(cancel.as_ref())?;
 
         let url = self
             .session()

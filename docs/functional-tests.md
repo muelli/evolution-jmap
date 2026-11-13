@@ -42,6 +42,21 @@ anything. They do not need `sudo`. They do not touch your own Evolution data.
 `-DENABLE_FUNCTIONAL_TESTS=ON` and one of them is missing, the configuration
 fails. The error message names the missing item.
 
+If the host does not have these packages installed, build and run the
+container image in `ci/functional/Containerfile` with rootless `podman`. Use a
+separate build directory such as `build-func` so the Ubuntu 24.04 CMake cache
+does not collide with a host `build/` directory:
+
+```console
+$ podman build -f ci/functional/Containerfile -t evolution-jmap-functional ci
+$ podman run --rm --userns=keep-id \
+    -e HOME="$HOME" \
+    -e PATH="$HOME/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    -v "$PWD:$PWD" -v "$HOME/.rustup:$HOME/.rustup:ro" -v "$HOME/.cargo:$HOME/.cargo" \
+    -w "$PWD" evolution-jmap-functional \
+    bash -c 'cmake -S . -B build-func -G Ninja -DENABLE_FUNCTIONAL_TESTS=ON && cmake --build build-func && ctest --test-dir build-func -L functional --output-on-failure'
+```
+
 ## How one test runs
 
 `rust/crates/jmap-functional` is the harness. For each test it does these

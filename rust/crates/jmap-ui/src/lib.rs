@@ -29,6 +29,8 @@
 //! 2. The server-side facts in [`session_cache`] decide if the UI is
 //!    sensitive.
 
+pub mod delegates;
+pub mod delegation;
 pub mod dispatch;
 pub mod external_photo;
 pub mod filters;

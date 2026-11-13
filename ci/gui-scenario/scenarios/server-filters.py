@@ -10,6 +10,9 @@
    script's blob stays the one from step 2: the save wrote nothing.
 4. Alice edits the plain script's text to something invalid and clicks
    Check. The page shows the server's refusal, not "The script is valid.".
+4a. Alice types a line the local Sieve parser rejects on its own, with no
+    Check click: the line underlines and a tooltip shows the message.
+    Fixing the line clears both, still with no Check click.
 5. With the vacation responder on, its script shows as protected: the page
    marks its row and disables the buttons that would change it.
 6. A very long server refusal from Check still leaves every script list
@@ -60,6 +63,11 @@ INVOICES_FOLDER = "Invoices"
 INVALID_TEXT = 'fileinto "Nonexistent";'
 SCRIPT_VALID = "The script is valid."
 CHECKING = "Checking the script…"
+
+# A line the local Sieve parser (item 171b) rejects on its own, with no
+# server round trip: an unterminated block. Deliberately NOT `INVALID_TEXT`
+# above, which is syntactically valid Sieve the server alone refuses.
+LOCAL_SYNTAX_ERROR_TEXT = "if true {"
 
 # With --sieve-validate-long-error, a script containing this marker makes
 # Check answer with LONG_ERROR_DETAIL below instead of really validating it.
@@ -222,6 +230,17 @@ def script_cell(editor, text):
 def select_script(editor, name):
     cell = wait_for(lambda: script_cell(editor, name), f"{name!r} in the script list")
     cell.queryComponent().grabFocus()
+
+
+def has_error_underline(source_view, offset=0):
+    """True if the error tag (item 171b) covers `offset` of `source_view`.
+
+    GTK reports a `GtkTextTag`'s `PANGO_UNDERLINE_ERROR` as the AT-SPI text
+    attribute `underline:error`, distinct from GtkSourceView's own syntax
+    colours, which stay present either way.
+    """
+    attributes, _start, _end = source_view.queryText().getAttributes(offset)
+    return "underline:error" in attributes.split(";")
 
 
 def selected_item_name(combo):
@@ -405,6 +424,26 @@ def run():
     if download_sieve(server, scripts_after_check[LEGACY_NAME]["blobId"]) != LEGACY_TEXT:
         raise ScenarioFailure("Cancel after Check wrote the invalid text to the server")
     say("server: the invalid edit never reached the server")
+
+    # 4a. A local syntax error underlines the line and sets a tooltip with no
+    # Check click at all (item 171b): the local parser alone, on a debounce.
+    editor = open_page()
+    loaded(editor)
+    select_script(editor, LEGACY_NAME)
+    source_view = wait_for(
+        lambda: text_field(editor, LEGACY_TEXT), f"the text view showing {LEGACY_TEXT!r}"
+    )
+    set_text(source_view, LOCAL_SYNTAX_ERROR_TEXT)
+    wait_for(lambda: has_error_underline(source_view), "a local error underline")
+    tooltip = wait_for(lambda: source_view.description or None, "a tooltip with a message")
+    say(f"page: a local syntax error underlines the line, tooltip {tooltip!r}")
+    screenshot("local-syntax-error")
+
+    set_text(source_view, "keep;")
+    wait_for(lambda: not has_error_underline(source_view), "the underline clears once fixed")
+    wait_for(lambda: source_view.description == "", "the tooltip clears once fixed")
+    say("page: fixing the line clears the underline and the tooltip, still with no Check click")
+    close_with_cancel(editor)
 
     # 5. With the vacation responder on, its script shows as protected.
     server.call(

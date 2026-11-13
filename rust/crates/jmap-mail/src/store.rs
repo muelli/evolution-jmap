@@ -468,6 +468,12 @@ impl JmapStore {
     /// The first call has no listing, so it lists the account for all flags.
     /// Otherwise, an account opens empty and shows no mail until a refresh.
     ///
+    /// The listing merges in every account the login's session shares mail
+    /// from ([`MailSync::folder_tree_with_shared`]), under one `Shared/<owner>`
+    /// branch per sharing account (ROADMAP item 163). `MailSync::rebuild`
+    /// keeps the merge on every later full relist too, so only the first
+    /// listing needs to ask for it explicitly here.
+    ///
     /// This function does not read the other flags. `SUBSCRIBED` and
     /// `SUBSCRIPTION_LIST` ask for the tree filtered to the subscribed
     /// folders: a filter on the tree, not a different request. `FAST` asks for
@@ -544,7 +550,7 @@ impl JmapStore {
             None => {
                 baseline_generation = None;
                 match retry_once_after(
-                    || sync.folder_tree(),
+                    || sync.folder_tree_with_shared(),
                     SyncError::is_unauthorized,
                     || self.refresh_credentials(sync),
                 ) {
@@ -573,10 +579,17 @@ impl JmapStore {
         // generation during this request. Its write is more current than this
         // answer, which was correct when asked but is now stale. Keep the
         // edit, and give the caller the tree that the edit wrote.
-        let stale = matches!(
-            (&*guard, baseline_generation),
-            (Some(current), Some(baseline)) if current.generation != baseline
-        );
+        //
+        // A `None` baseline (this request started with no listing at all)
+        // is stale too if the slot now holds one. Two first listings can
+        // race the same empty slot; whichever populates it first can then
+        // be edited, and the other has no generation to notice that. Its
+        // own answer must not overwrite a slot that is no longer empty.
+        let stale = match (&*guard, baseline_generation) {
+            (Some(current), Some(baseline)) => current.generation != baseline,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
         let (tree, persisted_state) = if stale {
             match guard.as_ref() {
                 Some(current) => (Arc::clone(&current.tree), current.state.clone()),
@@ -650,18 +663,27 @@ impl JmapStore {
     /// nothing, the same way [`crate::cache::MessageCache::open`] relies on
     /// `camel_data_cache_new` to make its own directory rather than assume
     /// Camel already did.
+    ///
+    /// Sets the directory to 0700 and the cache file to 0600, matching
+    /// `camel_data_cache`'s own directories and files (security audit item
+    /// 167(a), row S7-3): a bare `create_dir_all`/`write` would leave both at
+    /// the process umask, typically readable by every local account.
     fn persist_folders_to_disk(&self, state: &State, tree: &FolderTree) {
+        use std::os::unix::fs::PermissionsExt;
+
         let Some(path) = self.folder_tree_cache_path() else {
             return;
         };
         if let Some(directory) = path.parent() {
             let _ = std::fs::create_dir_all(directory);
+            let _ = std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700));
         }
         let mut tmp = path.clone().into_os_string();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
         let json = folder_tree_to_json(state, tree);
         if std::fs::write(&tmp, json)
+            .and_then(|()| std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)))
             .and_then(|()| std::fs::rename(&tmp, &path))
             .is_err()
         {
@@ -764,16 +786,34 @@ impl JmapStore {
     /// A folder without a state calls this: on the first refresh of a
     /// mailbox, and to recover when the server cannot calculate a delta from
     /// a state.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Email/query`
+    /// and `Email/get` are method calls under one `accountId`, so this
+    /// resolves the mailbox's real owner first ([`FolderTree::owning_account`])
+    /// and lists under that account instead of this store's own (ROADMAP
+    /// item 179(d)). The resolve reads [`Self::held_folders`], the cached
+    /// tree, not [`Self::folders`]: a mailbox id reaches this function only
+    /// once Camel has already listed the account that showed it, the same
+    /// reason [`Self::set_subscribed`] gives, and unlike that reason
+    /// `disconnect_window.rs` also requires it here: `folders(0)` would hold
+    /// the connection's read lock across a network round trip on a store
+    /// with no listing yet, which is exactly the wait this function's own
+    /// disconnect-window test forbids.
     pub fn messages(&self, mailbox: &Id) -> Result<(State, Vec<MessageSummary>), StoreError> {
+        let account = self
+            .held_folders()
+            .and_then(|tree| tree.owning_account(mailbox).cloned());
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = account.unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(mailbox_id = mailbox.as_str(), "listing messages in mailbox");
         match retry_once_after(
-            || sync.messages(mailbox),
+            || sync.messages_as(&account, mailbox),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
@@ -813,18 +853,30 @@ impl JmapStore {
     /// `MailSync::messages_since`, which uses it for one decision: when a
     /// delta is so large that a full listing costs less. The folder counts its
     /// summary at no cost; the layer below must ask the server.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Email/changes`
+    /// and `Email/get` are method calls under one `accountId`, so this
+    /// resolves the mailbox's real owner first ([`FolderTree::owning_account`])
+    /// and asks that account instead of this store's own (ROADMAP item
+    /// 179(d)). The resolve reads [`Self::held_folders`], not
+    /// [`Self::folders`], for the same reason [`Self::messages`] does.
     pub fn messages_since(
         &self,
         mailbox: &Id,
         since: &State,
         held: usize,
     ) -> Result<MessageUpdate, StoreError> {
+        let account = self
+            .held_folders()
+            .and_then(|tree| tree.owning_account(mailbox).cloned());
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = account.unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             mailbox_id = mailbox.as_str(),
             since = since.as_str(),
@@ -832,7 +884,7 @@ impl JmapStore {
             "fetching message changes"
         );
         match retry_once_after(
-            || sync.messages_since(mailbox, since, held),
+            || sync.messages_since_as(&account, mailbox, since, held),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
@@ -973,6 +1025,13 @@ impl JmapStore {
     /// It takes no mailbox argument for the same reason: the [`Filing`] has
     /// the two mailboxes, and the message id identifies the message in the
     /// account, not in a folder.
+    ///
+    /// `filing`'s destination mailbox can be a mailbox of a shared account
+    /// merged into this account's folder tree ([`FolderTree::merge_shared`]).
+    /// `Email/set` is a method call under one `accountId`, so this resolves
+    /// the mailbox's real owner first ([`FolderTree::owning_account`]) and
+    /// files the message under that account instead of this store's own, the
+    /// same way [`Self::import_message`] already does (ROADMAP item 179(d)).
     pub fn file_message(&self, uid: &Id, filing: &Filing) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
@@ -980,9 +1039,14 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = self
+            .folders(0)
+            .ok()
+            .and_then(|tree| tree.owning_account(filing.into_mailbox()).cloned())
+            .unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(uid = uid.as_str(), "filing message");
         match retry_once_after(
-            || sync.file_message(uid, filing),
+            || sync.file_message_as(&account, uid, filing),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
@@ -1001,6 +1065,13 @@ impl JmapStore {
     /// calculates them. This is the request of `search_by_expression` and
     /// `search_by_uids` of a folder, after translation of the Camel search
     /// expression.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Email/query` is
+    /// a method call under one `accountId`, so this resolves the mailbox's
+    /// real owner first ([`FolderTree::owning_account`]) and searches under
+    /// that account instead of this store's own, the same way
+    /// [`Self::messages`] already does (ROADMAP item 179(d)).
     pub fn search(
         &self,
         mailbox: &Id,
@@ -1012,9 +1083,14 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = self
+            .folders(0)
+            .ok()
+            .and_then(|tree| tree.owning_account(mailbox).cloned())
+            .unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(mailbox_id = mailbox.as_str(), "searching mailbox");
         match retry_once_after(
-            || sync.search(mailbox, filter.clone()),
+            || sync.search_as(&account, mailbox, filter.clone()),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
@@ -1037,6 +1113,15 @@ impl JmapStore {
     /// mailbox if a different mailbox holds it. This is the write of a delete
     /// outside the trash, for the reasons that [`MailSync::trash_message`]
     /// gives. It locks the same as [`JmapStore::expunge_message`].
+    ///
+    /// `mailbox` and `trash` can both be mailboxes of a shared account
+    /// merged into this account's folder tree ([`FolderTree::merge_shared`]).
+    /// `Email/get` and `Email/set` are method calls under one `accountId`,
+    /// so this resolves `mailbox`'s real owner first
+    /// ([`FolderTree::owning_account`]) and trashes under that account
+    /// instead of this store's own, the same way [`Self::expunge_message`]
+    /// already does (ROADMAP item 179(d)). The caller is responsible for
+    /// `trash` naming a mailbox of that same owner.
     pub fn trash_message(&self, uid: &Id, mailbox: &Id, trash: &Id) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
@@ -1044,8 +1129,13 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = self
+            .folders(0)
+            .ok()
+            .and_then(|tree| tree.owning_account(mailbox).cloned())
+            .unwrap_or_else(|| sync.account_id().clone());
         retry_once_after(
-            || sync.trash_message(uid, mailbox, trash),
+            || sync.trash_message_as(&account, uid, mailbox, trash),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         )
@@ -1065,6 +1155,13 @@ impl JmapStore {
     /// It takes a read lock although it destroys, for the reason that
     /// [`JmapStore::set_keywords`] gives: the lock protects the connection,
     /// and Evolution empties a trash while the account continues to refresh.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Email/get` and
+    /// `Email/set` are method calls under one `accountId`, so this resolves
+    /// the mailbox's real owner first ([`FolderTree::owning_account`]) and
+    /// expunges under that account instead of this store's own, the same
+    /// way [`Self::file_message`] already does (ROADMAP item 179(d)).
     pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
@@ -1072,13 +1169,18 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = self
+            .folders(0)
+            .ok()
+            .and_then(|tree| tree.owning_account(mailbox).cloned())
+            .unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             uid = uid.as_str(),
             mailbox_id = mailbox.as_str(),
             "expunging message"
         );
         match retry_once_after(
-            || sync.expunge_message(uid, mailbox),
+            || sync.expunge_message_as(&account, uid, mailbox),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
@@ -1113,6 +1215,15 @@ impl JmapStore {
     /// It takes a read lock although it uploads. This is the longest request
     /// of this store. An exclusive lock stops each folder refresh in the
     /// account for the duration of an attachment upload.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Email/import`
+    /// is a method call under one `accountId`, so this resolves the mailbox's
+    /// real owner first ([`FolderTree::owning_account`]) and uploads and
+    /// imports under that account instead of this store's own, the same way
+    /// [`Self::may_add_items`] already reads the right mailbox's own
+    /// permission rather than assuming the store's own account (ROADMAP item
+    /// 179(d), the append-path slice).
     pub fn import_message(
         &self,
         mailbox: &Id,
@@ -1126,6 +1237,11 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = self
+            .folders(0)
+            .ok()
+            .and_then(|tree| tree.owning_account(mailbox).cloned())
+            .unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             mailbox_id = mailbox.as_str(),
             size = source.len(),
@@ -1136,7 +1252,7 @@ impl JmapStore {
         // The `attempt` of `retry_once_after` must be safe to run two times.
         // Each other retried call here meets this by taking references.
         match retry_once_after(
-            || sync.import_message(mailbox, source.clone(), keywords, received_at),
+            || sync.import_message_as(&account, mailbox, source.clone(), keywords, received_at),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
@@ -1187,17 +1303,33 @@ impl JmapStore {
     /// tree again: one listing more than necessary. The alternative is a store
     /// that makes a state string that the server did not send, and asks
     /// `Mailbox/changes` from it.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Mailbox/set` is
+    /// a method call under one `accountId`, so this resolves the mailbox's
+    /// real owner first and subscribes under that account instead of this
+    /// store's own, the same way [`Self::file_message`] already does
+    /// (ROADMAP item 179(d)). The resolve reads [`Self::held_folders`], the
+    /// cached tree, not [`Self::folders`]: a mailbox id reaches this function
+    /// only once Camel has already listed the account that showed it, and
+    /// [`Self::folders`] would otherwise list the account here for the first
+    /// time, which `tests/subscriptions.rs`'s
+    /// `a_store_that_has_not_listed_yet_does_not_gain_a_listing` forbids.
     pub fn set_subscribed(&self, mailbox: &Id, subscribed: bool) -> Result<(), StoreError> {
+        let account = self
+            .held_folders()
+            .and_then(|tree| tree.owning_account(mailbox).cloned());
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let account = account.unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             mailbox_id = mailbox.as_str(),
             subscribed,
             "setting folder subscription"
         );
         if let Err(failure) = retry_once_after(
-            || sync.set_subscribed(mailbox, subscribed),
+            || sync.set_subscribed_as(&account, mailbox, subscribed),
             SyncError::is_unauthorized,
             || self.refresh_credentials(sync),
         ) {
@@ -1242,21 +1374,32 @@ impl JmapStore {
     /// If no listing exists yet, nothing is added, and the state of the
     /// listing does not change. [`JmapStore::set_subscribed`] gives the
     /// reasons for both.
+    ///
+    /// `parent` can be a folder of a shared account merged into this
+    /// store's folder tree ([`FolderTree::merge_shared`]). `Mailbox/set` is
+    /// a method call under one `accountId`, so a new child of a shared
+    /// folder must be created in the parent's own account, not this
+    /// store's (ROADMAP item 179(d)). `parent`'s own
+    /// [`FolderInfo::account_id`] already names that account; no
+    /// [`FolderTree::owning_account`] lookup is needed, unlike
+    /// [`Self::set_subscribed`], which only has a mailbox id to resolve.
     pub fn create_folder(
         &self,
         parent: Option<&FolderInfo>,
         name: &str,
     ) -> Result<FolderInfo, StoreError> {
+        let account = parent.and_then(|parent| parent.account_id.clone());
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let account = account.unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             parent_id = parent.map(|p| p.id.as_str()),
             name,
             "creating mail folder"
         );
         let created = match retry_once_after(
-            || sync.create_folder(parent, name),
+            || sync.create_folder_as(&account, parent, name),
             SyncError::is_unauthorized,
             || self.refresh_credentials(sync),
         ) {
@@ -1294,13 +1437,23 @@ impl JmapStore {
     /// It takes a mailbox id, not a path. The caller got the folder from a
     /// listing, and a rename by a different client can make that path
     /// incorrect.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// store's folder tree ([`FolderTree::merge_shared`]); this resolves
+    /// its real owner first and deletes under that account instead of this
+    /// store's own, the same way [`Self::set_subscribed`] does (ROADMAP
+    /// item 179(d)).
     pub fn delete_folder(&self, mailbox: &Id) -> Result<(), StoreError> {
+        let account = self
+            .held_folders()
+            .and_then(|tree| tree.owning_account(mailbox).cloned());
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let account = account.unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(mailbox_id = mailbox.as_str(), "deleting mail folder");
         if let Err(failure) = retry_once_after(
-            || sync.delete_folder(mailbox),
+            || sync.delete_folder_as(&account, mailbox),
             SyncError::is_unauthorized,
             || self.refresh_credentials(sync),
         ) {
@@ -1345,6 +1498,12 @@ impl JmapStore {
     /// the caller found the folder. Then the result is the given folder at its
     /// new path, without children: only the tree edit knows their paths. This
     /// result is incomplete, not wrong, and the account is listed again.
+    ///
+    /// `folder` can be a mailbox of a shared account merged into this
+    /// store's folder tree ([`FolderTree::merge_shared`]); its own
+    /// [`FolderInfo::account_id`] names that account, so the rename goes
+    /// there instead of this store's own (ROADMAP item 179(d)), the same
+    /// way [`Self::create_folder`] uses `parent`'s.
     pub fn rename_folder(
         &self,
         folder: &FolderInfo,
@@ -1354,6 +1513,10 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let account = folder
+            .account_id
+            .clone()
+            .unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             mailbox_id = folder.id.as_str(),
             parent_id = parent.map(|p| p.id.as_str()),
@@ -1361,7 +1524,7 @@ impl JmapStore {
             "renaming mail folder"
         );
         let path = match retry_once_after(
-            || sync.rename_folder(&folder.id, parent, name),
+            || sync.rename_folder_as(&account, &folder.id, parent, name),
             SyncError::is_unauthorized,
             || self.refresh_credentials(sync),
         ) {

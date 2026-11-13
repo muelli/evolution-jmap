@@ -31,4 +31,5 @@ $SUDO apt-get install -y --no-install-recommends \
     libecal2.0-dev \
     libedata-cal2.0-dev \
     evolution-dev \
+    libgtksourceview-4-dev \
     lintian

@@ -219,7 +219,14 @@ pub unsafe fn fan_out<C: Collection + ?Sized>(
     );
 
     // SAFETY: the contract of this function is the contract of the callee.
-    Ok(unsafe { apply_fanout(collection, &fanout, &login.server.connection) })
+    Ok(unsafe {
+        apply_fanout(
+            collection,
+            &fanout,
+            &login.server.connection,
+            login.server.rebase_urls,
+        )
+    })
 }
 
 /// The fan-out without the network: all changes that a discovered [`Fanout`]
@@ -239,6 +246,7 @@ pub unsafe fn apply_fanout<C: Collection + ?Sized>(
     collection: &C,
     fanout: &Fanout,
     connection: &Connection,
+    rebase_urls: bool,
 ) -> Populated {
     // List before the first creation. See the module documentation on the order.
     let existing = collection.existing_children();
@@ -252,6 +260,7 @@ pub unsafe fn apply_fanout<C: Collection + ?Sized>(
                 &child.resource_id,
                 &child.settings(connection),
                 child.remote_deletable,
+                rebase_urls,
             )
         } {
             Adopted::Written { .. } => report.children.push(child.resource_id),
@@ -292,6 +301,7 @@ pub unsafe fn adopt<C: Collection + ?Sized>(
     resource_id: &str,
     settings: &[Setting],
     remote_deletable: bool,
+    rebase_urls: bool,
 ) -> Adopted {
     // SAFETY: `new_child` is `(transfer full)`. `Owned` releases this reference
     // at the end of this function on all paths. The registry server keeps its
@@ -311,6 +321,12 @@ pub unsafe fn adopt<C: Collection + ?Sized>(
 
     match written {
         Ok(()) => {
+            // Not one of `settings`: the opt-in is the local account's own
+            // preference, never the server's (ROADMAP item 179(c)). Without
+            // it, this child's own later connect resolves the real host a
+            // tunnel hides.
+            // SAFETY: `source` is alive, as the call above already used it.
+            unsafe { jmap_backend_core::rebase::write(source.as_ptr(), rebase_urls) };
             if is_new {
                 collection.publish(source.as_ptr());
             }

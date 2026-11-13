@@ -30,10 +30,10 @@ every showing, sensitive push button, check box, text field and table is
 actually visited. A combo box is excluded from what it expects to
 observe directly (see TAB_OBSERVABLE_ROLES's doc comment); Tab still has
 to pass through it to reach the field after it, so a trap there would
-still surface as that next field going unreached. Not run on the
-Vacation Responder page: its message body is a multi-line text view,
-which `tab_reachable`'s own doc comment explains this check cannot walk
-through here; PAGES' "tab_check" flag gates it per page.
+still surface as that next field going unreached. Run on both pages now:
+the Vacation Responder page's message body used to trap Tab as an
+inserted character, fixed in item 174(b) with `gtk_text_view_set_accepts_
+tab`; PAGES' "tab_check" flag gates the walk per page.
 """
 
 import pyatspi
@@ -78,13 +78,9 @@ MENU_KEY = 0xFF67
 # once the load completes), so it serves as both ready and anchor.
 #
 # "tab_check" gates the live Tab-reachability walk (`audit_tab_
-# reachability`, scenario.py). The Vacation Responder page's message body
-# is a STATE_MULTI_LINE text view: tab_reachable's own doc comment records
-# why that kind of widget cannot be walked with a plain Tab here (it
-# consumes Tab as an inserted character, and this container has no working
-# way to synthesize the Ctrl+Tab that would normally escape it), so this
-# page keeps relying on the code-read check in `audits/ERGONOMY-A11Y-
-# AUDIT-2026-11-01.md`'s row 18 for tab order instead.
+# reachability`, scenario.py). Both pages run it: the Vacation Responder
+# page's message body no longer traps Tab since item 174(b)'s `accepts-
+# tab` fix, so a plain Tab walk can now reach every field after it.
 PAGES = (
     {
         "name": "Server Filters",
@@ -100,7 +96,7 @@ PAGES = (
         "ready_name": "Send automatic replies",
         "anchor_role": "check box",
         "anchor_name": "Send automatic replies",
-        "tab_check": False,
+        "tab_check": True,
     },
 )
 

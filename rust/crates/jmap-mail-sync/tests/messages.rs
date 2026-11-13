@@ -231,6 +231,93 @@ fn a_query_past_the_id_budget_is_refused() {
     assert_eq!(exact.unwrap().len(), 5);
 }
 
+/// ROADMAP item 179(d): `Email/query` and `Email/get` are method calls under
+/// one `accountId`, so listing a shared mailbox must carry that account, not
+/// the sync's own one. `messages_as` is the entry point a caller that
+/// resolved the owning account (`FolderTree::owning_account`) uses instead
+/// of `messages`.
+#[test]
+fn messages_as_lists_the_named_account_not_the_syncs_own() {
+    let fixture = Fixture::start();
+
+    let shared = Id::new("A2");
+    let shared_inbox = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+        let inbox = sharer.seed_mailbox("Inbox", None);
+        sharer.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        inbox
+    };
+
+    let (_, messages) = fixture
+        .sync()
+        .messages_as(&shared, &shared_inbox)
+        .expect("the listing to read the named shared account");
+
+    assert_eq!(
+        Fixture::subjects(&messages),
+        ["Lunch?"],
+        "the message lives in the shared account, not this sync's own"
+    );
+}
+
+/// ROADMAP item 179(d), the delta half: `messages_since_as` is the entry
+/// point a caller that resolved the owning account uses instead of
+/// `messages_since`.
+#[test]
+fn messages_since_as_reads_changes_from_the_named_account_not_the_syncs_own() {
+    let fixture = Fixture::start();
+
+    let shared = Id::new("A2");
+    let shared_inbox = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Inbox", None)
+    };
+
+    let sync = fixture.sync();
+    let (since, _) = sync
+        .messages_as(&shared, &shared_inbox)
+        .expect("the first listing of the shared mailbox");
+
+    {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.account_mut(&shared).unwrap();
+        sharer.deliver_email(EmailSeed::new(
+            shared_inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+    }
+
+    let update = sync
+        .messages_since_as(&shared, &shared_inbox, &since, 0)
+        .expect("the delta to read the named shared account");
+
+    match update {
+        jmap_mail_sync::MessageUpdate::Changed { present, .. } => {
+            assert_eq!(Fixture::subjects(&present), ["Lunch?"]);
+        }
+        jmap_mail_sync::MessageUpdate::Relisted { messages, .. } => {
+            assert_eq!(Fixture::subjects(&messages), ["Lunch?"]);
+        }
+        other => panic!("expected the new message to be reported, got {other:?}"),
+    }
+}
+
 #[test]
 fn a_server_that_never_stops_paging_is_given_up_on_rather_than_looped_forever() {
     // A server that always sends a limited, non-empty page, for each

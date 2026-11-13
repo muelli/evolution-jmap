@@ -43,13 +43,11 @@ const LOAD_ID: &str = "__jmap-external-photo-load-button";
 
 /// The fixed prefix of every "Load image" button's class. [`fresh_load_class`]
 /// appends a fresh unguessable token to this for every render; no class this
-/// script ever writes is this prefix alone. Public so `mail_script`'s own,
-/// unrelated fixed class can assert it never starts with this prefix,
-/// however the token part comes out.
-pub const LOAD_CLASS_PREFIX: &str = "__jmap-external-photo-load-";
+/// script ever writes is this prefix alone.
+const LOAD_CLASS_PREFIX: &str = "__jmap-external-photo-load-";
 
-/// A class for one render's "Load image" button: [`LOAD_CLASS_PREFIX`] plus
-/// 128 bits of randomness, as lowercase hex.
+/// A class for one render's "Load image" button: the fixed prefix plus 128
+/// bits of randomness, as lowercase hex.
 ///
 /// [`super::display_ext`] calls this once per `content-loaded`, uses the
 /// result as `load_class` in [`placeholder_script`], and registers the same

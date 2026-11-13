@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+SPDX-License-Identifier: GPL-3.0-or-later
+
+A GtkSourceView language definition for RFC 5228 Sieve mail filtering
+scripts, used by the Server Filters page's text mode (item 171a). Covers
+the control structures, the common action and test commands RFC 5228
+defines, tagged arguments, comments, and both string forms (quoted and the
+"text:" multi-line literal). It does not cover extension commands or tests
+that later RFCs add (for example RFC 5173's :mime tag): highlighting one
+of those as plain text is a cosmetic gap, not a parse error, since the
+editor sends the typed text to the server unchanged either way.
+-->
+<language id="sieve" _name="Sieve" version="2.0" _section="Other">
+  <metadata>
+    <property name="mimetypes">application/sieve</property>
+    <property name="globs">*.sieve</property>
+    <property name="line-comment-start">#</property>
+    <property name="block-comment-start">/*</property>
+    <property name="block-comment-end">*/</property>
+  </metadata>
+
+  <styles>
+    <style id="comment" name="Comment" map-to="def:comment"/>
+    <style id="string" name="String" map-to="def:string"/>
+    <style id="keyword" name="Keyword" map-to="def:keyword"/>
+    <style id="command" name="Command" map-to="def:builtin"/>
+    <style id="tag" name="Tagged Argument" map-to="def:type"/>
+    <style id="number" name="Number" map-to="def:decimal"/>
+  </styles>
+
+  <definitions>
+    <context id="line-comment" style-ref="comment" end-at-line-end="true" class="comment" class-disabled="no-spell-check">
+      <start>#</start>
+    </context>
+
+    <context id="block-comment" style-ref="comment" class="comment" class-disabled="no-spell-check">
+      <start>/\*</start>
+      <end>\*/</end>
+    </context>
+
+    <!-- RFC 5228 Section 2.4.2: a quoted string. "\\" and "\"" are the two
+         defined escapes; every other character stands for itself. -->
+    <context id="quoted-string" style-ref="string" class="string" class-disabled="no-spell-check">
+      <start>"</start>
+      <end>"</end>
+      <include>
+        <context id="quoted-string-escape" style-ref="string">
+          <match>\\.</match>
+        </context>
+      </include>
+    </context>
+
+    <!-- RFC 5228 Section 2.4.2.4: a multi-line literal. "text:" starts it,
+         optionally followed by a comment to end of line; a line holding
+         only "." ends it; a line starting with "." has the dot removed
+         (dot-stuffing), which this context does not need to unwind since
+         it only marks the extent of the literal, not its decoded value. -->
+    <context id="multiline-string" style-ref="string" class="string" class-disabled="no-spell-check">
+      <start>text:[ \t]*(#.*)?$</start>
+      <end>^\.$</end>
+    </context>
+
+    <!-- RFC 5228 Section 8.2: control commands. -->
+    <context id="control-keywords" style-ref="keyword">
+      <keyword>if</keyword>
+      <keyword>elsif</keyword>
+      <keyword>else</keyword>
+      <keyword>require</keyword>
+      <keyword>stop</keyword>
+    </context>
+
+    <!-- RFC 5228 Section 8.1 and 5: action and declaration commands this
+         project's own managed script, and a hand-edited one, commonly use.
+         Not exhaustive: an extension command (a later RFC, or the server's
+         own) that this list omits still lexes correctly as a bareword, it
+         is simply not highlighted as a command. -->
+    <context id="commands" style-ref="command">
+      <keyword>keep</keyword>
+      <keyword>discard</keyword>
+      <keyword>redirect</keyword>
+      <keyword>fileinto</keyword>
+      <keyword>reject</keyword>
+      <keyword>ereject</keyword>
+      <keyword>vacation</keyword>
+      <keyword>setflag</keyword>
+      <keyword>addflag</keyword>
+      <keyword>removeflag</keyword>
+      <keyword>address</keyword>
+      <keyword>envelope</keyword>
+      <keyword>header</keyword>
+      <keyword>exists</keyword>
+      <keyword>size</keyword>
+      <keyword>allof</keyword>
+      <keyword>anyof</keyword>
+      <keyword>not</keyword>
+      <keyword>true</keyword>
+      <keyword>false</keyword>
+    </context>
+
+    <!-- RFC 5228 Section 2.4.1 (tag) and 1.10: a tagged argument, like
+         ":contains" or ":fileinto". The colon itself is part of the
+         token, matching the ABNF (tag = ":" identifier). -->
+    <context id="tagged-argument" style-ref="tag">
+      <match>:[a-zA-Z][a-zA-Z0-9_]*</match>
+    </context>
+
+    <!-- RFC 5228 Section 2.4.2.3: a number, optionally suffixed with one
+         of the quantifier units ("K", "M", "G"). -->
+    <context id="number" style-ref="number">
+      <match>\b[0-9]+[KMGkmg]?\b</match>
+    </context>
+
+    <context id="sieve" class="no-spell-check">
+      <include>
+        <context ref="line-comment"/>
+        <context ref="block-comment"/>
+        <context ref="quoted-string"/>
+        <context ref="multiline-string"/>
+        <context ref="control-keywords"/>
+        <context ref="commands"/>
+        <context ref="tagged-argument"/>
+        <context ref="number"/>
+      </include>
+    </context>
+  </definitions>
+</language>

@@ -154,9 +154,11 @@ main (int argc,
 	gboolean restart_second;
 	gboolean offline_save_draft;
 	gboolean offline_expunge_roundtrip;
+	gboolean offline_append_restart_prime;
+	gboolean offline_append_restart_second;
 
 	if (argc != 2 && argc != 3) {
-		g_printerr ("usage: %s <source-uid> [offline-roundtrip|restart-prime|restart-second|offline-save-draft|offline-expunge-roundtrip]\n", argv[0]);
+		g_printerr ("usage: %s <source-uid> [offline-roundtrip|restart-prime|restart-second|offline-save-draft|offline-expunge-roundtrip|offline-append-restart-prime|offline-append-restart-second]\n", argv[0]);
 		return 2;
 	}
 
@@ -166,6 +168,8 @@ main (int argc,
 	restart_second = argc == 3 && g_strcmp0 (argv[2], "restart-second") == 0;
 	offline_save_draft = argc == 3 && g_strcmp0 (argv[2], "offline-save-draft") == 0;
 	offline_expunge_roundtrip = argc == 3 && g_strcmp0 (argv[2], "offline-expunge-roundtrip") == 0;
+	offline_append_restart_prime = argc == 3 && g_strcmp0 (argv[2], "offline-append-restart-prime") == 0;
+	offline_append_restart_second = argc == 3 && g_strcmp0 (argv[2], "offline-append-restart-second") == 0;
 
 	/* The harness points these at the scratch tree. Camel keeps a summary
 	 * database and a message cache for each service in them. The real XDG
@@ -223,7 +227,7 @@ main (int argc,
 	 * offline, the same as the shell's "Work Offline" state at startup:
 	 * no connection is ever attempted, so a dead or unreachable mock
 	 * cannot be told apart from "no network" here. */
-	if (restart_second)
+	if (restart_second || offline_append_restart_second)
 		camel_session_set_online (session, FALSE);
 
 	/* Camel dlopens the provider here. It finds the protocol in the table
@@ -277,6 +281,79 @@ main (int argc,
 		report_sorted ("restart-inbox-subjects", subjects);
 		g_ptr_array_unref (subjects);
 		g_object_unref (inbox);
+		return 0;
+	}
+
+	/* `offline-append-restart-second` mode: the second half of item
+	 * 176(b)'s restart-survival pair for a queued offline append
+	 * (`offline-append-restart-prime` below primes the pending draft).
+	 * Starts offline the same way `restart_second` does above, with no
+	 * `camel_service_connect_sync` call at all, and reads Drafts from
+	 * disk alone: a pending append whose row and bytes were lost on
+	 * restart would show as an empty folder here. Then it goes online,
+	 * the same generic `CamelOfflineStore` reconnect flush the other
+	 * roundtrip modes above rely on, and reports Drafts again to see
+	 * whether the pending draft reached the server. */
+	if (offline_append_restart_second) {
+		CamelFolder *drafts;
+		GPtrArray *drafts_uids;
+		GPtrArray *subjects;
+		guint drafts_index;
+
+		drafts = camel_store_get_folder_sync (store, "Drafts",
+						       CAMEL_STORE_FOLDER_NONE,
+						       NULL, &error);
+		if (!drafts)
+			return functional_fail ("offline-append-restart-second-drafts-folder", error);
+
+		drafts_uids = folder_dup_uids (drafts);
+		g_print ("restart-drafts-count=%u\n", drafts_uids->len);
+
+		subjects = g_ptr_array_new_with_free_func (g_free);
+		for (drafts_index = 0; drafts_index < drafts_uids->len; drafts_index++) {
+			const gchar *uid = drafts_uids->pdata[drafts_index];
+			CamelMessageInfo *message_info = camel_folder_get_message_info (drafts, uid);
+
+			if (!message_info) {
+				g_ptr_array_unref (subjects);
+				folder_free_uids (drafts, drafts_uids);
+				g_object_unref (drafts);
+				return functional_fail ("offline-append-restart-second-message-info", NULL);
+			}
+			g_ptr_array_add (subjects,
+					 g_strdup (camel_message_info_get_subject (message_info)));
+			g_clear_object (&message_info);
+		}
+		folder_free_uids (drafts, drafts_uids);
+		report_sorted ("restart-drafts-subjects", subjects);
+		g_ptr_array_unref (subjects);
+
+		/* This process started with `camel_session_set_online (session,
+		 * FALSE)`, the session-level flag, not only the store's own.
+		 * `camel_offline_store_set_online_sync`'s generic reconnect
+		 * flush (`camel-offline-store.c`) gates its whole synchronize
+		 * walk on `camel_session_get_online`, so the store alone going
+		 * online would silently skip the flush. The real shell flips
+		 * the session first, on a GNetworkMonitor callback, before any
+		 * store's own online state follows; this mirrors that order. */
+		camel_session_set_online (session, TRUE);
+
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), TRUE, NULL, &error)) {
+			g_object_unref (drafts);
+			return functional_fail ("offline-append-restart-second-go-online", error);
+		}
+		g_print ("went-online=1\n");
+
+		if (!camel_folder_refresh_info_sync (drafts, NULL, &error)) {
+			g_object_unref (drafts);
+			return functional_fail ("offline-append-restart-second-refresh", error);
+		}
+		drafts_uids = folder_dup_uids (drafts);
+		g_print ("drafts-count-after-reconnect=%u\n", drafts_uids->len);
+		folder_free_uids (drafts, drafts_uids);
+
+		g_object_unref (drafts);
 		return 0;
 	}
 
@@ -337,6 +414,90 @@ main (int argc,
 		report_sorted ("restart-inbox-subjects", subjects);
 		g_ptr_array_unref (subjects);
 		g_object_unref (inbox);
+		return 0;
+	}
+
+	/* `offline-append-restart-prime` mode: the first half of item
+	 * 176(b)'s restart-survival pair for a queued offline append.
+	 * Connects normally, reads Drafts once (so its folder tree and
+	 * starting summary reach disk, the same `restart-prime` reason
+	 * above), goes offline, appends a draft message, and exits while
+	 * still offline: no reconnect in this process, simulating an
+	 * application killed before the user ever went back online.
+	 * `offline-append-restart-second` above opens the same cache
+	 * directory fresh and checks whether the pending draft survived. */
+	if (offline_append_restart_prime) {
+		CamelFolder *drafts;
+		GPtrArray *drafts_uids;
+		static const gchar draft_message[] =
+			"From: Alice <alice@example.com>\r\n"
+			"To: Carol <carol@example.com>\r\n"
+			"Subject: Draft while offline\r\n"
+			"Message-ID: <offline-restart-draft@example.com>\r\n"
+			"Date: Thu, 15 Jan 2026 12:00:00 +0000\r\n"
+			"\r\n"
+			"Written with no network, then the process restarts.\r\n";
+		CamelMimeMessage *draft;
+		gchar *draft_uid = NULL;
+		GError *draft_error = NULL;
+
+		drafts = camel_store_get_folder_sync (store, "Drafts",
+						       CAMEL_STORE_FOLDER_NONE,
+						       NULL, &error);
+		if (!drafts)
+			return functional_fail ("offline-append-restart-prime-drafts-folder", error);
+
+		if (!camel_folder_refresh_info_sync (drafts, NULL, &error)) {
+			g_object_unref (drafts);
+			return functional_fail ("offline-append-restart-prime-refresh", error);
+		}
+		drafts_uids = folder_dup_uids (drafts);
+		g_print ("drafts-count-before=%u\n", drafts_uids->len);
+		folder_free_uids (drafts, drafts_uids);
+
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), FALSE, NULL, &error)) {
+			g_object_unref (drafts);
+			return functional_fail ("offline-append-restart-prime-go-offline", error);
+		}
+		g_print ("went-offline=1\n");
+
+		draft = camel_mime_message_new ();
+		if (!camel_data_wrapper_construct_from_data_sync (
+				CAMEL_DATA_WRAPPER (draft),
+				draft_message, sizeof (draft_message) - 1,
+				NULL, &error)) {
+			g_object_unref (draft);
+			g_object_unref (drafts);
+			return functional_fail ("offline-append-restart-prime-parse", error);
+		}
+
+		if (!camel_folder_append_message_sync (drafts, draft, NULL,
+							&draft_uid, NULL, &draft_error)) {
+			g_object_unref (draft);
+			g_object_unref (drafts);
+			g_print ("offline-append-restart-appended=0\n");
+			g_print ("offline-append-restart-error=%s\n",
+				 draft_error ? draft_error->message : "(no detail)");
+			g_clear_error (&draft_error);
+			return 1;
+		}
+		g_object_unref (draft);
+		g_print ("offline-append-restart-appended=1\n");
+		g_print ("offline-append-restart-uid=%s\n", draft_uid ? draft_uid : "");
+		g_free (draft_uid);
+
+		/* As in `restart-prime` above: the append schedules
+		 * `camel_folder_changed` on a low-priority idle, and the
+		 * default handler that saves the summary to disk only runs
+		 * once that idle fires. Drain it here so the pending-append
+		 * row and the synthetic summary row both reach disk before
+		 * this process exits. */
+		while (g_main_context_pending (NULL))
+			g_main_context_iteration (NULL, FALSE);
+
+		g_object_unref (drafts);
+		/* Exit while still offline: no reconnect in this process. */
 		return 0;
 	}
 

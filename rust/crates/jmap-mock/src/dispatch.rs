@@ -341,7 +341,8 @@ fn handle_method(
         | "TaskList/changes"
         | "Task/changes"
         | "EmailSubmission/changes"
-        | "ParticipantIdentity/changes" => {
+        | "ParticipantIdentity/changes"
+        | "CalendarEventNotification/changes" => {
             let request: jmap_proto::methods::ChangesRequest = parse_arguments(arguments)?;
             let page_size = state.changes_page_size;
             let never_terminates = state.changes_never_terminates;
@@ -402,6 +403,12 @@ fn handle_method(
                     page_size,
                     unrecognized_state_shape,
                 ),
+                "CalendarEventNotification/changes" => crate::setops::store_changes(
+                    &account.calendar_event_notifications,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
                 _ => crate::setops::store_changes(
                     &account.calendar_events,
                     request,
@@ -438,12 +445,16 @@ fn handle_method(
         "ParticipantIdentity/get" => crate::calendars::participant_identity_get(state, arguments),
         "ParticipantIdentity/set" => crate::calendars::participant_identity_set(state, arguments),
         "Principal/get" => crate::principals::principal_get(state, arguments, caller),
+        "Principal/set" => crate::principals::principal_set(state, arguments, caller),
         "Principal/query" => crate::principals::principal_query(state, arguments),
         "Principal/getAvailability" => {
             crate::principals::principal_get_availability(state, arguments, caller)
         }
         "ShareNotification/get" => {
             crate::principals::share_notification_get(state, arguments, caller)
+        }
+        "ShareNotification/set" => {
+            crate::principals::share_notification_set(state, arguments, caller)
         }
         "ShareNotification/query" => {
             crate::principals::share_notification_query(state, arguments, caller)

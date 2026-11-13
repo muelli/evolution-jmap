@@ -29,7 +29,7 @@ set(PACKAGE_NAME "evolution-jmap")
 # Keep in step with rust/Cargo.toml's workspace version and the release tag —
 # this feeds CPACK_PACKAGE_VERSION, so a stale value ships a .deb whose
 # version disagrees with the tag (v0.1.0 shipped a 0.0.1 .deb once).
-set(VERSION "0.6.5")
+set(VERSION "0.6.6")
 set(VERSION_INFO "Release")
 set(LANGUAGE_SUPPORT_DIRECTORY ${CMAKE_INSTALL_PREFIX}/share/locale)
 
@@ -57,6 +57,11 @@ pkg_check_modules(EVOLUTION_SHELL REQUIRED evolution-shell-3.0>=${REQUIRE_EVOLUT
 pkg_check_modules(EVOLUTION_CALENDAR REQUIRED evolution-calendar-3.0>=${REQUIRE_EVOLUTION_VERSION})
 pkg_check_modules(EVOLUTION_MAIL REQUIRED evolution-mail-3.0>=${REQUIRE_EVOLUTION_VERSION})
 pkg_check_modules(LIBECAL REQUIRED libecal-2.0>=${REQUIRE_EVOLUTION_VERSION})
+# The Sieve script editor needs GtkSourceView 4, the GTK3-ABI release
+# (version 5 is GTK4-only). This check fails configure early with a clear
+# message if the package is missing. The pkg-config module is named
+# "gtksourceview-4", with no ".0" suffix, unlike most GNOME libraries.
+pkg_check_modules(GTKSOURCEVIEW REQUIRED gtksourceview-4)
 
 pkg_check_variable(EVOLUTION_MODULE_DIR evolution-shell-3.0 moduledir)
 

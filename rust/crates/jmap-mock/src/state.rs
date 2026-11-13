@@ -60,6 +60,10 @@ pub struct ServerState {
     pub size_request: Option<u64>,
     /// Optional `maxSizeUpload` in bytes; `None` means unlimited.
     pub size_upload: Option<u64>,
+    /// Optional `maxConcurrentRequests`; `None` means unlimited.
+    pub max_concurrent_requests: Option<u64>,
+    /// Optional `maxConcurrentUpload`; `None` means unlimited.
+    pub max_concurrent_upload: Option<u64>,
     /// Route `/.well-known/jmap` to `/jmap/session` in auth redirect tests.
     pub session_via_redirect: bool,
     /// Optional redirect origin for `GET /.well-known/jmap`.
@@ -122,6 +126,14 @@ pub struct ServerState {
     pub tasks_enabled: bool,
     /// Refuse `Principal/query` with forbidden, modeling Stalwart directory policy.
     pub disable_principal_query: bool,
+    /// Answer every `Email/set` update with `notFound`, without removing the
+    /// email from the account.
+    pub email_update_always_not_found: bool,
+    /// Reject a `Calendar/set` destroy that names the standard
+    /// `onDestroyRemoveContents` argument with `invalidArguments`, modeling
+    /// Cyrus's pre-standardization `Calendar/set` parser (CYRUS-RFC-FINDINGS.md
+    /// Finding 21), which instead expects `onDestroyRemoveEvents`.
+    pub calendar_destroy_rejects_remove_contents: bool,
     /// Active hostile scenarios for simulating adversarial server conditions.
     pub hostile_scenarios: BTreeSet<crate::hostile::HostileScenario>,
     /// Cached response for `HostileScenario::ReplayedResponse`.
@@ -165,6 +177,8 @@ impl ServerState {
             query_hides_limit: false,
             size_request: Some(crate::DEFAULT_SIZE_REQUEST),
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
+            max_concurrent_requests: Some(4),
+            max_concurrent_upload: Some(4),
             session_via_redirect: false,
             well_known_redirect_to: None,
             advertise_origin: None,
@@ -198,6 +212,8 @@ impl ServerState {
             sieve_validate_long_error: false,
             tasks_enabled: false,
             disable_principal_query: false,
+            email_update_always_not_found: false,
+            calendar_destroy_rejects_remove_contents: false,
             hostile_scenarios: BTreeSet::new(),
             cached_replayed_response: None,
             hostile_state_calls: 0,

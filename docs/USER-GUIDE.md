@@ -157,11 +157,43 @@ A contact can keep its photo on a web server instead of in the contact. The addr
 
 This keeps the owner of that web server from learning when you look at the contact.
 
+## Working offline
+
+A JMAP account works offline much like any other Evolution account.
+
+To work offline on purpose, open `File`, then `Work Offline`. Evolution also starts offline on its own when it finds no network.
+
+### What you can read offline
+
+- The folder list and the message list from your last sync.
+- A message you already opened.
+- A folder you downloaded with `Download messages for offline use` or `Copy folder content locally`.
+- Contacts and calendar events you already loaded.
+
+### What you can still do, and Evolution sends it later
+
+These actions work offline. Evolution queues each one and sends it to the server once you go back online. You do not need to repeat the action yourself.
+
+- Mark a message read or unread. Flag it. Mark it junk or not junk. Add or remove a label.
+- Move or copy a message to another folder.
+- Delete a message, or empty the trash.
+- Save a draft.
+- Create, edit or delete a contact or a calendar event.
+
+### What needs a connection right away
+
+A few actions need the server at once. Evolution shows an "offline" message or an error instead of queuing these:
+
+- Accepting or declining a meeting invitation.
+- Saving the `Server Filters` or `Vacation Responder` page. Each page shows "You are offline" when you open it offline, instead of failing only when you save.
+- Scheduling a message with `Send Later`. The menu shows "You are offline" and stays disabled.
+
 ## Known limits
 
 - Snooze works only on servers that offer the Cyrus snooze capability.
 - If the server advertises an `eventSourceUrl`, mail uses JMAP Push.
   If it does not, new mail arrives at the refresh interval of the account.
+- Checking another person's free or busy time does not yet fall back to locally cached calendar data. It can show no information, online or offline.
 
 ## Logs and debug output
 

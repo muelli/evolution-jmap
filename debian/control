@@ -19,7 +19,8 @@ Build-Depends: debhelper-compat (= 13),
                libedata-book1.2-dev,
                libecal2.0-dev,
                libedata-cal2.0-dev,
-               evolution-dev
+               evolution-dev,
+               libgtksourceview-4-dev
 Standards-Version: 4.7.0
 Homepage: https://github.com/muelli/evolution-jmap
 Vcs-Browser: https://github.com/muelli/evolution-jmap

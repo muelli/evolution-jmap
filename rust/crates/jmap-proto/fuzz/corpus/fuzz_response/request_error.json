@@ -1,0 +1,6 @@
+{
+  "type": "urn:ietf:params:jmap:error:limit",
+  "status": 400,
+  "detail": "Request exceeds maximum allowed size",
+  "limit": "maxSizeRequest"
+}

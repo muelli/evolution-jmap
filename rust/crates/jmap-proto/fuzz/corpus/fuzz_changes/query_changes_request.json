@@ -1,0 +1,18 @@
+{
+  "accountId": "acc1",
+  "sinceQueryState": "qstate1",
+  "filter": {
+    "inMailbox": "mb1",
+    "hasKeyword": "$seen",
+    "text": "hello",
+    "after": "2026-01-01T00:00:00Z",
+    "before": "2026-12-31T23:59:59Z"
+  },
+  "sort": [
+    { "property": "receivedAt", "isAscending": false, "collation": "i;ascii-casemap" }
+  ],
+  "maxChanges": 25,
+  "upToId": "id42",
+  "calculateTotal": true,
+  "collapseThreads": true
+}

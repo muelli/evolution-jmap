@@ -212,12 +212,6 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // extension names this public parent class as its extensible type and
     // tests the real type by name when it is constructed.
     "e_web_view_get_type",
-    // The mail reader's own `EWebView` subclass, which the mail vCard
-    // placeholder extension gates on. Unlike `EABContactDisplay`, Evolution
-    // installs a header for this one (`mail/e-mail-display.h`, already
-    // pulled in by `e-mail-reader.h` above), so the gate calls this
-    // accessor directly instead of a name lookup.
-    "e_mail_display_get_type",
     // Runs one script in the page the preview shows. The `_take` form frees
     // the script string with `g_free` after it starts the script, so the
     // caller must allocate that string with GLib.
@@ -447,12 +441,89 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // vacation responder owns.
     "gtk_text_view_set_editable",
     "gtk_text_view_set_monospace",
+    // The Vacation Responder's message body: without this, Tab inserts a
+    // tab character instead of moving focus to the next field.
+    "gtk_text_view_set_accepts_tab",
+    // A test reads the property back to confirm a setter reached it.
+    "gtk_text_view_get_accepts_tab",
+    // The Server Filters page's text mode (item 171a). GtkSourceView is a
+    // GtkTextView subclass, so the calls above keep working against the
+    // same pointer; only the constructor and the language lookup are new.
+    "gtk_source_view_new",
+    "gtk_source_language_manager_get_default",
+    "gtk_source_language_manager_get_language",
+    "gtk_source_buffer_set_language",
+    // Item 180(e): with no completion suggestion showing, Tab moves focus
+    // out of the editor (`gtk_text_view_set_accepts_tab` above, FALSE), so
+    // auto-indent takes over the indenting work Tab no longer does.
+    "gtk_source_view_set_auto_indent",
+    "gtk_source_view_get_auto_indent",
+    // A test reads the language back to confirm `set_sieve_language` found
+    // and applied it, without needing a display to inspect highlighting.
+    "gtk_source_buffer_get_language",
+    // Item 171b: a red underline on the line a local Sieve parse rejects.
+    // One anonymous tag, created once and kept, applied to and removed from
+    // a line range as the user types. `GtkTextIter` is the one struct this
+    // crate gives a real layout, not a zero-sized handle: see the comment
+    // on its `raw_line` definition.
+    "gtk_text_tag_new",
+    "gtk_text_buffer_get_tag_table",
+    "gtk_text_tag_table_add",
+    "gtk_text_buffer_get_start_iter",
+    "gtk_text_buffer_get_end_iter",
+    "gtk_text_buffer_get_iter_at_line",
+    "gtk_text_iter_forward_to_line_end",
+    "gtk_text_buffer_apply_tag",
+    "gtk_text_buffer_remove_tag",
+    // Test-only: `GtkTextBuffer` is a plain GObject, not a widget, so
+    // `tests/text_iter.rs` builds one straight from this constructor
+    // instead of going through a display-bound `GtkSourceView`, and reads
+    // an iter's line and offset back to confirm the fields this crate
+    // wrote are the fields GTK reads.
+    "gtk_text_buffer_new",
+    "gtk_text_iter_get_line",
+    "gtk_text_iter_get_offset",
+    // Item 171c: the completion popup. Finding the word under the cursor
+    // reads the current line up to the cursor's own mark, then moves a
+    // copy of that iter back by the word's own character count to find
+    // where to delete from before inserting the chosen candidate.
+    "gtk_text_buffer_get_insert",
+    "gtk_text_buffer_get_iter_at_mark",
+    "gtk_text_buffer_get_text",
+    "gtk_text_iter_backward_chars",
+    "gtk_text_buffer_delete",
+    "gtk_text_buffer_insert",
+    "gtk_text_buffer_place_cursor",
+    // Item 171c: positioning the popup under the cursor's own line, in
+    // screen coordinates. `GdkRectangle` is the one other struct (besides
+    // `GtkTextIter`) this crate gives a real layout: see its `raw_line`
+    // definition below.
+    "gtk_text_view_get_iter_location",
+    "gtk_text_view_buffer_to_window_coords",
+    "gtk_widget_get_window",
+    "gdk_window_get_origin",
+    // Item 171c: a plain `GTK_WINDOW_POPUP`, moved under the cursor and
+    // shown or hidden as the user asks for completion. Never focused, so
+    // every key still reaches the source view's own handler below.
+    "gtk_window_new",
+    "gtk_window_move",
+    "gtk_window_set_accept_focus",
+    "gtk_widget_hide",
+    // Item 171c: reads the key and modifier state of the source view's own
+    // `key-press-event`, rather than the event struct's fields.
+    "gdk_event_get_keyval",
+    "gdk_event_get_state",
     // The parent window of the name dialog that Add and Rename open.
     "gtk_widget_get_toplevel",
     // The name dialog's OK button answers Enter too: a default response for
     // the dialog, and the entry that forwards Enter to it.
     "gtk_dialog_set_default_response",
     "gtk_entry_set_activates_default",
+    // Item 179(e): the Delegates Add dialog's OK response stays insensitive
+    // while the principal is empty or both levels grant nothing. The test
+    // reads the response's own button back by its response id.
+    "gtk_dialog_set_response_sensitive",
+    "gtk_dialog_get_widget_for_response",
     // `jmap-ui`'s test reads the default widget back to confirm one is set.
     "gtk_window_get_default_widget",
     // The rule dialog of the Server Filters page. Each combo is a
@@ -762,6 +833,21 @@ const GTK_HANDLES: &[&str] = &[
     // itself exist.
     "GtkAdjustment",
     "GtkScrolledWindow",
+    // The Server Filters page's text mode (item 171a). `GtkSource.*` already
+    // matches `BLOCKED_GTK_TYPES`'s `Gtk.*` blocklist entry, so these need
+    // no separate blocklisting; this crate still subclasses none of them,
+    // only constructs a view and looks up a language, so they stay opaque
+    // handles like every other GTK class here.
+    "GtkSourceView",
+    "GtkSourceBuffer",
+    "GtkSourceLanguageManager",
+    "GtkSourceLanguage",
+    // Item 171b's error tag and its table. This crate never reads a field
+    // of either, only creates the tag once, adds it to the table
+    // `gtk_text_buffer_get_tag_table` returns, and later hands the same
+    // tag pointer back to `gtk_text_buffer_apply_tag`/`remove_tag`.
+    "GtkTextTag",
+    "GtkTextTagTable",
     // Not a GTK type: ATK's accessible object, what `gtk_widget_get_accessible`
     // returns. `gtkwidget.h` includes `atk/atk.h`, so clang sees it in the
     // same translation unit as everything else here. A status label marks
@@ -769,6 +855,15 @@ const GTK_HANDLES: &[&str] = &[
     // reader treats a later text change as an announcement; an unlabelled
     // widget gets a name (`atk_object_set_name`) the same way.
     "AtkObject",
+    // Item 171c's completion popup. The text-mode editor's own insert
+    // mark, found back from the buffer and handed straight to
+    // `gtk_text_buffer_get_iter_at_mark`; this crate never reads a field
+    // of it. `GdkWindow`, `GdkEvent`, `GdkEventKey` and `GdkRectangle`
+    // need no such entry here: `Gdk.*` is not in `BLOCKED_GTK_TYPES`
+    // (only `Gtk.*` is), so bindgen already generates their real,
+    // header-derived layout once any allowlisted function's signature
+    // reaches them.
+    "GtkTextMark",
 ];
 
 fn main() {
@@ -839,6 +934,24 @@ fn main() {
 
     // Colon-separated, like every other library path in the loader's world.
     println!("cargo:libdirs={}", link_paths.join(":"));
+
+    // The Server Filters page's text mode (item 171a). Unlike Evolution's
+    // own libraries, GtkSourceView installs into the system's normal
+    // library directories, so `probe`'s own default link metadata is
+    // enough: no RUNPATH bookkeeping like the loop above needs.
+    //
+    // The package name has no ".0" suffix, unlike most GNOME `.pc` files
+    // (confirmed by reading the installed `gtksourceview-4.pc` directly, not
+    // assumed from the GNOME naming convention).
+    let gtksourceview = pkg_config::Config::new()
+        .probe("gtksourceview-4")
+        .unwrap_or_else(|e| panic!("gtksourceview-4 not found: {e}"));
+    clang_args.extend(
+        gtksourceview
+            .include_paths
+            .iter()
+            .map(|p| format!("-I{}", p.display())),
+    );
 
     // This decides which menu/action layer `wrapper.h`'s
     // `JMAP_EVO_EUI_MANAGER` picks between (see `MIN_EVO_EUI_MANAGER`).
@@ -912,6 +1025,35 @@ fn main() {
         // always has one selected.
         .raw_line("pub type GtkSelectionMode = ::std::os::raw::c_uint;")
         .raw_line("pub const GTK_SELECTION_BROWSE: GtkSelectionMode = 2;")
+        // Item 171c's completion popup: `gtk_window_new`'s argument.
+        // Copied from `/usr/include/gtk-3.0/gtk/gtkwindow.h`'s own
+        // `GtkWindowType` (`GTK_WINDOW_TOPLEVEL` is 0, unused here).
+        .raw_line("pub type GtkWindowType = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_WINDOW_POPUP: GtkWindowType = 1;")
+        // `gtk_text_view_buffer_to_window_coords`'s argument, naming the
+        // view's own main editing area rather than a border window.
+        // Copied from `gtk/gtktextview.h`'s own `GtkTextWindowType`.
+        .raw_line("pub type GtkTextWindowType = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_TEXT_WINDOW_WIDGET: GtkTextWindowType = 1;")
+        // `GdkModifierType` and `GDK_CONTROL_MASK` need no `raw_line`
+        // here: `Gdk.*` is not in `BLOCKED_GTK_TYPES`, so bindgen already
+        // generates both from the installed `gdk/gdktypes.h`.
+        //
+        // The `GDK_KEY_*` keysym values `on_source_key_press` compares
+        // against are different: `gdk/gdkkeysyms.h`, the header that
+        // `#define`s them, is never included here (`gdk/gdk.h` does not
+        // pull it in on its own, and nothing else in `wrapper.h` needs
+        // it), so bindgen never sees these macros to generate them.
+        // Copied from the installed header, not from memory: every GDK
+        // application compares against these same X11 keysym values,
+        // unchanged since X11.
+        .raw_line("pub const GDK_KEY_space: ::std::os::raw::c_uint = 0x020;")
+        .raw_line("pub const GDK_KEY_Tab: ::std::os::raw::c_uint = 0xff09;")
+        .raw_line("pub const GDK_KEY_Return: ::std::os::raw::c_uint = 0xff0d;")
+        .raw_line("pub const GDK_KEY_Escape: ::std::os::raw::c_uint = 0xff1b;")
+        .raw_line("pub const GDK_KEY_Up: ::std::os::raw::c_uint = 0xff52;")
+        .raw_line("pub const GDK_KEY_Right: ::std::os::raw::c_uint = 0xff53;")
+        .raw_line("pub const GDK_KEY_Down: ::std::os::raw::c_uint = 0xff54;")
         // `e_web_view_register_element_clicked`'s callback type. Bindgen
         // will not generate this on its own: its signature names
         // `GtkAllocation`, a blocklisted type, so bindgen drops the typedef
@@ -928,7 +1070,49 @@ fn main() {
              user_data: *mut ::std::os::raw::c_void,\n\
              ),\n\
              >;",
+        )
+        // `GtkTextIter` (item 171b). Unlike every other `Gtk.*` type, this
+        // one is not reached only as a pointer: `gtk_text_buffer_get_start_
+        // iter` and its siblings fill a struct the caller allocates, so this
+        // crate must give it GTK's real layout, not the zero-sized handle
+        // `GTK_HANDLES` gives every class. `gtk/gtktextiter.h`'s own struct
+        // comment calls the fields "opaque, ignore them", but their count,
+        // order and type is the public ABI a caller's own allocation relies
+        // on: GTK has kept this struct's layout unchanged since GTK 2, for
+        // exactly this reason. Copied field for field from the installed
+        // `/usr/include/gtk-3.0/gtk/gtktextiter.h`. `tests/text_iter.rs`
+        // exercises every field path this crate uses, so a wrong size here
+        // fails a test instead of corrupting a stack frame silently.
+        .raw_line(
+            "#[repr(C)]\n\
+             #[derive(Clone, Copy)]\n\
+             pub struct GtkTextIter {\n\
+             dummy1: *mut ::std::os::raw::c_void,\n\
+             dummy2: *mut ::std::os::raw::c_void,\n\
+             dummy3: ::std::os::raw::c_int,\n\
+             dummy4: ::std::os::raw::c_int,\n\
+             dummy5: ::std::os::raw::c_int,\n\
+             dummy6: ::std::os::raw::c_int,\n\
+             dummy7: ::std::os::raw::c_int,\n\
+             dummy8: ::std::os::raw::c_int,\n\
+             dummy9: *mut ::std::os::raw::c_void,\n\
+             dummy10: *mut ::std::os::raw::c_void,\n\
+             dummy11: ::std::os::raw::c_int,\n\
+             dummy12: ::std::os::raw::c_int,\n\
+             dummy13: ::std::os::raw::c_int,\n\
+             dummy14: *mut ::std::os::raw::c_void,\n\
+             }\n\
+             impl ::std::default::Default for GtkTextIter {\n\
+             fn default() -> Self {\n\
+             unsafe { ::std::mem::zeroed() }\n\
+             }\n\
+             }",
         );
+    // `GdkRectangle` (item 171c, `gtk_text_view_get_iter_location`'s
+    // out-parameter) needs no `raw_line` either: `Gdk.*` is not blocked,
+    // so bindgen generates it from `gdk/gdktypes.h` directly, aliased to
+    // `cairo_rectangle_int_t` with its real `x`/`y`/`width`/`height`
+    // fields, the same type the installed header itself aliases it to.
 
     // Evolution's handles need the struct tag as well as the typedef. A
     // blocklisted `EMailConfigServicePage` comes through as

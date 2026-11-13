@@ -35,7 +35,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.6.5"
+version = "0.6.6"
 edition = "2024"
 license = "GPL-3.0-or-later"
 rust-version = "1.97"
@@ -60,6 +60,11 @@ sha2 = "0.10"
 zeroize = "1"
 pkg-config = "0.3"
 bindgen = "0.72"
+# POSIX shell-word splitting for the External Editor command line
+# (jmap-ui's filters page, item 180 step (d)). Already in the tree
+# transitively via cc/bindgen; depended on directly to avoid hand-rolling
+# quoting rules.
+shlex = "1"
 # Property-based testing of the untrusted-server boundary (dev-dependency
 # only): stable-friendly, unlike cargo-fuzz which needs nightly.
 proptest = "1"

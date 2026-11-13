@@ -20,6 +20,11 @@ ARTIFACTS = os.environ.get("GUI_SCENARIO_ARTIFACTS", ".")
 JMAP_URL = os.environ.get("GUI_SCENARIO_JMAP_URL", "http://127.0.0.1:8090")
 MOCK_PORT = os.environ.get("GUI_SCENARIO_MOCK_PORT", "8090")
 SOURCES = os.environ.get("GUI_SCENARIO_SOURCES", ".")
+# ci/dovecot-oracle.sh's own container name and port, forwarded in by
+# ci/gui-scenario/run.sh when it joined the oracle's podman network. Empty
+# when no oracle is running; a scenario that needs it fails fast instead.
+IMAP_HOST = os.environ.get("GUI_SCENARIO_IMAP_HOST", "")
+IMAP_PORT = os.environ.get("GUI_SCENARIO_IMAP_PORT", "")
 DEFAULT_TIMEOUT = 60
 POLL_SECONDS = 0.5
 # The X keysym of the Menu key.
@@ -138,6 +143,64 @@ Enabled=true
 BackendName=jmap
 
 {connection}""",
+    )
+    return name
+
+
+def write_standalone_imap_account(
+    name="IMAP scenario mail",
+    key="imap-scenario",
+    user="tester",
+    identity=("Alice", "alice@example.com"),
+):
+    """Write a standalone IMAP account and its identity, against
+    ci/dovecot-oracle.sh's own container.
+
+    `IMAP_HOST`/`IMAP_PORT` (ci/gui-scenario/run.sh's forwarded
+    `GUI_SCENARIO_IMAP_HOST`/`_PORT`) must already name the oracle: start it
+    first with `ci/dovecot-oracle.sh start`, on the same podman network this
+    script's own container joins. No `[Authentication] Method`: the empty
+    default (`camel_imapx_password_authtype`'s own `authproto`, `""`) is a
+    plain IMAP `LOGIN`, matching the oracle's `static`/`nopassword=y` passdb,
+    which accepts any password, including the empty one
+    `dismiss_first_run_dialogs` submits (there is no keyring here to cache
+    one). Return the display name.
+    """
+    if not IMAP_HOST or not IMAP_PORT:
+        raise ScenarioFailure(
+            "no IMAP oracle: start one first with 'ci/dovecot-oracle.sh start', "
+            "then rerun ci/gui-scenario/run.sh so it joins the oracle's network"
+        )
+    write_source(
+        f"{key}-mail",
+        f"""[Data Source]
+DisplayName={name}
+Enabled=true
+
+[Mail Account]
+BackendName=imapx
+IdentityUid={key}-identity
+
+[Authentication]
+Host={IMAP_HOST}
+Port={IMAP_PORT}
+User={user}
+
+[Security]
+Method=none
+""",
+    )
+    sender, address = identity
+    write_source(
+        f"{key}-identity",
+        f"""[Data Source]
+DisplayName={sender}
+Enabled=true
+
+[Mail Identity]
+Name={sender}
+Address={address}
+""",
     )
     return name
 
@@ -600,15 +663,16 @@ def tab_reachable(root, max_presses=120):
     is expected and skipped, not a failure, as long as the chain still
     closes within `max_presses`.
 
-    Not suitable for a window that holds a STATE_MULTI_LINE text view
-    (the Vacation Responder page's message body): confirmed empirically
-    that a plain Tab there inserts a tab character instead of moving
-    focus (GTK's own `accepts-tab` default), and this container has no
-    working way to synthesize the Ctrl+Tab that would normally escape it
-    (AT-SPI's keyboard event generator takes a modifier only as a keysym
-    *string* on a KEY_PRESS/KEY_RELEASE pair, which left Control
-    unobserved as held by the following Tab in every form tried). Callers
-    with such a surface skip this check; see a11y-audit.py's docstring.
+    Not suitable for a window that holds a STATE_MULTI_LINE text view with
+    GTK's own `accepts-tab` default (TRUE): a plain Tab there inserts a tab
+    character instead of moving focus, and this container has no working
+    way to synthesize the Ctrl+Tab that would normally escape it (AT-SPI's
+    keyboard event generator takes a modifier only as a keysym *string* on
+    a KEY_PRESS/KEY_RELEASE pair, which left Control unobserved as held by
+    the following Tab in every form tried). The Vacation Responder page's
+    message body set `accepts-tab` FALSE (item 174(b)) and no longer needs
+    this exclusion; callers with such a surface skip this check; see
+    a11y-audit.py's docstring.
     """
     start = wait_for(lambda: focused_node(root), "a focused widget to start the Tab walk")
     start_key = _tab_key(start)

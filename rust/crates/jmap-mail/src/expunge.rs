@@ -183,11 +183,16 @@ pub(crate) unsafe fn expunge_folder(
     };
 
     // A failed listing gives an error, not "no trash": a destroy that the
-    // trash would have prevented loses mail.
-    let trash = store
-        .folders(0)?
-        .role(FolderRole::Trash)
-        .map(|trash| trash.id.clone());
+    // trash would have prevented loses mail. `mailbox` can be a mailbox of
+    // a shared account merged into this account's folder tree
+    // (`FolderTree::merge_shared`); the trash that matters is then that
+    // account's own, not this store's (ROADMAP item 179(d)).
+    let tree = store.folders(0)?;
+    let trash = match tree.owning_account(&mailbox) {
+        Some(owner) => tree.shared_role(owner, FolderRole::Trash),
+        None => tree.role(FolderRole::Trash),
+    }
+    .map(|trash| trash.id.clone());
     let in_trash = trash.as_ref() == Some(&mailbox);
     let work = match walk {
         Walk::Expunge if in_trash => marked.into_iter().chain(unmarked).collect(),

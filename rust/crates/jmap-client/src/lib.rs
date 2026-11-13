@@ -87,6 +87,7 @@ mod blob;
 mod calendars;
 mod changes;
 mod client;
+mod concurrency;
 mod contacts;
 mod error;
 pub mod eventsource;

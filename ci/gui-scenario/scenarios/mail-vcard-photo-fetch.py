@@ -3,8 +3,20 @@
 """Scenario: what the mail reader does with an http(s) vCard photo attached to a mail.
 
 A mail from someone else carries a vCard attachment whose PHOTO is an http
-URL. This scenario measures first, as item 175 requires: does opening the
-mail make Evolution fetch the photo URL on its own.
+URL. Item 178 measured (operator, evo-test, stock 3.52.3): Evolution's own
+mail reader already treats this photo like any other remote image in a
+message. At the default `image-loading-policy` ("never") it stays blocked;
+`mail-vcard-photo-fetch-remote-content.py` checks the other half, with the
+policy "always", where it loads with the rest of the message's remote
+content and needs no click.
+
+jmap-ui's own mail-view placeholder (`external_photo::mail_display_ext`,
+`mail_script`) duplicated this stock behaviour and, worse, let a sender
+forge its "Load image" button from their own HTML body and make it fetch
+an attacker URL as a click tracker (`e_web_view_register_element_clicked`
+matches a click by class name across every frame of the view, not only
+the vCard's own iframe). Item 178 deleted that placeholder; this scenario
+now only confirms Evolution's own, unmodified behaviour.
 
 The attachment's `Content-Disposition` is `attachment` (this seed's own
 choice, matching how most senders attach a vCard), so
@@ -12,34 +24,7 @@ choice, matching how most senders attach a vCard), so
 vcard-inline module's own render stays collapsed behind the attachment
 bar's "Toggle View Inline" expander button until a user clicks it: this
 scenario does, so it reaches the real inline render, not only the generic
-attachment bar. The compact render writes a plain
-`<img src="the-photo-url">` (`eab-contact-formatter.c`'s `render_compact`),
-unlike a `file://` photo, yet no fetch happens at Evolution's default
-remote image policy (`image-loading-policy` "never"). See the harness log
-entry this scenario's commit is paired with for the full trail.
-
-Past the expand, this scenario also drives jmap-ui's click-to-load
-placeholder (`external_photo::mail_display_ext`): the "Load image" button
-it puts in place of the `<img>` the compact render would otherwise show,
-same as `contact-photo-fetch.py` already does for the standalone address
-book preview.
-
-Not yet covered here: item 175 also asks to check with the user's "Load
-remote content" setting turned on. Switching `image-loading-policy` to
-"always" live, while this message is open, makes Evolution reformat the
-message on its own (a new "Load Images" information bar appears and the
-vCard section collapses back to its unexpanded state), so this needs its
-own, carefully observed follow-up rather than a quick reuse of this
-window; left open, see the harness log.
-
-Item 178's own red test lives here too: a second seeded message has no
-vCard at all, only an HTML body that forges the id/class the placeholder
-above uses for its "Load image" button. `e_web_view_register_element_
-clicked` matches by class name across every frame of the view, so this
-forged button reaches the same click handler and the same fetch. This is
-expected to fail against the script-based placeholder (`f95ee766`): item
-178 replaces it with a mail extension that never trusts a URL read back
-from the page.
+attachment bar.
 """
 
 import json
@@ -72,25 +57,7 @@ VCARD = (
     f"PHOTO;VALUE=uri:{cp.PHOTO_URL}\r\nEND:VCARD\r\n"
 )
 WAIT_SECONDS = 10
-# The label of the placeholder and the text of its button, as jmap-ui writes
-# them (same English text as the address book preview's own placeholder).
-PLACEHOLDER = "Externally hosted image"
-LOAD_BUTTON = "Load image"
 SEED_PATH = os.path.join(os.environ.get("GUI_SCENARIO_ARTIFACTS", "."), "mail-vcard-seed.json")
-
-# Item 178: `e_web_view_register_element_clicked` matches this class in every
-# frame of the view, not only the vCard's own iframe. The sender's own HTML
-# body is a frame of the same view, so a message with no vCard at all can
-# carry this class and value directly and reach the same click handler. The
-# class must match `jmap_ui::external_photo::mail_script::LOAD_CLASS`.
-FORGED_SUBJECT = "A forged load-image button"
-FORGED_LOAD_CLASS = "__jmap-mail-vcard-photo-load"
-EVIL_PATH = "/evil.png"
-EVIL_URL = f"http://127.0.0.1:{cp.PHOTO_PORT}{EVIL_PATH}"
-FORGED_HTML = (
-    "<p>Nothing to see here.</p>"
-    f'<button class="{FORGED_LOAD_CLASS}" value="{EVIL_URL}">{LOAD_BUTTON}</button>'
-)
 
 
 def write_seed():
@@ -124,16 +91,7 @@ def write_seed():
                                 "content": VCARD,
                             }
                         ],
-                    },
-                    {
-                        "mailboxId": "M1",
-                        "from": {"name": "Sender", "email": "sender@example.test"},
-                        "to": [{"name": "Alice", "email": "alice@example.com"}],
-                        "subject": FORGED_SUBJECT,
-                        "textBody": FORGED_HTML,
-                        "bodyIsHtml": True,
-                        "receivedAt": "2026-01-02T03:05:05Z",
-                    },
+                    }
                 ],
             }
         ]
@@ -197,9 +155,8 @@ def run():
     say(f"photo server: no request for the http photo after {WAIT_SECONDS}s")
 
     # The attachment bar's own expander reveals the vcard-inline module's
-    # real compact render (see the module docstring for why a click is
-    # needed at all). Only past this click does the scenario reach the
-    # `<img src="the-photo-url">` item 175 is actually worried about.
+    # real compact render, with the PHOTO URL in a plain `<img src>`
+    # (`eab-contact-formatter.c`'s `render_compact`).
     click_button(browser, "Toggle View Inline")
     time.sleep(WAIT_SECONDS)
     screenshot("after-expand")
@@ -207,43 +164,14 @@ def run():
     if not any("Helen Httpphoto" in text for text in texts):
         raise ScenarioFailure(f"the compact vCard render never showed: {texts}")
     if photos.requests:
-        raise ScenarioFailure(f"expanding the vCard fetched the http photo: {photos.requests}")
-    say("mail reader: shows the compact vCard inline, still no photo fetch")
-
-    if not any(PLACEHOLDER in text for text in texts):
-        raise ScenarioFailure(f"the placeholder never showed: {texts}")
-    if not any(cp.PHOTO_URL in text for text in texts):
-        raise ScenarioFailure(f"the placeholder does not name the URL: {texts}")
-    say(f"mail reader: the placeholder names {cp.PHOTO_URL}")
-
-    click_button(browser, LOAD_BUTTON)
-    wait_for(lambda: photos.requests or None, "the photo server to see the click's request")
-    time.sleep(2)
-    screenshot("after-load-click")
-    if photos.requests != ["/photo.png"]:
-        raise ScenarioFailure(f"the click made an unexpected request shape: {photos.requests}")
-    say(f"photo server: exactly one request after the click: {photos.requests}")
-
-    # Item 178: a sender's own HTML body, not a vCard at all, forges the same
-    # class our placeholder's button uses. This message carries no vCard.
-    select_message(FORGED_SUBJECT)
-    menu_item("Message/Open in New Window")
-    forged = wait_for(lambda: window(FORGED_SUBJECT), "the forged message window")
-    wait_for(
-        lambda: find(forged, "document web", name="Evolution Mail Display"),
-        "the forged message body",
-    )
-    time.sleep(WAIT_SECONDS)
-    screenshot("forged-button-shown")
-    click_button(forged, LOAD_BUTTON)
-    time.sleep(WAIT_SECONDS)
-    screenshot("after-forged-click")
-    if EVIL_PATH in photos.requests:
         raise ScenarioFailure(
-            f"a forged load button in the sender's own HTML body fetched its "
-            f"URL: {photos.requests}"
+            f"expanding the vCard fetched the http photo at the default "
+            f"image-loading-policy: {photos.requests}"
         )
-    say("mail reader: a forged load button in the sender's own HTML body made no request")
+    say(
+        "mail reader: shows the compact vCard inline, still no photo fetch at the "
+        "default image-loading-policy"
+    )
 
 
 main(setup, run, mock_args=("--seed", write_seed()))

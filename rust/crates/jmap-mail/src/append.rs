@@ -14,8 +14,8 @@
 //! result. The writer is in [`jmap_backend_core::mime`] because sending needs
 //! the same bytes. [`Unwritable::into_gerror`] takes the error domain.
 //!
-//! The append adds no summary row: a row made from only a uid has no subject,
-//! sender or date. The message appears at the next listing.
+//! A connected append adds no summary row: a row made from only a uid has no
+//! subject, sender or date. The message appears at the next listing.
 //!
 //! The append does not write to [`crate::cache`]. RFC 8621 §4.8 lets a server
 //! repair an imported message, so the local bytes can differ from the stored
@@ -26,29 +26,56 @@
 //! [`StoreError::Client`] in `CAMEL_FOLDER_ERROR`, because the account is not
 //! broken.
 //!
+//! ## Offline
+//!
+//! With no connection, `queue_append` builds a row right away instead of
+//! waiting for a listing that offline has none of: a saved draft or a dropped
+//! `.eml` file must show up in the folder, not vanish until the account comes
+//! back. `message_info::new_pending_append_row` builds the row from the
+//! message's own headers, [`crate::pending_append_cache::PendingAppendCache`]
+//! keeps the bytes `Email/import` has not seen yet, and
+//! `message_info::set_pending_append` marks the row with the destination
+//! mailbox. `replay_append` is the reconnect walk that uploads a pending
+//! append, called from `synchronize.rs`'s own `synchronize_sync`.
+//!
+//! `replay_append` gives up on a pending append that [`Error::TooLarge`]
+//! refuses: the message cannot shrink between retries, so retrying it on
+//! every reconnect would fail this folder's whole synchronise forever, with
+//! no way for the user to give up on the draft. Any other refusal keeps the
+//! row queued, because it may be transient.
+//!
 //! [`Error::TooLarge`]: jmap_client::Error::TooLarge
 //! [`Client::upload_blob`]: jmap_client::Client::upload_blob
 //!
 //! [`MailSync::import_message`]: jmap_mail_sync::MailSync::import_message
 
-use std::ffi::{CString, c_int};
+use std::ffi::{CStr, CString, c_int};
 
 use eds_sys::{
-    CAMEL_FOLDER_ERROR_INVALID, CamelFolder, CamelFolderClass, CamelMessageInfo, CamelMimeMessage,
-    camel_folder_error_quark, camel_folder_get_full_name, camel_message_info_get_date_received,
+    CAMEL_FOLDER_ERROR_INVALID, CamelFolder, CamelFolderClass, CamelFolderSummary,
+    CamelMessageInfo, CamelMimeMessage, camel_folder_changed, camel_folder_error_quark,
+    camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_summary_add,
+    camel_folder_summary_get, camel_message_info_clone, camel_message_info_get_date_received,
+    camel_message_info_set_folder_flagged, camel_message_info_set_uid,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, g_strdup, gboolean, gchar};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{fail_bool, set_raw_gerror};
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::guard_bool;
+use jmap_client::Error;
 use jmap_mail_sync::Keywords;
 use jmap_proto::Id;
 
+use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, parent_store};
-use crate::message_info::row_keywords;
+use crate::message_info::{
+    clear_pending_write, new_pending_append_row, pending_append, row_keywords, set_pending_append,
+    set_server_keywords, synthetic_uid,
+};
 use jmap_backend_core::mime::{Unwritable, write_message};
 
 /// Installs the folder's append vfunc on a class whose first member is a
@@ -126,15 +153,257 @@ unsafe extern "C" fn append_message_sync(
                 );
             }
 
-            match store.import_message(mailbox, source, &keywords, received_at) {
+            // The upload takes `source` by value, so a failed attempt gives it
+            // back no other way than a clone kept for the offline path below.
+            match store.import_message(mailbox, source.clone(), &keywords, received_at) {
                 Ok(uid) => {
                     report(appended_uid, &uid);
                     GTRUE
                 }
+                Err(StoreError::Disconnected) => queue_append(
+                    folder,
+                    message,
+                    &source,
+                    info,
+                    mailbox.clone(),
+                    appended_uid,
+                    error,
+                ),
                 Err(problem) => fail_bool(error, &problem, StoreError::to_gerror),
             }
         })
     }
+}
+
+/// Keeps an append that could not reach the server because the account is
+/// offline: builds a local row for `message` and stores `source` until a
+/// later claim uploads it, instead of failing the call.
+///
+/// Returns `TRUE` and sets `appended_uid` to the row's synthetic uid, the
+/// same contract as a landed append, so Camel and the user see the append as
+/// done. Returns `FALSE` only if the queue itself cannot be built (the folder
+/// has no summary or no byte store, or the write to disk fails): an append
+/// this provider cannot even remember locally must not claim to have
+/// succeeded.
+///
+/// # Safety
+///
+/// `folder` must point at a live `JmapFolder`, `message` at the live
+/// `CamelMimeMessage` whose serialised bytes are `source`, and `info` at NULL
+/// or a live row (Camel declares the vfunc's own row argument nullable).
+unsafe fn queue_append(
+    folder: *mut CamelFolder,
+    message: *mut CamelMimeMessage,
+    source: &[u8],
+    info: *mut CamelMessageInfo,
+    mailbox: Id,
+    appended_uid: *mut *mut gchar,
+    error: *mut *mut GError,
+) -> gboolean {
+    // SAFETY: the contract above.
+    let summary = unsafe { camel_folder_get_folder_summary(folder) };
+    if summary.is_null() {
+        // SAFETY: `error` meets `fail_bool`'s contract by this function's own.
+        return unsafe {
+            fail_bool(
+                error,
+                &StoreError::NoFolder(name_of(folder)),
+                StoreError::to_gerror,
+            )
+        };
+    }
+    // SAFETY: the contract above.
+    let cache = unsafe { JmapFolder::borrow(folder) }.and_then(JmapFolder::pending_append_cache);
+    let Some(cache) = cache else {
+        // SAFETY: as above.
+        return unsafe { fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror) };
+    };
+
+    let uid = synthetic_uid();
+    if !cache.store(&uid, source) {
+        // SAFETY: as above.
+        return unsafe { fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror) };
+    }
+
+    // SAFETY: the contract above.
+    let keywords = match info.is_null() {
+        true => Keywords::default(),
+        false => unsafe { row_keywords(info) },
+    };
+    // SAFETY: as above.
+    let received_at = unsafe { received_at(info) };
+
+    // SAFETY: `summary` and `message` are live by the contract above.
+    let row = unsafe {
+        Owned::from_raw(new_pending_append_row(
+            summary,
+            message,
+            &uid,
+            &keywords,
+            received_at,
+            mailbox,
+        ))
+    };
+    let Some(row) = row else {
+        cache.remove(&uid);
+        // SAFETY: as above.
+        return unsafe { fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror) };
+    };
+
+    // SAFETY: `summary` is live, and `row` is the row this call just built
+    // for it. `force_keep_uid` is TRUE: the uid is this row's own synthetic
+    // one, not one the summary's own counter would hand out. `add` marks the
+    // row `CAMEL_MESSAGE_FOLDER_FLAGGED`, which must stay set: it is what
+    // tells Camel's own generic reconnect flush, on top of this crate's own
+    // `crate::synchronize` walk, that this folder has unsent work at all.
+    // `crate::synchronize::push_row` already checks `pending_append` first
+    // and skips such a row outright, so the keyword-diff walk never reads
+    // this uid as a server id.
+    unsafe {
+        camel_folder_summary_add(summary, row.as_ptr(), GTRUE);
+    }
+
+    let mut changes = Changes::new();
+    changes.add(&uid);
+    // SAFETY: a live folder, and a change info this call owns for the call.
+    // `report` needs only a writable or NULL out-parameter, which this
+    // function's own contract (Camel's vfunc contract, via its one caller)
+    // gives it.
+    unsafe {
+        camel_folder_changed(folder, changes.as_ptr());
+        report(appended_uid, &Id::new(uid));
+    }
+    GTRUE
+}
+
+/// Completes an append that [`queue_append`] could not send while offline,
+/// for one row of the work list [`crate::synchronize::synchronize_sync`]
+/// walks.
+///
+/// Returns the new uid if the append landed: the caller must replace the row
+/// in the folder's summary, under that uid in place of the synthetic one
+/// this row used while offline, and report both in the next `changed`
+/// signal. The replacement row is already built and added to `summary` by
+/// this function; only the old row's removal is left to the caller, the same
+/// division [`crate::transfer::replay_filing`] uses for a landed move.
+/// Returns `None` if there is nothing to replay: no pending append, or still
+/// offline (the same "write it later" rule `replay_filing` uses).
+///
+/// # Safety
+///
+/// `folder` must point at a live `JmapFolder` and `summary` at its summary.
+pub(crate) unsafe fn replay_append(
+    folder: *mut CamelFolder,
+    summary: *mut CamelFolderSummary,
+    uid: &CStr,
+) -> Result<Option<CString>, StoreError> {
+    // SAFETY: the contract above. `Owned` releases the row's reference when it
+    // drops at the end of this function.
+    let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
+    else {
+        return Ok(None);
+    };
+    // SAFETY: `info` is a live row while this function holds its reference.
+    let Some(append) = (unsafe { pending_append(info.as_ptr()) }) else {
+        return Ok(None);
+    };
+    let Ok(text) = uid.to_str() else {
+        return Ok(None);
+    };
+    // SAFETY: the contract above.
+    let cache = unsafe { JmapFolder::borrow(folder) }.and_then(JmapFolder::pending_append_cache);
+    let Some(cache) = cache else {
+        return Err(StoreError::Disconnected);
+    };
+    let Some(source) = cache.load(text) else {
+        // The bytes are gone, which only a damaged cache directory can cause:
+        // retrying forever cannot fix a missing file. Give up quietly, the
+        // same restraint `push_row` already applies to a message another
+        // client destroyed.
+        // SAFETY: `info` is still the live row.
+        unsafe {
+            set_pending_append(info.as_ptr(), None);
+            clear_pending_write(info.as_ptr());
+        }
+        return Ok(None);
+    };
+
+    // SAFETY: `info` is still the live row.
+    let keywords = unsafe { row_keywords(info.as_ptr()) };
+    // SAFETY: as above.
+    let recv = unsafe { received_at(info.as_ptr()) };
+
+    let result = match unsafe { parent_store(folder) } {
+        Some(store) => store.import_message(append.mailbox(), source, &keywords, recv),
+        None => Err(StoreError::Disconnected),
+    };
+    let new_uid = match result {
+        Ok(new_uid) => new_uid,
+        Err(StoreError::Disconnected) => {
+            // Still offline. Unlike `replay_filing`'s own row, `push_row`
+            // never touches a pending-append row's mark (see its own guard),
+            // so there is nothing to restore here.
+            // SAFETY: `info` is still the live row.
+            unsafe { camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE) };
+            return Ok(None);
+        }
+        Err(StoreError::Client(Error::TooLarge { .. })) => {
+            // The server refuses this message on every attempt: its size
+            // does not change between reconnects. Retrying it would fail
+            // the same way forever, and `Err` here would fail this whole
+            // folder's synchronise on every future reconnect, with no way
+            // for the user to give up on the draft. Give up now instead,
+            // the same restraint the missing-bytes case above uses, but
+            // warn so the loss is not silent.
+            tracing::warn!(
+                uid = text,
+                "a queued append gave up: too large for the server"
+            );
+            cache.remove(text);
+            // SAFETY: `info` is still the live row.
+            unsafe {
+                set_pending_append(info.as_ptr(), None);
+                clear_pending_write(info.as_ptr());
+            }
+            return Ok(None);
+        }
+        Err(other) => return Err(other),
+    };
+    let Ok(new_cstring) = CString::new(new_uid.as_str()) else {
+        // Cannot happen for a server-chosen id; defensive only.
+        return Ok(None);
+    };
+
+    // The server already has the message now. Build its replacement row:
+    // `clone` copies every column this provider's own override and Camel's
+    // base class keep, so the message keeps the subject, sender and date
+    // this provider already extracted when it built the synthetic row.
+    //
+    // SAFETY: `info` and `summary` are both live.
+    let copy = unsafe { Owned::from_raw(camel_message_info_clone(info.as_ptr(), summary)) };
+    let Some(copy) = copy else {
+        // The upload cannot be retried (the server already has it), so
+        // forget the pending append; the next ordinary refresh lists the
+        // message at its new uid instead.
+        cache.remove(text);
+        // SAFETY: `info` is still the live row.
+        unsafe {
+            set_pending_append(info.as_ptr(), None);
+            clear_pending_write(info.as_ptr());
+        }
+        return Ok(None);
+    };
+    // SAFETY: `copy` is a row this function owns until `camel_folder_
+    // summary_add` below gives the summary its own reference.
+    unsafe {
+        camel_message_info_set_uid(copy.as_ptr(), new_cstring.as_ptr());
+        set_pending_append(copy.as_ptr(), None);
+        set_server_keywords(copy.as_ptr(), keywords);
+        clear_pending_write(copy.as_ptr());
+        camel_folder_summary_add(summary, copy.as_ptr(), GTRUE);
+    }
+    cache.remove(text);
+    Ok(Some(new_cstring))
 }
 
 /// Sets the error for a message that the Camel writer cannot write, and returns

@@ -52,13 +52,15 @@
 //! removal, a short file stays. Camel's parser reads that file as a *complete*
 //! message with a truncated body, because MIME has no length.
 //!
-//! Thus both operations take the size that the row of the folder claims. This
+//! Thus every operation takes the size that the row of the folder claims. This
 //! is the `size` of RFC 8621 §4.1, which the specification defines as the
 //! octets of exactly the bytes that the `blobId` references. An entry shorter
 //! than that size is not a message. [`load`] removes such an entry and does not
 //! serve it. [`store`] does not write one, for the same reason that it does not
 //! write an empty one: an entry that the cache does not serve is a syscall that
-//! only makes a miss.
+//! only makes a miss. [`MessageCache::filename`] refuses one too, because a
+//! caller of `CamelFolderClass::get_filename` ("View Source") opens that path
+//! directly and shows whatever is in it, with no size check of its own.
 //!
 //! **Shorter, not different.** This check prevents truncation, and truncation
 //! always gives a short file. A server whose `size` is too small by a byte has
@@ -146,6 +148,7 @@ use jmap_backend_core::trampoline::{guard_ptr, log_critical, log_critical_for_me
 
 use crate::connect::StoreError;
 use crate::folder::JmapFolder;
+use crate::message::listed_size;
 
 /// The subdirectory of the entries, below the cache directory of the account.
 ///
@@ -344,9 +347,13 @@ impl MessageCache {
         let source = source?;
         // An empty entry is not a message, and an entry shorter than the
         // message is not one either. A process that stops between `add` and
-        // the write leaves both. RFC 5322 has no zero-octet document. Camel's
-        // parser makes a message from either, and the caller then serves it
-        // and does not fetch, for as long as the entry survives.
+        // the write leaves both. RFC 5322 has no zero-octet document.
+        // `camel_data_cache_get` above already refuses an on-disk empty file
+        // with its own error, silently, before this point: the empty check
+        // here only catches a narrower race, a file its stat found non-empty
+        // that a concurrent write then truncates before this read. Camel's
+        // parser makes a message from the short case, and the caller then
+        // serves it and does not fetch, for as long as the entry survives.
         let damage = if source.is_empty() {
             Some("it has nothing in it".to_owned())
         } else {
@@ -421,152 +428,7 @@ impl MessageCache {
             return false;
         }
         let cache = self.lock();
-
-        // Two implementations of one contract: write `source` under `key`, and
-        // tell if the write succeeded. The 3.52-3.61 arm (see "The atomic
-        // write" in the module docs) writes directly to the final path and
-        // checks the result. The 3.62+ arm writes to a temporary name first.
-        // Thus a failed write leaves nothing under `key`, not a short file.
-
-        #[cfg(not(camel_data_cache_atomic))]
-        // SAFETY: `add` replaces an entry that is already under the key. The
-        // returned reference is ours, and `stream` releases it on each exit
-        // from this scope.
-        let stored = unsafe {
-            let mut error: *mut GError = ptr::null_mut();
-            let Some(stream) = Owned::from_raw(camel_data_cache_add(
-                cache.as_ptr(),
-                MESSAGES.as_ptr(),
-                key.as_ptr(),
-                &mut error,
-            )) else {
-                log_critical_for_message(
-                    uid,
-                    &format!("message {uid} could not be cached: {}", describe(error)),
-                );
-                g_clear_error(&mut error);
-                return false;
-            };
-
-            // The output stream is borrowed from `stream`, `source` is a live
-            // buffer of the given length, and the two out-parameters are
-            // locals.
-            let mut written: usize = 0;
-            let written_all = g_output_stream_write_all(
-                g_io_stream_get_output_stream(stream.as_ptr()),
-                // gio-sys gives the buffer the type `*mut`, but the C function
-                // takes a `const void *`. The cast agrees with the header.
-                source.as_ptr().cast_mut().cast(),
-                source.len(),
-                &mut written,
-                ptr::null_mut(),
-                &mut error,
-            ) != GFALSE;
-            // The close flushes. Thus a successful write with a failed close
-            // is still an incomplete entry. The close error goes into its own
-            // local, because GLib logs a critical when a second `g_set_error`
-            // writes to an out-parameter that is set. Report the write error
-            // first, because it tells the cause.
-            let mut on_close: *mut GError = ptr::null_mut();
-            let closed =
-                g_io_stream_close(stream.as_ptr(), ptr::null_mut(), &mut on_close) != GFALSE;
-            if error.is_null() {
-                error = on_close;
-            } else {
-                g_clear_error(&mut on_close);
-            }
-            let stored = written_all && closed && written == source.len();
-
-            if !stored {
-                log_critical_for_message(
-                    uid,
-                    &format!(
-                        "message {uid} was cached incompletely and has been dropped: {}",
-                        describe(error)
-                    ),
-                );
-                // This code cannot act on a failure of the removal.
-                camel_data_cache_remove(
-                    cache.as_ptr(),
-                    MESSAGES.as_ptr(),
-                    key.as_ptr(),
-                    ptr::null_mut(),
-                );
-            }
-            g_clear_error(&mut error);
-            stored
-        };
-
-        #[cfg(camel_data_cache_atomic)]
-        // SAFETY: `add_atomic` returns a stream open on a temporary file in the
-        // directory of the final file. This code owns the stream until it gives it to
-        // `commit_atomic` or `discard_atomic` below. Each of the two takes
-        // ownership of it: it closes the stream and releases the busy-bag
-        // reservation of `add_atomic`, for either result of the write.
-        let stored = unsafe {
-            let mut error: *mut GError = ptr::null_mut();
-            let Some(stream) = Owned::from_raw(camel_data_cache_add_atomic(
-                cache.as_ptr(),
-                MESSAGES.as_ptr(),
-                key.as_ptr(),
-                &mut error,
-            )) else {
-                log_critical_for_message(
-                    uid,
-                    &format!("message {uid} could not be cached: {}", describe(error)),
-                );
-                g_clear_error(&mut error);
-                return false;
-            };
-
-            // The output stream is borrowed from `stream`, and `source` is a
-            // live buffer of the given length. No close here: both calls
-            // below close the stream when they take ownership of it.
-            let mut written: usize = 0;
-            let written_all = g_output_stream_write_all(
-                g_io_stream_get_output_stream(stream.as_ptr()),
-                source.as_ptr().cast_mut().cast(),
-                source.len(),
-                &mut written,
-                ptr::null_mut(),
-                &mut error,
-            ) != GFALSE
-                && written == source.len();
-
-            let stored = if written_all {
-                // `into_raw` gives the stream to `commit_atomic`, which
-                // consumes it. A second release from the `Drop` of `stream`
-                // would free it twice. `commit_atomic` opens a stream on the
-                // renamed file. Only its presence is necessary, so
-                // `Owned::from_raw(..).is_some()` checks it and drops it.
-                Owned::from_raw(camel_data_cache_commit_atomic(
-                    cache.as_ptr(),
-                    stream.into_raw(),
-                    &mut error,
-                ))
-                .is_some()
-            } else {
-                // `discard_atomic` takes ownership of `stream` in the same
-                // way, closes it, and removes the temporary file. It gives
-                // no error.
-                camel_data_cache_discard_atomic(cache.as_ptr(), stream.into_raw());
-                false
-            };
-
-            if !stored {
-                log_critical_for_message(
-                    uid,
-                    &format!(
-                        "message {uid} was cached incompletely and has been dropped: {}",
-                        describe(error)
-                    ),
-                );
-            }
-            g_clear_error(&mut error);
-            stored
-        };
-
-        stored
+        write_entry(&cache, MESSAGES, &key, source, uid)
     }
 
     /// Whether a valid, undamaged entry for `uid` already exists, without
@@ -583,17 +445,17 @@ impl MessageCache {
     ///
     /// [`load`]: MessageCache::load
     pub fn contains(&self, uid: &str, listed: Option<u32>) -> bool {
-        let Some(path) = self.filename(uid) else {
-            return false;
-        };
-        let Ok(metadata) = std::fs::metadata(path) else {
-            return false;
-        };
-        let len = metadata.len();
-        len > 0 && claimed(listed).is_none_or(|listed| len >= u64::from(listed))
+        // `filename` now makes the same undamaged-and-the-right-size check
+        // this function needs; the one thing it does not check, because a
+        // caller that opens the raw path is allowed to rely on an unfetched
+        // message instead, is that the file exists at all.
+        self.filename(uid, listed)
+            .is_some_and(|path| Path::new(&path).is_file())
     }
 
-    /// The path on disk of the entry for `uid`, also if it is not cached yet.
+    /// The path on disk of the entry for `uid`, also if it is not cached yet,
+    /// checked against the size that the row of the folder claims, the same
+    /// check [`Self::load`] makes. See `claimed` for what a claim is.
     ///
     /// `camel_data_cache_get_filename` only computes a path, the same path
     /// that `camel_data_cache_add`/`_get` use internally. Thus this function
@@ -603,11 +465,22 @@ impl MessageCache {
     /// reason as there. Each caller of `CamelFolderClass::get_filename` treats a
     /// path that it cannot open as "no local copy", and reads the message in a
     /// different way. "View Source" in `e-mail-formatter-source.c` is this
-    /// fallback. No caller reads the path as a promise that the file exists.
+    /// fallback, and it is the whole reason for the size check below: that
+    /// caller, unlike [`Self::load`], opens the file directly and shows
+    /// whatever bytes are in it, with no check of its own. A process that
+    /// stopped mid-write, the same gap [`Self::load`]'s own doc describes,
+    /// would otherwise show the user a silently truncated message instead of
+    /// the correct, complete one the in-memory `CamelMimeMessage` still holds.
+    /// A path that was never fetched is not this damage, so it still passes
+    /// through unchecked: no caller reads the path as a promise that the file
+    /// exists.
     ///
-    /// `None` for the same reason that `Self::key` refuses: a uid that is not
-    /// a valid JMAP id is never a file name that this cache creates.
-    pub fn filename(&self, uid: &str) -> Option<String> {
+    /// `None` for an invalid uid, for the same reason that `Self::key`
+    /// refuses: a uid that is not a valid JMAP id is never a file name that
+    /// this cache creates. `None` also for a file this check finds damaged.
+    ///
+    /// [`load`]: MessageCache::load
+    pub fn filename(&self, uid: &str, listed: Option<u32>) -> Option<String> {
         let key = self.key(uid)?;
         let cache = self.lock();
 
@@ -623,7 +496,20 @@ impl MessageCache {
         // SAFETY: `raw` is NULL or a `g_malloc`'d pointer that this function
         // owns. `g_free` on NULL is a defined no-op.
         unsafe { g_free(raw.cast()) };
-        path
+        let path = path?;
+
+        // A path with nothing at it yet is not damage, only an unfetched
+        // message; leave the existence test to the caller's own open, as the
+        // doc above explains. A path whose file exists is checked by length
+        // alone, the same signal `Self::load` and `Self::contains` use,
+        // because the damage this guards against is a short write, not a
+        // wrong one.
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            return Some(path);
+        };
+        let len = metadata.len();
+        let damaged = len == 0 || claimed(listed).is_some_and(|listed| len < u64::from(listed));
+        if damaged { None } else { Some(path) }
     }
 
     /// A uid as the file name that it becomes, or `None` if it cannot be one.
@@ -649,6 +535,197 @@ impl MessageCache {
     }
 }
 
+/// Whether the file at `path` holds exactly `expected_len` bytes.
+///
+/// [`write_entry`]'s 3.62+ arm uses this to tell a cache entry that
+/// `commit_atomic` already renamed into place, complete, from one it never
+/// wrote: both a missing file and a short or long one answer `false`. Plain
+/// Rust, kept outside the `camel_data_cache_atomic` gate so it has unit tests
+/// on every installed EDS, not only 3.62+.
+#[cfg_attr(not(camel_data_cache_atomic), allow(dead_code))]
+fn file_has_len(path: &str, expected_len: usize) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == expected_len as u64)
+}
+
+/// Writes `source` under `key` in `subdir` of `cache`, and tells if the write
+/// succeeded. Two implementations of one contract: the 3.52-3.61 arm (see
+/// "The atomic write" in the module docs) writes directly to the final path
+/// and checks the result; the 3.62+ arm writes to a temporary name first.
+/// Both leave nothing under `key` on a failed write, not a short file: on the
+/// 3.62+ arm, a `commit_atomic` failure after a successful rename still
+/// counts as success, because the rename already left the full entry at
+/// `key`; see [`file_has_len`].
+///
+/// `uid` only names the entry in a log line. This is `pub(crate)` so
+/// [`crate::pending_append_cache::PendingAppendCache::store`] can reuse it:
+/// the all-or-nothing write is the same for both kinds of entry, only the
+/// check of what is worth writing differs, and that check stays with each
+/// caller.
+pub(crate) fn write_entry(
+    cache: &Owned<CamelDataCache>,
+    subdir: &CStr,
+    key: &CString,
+    source: &[u8],
+    uid: &str,
+) -> bool {
+    #[cfg(not(camel_data_cache_atomic))]
+    // SAFETY: `add` replaces an entry that is already under the key. The
+    // returned reference is ours, and `stream` releases it on each exit
+    // from this scope.
+    let stored = unsafe {
+        let mut error: *mut GError = ptr::null_mut();
+        let Some(stream) = Owned::from_raw(camel_data_cache_add(
+            cache.as_ptr(),
+            subdir.as_ptr(),
+            key.as_ptr(),
+            &mut error,
+        )) else {
+            log_critical_for_message(
+                uid,
+                &format!("message {uid} could not be cached: {}", describe(error)),
+            );
+            g_clear_error(&mut error);
+            return false;
+        };
+
+        // The output stream is borrowed from `stream`, `source` is a live
+        // buffer of the given length, and the two out-parameters are
+        // locals.
+        let mut written: usize = 0;
+        let written_all = g_output_stream_write_all(
+            g_io_stream_get_output_stream(stream.as_ptr()),
+            // gio-sys gives the buffer the type `*mut`, but the C function
+            // takes a `const void *`. The cast agrees with the header.
+            source.as_ptr().cast_mut().cast(),
+            source.len(),
+            &mut written,
+            ptr::null_mut(),
+            &mut error,
+        ) != GFALSE;
+        // The close flushes. Thus a successful write with a failed close
+        // is still an incomplete entry. The close error goes into its own
+        // local, because GLib logs a critical when a second `g_set_error`
+        // writes to an out-parameter that is set. Report the write error
+        // first, because it tells the cause.
+        let mut on_close: *mut GError = ptr::null_mut();
+        let closed = g_io_stream_close(stream.as_ptr(), ptr::null_mut(), &mut on_close) != GFALSE;
+        if error.is_null() {
+            error = on_close;
+        } else {
+            g_clear_error(&mut on_close);
+        }
+        let stored = written_all && closed && written == source.len();
+
+        if !stored {
+            log_critical_for_message(
+                uid,
+                &format!(
+                    "message {uid} was cached incompletely and has been dropped: {}",
+                    describe(error)
+                ),
+            );
+            // This code cannot act on a failure of the removal.
+            camel_data_cache_remove(
+                cache.as_ptr(),
+                subdir.as_ptr(),
+                key.as_ptr(),
+                ptr::null_mut(),
+            );
+        }
+        g_clear_error(&mut error);
+        stored
+    };
+
+    #[cfg(camel_data_cache_atomic)]
+    // SAFETY: `add_atomic` returns a stream open on a temporary file in the
+    // directory of the final file. This code owns the stream until it gives it to
+    // `commit_atomic` or `discard_atomic` below. Each of the two takes
+    // ownership of it: it closes the stream and releases the busy-bag
+    // reservation of `add_atomic`, for either result of the write.
+    let stored = unsafe {
+        let mut error: *mut GError = ptr::null_mut();
+        let Some(stream) = Owned::from_raw(camel_data_cache_add_atomic(
+            cache.as_ptr(),
+            subdir.as_ptr(),
+            key.as_ptr(),
+            &mut error,
+        )) else {
+            log_critical_for_message(
+                uid,
+                &format!("message {uid} could not be cached: {}", describe(error)),
+            );
+            g_clear_error(&mut error);
+            return false;
+        };
+
+        // The output stream is borrowed from `stream`, and `source` is a
+        // live buffer of the given length. No close here: both calls
+        // below close the stream when they take ownership of it.
+        let mut written: usize = 0;
+        let written_all = g_output_stream_write_all(
+            g_io_stream_get_output_stream(stream.as_ptr()),
+            source.as_ptr().cast_mut().cast(),
+            source.len(),
+            &mut written,
+            ptr::null_mut(),
+            &mut error,
+        ) != GFALSE
+            && written == source.len();
+
+        let stored = if written_all {
+            // `into_raw` gives the stream to `commit_atomic`, which
+            // consumes it. A second release from the `Drop` of `stream`
+            // would free it twice. `commit_atomic` opens a stream on the
+            // renamed file. Only its presence is necessary, so
+            // `Owned::from_raw(..).is_some()` checks it and drops it.
+            let committed = Owned::from_raw(camel_data_cache_commit_atomic(
+                cache.as_ptr(),
+                stream.into_raw(),
+                &mut error,
+            ))
+            .is_some();
+            // `commit_atomic` can also fail after its own rename already
+            // succeeded, when only its post-rename reopen of the committed
+            // file fails (EACCES, EMFILE and similar, per
+            // `camel-data-cache.c`). Nothing removes the renamed file on
+            // that path, so the entry is complete at `key` either way; a
+            // file of the written length there is that case, not a dropped
+            // write.
+            committed || {
+                let raw =
+                    camel_data_cache_get_filename(cache.as_ptr(), subdir.as_ptr(), key.as_ptr());
+                // SAFETY: `raw` is NULL or a fresh `g_malloc`'d string, read
+                // before the free below.
+                let path = read_string(raw);
+                // SAFETY: `raw` is NULL or a `g_malloc`'d pointer this call
+                // owns. `g_free` on NULL is a defined no-op.
+                g_free(raw.cast());
+                path.is_some_and(|path| file_has_len(&path, source.len()))
+            }
+        } else {
+            // `discard_atomic` takes ownership of `stream` in the same
+            // way, closes it, and removes the temporary file. It gives
+            // no error.
+            camel_data_cache_discard_atomic(cache.as_ptr(), stream.into_raw());
+            false
+        };
+
+        if !stored {
+            log_critical_for_message(
+                uid,
+                &format!(
+                    "message {uid} was cached incompletely and has been dropped: {}",
+                    describe(error)
+                ),
+            );
+        }
+        g_clear_error(&mut error);
+        stored
+    };
+
+    stored
+}
+
 /// Installs the vfunc on a class whose first member is a `CamelFolderClass`.
 ///
 /// # Safety
@@ -666,8 +743,10 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
 /// from this path, and do not ask Camel to serialize the message again.
 ///
 /// On success, a path, also if no file is there yet. NULL with the error set
-/// when the folder has no cache, or `uid` is not a valid key. See
-/// [`MessageCache::filename`] for why the usual case needs no check.
+/// when the folder has no cache, `uid` is not a valid key, or the entry on
+/// disk is damaged (shorter than the row's claimed size). See
+/// [`MessageCache::filename`] for why the usual, unfetched case needs no
+/// check, and why a damaged one is refused.
 unsafe extern "C" fn get_filename(
     folder: *mut CamelFolder,
     uid: *const gchar,
@@ -678,6 +757,9 @@ unsafe extern "C" fn get_filename(
     // that is NULL, or writable and NULL.
     unsafe {
         guard_ptr("get_filename", error, || {
+            // SAFETY: `folder` and `uid` meet the vfunc contract above, read
+            // before `uid` is consumed into an owned `String` below.
+            let listed = listed_size(folder, uid);
             let Some(uid) = read_string(uid) else {
                 return fail(error, &StoreError::NoLocalFile, StoreError::to_gerror);
             };
@@ -687,7 +769,7 @@ unsafe extern "C" fn get_filename(
             let Some(cache) = this.cache() else {
                 return fail(error, &StoreError::NoLocalFile, StoreError::to_gerror);
             };
-            match cache.filename(&uid) {
+            match cache.filename(&uid, listed) {
                 Some(path) => dup_string(&path),
                 None => fail(error, &StoreError::NoLocalFile, StoreError::to_gerror),
             }
@@ -707,19 +789,29 @@ fn claimed(listed: Option<u32>) -> Option<u32> {
     listed.filter(|listed| *listed != 0)
 }
 
+/// The bytes `camel_data_cache_add_atomic` appends to a key for its temporary
+/// file, `.XXXXXX` (`g_mkstemp`'s own placeholder, `camel-data-cache.c`). A
+/// key at the RFC's own 255-byte limit would make a 262-byte file name on
+/// EDS 3.62+, past most filesystems' 255-byte name limit, so `store` would
+/// fail there alone, forever, for that one message. `valid_key` stays below
+/// this margin so the same key is cacheable on every supported EDS version.
+const ATOMIC_TEMP_SUFFIX_LEN: usize = ".XXXXXX".len();
+
 /// Whether `key` is an id that RFC 8620 §1.2 allows, and thus a file name that
-/// this cache can create.
+/// this cache can create on every supported EDS version.
 ///
-/// This is exactly the grammar of the RFC: one to 255 characters of
-/// `A-Za-z0-9_-`, without a dash at the start. Each part of it is necessary.
-/// The character set keeps a key in one directory. The RFC itself bans the
-/// leading dash, so that an id is not read as a command-line option. The ban on
-/// the empty string stops a key that names the directory itself. The character
-/// set refuses `.` and `..`, the two most dangerous names.
-fn valid_key(key: &str) -> bool {
+/// This is almost the grammar of the RFC: one to 255 characters of
+/// `A-Za-z0-9_-`, narrowed to `255 - ATOMIC_TEMP_SUFFIX_LEN` so a key this
+/// module accepts is cacheable whether or not the installed EDS has the
+/// atomic store path. Each part of it is necessary. The character set keeps
+/// a key in one directory and refuses `.` and `..`, the two most dangerous
+/// names. The ban on the empty string stops a key that names the directory
+/// itself. The RFC only asks a server to try to avoid a leading dash, so
+/// that an id is not read as a command-line option; this cache never passes
+/// a key as a bare argument, so a leading dash is not refused here.
+pub(crate) fn valid_key(key: &str) -> bool {
     !key.is_empty()
-        && key.len() <= 255
-        && !key.starts_with('-')
+        && key.len() <= 255 - ATOMIC_TEMP_SUFFIX_LEN
         && key
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
@@ -737,7 +829,7 @@ fn valid_key(key: &str) -> bool {
 /// # Safety
 ///
 /// `input` must point to a live `GInputStream`.
-unsafe fn read_all(input: *mut gio_sys::GInputStream, uid: &str) -> Option<Vec<u8>> {
+pub(crate) unsafe fn read_all(input: *mut gio_sys::GInputStream, uid: &str) -> Option<Vec<u8>> {
     let mut source: Vec<u8> = Vec::new();
     let mut chunk = [0u8; CHUNK];
     loop {
@@ -783,7 +875,7 @@ unsafe fn read_all(input: *mut gio_sys::GInputStream, uid: &str) -> Option<Vec<u
 /// # Safety
 ///
 /// `error` must be NULL or point to a live `GError`.
-unsafe fn describe(error: *mut GError) -> String {
+pub(crate) unsafe fn describe(error: *mut GError) -> String {
     // SAFETY: the contract above. The message of a live GError is a
     // NUL-terminated string that the GError owns.
     unsafe {
@@ -791,5 +883,65 @@ unsafe fn describe(error: *mut GError) -> String {
             .as_ref()
             .and_then(|error| jmap_backend_core::marshal::read_string(error.message))
             .unwrap_or_else(|| "(no detail)".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{file_has_len, valid_key};
+
+    /// `255 - ATOMIC_TEMP_SUFFIX_LEN` is the last length a key's temporary
+    /// file still fits in a 255-byte file name on EDS 3.62+.
+    #[test]
+    fn a_key_up_to_the_atomic_margin_is_valid() {
+        assert!(valid_key(&"a".repeat(248)));
+    }
+
+    /// A key past the margin is refused, even though RFC 8620 §1.2 allows it,
+    /// because its atomic temporary file would not fit a 255-byte file name.
+    #[test]
+    fn a_key_past_the_atomic_margin_is_not_valid() {
+        for length in [249, 255] {
+            assert!(
+                !valid_key(&"a".repeat(length)),
+                "a {length}-byte key was accepted"
+            );
+        }
+    }
+
+    /// A file of exactly the expected length is a complete entry, the shape
+    /// `commit_atomic` leaves behind when its rename succeeds but its own
+    /// post-rename reopen then fails.
+    #[test]
+    fn a_file_of_the_expected_length_has_that_length() {
+        let file = tempfile_with(b"hello");
+        assert!(file_has_len(file.to_str().unwrap(), 5));
+        std::fs::remove_file(file).unwrap();
+    }
+
+    /// A short file is not a complete entry: a genuinely incomplete write,
+    /// not one that only failed to reopen after a full rename.
+    #[test]
+    fn a_short_file_does_not_have_the_expected_length() {
+        let file = tempfile_with(b"hel");
+        assert!(!file_has_len(file.to_str().unwrap(), 5));
+        std::fs::remove_file(file).unwrap();
+    }
+
+    /// A path with nothing at it is not a complete entry either: the rename
+    /// itself failed, the shape `discard_atomic` leaves behind.
+    #[test]
+    fn a_missing_file_does_not_have_the_expected_length() {
+        assert!(!file_has_len("/nonexistent/path/for/jmap-mail-tests", 5));
+    }
+
+    fn tempfile_with(bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "jmap-mail-cache-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        path
     }
 }

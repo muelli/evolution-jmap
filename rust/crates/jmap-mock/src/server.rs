@@ -107,6 +107,13 @@ pub struct Faults {
     pub snooze_extension: bool,
     /// Refuse `Principal/query` with `forbidden`, modeling Stalwart directory policy.
     pub disable_principal_query: bool,
+    /// Answer every `Email/set` update with `notFound`, without removing the
+    /// email from the account: models a server that loses track of an id for
+    /// a write while still listing it everywhere else.
+    pub email_update_always_not_found: bool,
+    /// Reject a `Calendar/set` destroy naming `onDestroyRemoveContents` with
+    /// `invalidArguments`, modeling Cyrus's pre-standardization parser.
+    pub calendar_destroy_rejects_remove_contents: bool,
     /// Active hostile scenarios.
     pub hostile_scenarios: BTreeSet<crate::hostile::HostileScenario>,
 }
@@ -125,6 +132,8 @@ pub struct MockServerBuilder {
     query_page_size: Option<u64>,
     size_request: Option<u64>,
     size_upload: Option<u64>,
+    max_concurrent_requests: Option<u64>,
+    max_concurrent_upload: Option<u64>,
     well_known_redirect_to: Option<String>,
     advertise_origin: Option<String>,
     download_via_redirect_to: Option<String>,
@@ -286,6 +295,18 @@ impl MockServerBuilder {
     /// Omit `maxSizeUpload` and accept any upload size.
     pub fn no_size_upload(mut self) -> Self {
         self.size_upload = None;
+        self
+    }
+
+    /// Set `maxConcurrentRequests` in the core session capability.
+    pub fn max_concurrent_requests(mut self, limit: u64) -> Self {
+        self.max_concurrent_requests = Some(limit);
+        self
+    }
+
+    /// Set `maxConcurrentUpload` in the core session capability.
+    pub fn max_concurrent_upload(mut self, limit: u64) -> Self {
+        self.max_concurrent_upload = Some(limit);
         self
     }
 
@@ -486,6 +507,21 @@ impl MockServerBuilder {
         self
     }
 
+    /// Answer every `Email/set` update with `notFound`, without removing the
+    /// email from the account.
+    pub fn email_update_always_not_found(mut self) -> Self {
+        self.faults.email_update_always_not_found = true;
+        self
+    }
+
+    /// Reject a `Calendar/set` destroy naming `onDestroyRemoveContents` with
+    /// `invalidArguments`, modeling Cyrus's pre-standardization parser
+    /// (CYRUS-RFC-FINDINGS.md Finding 21).
+    pub fn calendar_destroy_rejects_remove_contents(mut self) -> Self {
+        self.faults.calendar_destroy_rejects_remove_contents = true;
+        self
+    }
+
     /// Enable one hostile server scenario for adversarial testing.
     pub fn hostile(mut self, scenario: crate::hostile::HostileScenario) -> Self {
         self.faults.hostile_scenarios.insert(scenario);
@@ -514,6 +550,8 @@ impl MockServerBuilder {
         state.query_hides_limit = self.faults.query_hides_limit;
         state.size_request = self.size_request;
         state.size_upload = self.size_upload;
+        state.max_concurrent_requests = self.max_concurrent_requests;
+        state.max_concurrent_upload = self.max_concurrent_upload;
         state.session_via_redirect = self.faults.session_via_redirect;
         state.well_known_redirect_to = self.well_known_redirect_to.clone();
         state.advertise_origin = self.advertise_origin.clone();
@@ -541,6 +579,9 @@ impl MockServerBuilder {
         state.sieve_validate_long_error = self.sieve_validate_long_error;
         state.tasks_enabled = self.tasks_enabled;
         state.disable_principal_query = self.faults.disable_principal_query;
+        state.email_update_always_not_found = self.faults.email_update_always_not_found;
+        state.calendar_destroy_rejects_remove_contents =
+            self.faults.calendar_destroy_rejects_remove_contents;
         state.hostile_scenarios = self.faults.hostile_scenarios.clone();
         if !self.tasks_enabled {
             state
@@ -609,6 +650,8 @@ impl MockServer {
             query_page_size: None,
             size_request: Some(DEFAULT_SIZE_REQUEST),
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
+            max_concurrent_requests: Some(4),
+            max_concurrent_upload: Some(4),
             well_known_redirect_to: None,
             advertise_origin: None,
             download_via_redirect_to: None,
@@ -1341,12 +1384,16 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
 
     // Build `core`. Omit optional limits when unset.
     let mut core = json!({
-        "maxConcurrentUpload": 4,
-        "maxConcurrentRequests": 4,
         "maxObjectsInGet": state.objects_in_get(),
         "maxObjectsInSet": 128,
         "collationAlgorithms": ["i;ascii-casemap"],
     });
+    if let Some(limit) = state.max_concurrent_requests {
+        core["maxConcurrentRequests"] = json!(limit);
+    }
+    if let Some(limit) = state.max_concurrent_upload {
+        core["maxConcurrentUpload"] = json!(limit);
+    }
     if let Some(size_request) = state.size_request {
         core["maxSizeRequest"] = json!(size_request);
     }

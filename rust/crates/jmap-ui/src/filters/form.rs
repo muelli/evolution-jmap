@@ -67,6 +67,10 @@ pub struct ScriptEntry {
     pub active: bool,
     /// True for the script the vacation responder owns.
     pub protected: bool,
+    /// True once [`FiltersForm::set_text`] changed this script's text. The
+    /// external-edit banner never shows again for this script once this is
+    /// set: a text edit in this page is not an edit outside Evolution.
+    pub edited_as_text: bool,
 }
 
 impl ScriptEntry {
@@ -146,6 +150,7 @@ impl FiltersForm {
                 name: script.script.name,
                 text: script.text,
                 active: script.script.is_active,
+                edited_as_text: false,
             });
         }
         form.selected = (!form.entries.is_empty()).then_some(0);
@@ -254,6 +259,7 @@ impl FiltersForm {
             text,
             active: false,
             protected: false,
+            edited_as_text: false,
         });
         let index = self.entries.len() - 1;
         self.selected = Some(index);
@@ -269,8 +275,16 @@ impl FiltersForm {
     }
 
     /// Replaces the Sieve source of row `index` with what the text view holds.
+    ///
+    /// Marks the entry [`ScriptEntry::edited_as_text`] if `text` differs from
+    /// the text already staged, so a flush with no real change (for example,
+    /// a reselection that just flushes the same buffer back) does not count
+    /// as a text edit.
     pub fn set_text(&mut self, index: usize, text: &str) -> Result<(), &'static CStr> {
         self.writable(index)?;
+        if self.entries[index].text != text {
+            self.entries[index].edited_as_text = true;
+        }
         self.entries[index].text = text.to_owned();
         Ok(())
     }
@@ -306,6 +320,54 @@ impl FiltersForm {
             entry.active = false;
         }
         Ok(())
+    }
+
+    /// The row the user currently has active, if any.
+    pub fn active_row(&self) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.active)
+    }
+
+    /// Makes `index` the only active row (none, when `index` is `None`),
+    /// with no other check. For the Activate button's instant apply (item
+    /// 180(a)): undoes a staged [`FiltersForm::activate`]/
+    /// [`FiltersForm::deactivate`] the server refused to write.
+    pub fn restore_active(&mut self, index: Option<usize>) {
+        for (row, entry) in self.entries.iter_mut().enumerate() {
+            entry.active = Some(row) == index;
+        }
+    }
+
+    /// Sets row `index`'s name back to `name`, with no other check. For the
+    /// Rename button's instant apply (item 180(a)): undoes a staged
+    /// [`FiltersForm::rename`] the server refused to write.
+    pub fn restore_name(&mut self, index: usize, name: String) {
+        if let Some(entry) = self.entries.get_mut(index) {
+            entry.name = name;
+        }
+    }
+
+    /// Removes row `index`, with no other check. For the Add button's
+    /// instant apply (item 180(a)): undoes a staged [`FiltersForm::add`] the
+    /// server refused to write. The row never carries a server id (a script
+    /// this session added), so nothing joins the destroy list.
+    pub fn restore_added(&mut self, index: usize) {
+        if index >= self.entries.len() {
+            return;
+        }
+        self.entries.remove(index);
+        self.selected = (!self.entries.is_empty()).then(|| index.min(self.entries.len() - 1));
+    }
+
+    /// Puts `entry` back at row `index`, with no other check. For the Remove
+    /// button's instant apply (item 180(a)): undoes a staged
+    /// [`FiltersForm::remove`] the server refused to write.
+    pub fn restore_removed(&mut self, index: usize, entry: ScriptEntry) {
+        if entry.id.is_some() {
+            self.destroys.pop();
+        }
+        let index = index.min(self.entries.len());
+        self.entries.insert(index, entry);
+        self.selected = Some(index);
     }
 
     /// True when a submit has anything to write.
@@ -611,6 +673,21 @@ mod tests {
     }
 
     #[test]
+    fn set_text_marks_the_entry_edited_only_when_the_text_changes() {
+        let mut form = form(vec![script("a", "work", false)]);
+        assert!(!form.entries()[0].edited_as_text);
+
+        // The same text a flush sends when the user made no edit: not a
+        // text edit, so the banner must still be free to show again.
+        let same_text = form.entries()[0].text.clone();
+        form.set_text(0, &same_text).unwrap();
+        assert!(!form.entries()[0].edited_as_text);
+
+        form.set_text(0, "discard;\n").unwrap();
+        assert!(form.entries()[0].edited_as_text);
+    }
+
+    #[test]
     fn the_plan_carries_the_state_and_the_scripts_of_the_load() {
         let scripts = || vec![script("a", "work", true), script("v", "vacation", false)];
         let expected = loaded(scripts()).baseline();
@@ -715,6 +792,69 @@ mod tests {
 
         assert!(!form.dirty());
         assert!(form.plan().unwrap().is_none());
+    }
+
+    #[test]
+    fn active_row_finds_the_one_active_script() {
+        let form = form(vec![script("a", "work", false), script("b", "spam", true)]);
+
+        assert_eq!(form.active_row(), Some(1));
+    }
+
+    #[test]
+    fn restore_active_undoes_a_staged_activation() {
+        let mut form = form(vec![script("a", "work", true), script("b", "spam", false)]);
+        let previous = form.active_row();
+
+        form.activate(1).unwrap();
+        assert_eq!(form.active_row(), Some(1));
+
+        form.restore_active(previous);
+
+        assert_eq!(form.active_row(), Some(0));
+        assert!(!form.entries()[1].active);
+    }
+
+    #[test]
+    fn restore_name_undoes_a_staged_rename() {
+        let mut form = form(vec![script("a", "work", false)]);
+
+        form.rename(0, "renamed").unwrap();
+        assert_eq!(form.entries()[0].name, "renamed");
+
+        form.restore_name(0, "work".to_owned());
+
+        assert_eq!(form.entries()[0].name, "work");
+    }
+
+    #[test]
+    fn restore_added_undoes_a_staged_add() {
+        let mut form = form(vec![script("a", "work", false)]);
+
+        let row = form.add("new one").unwrap();
+        assert_eq!(form.entries().len(), 2);
+
+        form.restore_added(row);
+
+        assert_eq!(form.entries().len(), 1);
+        assert_eq!(form.entries()[0].name, "work");
+        assert!(!form.dirty());
+    }
+
+    #[test]
+    fn restore_removed_undoes_a_staged_removal() {
+        let mut form = form(vec![script("a", "work", false), script("b", "spam", false)]);
+        let removed = form.entries()[0].clone();
+
+        form.remove(0).unwrap();
+        assert_eq!(form.entries().len(), 1);
+
+        form.restore_removed(0, removed);
+
+        assert_eq!(form.entries().len(), 2);
+        assert_eq!(form.entries()[0].name, "work");
+        assert_eq!(form.entries()[1].name, "spam");
+        assert!(!form.dirty());
     }
 
     #[test]

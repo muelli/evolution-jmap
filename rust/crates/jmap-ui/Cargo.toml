@@ -47,6 +47,11 @@ jmap-backend-core = { workspace = true }
 jmap-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Splits the External Editor command line into an argv (filters::
+# external_editor, item 180 step (d)).
+shlex = { workspace = true }
+# The local, offline syntax check in filters::validate (item 171 step (b)).
+sieve = { version = "0.7.3", package = "sieve-rs", default-features = false }
 tracing = { workspace = true }
 
 [dev-dependencies]
@@ -56,3 +61,4 @@ jmap-backend-core = { workspace = true, features = ["testing"] }
 # `tests/send_later.rs` tests the full scheduled-send exchange against the
 # stateful mock, including the HOLDFOR gate.
 evolution-jmap-mock = { workspace = true }
+evolution-jmap-tracing-capture = { workspace = true }

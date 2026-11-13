@@ -744,7 +744,7 @@ pub fn drawn_conference(key: &str, location: &Value) -> Option<ICalendarEntry> {
     let uri = location
         .get("uri")?
         .as_str()
-        .filter(|uri| names_a_uri(uri))?;
+        .filter(|uri| names_a_uri(uri) && !fetched_locally(uri) && !is_data_uri(uri))?;
     Some(
         make_uri_entry("CONFERENCE", uri)
             .with_named_param("VALUE", "URI")
@@ -808,7 +808,7 @@ pub fn drawn_link(key: &str, link: &Value) -> Option<ICalendarEntry> {
     let href = link
         .get("href")?
         .as_str()
-        .filter(|href| names_a_uri(href) && !fetched_locally(href))?;
+        .filter(|href| names_a_uri(href) && !fetched_locally(href) && !is_data_uri(href))?;
     let media_type = media_type(link);
     if link.get("rel").and_then(Value::as_str) == Some(ICON_REL) {
         // `VALUE=URI` because RFC 7986 §5.10's `image` grammar makes it REQUIRED
@@ -893,7 +893,7 @@ pub fn calendar_address(participant: &Value) -> Option<&str> {
                 .and_then(|send_to| send_to.get(IMIP))
                 .and_then(Value::as_str)
         })
-        .filter(|address| names_a_uri(address))
+        .filter(|address| names_a_uri(address) && !is_data_uri(address))
 }
 
 /// Whether a value is a URI this mapping will put on a content line: RFC 3986
@@ -907,7 +907,10 @@ pub fn names_a_uri(value: &str) -> bool {
     let Some((_, rest)) = jmap_proto::text::split_uri(value) else {
         return false;
     };
-    !rest.is_empty() && !value.chars().any(char::is_whitespace)
+    !rest.is_empty()
+        && !value
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '\\')
 }
 
 /// The `name` an object states, or `None` where it has none to put in a `CN` or
@@ -918,7 +921,8 @@ pub fn names_a_uri(value: &str) -> bool {
 /// the place is named nothing, where leaving it off says only that the value
 /// speaks for itself.
 pub fn stated_name(value: &Value) -> Option<&str> {
-    value.get("name")?.as_str().filter(|name| !name.is_empty())
+    let name = value.get("name")?.as_str()?.trim();
+    (!name.is_empty()).then_some(name)
 }
 
 /// Whether a participant states this RFC 8984 §4.4.6 role. The values of a set
@@ -1807,7 +1811,14 @@ pub fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>)
         (true, _) => {
             let vals = values
                 .iter()
-                .map(|value| ICalendarValue::Text(value[..8].to_owned()))
+                .map(|value| {
+                    let date_val = if value.len() >= 8 && value.is_char_boundary(8) {
+                        &value[..8]
+                    } else {
+                        value.as_str()
+                    };
+                    ICalendarValue::Text(date_val.to_owned())
+                })
                 .collect();
             ICalendarEntry::new(prop)
                 .with_values(vals)
@@ -2158,7 +2169,7 @@ pub fn date_time_text(stamp: &PartialDateTime) -> String {
 
 pub fn param_text(value: &ICalendarParameterValue) -> String {
     match value {
-        ICalendarParameterValue::Text(text) => caret_decoded(text),
+        ICalendarParameterValue::Text(text) => caret_decoded(text).trim().to_owned(),
         ICalendarParameterValue::Integer(number) => number.to_string(),
         ICalendarParameterValue::Bool(true) => "TRUE".to_owned(),
         ICalendarParameterValue::Bool(false) => "FALSE".to_owned(),
@@ -2701,16 +2712,17 @@ pub fn read_observance(component: &ICalendarComponent) -> Option<Value> {
 /// Known zone names take precedence over document `VTIMEZONE` definitions.
 /// Unknown identifiers return unchanged to preserve unresolved zones.
 fn zone_of(tzid: &str, zones: &Zones) -> String {
-    if let Some(name) = zones.get(tzid).and_then(|zone| zone.name.clone()) {
+    let tzid = normalize_keyword(tzid);
+    if let Some(name) = zones.get(&tzid).and_then(|zone| zone.name.clone()) {
         return name;
     }
-    if names_time_zone(tzid) {
-        return tzid.to_owned();
+    if names_time_zone(&tzid) {
+        return tzid;
     }
-    if let Some(iana) = unique_tzid_to_iana(tzid) {
+    if let Some(iana) = unique_tzid_to_iana(&tzid) {
         return iana.to_owned();
     }
-    tzid.to_owned()
+    tzid
 }
 
 /// Convert one `VEVENT` into a JSCalendar event without named instances.
@@ -2800,7 +2812,7 @@ const INVENTED_PARTICIPANT_KEY: &str = "p";
 pub fn read_organizer(vevent: &ICalendarComponent) -> Option<String> {
     component_entry(vevent, "ORGANIZER")
         .map(entry_raw_value)
-        .filter(|address| names_a_uri(address))
+        .filter(|address| names_a_uri(address) && !is_data_uri(address))
 }
 
 /// Parse component participants into a JSCalendar participant map.
@@ -2836,7 +2848,7 @@ pub fn read_participants(vevent: &ICalendarComponent) -> Option<BTreeMap<String,
 
     if let Some(line) = component_entry(vevent, "ORGANIZER") {
         let address = entry_raw_value(line);
-        if names_a_uri(&address) {
+        if names_a_uri(&address) && !is_data_uri(&address) {
             let participant = entry(&mut people, address);
             named(line, participant);
             participant.insert("roles".to_owned(), json!({ OWNER_ROLE: true }));
@@ -2844,7 +2856,7 @@ pub fn read_participants(vevent: &ICalendarComponent) -> Option<BTreeMap<String,
     }
     for line in component_entries(vevent, "ATTENDEE") {
         let address = entry_raw_value(line);
-        if !names_a_uri(&address) {
+        if !names_a_uri(&address) || is_data_uri(&address) {
             continue;
         }
         let participant = entry(&mut people, address);
@@ -2920,7 +2932,7 @@ pub fn read_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Va
 /// Parse `CONFERENCE` properties into a virtual locations map (RFC 7986 §5.11).
 ///
 /// Read URI, label, and feature parameters for each conference entry.
-/// Drop invalid URIs and return `None` when no entries exist.
+/// Drop invalid URIs and local `file:` schemes, returning `None` when no entries exist.
 pub fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
     let lines: Vec<&ICalendarEntry> = component_entries(vevent, "CONFERENCE").collect();
     let keys: Vec<Option<String>> = lines
@@ -2932,7 +2944,7 @@ pub fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<St
     let mut invented = 0;
     for (line, key) in lines.iter().zip(&keys) {
         let value = entry_raw_value(line);
-        if !names_a_uri(&value) {
+        if !names_a_uri(&value) || fetched_locally(&value) || is_data_uri(&value) {
             continue;
         }
         let key = match key {
@@ -2988,7 +3000,7 @@ pub fn read_links(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>
     let mut invented = 0;
     for (line, key) in lines.iter().zip(&keys) {
         let href = entry_raw_value(line);
-        if !names_a_uri(&href) || fetched_locally(&href) {
+        if !names_a_uri(&href) || fetched_locally(&href) || is_data_uri(&href) {
             continue;
         }
         let key = match key {
@@ -3032,14 +3044,49 @@ pub fn fetched_locally(href: &str) -> bool {
         .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
 }
 
+/// Return true if the URI uses the `data:` scheme (RFC 2397).
+pub fn is_data_uri(href: &str) -> bool {
+    href.split_once(':')
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("data"))
+}
+
+/// Normalize a category keyword tag by trimming leading and trailing whitespace
+/// and collapsing consecutive spaces or tabs to match calcard's tokenizer folding rules.
+pub fn normalize_keyword(tag: &str) -> String {
+    let trimmed = tag.trim_matches(|c| c == ' ' || c == '\t');
+    let mut out = String::with_capacity(trimmed.len());
+    let mut last_space = false;
+    let mut last_tab = false;
+    for c in trimmed.chars() {
+        if c == ' ' {
+            if !last_space {
+                out.push(' ');
+                last_space = true;
+            }
+            last_tab = false;
+        } else if c == '\t' {
+            if !last_tab {
+                out.push('\t');
+                last_tab = true;
+            }
+            last_space = false;
+        } else {
+            out.push(c);
+            last_space = false;
+            last_tab = false;
+        }
+    }
+    out
+}
+
 /// Parse `CATEGORIES` properties into a JSCalendar keywords set.
 ///
-/// Split comma-separated values, trim whitespace, and discard empty entries.
+/// Split comma-separated values, trim and normalize whitespace, and discard empty entries.
 /// Return `None` when no keywords exist.
 pub fn read_keywords(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = component_entries(vevent, "CATEGORIES")
         .flat_map(entry_texts)
-        .map(|tag| tag.trim().to_owned())
+        .map(|tag| normalize_keyword(&tag))
         .filter(|tag| !tag.is_empty())
         .map(|tag| (tag, Value::Bool(true)))
         .collect();
@@ -3230,6 +3277,7 @@ pub fn stated_duration(value: &str) -> Option<String> {
     let mut rest = value.strip_prefix(['P', 'p'])?;
     let mut out = String::from("P");
     let mut measured = false;
+    let mut in_time = false;
     let mut time_part = false;
     let mut has_non_zero = false;
     for unit in ['W', 'D', 'T', 'H', 'M', 'S'] {
@@ -3239,7 +3287,11 @@ pub fn stated_duration(value: &str) -> Option<String> {
                 rest = after;
                 measured = false;
                 time_part = true;
+                in_time = true;
             }
+            continue;
+        }
+        if matches!(unit, 'H' | 'M' | 'S') && !in_time {
             continue;
         }
         let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();

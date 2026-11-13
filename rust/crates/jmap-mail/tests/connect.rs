@@ -294,6 +294,31 @@ fn a_401_on_a_bearer_token_reclassifies_to_the_same_oauth2_failure_a_fetch_would
     );
 }
 
+/// `StoreError::Unauthenticated` (the Finding 12 replacement of a 401, see
+/// that variant's own doc) is the shape a server like Stalwart actually
+/// gives a bad bearer token: an anonymous 200, never a 401. It must
+/// reclassify exactly as a real 401 does, for the same reason.
+///
+/// Without this, a server that never sends 401 forces a bearer-token
+/// account's credentials prompter into its REJECTED-retry path (the
+/// consent window and discarded refresh token `reclassify_oauth2_rejection`
+/// exists to avoid) on every token the server did not recognise.
+#[test]
+fn an_anonymous_session_on_a_bearer_token_is_also_reclassified() {
+    let error = StoreError::Unauthenticated;
+    assert_eq!(error.authentication_result(), CAMEL_AUTHENTICATION_REJECTED);
+
+    let reclassified = error.reclassify_oauth2_rejection();
+    assert!(
+        matches!(reclassified, StoreError::OAuth2(_)),
+        "expected OAuth2, got {reclassified}"
+    );
+    assert_eq!(
+        reclassified.authentication_result(),
+        CAMEL_AUTHENTICATION_ERROR
+    );
+}
+
 /// Reclassification is narrow. A `Client` failure that is not a 401 passes
 /// through unchanged. `only_a_401_makes_camel_ask_for_the_password_again`
 /// already pins this shape as `ERROR` regardless.

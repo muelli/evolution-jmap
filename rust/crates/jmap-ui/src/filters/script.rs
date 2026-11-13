@@ -81,13 +81,19 @@ pub fn parse_script(text: &str) -> Option<Vec<Rule>> {
 
 /// Loads the rules a server-stored script encodes, in rules mode (D5).
 ///
-/// Parses the script, then generates it again from the parsed rules and
-/// compares the result with `server_text` byte for byte. Returns the rules
-/// only on an exact match; otherwise `None`, meaning the caller shows the
-/// script as plain text, since it was not written by this crate or was
-/// changed since.
+/// Parses the script, checks each rule against [`Rule::validate`], then
+/// generates the script again from the rules and compares the result with
+/// `server_text` byte for byte. Returns the rules only when every rule is
+/// valid and the bytes match exactly; otherwise `None`, meaning the caller
+/// shows the script as plain text, since it was not written by this crate
+/// or was changed since. A rule that fails `validate` never reaches
+/// `generate_script`: some of its fields assume a valid rule and panic
+/// otherwise, and a hostile or hand-edited script can set them.
 pub fn load(server_text: &str, has_mailboxid: bool) -> Option<Vec<Rule>> {
     let rules = parse_script(server_text)?;
+    if rules.iter().any(|rule| rule.validate().is_err()) {
+        return None;
+    }
     (generate_script(&rules, has_mailboxid) == server_text).then_some(rules)
 }
 
@@ -603,5 +609,22 @@ mod tests {
         assert!(parse_script(&script).is_some());
         // ...but regenerating does not reproduce the edited bytes.
         assert_eq!(load(&script, false), None);
+    }
+
+    #[test]
+    fn a_rule_that_fails_validate_does_not_panic() {
+        // A server or a hand edit can write a `# rule` line whose JSON
+        // parses but whose fields `Rule::validate` would refuse, here a
+        // `Size` condition with `Contains`. `condition_test` assumes
+        // `validate` already ran, so `load` must reject the rule itself.
+        let text = format!(
+            "{HEADER_LINE_1}\n{HEADER_LINE_2}\n\n\
+             # rule {{\"name\":\"x\",\"enabled\":true,\"combine\":\"All\",\
+             \"conditions\":[{{\"field\":\"Size\",\"op\":\"Contains\",\"value\":\"1\"}}],\
+             \"actions\":[\"Discard\"],\"stop\":false}}\n"
+        );
+        let result = std::panic::catch_unwind(|| load(&text, false));
+        assert!(result.is_ok(), "load panicked instead of returning None");
+        assert_eq!(result.unwrap(), None);
     }
 }

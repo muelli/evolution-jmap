@@ -27,11 +27,32 @@ const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
 
 /// Percent-encodes a value for substitution into a URL template.
 ///
-/// Unreserved characters pass through unchanged.
+/// Unreserved characters pass through unchanged, except standalone `.` and `..`
+/// values which become `%2E` and `%2E%2E` so they never form dot-segments.
 /// Other bytes become uppercase hex escapes per RFC 3986 section 2.1.
 /// The encoder encodes multi-byte UTF-8 octets individually.
 pub(crate) fn encode_template_value(value: &str) -> String {
-    utf8_percent_encode(value, UNRESERVED).to_string()
+    match value {
+        "." => "%2E".to_owned(),
+        ".." => "%2E%2E".to_owned(),
+        _ => utf8_percent_encode(value, UNRESERVED).to_string(),
+    }
+}
+
+/// Validates an SRV target host and port before interpolating them into an `https://` origin.
+pub(crate) fn valid_srv_target(host: &str, port: u16) -> Option<(&str, u16)> {
+    if port == 0 {
+        return None;
+    }
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let valid = !host.is_empty()
+        && !host.starts_with('.')
+        && !host.starts_with('-')
+        && !host.contains("..")
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    valid.then_some((host, port))
 }
 
 /// Replaces `url`'s scheme and authority with `origin`'s, keeping path and query untouched.
@@ -40,17 +61,28 @@ pub(crate) fn encode_template_value(value: &str) -> String {
 /// A session document defines authoritative paths for endpoints.
 /// Reverse proxies or NAT boundaries may require connecting through an alternate origin.
 pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
-    let path_and_beyond = match url.find("://") {
+    if url.is_empty() {
+        return String::new();
+    }
+    let base = origin.trim_end_matches('/');
+    match url.find("://") {
         Some(scheme_end) => {
             let after_scheme = scheme_end + 3;
-            match url[after_scheme..].find('/') {
-                Some(slash) => &url[after_scheme + slash..],
-                None => "",
+            match url[after_scheme..].find(['/', '?', '#', '\\']) {
+                Some(pos) => {
+                    let tail = &url[after_scheme + pos..];
+                    if tail.starts_with('/') {
+                        format!("{base}{tail}")
+                    } else {
+                        format!("{base}/{tail}")
+                    }
+                }
+                None => base.to_owned(),
             }
         }
-        None => url,
-    };
-    format!("{}{path_and_beyond}", origin.trim_end_matches('/'))
+        None if url.starts_with('/') => format!("{base}{url}"),
+        None => format!("{base}/{url}"),
+    }
 }
 
 /// The scheme, host and port of `url`, in lower case, with no user part, no
@@ -62,7 +94,7 @@ pub fn origin(url: &str) -> Cow<'_, str> {
     };
     let scheme = &url[..scheme_end];
     let after_scheme = scheme_end + 3;
-    let authority_end = match url[after_scheme..].find(['/', '?', '#']) {
+    let authority_end = match url[after_scheme..].find(['/', '?', '#', '\\']) {
         Some(pos) => after_scheme + pos,
         None => url.len(),
     };
@@ -211,10 +243,27 @@ pub(crate) fn may_carry_credentials(session_url: &str, endpoint: &str) -> bool {
         || (!on_tls(session_url) && same_origin(session_url, endpoint))
 }
 
+/// Whether `url` starts with an RFC 3986 URI scheme (`ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"`).
+fn has_uri_scheme(url: &str) -> bool {
+    let head = match url.find(['/', '?', '#']) {
+        Some(pos) => &url[..pos],
+        None => url,
+    };
+    let Some((scheme, _)) = head.split_once(':') else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
 /// Resolves a redirect location against the current URL.
 pub(crate) fn resolve_redirect(current_url: &str, location: &str) -> Result<String, String> {
     if split_http_scheme(location).is_some() {
         return Ok(location.to_string());
+    }
+    if has_uri_scheme(location) {
+        return Err(format!("unsupported redirect scheme in {location}"));
     }
     let scheme_end = current_url
         .find("://")
@@ -318,7 +367,47 @@ mod tests {
         assert_eq!(encode_template_value("a/b"), "a%2Fb");
         assert_eq!(encode_template_value("a b"), "a%20b");
         assert_eq!(encode_template_value("a%b"), "a%25b");
-        assert_eq!(encode_template_value(".."), "..");
+        assert_eq!(encode_template_value("."), "%2E");
+        assert_eq!(encode_template_value(".."), "%2E%2E");
+    }
+
+    #[test]
+    fn origin_and_same_origin_stop_authority_at_backslash() {
+        assert_eq!(
+            origin("https://evil.example\\@jmap.example.com/api"),
+            "https://evil.example"
+        );
+        assert!(!same_origin(
+            "https://jmap.example.com/.well-known/jmap",
+            "https://evil.example\\@jmap.example.com/api"
+        ));
+    }
+
+    #[test]
+    fn rebase_origin_keeps_empty_url_and_prevents_authority_rewrite() {
+        assert_eq!(rebase_origin("", "https://jmap.example.com"), "");
+        assert_eq!(
+            rebase_origin("@evil.example.com/jmap", "https://jmap.example.com"),
+            "https://jmap.example.com/@evil.example.com/jmap"
+        );
+        assert_eq!(
+            rebase_origin(".evil.example.com/jmap", "https://jmap.example.com"),
+            "https://jmap.example.com/.evil.example.com/jmap"
+        );
+        assert_eq!(
+            rebase_origin(
+                "https://internal.example?foo=1/bar",
+                "https://jmap.example.com"
+            ),
+            "https://jmap.example.com/?foo=1/bar"
+        );
+    }
+
+    #[test]
+    fn resolve_redirect_refuses_non_http_schemes() {
+        assert!(resolve_redirect("https://jmap.example.com/s", "file:///etc/passwd").is_err());
+        assert!(resolve_redirect("https://jmap.example.com/s", "ftp://evil.example/a").is_err());
+        assert!(resolve_redirect("https://jmap.example.com/s", "javascript:alert(1)").is_err());
     }
 
     #[test]

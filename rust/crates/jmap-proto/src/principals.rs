@@ -139,6 +139,9 @@ impl Principal {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PrincipalQueryFilter {
+    /// Match principals associated with any of these account ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_ids: Option<Vec<Id>>,
     /// Match principals whose name contains this substring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -148,9 +151,24 @@ pub struct PrincipalQueryFilter {
     /// Match principals against this free text, across multiple properties.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Match principals of this type.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub principal_type: Option<String>,
+    /// Match principals with this IANA time zone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    /// Server- or draft-defined properties this type does not name yet.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl PrincipalQueryFilter {
+    /// Match principals associated with any of these account ids.
+    pub fn account_ids(mut self, ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.account_ids = Some(ids.into_iter().map(Into::into).collect());
+        self
+    }
+
     /// Create a filter that matches on email alone.
     pub fn email(email: impl Into<String>) -> Self {
         Self {
@@ -168,6 +186,24 @@ impl PrincipalQueryFilter {
     /// Set the free text to match.
     pub fn text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
+        self
+    }
+
+    /// Set the principal type to match.
+    pub fn principal_type(mut self, principal_type: impl Into<String>) -> Self {
+        self.principal_type = Some(principal_type.into());
+        self
+    }
+
+    /// Set the time zone to match.
+    pub fn time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    /// Set extra properties this type does not name yet.
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }
@@ -425,6 +461,9 @@ pub struct ShareNotificationQueryFilter {
     /// [`share_notification_object_type`] constants.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_type: Option<String>,
+    /// Match notifications for this object account id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_account_id: Option<Id>,
     /// Server- or draft-defined properties this type does not name yet.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -454,6 +493,12 @@ impl ShareNotificationQueryFilter {
         self
     }
 
+    /// Set the object account id to match.
+    pub fn with_object_account_id(mut self, object_account_id: impl Into<Id>) -> Self {
+        self.object_account_id = Some(object_account_id.into());
+        self
+    }
+
     /// Set the draft-defined properties this type does not name yet.
     pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
         self.extra = extra;
@@ -466,6 +511,9 @@ impl ShareNotificationQueryFilter {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PrincipalsCapability {
+    /// The id of the principal that corresponds to the user accessing the account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_user_principal_id: Option<Id>,
     /// The largest number of principal ids the server accepts in one
     /// `Principal/get` call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -479,6 +527,12 @@ impl PrincipalsCapability {
     /// Create a `PrincipalsCapability` with every field unset.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the current user principal id.
+    pub fn with_current_user_principal_id(mut self, id: impl Into<Id>) -> Self {
+        self.current_user_principal_id = Some(id.into());
+        self
     }
 
     /// Set the largest accepted number of principal ids per `Principal/get`.

@@ -45,6 +45,7 @@ fn mailbox(id: Id) -> FolderInfo {
         unread: 0,
         subscribed: true,
         may_add_items: None,
+        account_id: None,
         children: Vec::new(),
     }
 }

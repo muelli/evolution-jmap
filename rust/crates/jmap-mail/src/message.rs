@@ -276,7 +276,10 @@ unsafe fn cached_message(
 ///
 /// `folder` must point at a live `CamelFolder`, and `message_uid` must be a live
 /// NUL-terminated string.
-unsafe fn listed_size(folder: *mut CamelFolder, message_uid: *const gchar) -> Option<u32> {
+pub(crate) unsafe fn listed_size(
+    folder: *mut CamelFolder,
+    message_uid: *const gchar,
+) -> Option<u32> {
     // SAFETY: the contract above. The summary is borrowed from the folder.
     // `summary_get` returns a reference that this function owns, and `info`
     // releases it at the end of the scope.

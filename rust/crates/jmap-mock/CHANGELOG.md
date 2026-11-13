@@ -13,6 +13,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- `EmailSeed::html_body` and `bodyIsHtml` in the `--seed` JSON, so a seeded
+  message can carry an HTML body instead of always `text/plain`. (`208b0b74`)
 - Publication metadata in `Cargo.toml`: repository, readme, documentation URL,
   keywords, and categories.
 - Crate `README.md` with mode overview and `jmap-mockd` usage from shell and Python.

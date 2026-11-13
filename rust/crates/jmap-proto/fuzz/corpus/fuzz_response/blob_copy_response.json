@@ -1,0 +1,12 @@
+{
+  "fromAccountId": "acc1",
+  "accountId": "acc2",
+  "copied": {
+    "blob1": "new-blob1"
+  },
+  "notCopied": {
+    "blob2": {
+      "type": "notFound"
+    }
+  }
+}

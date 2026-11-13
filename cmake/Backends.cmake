@@ -128,3 +128,13 @@ add_cargo_cdylib(jmap_config_module
 	SYMBOLS e_module_load e_module_unload
 	VERIFY_DESTINATION_FROM evolution-shell-3.0 moduledir
 )
+
+# The Server Filters page's syntax-highlighting language (item 171a step 3).
+# GtkSourceView finds a language definition under this fixed per-version
+# convention, not a pkg-config variable (gtksourceview-4.pc exposes none):
+# confirmed by reading the installed package's own layout. No ".0" suffix,
+# matching the pkg-config module name itself (see GTKSOURCEVIEW above).
+install(FILES ${CMAKE_SOURCE_DIR}/rust/crates/jmap-ui/sieve.lang
+	DESTINATION ${CMAKE_INSTALL_PREFIX}/share/gtksourceview-4/language-specs
+	COMPONENT config-module
+)

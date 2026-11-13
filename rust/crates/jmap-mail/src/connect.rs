@@ -333,11 +333,17 @@ impl StoreError {
     /// possible causes as a *failure to get one*. Thus it gets the same answer:
     /// report it, and do not discard the token.
     ///
+    /// [`Self::Unauthenticated`] gets the same treatment, for the same reason:
+    /// its own doc already marks it "the same result as a real 401", for the
+    /// server that gives an anonymous session instead of one. A bearer token
+    /// that server refuses must not look different from a 401 one refuses.
+    ///
     /// [`oauth2::uses_oauth2`]: crate::oauth2::uses_oauth2
     /// [`is_wrong_password`]: jmap_backend_core::connect::is_wrong_password
     pub fn reclassify_oauth2_rejection(self) -> Self {
         match self {
             Self::Client(error) if is_wrong_password(&error) => Self::OAuth2(error.to_string()),
+            Self::Unauthenticated => Self::OAuth2(Self::Unauthenticated.to_string()),
             other => other,
         }
     }

@@ -1,0 +1,32 @@
+{
+  "accountId": "acc1",
+  "oldState": "state-99",
+  "newState": "state-100",
+  "created": {
+    "c1": {
+      "id": "new1",
+      "blobId": "blob1"
+    }
+  },
+  "updated": {
+    "id1": null
+  },
+  "destroyed": ["id2"],
+  "notCreated": {
+    "c2": {
+      "type": "invalidProperties",
+      "description": "missing field",
+      "properties": ["name"]
+    }
+  },
+  "notUpdated": {
+    "id3": {
+      "type": "notFound"
+    }
+  },
+  "notDestroyed": {
+    "id4": {
+      "type": "forbidden"
+    }
+  }
+}

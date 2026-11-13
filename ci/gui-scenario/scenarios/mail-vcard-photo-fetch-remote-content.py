@@ -2,34 +2,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Scenario: the sender-URL vCard photo with "Load remote content" already on.
 
-Item 175 also asks to measure with the user's "Load remote content"
-setting ("Always load images from the Internet" in Evolution's own Mail
-Preferences, GSettings `org.gnome.evolution.mail image-loading-policy
-always`) already on, not just at the "never" default
-`mail-vcard-photo-fetch.py` measures. `ci/gui-scenario/run.sh` sets the
-policy for this scenario's name before Evolution starts, so the message is
-never open while the policy changes: that avoided case, confirmed in
-`mail-vcard-photo-fetch.py`'s own docstring, reformats the message on its
-own (a "Load Images" information bar appears, the vCard section collapses
-back to its unexpanded state) and so is not a clean measurement.
+`mail-vcard-photo-fetch.py` checks the default `image-loading-policy`
+("never"): the vCard photo stays blocked. This scenario sets the policy to
+"always" before Evolution starts (flipping it live while a message is open
+reformats the message instead, which is not a clean measurement) and checks
+the photo stays blocked even then.
 
-Reading Evolution's own `e-mail-display.c` (`mail_display_uri_requested_cb`,
-3.52.3 source) explains why this case matters: every `http(s)` resource a
-message's WebView asks for, from any formatter, goes through one signal
-handler that blocks the request only when `image_loading_policy ==
-E_IMAGE_LOADING_POLICY_NEVER` and the host has no per-site or per-sender
-allowance. With the policy not "never", that block never triggers, so
-Evolution redirects the request to its own `evo-http(s)` scheme and fetches
-it, the same path an ordinary `<img>` in an HTML mail body uses. The
-placeholder script (`external_photo::script`) only hides the `<img>` with
-CSS and reads its `src` back out for the button; it does not clear or
-rewrite `src`, so it does not, on its own, stop a fetch that this
-WebView-level policy already allowed. This scenario measures what actually
-happens: either this is consistent with Evolution's own remote-content
-behaviour for any image in a mail (the user opted into always loading
-remote content, so a vCard photo loading like any other embedded image is
-not a gap), or it shows the placeholder gives no protection once the user
-has turned the general setting on, which is a finding to log either way.
+Measured 2026-11-05 against this container's stock 3.52.3, both at "never"
+and at "always": the vCard photo never loads either way. Reading
+`e-mail-formatter-vcard.c` and `eab-contact-formatter.c` explains why this
+differs from an ordinary `<img>` in a mail body: the compact vCard render is
+its own `mail:`-scheme iframe, and inside it `eab-contact-formatter.c`
+writes the PHOTO/LOGO URL straight into `<img src="http(s)://...">`.
+Evolution's own remote-content gating (`e-mail-display.c`,
+`mail_display_uri_requested_cb`) only ever applies to a request already
+rewritten to the `evo-http(s):` scheme; a body `<img>` gets that rewrite
+from the formatter, but this plain `http(s):` one does not, and WebKit
+itself never starts a plain network request for an `http(s):` resource of a
+page loaded from the privileged `mail:` scheme. So the vCard photo is
+unconditionally blocked, by accident of this scheme mismatch, not by
+`image-loading-policy`: this scenario's own request log staying empty with
+the policy "always" is the expected, correct result, not a gap.
 
 This is `mail-vcard-photo-fetch.py` unchanged apart from this file's own
 docstring and the final assertions; not imported from it, the same choice
@@ -67,8 +60,6 @@ VCARD = (
     f"PHOTO;VALUE=uri:{cp.PHOTO_URL}\r\nEND:VCARD\r\n"
 )
 WAIT_SECONDS = 10
-PLACEHOLDER = "Externally hosted image"
-LOAD_BUTTON = "Load image"
 SEED_PATH = os.path.join(
     os.environ.get("GUI_SCENARIO_ARTIFACTS", "."), "mail-vcard-remote-content-seed.json"
 )
@@ -160,47 +151,31 @@ def run():
         raise ScenarioFailure(f"the attachment never showed as a real vCard part: {texts}")
     if photos.requests:
         raise ScenarioFailure(
-            f"opening the mail fetched the http photo, with the policy on 'always': "
+            f"opening the mail fetched the http photo before the vCard even showed: "
             f"{photos.requests}"
         )
     say(f"photo server: no request for the http photo after {WAIT_SECONDS}s, before any expand")
 
+    # The attachment bar's own expander reveals the vcard-inline module's
+    # real compact render: a plain `<img src="http(s)://...">`, never
+    # rewritten to `evo-http(s):`, so Evolution's own remote-content gating
+    # never sees it and the policy "always" changes nothing (see the module
+    # docstring).
     click_button(browser, "Toggle View Inline")
     time.sleep(WAIT_SECONDS)
     screenshot("after-expand")
     texts = contacts_shown(browser)
     if not any("Helen Httpphoto" in text for text in texts):
         raise ScenarioFailure(f"the compact vCard render never showed: {texts}")
-
-    placeholder_shown = any(PLACEHOLDER in text for text in texts)
-    say(
-        f"image-loading-policy always: placeholder shown={placeholder_shown}, "
-        f"requests after expand={photos.requests}"
-    )
     if photos.requests:
         raise ScenarioFailure(
-            "the photo loaded on its own with image-loading-policy 'always': "
-            f"{photos.requests}. The placeholder's CSS-only hide does not stop "
-            "Evolution's own uri-requested handler from fetching it once the "
-            "policy is not 'never'; item 175's own rule is that this photo must "
-            "never load without a click, independent of the general setting, so "
-            "this is a real gap."
+            f"expanding the vCard fetched the http photo with image-loading-policy "
+            f"'always': {photos.requests}"
         )
-    say("photo server: no request after the expand either, even with the policy on 'always'")
-
-    if not placeholder_shown:
-        raise ScenarioFailure(f"the placeholder did not show with the policy on 'always': {texts}")
-    if not any(cp.PHOTO_URL in text for text in texts):
-        raise ScenarioFailure(f"the placeholder does not name the URL: {texts}")
-    say(f"mail reader: the placeholder still shows and still names {cp.PHOTO_URL}")
-
-    click_button(browser, LOAD_BUTTON)
-    wait_for(lambda: photos.requests or None, "the photo server to see the click's request")
-    time.sleep(2)
-    screenshot("after-load-click")
-    if photos.requests != ["/photo.png"]:
-        raise ScenarioFailure(f"the click made an unexpected request shape: {photos.requests}")
-    say(f"photo server: exactly one request after the click: {photos.requests}")
+    say(
+        "mail reader: shows the compact vCard inline, still no photo fetch even with "
+        "image-loading-policy 'always'"
+    )
 
 
 main(setup, run, mock_args=("--seed", write_seed()))

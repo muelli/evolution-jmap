@@ -245,3 +245,50 @@ fn a_store_that_cannot_reconnect_serves_its_cached_folder_tree() {
         "a dead server must not look connected"
     );
 }
+
+/// Security audit item 167(a), row S7-3: the 176(b) folder-tree cache file
+/// and its directory must not be world- or group-readable, matching
+/// Camel's own `camel_data_cache` directories (0700) and files (0600).
+///
+/// On a real account, `CamelStore`'s own `GInitable::init` already makes the
+/// directory at 0700 (`store_initable_init`, `S_IRWXU`) before this test's
+/// `user-data-dir` and `user-cache-dir` properties, equal in this harness,
+/// ever let `persist_folders_to_disk` see an empty directory. Loosening the
+/// permissions here first, the way a directory inherited from an older
+/// release or a stray `umask` could arrive, proves `persist_folders_to_disk`
+/// restores 0700 on its own rather than relying on that earlier call.
+#[test]
+fn the_folder_tree_cache_is_not_readable_by_other_users() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = MockServer::builder().start();
+    let account = Account::open();
+    account.connect(common::sync_against(&server));
+
+    let cache_dir = std::path::PathBuf::from(account.cache_dir());
+    std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o775))
+        .expect("the cache directory exists and is writable");
+
+    account.jmap().folders(0).expect("the initial listing");
+
+    let dir_mode = std::fs::metadata(&cache_dir)
+        .expect("the cache directory exists")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        dir_mode, 0o700,
+        "the cache directory must not be group- or world-accessible"
+    );
+
+    let cache_file = cache_dir.join("folder-tree.json");
+    let file_mode = std::fs::metadata(&cache_file)
+        .expect("the folder-tree cache file exists")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        file_mode, 0o600,
+        "the folder-tree cache file must not be group- or world-readable"
+    );
+}

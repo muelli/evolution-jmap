@@ -63,6 +63,7 @@ use crate::cache::MessageCache;
 #[cfg(camel_folder_search_object)]
 use crate::connect::StoreError;
 use crate::folder_info::c_string;
+use crate::pending_append_cache::PendingAppendCache;
 #[cfg(camel_folder_search_object)]
 use crate::search_sexp;
 use crate::store::{JmapStore, store_type};
@@ -91,6 +92,13 @@ pub struct JmapFolder {
     /// This is not per-folder state. The entries are keyed by JMAP email id in
     /// the *account* directory, so all folders of a message read one file.
     cache: Slot<MessageCache>,
+    /// The not-yet-uploaded bytes of a message [`crate::append`] appended
+    /// while offline, for this account.
+    ///
+    /// [`new_folder`] fills it the same way, and for the same reason, as
+    /// [`Self::cache`]: it lives in the account cache directory, not a
+    /// per-folder one.
+    pending_append_cache: Slot<PendingAppendCache>,
 }
 
 impl JmapFolder {
@@ -106,6 +114,14 @@ impl JmapFolder {
     /// All callers then fetch the message: `None` is not an error.
     pub fn cache(&self) -> Option<&MessageCache> {
         self.cache.get()
+    }
+
+    /// The pending-append byte store of the account, or `None` if this folder
+    /// has none. [`crate::append`] then cannot queue an append made while
+    /// offline, and reports the failure the same way it did before the store
+    /// existed.
+    pub fn pending_append_cache(&self) -> Option<&PendingAppendCache> {
+        self.pending_append_cache.get()
     }
 
     /// The Rust view of a `CamelFolder *` from Camel.
@@ -628,6 +644,11 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
         if let Some(cache) = account_cache(store) {
             (*folder.cast::<JmapFolder>()).cache.init(cache);
         }
+        if let Some(cache) = account_pending_append_cache(store) {
+            (*folder.cast::<JmapFolder>())
+                .pending_append_cache
+                .init(cache);
+        }
         camel_folder_set_flags(folder, flags(mailbox));
         attach_summary(folder);
     }
@@ -636,19 +657,45 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
 }
 
 /// The message cache of the account that `store` is, or `None` if there is
-/// none.
-///
-/// The directory is the one that Camel gives the *service*: the session cache
-/// directory with the account uid below it. Evolution's "empty cache" clears
-/// this directory, and Camel removes it when the user deletes the account. Mail
-/// cached in a different directory stays after the account is deleted.
+/// none. [`account_cache_dir`] names the directory.
 ///
 /// # Safety
 ///
 /// `store` must point at a live `CamelStore`, which is a `CamelService`.
 unsafe fn account_cache(store: *mut CamelStore) -> Option<MessageCache> {
+    // SAFETY: the contract above.
+    MessageCache::open(&unsafe { account_cache_dir(store) }?)
+}
+
+/// The pending-append byte store of the account that `store` is, or `None` if
+/// there is none. Same directory as [`account_cache`]'s own, in a
+/// subdirectory of its own (see [`PendingAppendCache`]'s module docs for why
+/// the two need separate `CamelDataCache` instances).
+///
+/// # Safety
+///
+/// `store` must point at a live `CamelStore`, which is a `CamelService`.
+unsafe fn account_pending_append_cache(store: *mut CamelStore) -> Option<PendingAppendCache> {
+    // SAFETY: the contract above.
+    PendingAppendCache::open(&unsafe { account_cache_dir(store) }?)
+}
+
+/// The account cache directory Camel gives the *service*: the session cache
+/// directory with the account uid below it. Evolution's "empty cache" clears
+/// this directory, and Camel removes it when the user deletes the account.
+/// Data cached in a different directory stays after the account is deleted.
+///
+/// Returned owned, not borrowed: the string Camel gives back belongs to the
+/// service, not to this call, and [`account_cache`] and
+/// [`account_pending_append_cache`] each open their own `CamelDataCache`
+/// after this function has already returned.
+///
+/// # Safety
+///
+/// `store` must point at a live `CamelStore`, which is a `CamelService`.
+unsafe fn account_cache_dir(store: *mut CamelStore) -> Option<String> {
     // SAFETY: the contract above. The string belongs to the service, and this
-    // code only reads it.
+    // code only reads it, into a copy this function owns.
     let directory = unsafe {
         let directory = camel_service_get_user_cache_dir(store.cast::<CamelService>());
         if directory.is_null() {
@@ -659,7 +706,7 @@ unsafe fn account_cache(store: *mut CamelStore) -> Option<MessageCache> {
     // A filesystem path is bytes and is not always UTF-8. A lossy read can
     // point the cache at a different directory, so a non-UTF-8 path gives no
     // cache.
-    MessageCache::open(directory.to_str().ok()?)
+    directory.to_str().ok().map(str::to_owned)
 }
 
 /// How Camel must treat this folder.

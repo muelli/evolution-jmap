@@ -803,18 +803,14 @@ fn a_message_opened_while_online_stays_readable_offline() {
     );
 }
 
-/// ROADMAP item 176(a): "save a draft" while offline. `append_message_sync`
-/// (`jmap-mail/src/append.rs`) fails outright with `StoreError::Disconnected`
-/// when the store reports itself offline: unlike `synchronize_sync`, which
-/// deliberately leaves a flag change queued on the row for the next
-/// synchronisation, nothing here queues the message anywhere. Evolution's own
-/// `em_utils_composer_save_to_drafts_cb` (`em-composer-utils.c`) has no
-/// online check at all, unlike the actual Send path, so a real composer
-/// reaches this vfunc directly while offline. This test confirms the gap
-/// end to end: a draft appended while offline is not saved, and going back
-/// online does not retroactively save it either, unlike a flag change.
+/// ROADMAP item 176(b): "save a draft" while offline. `append_message_sync`
+/// (`jmap-mail/src/append.rs`) queues a message appended while the store
+/// reports itself offline, under a synthetic local uid, instead of failing
+/// outright. This test confirms the fix end to end: a draft appended while
+/// offline is saved and shown at once, and going back online uploads it,
+/// the same way a flag change left queued while offline already does.
 #[test]
-fn a_draft_appended_while_offline_is_not_queued_for_later() {
+fn a_draft_appended_while_offline_is_queued_and_lands_on_reconnect() {
     let client = required_path("JMAP_FUNCTIONAL_MAIL_CLIENT");
     let module = required_path("JMAP_FUNCTIONAL_MAIL_MODULE");
     let urls = required_path("JMAP_FUNCTIONAL_MAIL_URLS");
@@ -874,9 +870,8 @@ fn a_draft_appended_while_offline_is_not_queued_for_later() {
     );
     assert_eq!(
         seen.get("offline-save-draft-appended"),
-        Some(&"0"),
-        "appending a draft while offline unexpectedly succeeded: this \
-         confirms a gap closed, update this test and the offline matrix\n{report}"
+        Some(&"1"),
+        "appending a draft while offline should queue it, not fail\n{report}"
     );
     assert_eq!(
         seen.get("went-online"),
@@ -885,8 +880,8 @@ fn a_draft_appended_while_offline_is_not_queued_for_later() {
     );
     assert_eq!(
         seen.get("drafts-count-after"),
-        Some(&"0"),
-        "the failed draft should not appear in Drafts even after reconnecting\n{report}"
+        Some(&"1"),
+        "the queued draft should appear in Drafts once reconnected\n{report}"
     );
 
     let state = server.state();
@@ -894,9 +889,9 @@ fn a_draft_appended_while_offline_is_not_queued_for_later() {
     let account = state.account(&account_id).expect("the default account");
     assert_eq!(
         account.emails.len(),
-        1,
-        "the mock should still hold only the seeded inbox message, with no \
-         draft ever uploaded\n{report}"
+        2,
+        "the mock should hold the seeded inbox message and the uploaded \
+         draft\n{report}"
     );
 }
 

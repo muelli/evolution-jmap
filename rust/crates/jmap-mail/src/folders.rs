@@ -268,6 +268,7 @@ fn ticked(siblings: &[FolderInfo]) -> Vec<FolderInfo> {
             unread: folder.unread,
             subscribed: folder.subscribed,
             may_add_items: folder.may_add_items,
+            account_id: folder.account_id.clone(),
             children,
         };
         match parent {

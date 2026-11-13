@@ -167,6 +167,35 @@ fn deleting_a_calendar_sets_on_destroy_remove_contents() {
 }
 
 #[test]
+fn deleting_a_calendar_on_a_server_that_rejects_remove_contents_retries_with_remove_events() {
+    // CYRUS-RFC-FINDINGS.md Finding 21: Cyrus's Calendar/set parser rejects
+    // the standard onDestroyRemoveContents argument name outright with
+    // invalidArguments, instead expecting its pre-standardization name,
+    // onDestroyRemoveEvents. The delete must retry with that name rather
+    // than fail the user's Delete action.
+    let server = MockServer::builder()
+        .calendar_destroy_rejects_remove_contents()
+        .start();
+    let client = client(&server);
+    let child = create_collection(&client, &requested(ChildKind::Calendar, "Trips"))
+        .expect("the mock creates calendars");
+
+    delete_collection(
+        &client,
+        &Doomed {
+            kind: ChildKind::Calendar,
+            collection_id: child.collection_id.clone(),
+        },
+    )
+    .expect("the delete retries with onDestroyRemoveEvents and succeeds");
+
+    assert!(
+        !calendar_names(&discovered(&server)).contains(&"Trips".to_owned()),
+        "the calendar is still on the server"
+    );
+}
+
+#[test]
 fn deleting_an_address_book_leaves_a_calendar_of_the_same_id_alone() {
     // Ids are unique per account and type (RFC 8620 §1.2): both get the same id.
     let server = MockServer::builder().start();

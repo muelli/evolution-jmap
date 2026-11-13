@@ -160,20 +160,19 @@ impl Fanout {
 
         // Shared children come after the user's own, one account at a time,
         // in the order of `Fanout::shared`.
-        let shared = self.shared.iter().flat_map(|listing| {
-            [ChildKind::AddressBook, ChildKind::Calendar]
-                .into_iter()
-                .filter(|kind| self.parts.wants(*kind))
-                .flat_map(move |kind| {
-                    listing
-                        .listing(kind)
-                        .unwrap_or_default()
-                        .iter()
-                        .map(move |resource| {
-                            Child::for_shared_resource(kind, &listing.account, resource)
-                        })
-                })
-        });
+        let shared =
+            self.shared.iter().flat_map(|listing| {
+                [ChildKind::AddressBook, ChildKind::Calendar]
+                    .into_iter()
+                    .filter(|kind| self.parts.wants(*kind))
+                    .flat_map(move |kind| {
+                        listing.listing(kind).unwrap_or_default().iter().filter_map(
+                            move |resource| {
+                                Child::for_shared_resource(kind, &listing.account, resource)
+                            },
+                        )
+                    })
+            });
 
         let mut seen: Vec<String> = Vec::new();
         books
@@ -199,8 +198,28 @@ impl Child {
     /// give a created source that differs from the discovered one in a field
     /// that nothing compares. These fields decide if EDS keeps the cache file,
     /// and which server the child uses.
-    pub fn for_resource(kind: ChildKind, account: &ServiceAccount, resource: &Resource) -> Self {
-        Self {
+    ///
+    /// `None` when the account or the collection id holds a `/`. The identity
+    /// this code writes for a shared child is `<accountId>/<collectionId>`,
+    /// told apart from a primary child's bare id by splitting on that one
+    /// character (see [`split_shared_identity`]). A server-sent id with a
+    /// `/` in it could make a primary child parse back as shared, or a
+    /// shared child parse back as primary, routing a later sync or delete
+    /// to the wrong account. Refusing the child is safer than guessing.
+    pub fn for_resource(
+        kind: ChildKind,
+        account: &ServiceAccount,
+        resource: &Resource,
+    ) -> Option<Self> {
+        if account.id.as_str().contains('/') || resource.id.as_str().contains('/') {
+            tracing::warn!(
+                account_id = %account.id,
+                collection_id = %resource.id,
+                "ignoring a collection whose account or collection id contains '/'"
+            );
+            return None;
+        }
+        Some(Self {
             resource_id: kind.resource_id(&resource.id),
             kind,
             display_name: resource.name.clone(),
@@ -213,7 +232,7 @@ impl Child {
             read_only: account.read_only || resource.writable == Some(false),
             // Absent `mayDelete` (`deletable` is `None`) gives deletable.
             remote_deletable: resource.deletable.unwrap_or(true),
-        }
+        })
     }
 }
 
@@ -228,17 +247,22 @@ impl Child {
     /// collection of the owner for all users. Thus, when the server gives no
     /// rights, the permissive default of the user's own collections does not
     /// apply.
+    ///
+    /// `None` under the same rule as [`Child::for_resource`]: an account or
+    /// collection id with a `/` in it cannot be told apart from a primary
+    /// child's bare id.
     pub fn for_shared_resource(
         kind: ChildKind,
         account: &ServiceAccount,
         resource: &Resource,
-    ) -> Self {
-        Self {
+    ) -> Option<Self> {
+        let base = Self::for_resource(kind, account, resource)?;
+        Some(Self {
             resource_id: kind.shared_resource_id(&account.id, &resource.id),
             display_name: format!("{}: {}", plain(&account.name), plain(&resource.name)),
             remote_deletable: resource.deletable == Some(true),
-            ..Self::for_resource(kind, account, resource)
-        }
+            ..base
+        })
     }
 
     /// The `[Resource] Identity` of this child: the resource id without its
@@ -299,7 +323,7 @@ fn children<'a>(
 ) -> impl Iterator<Item = Child> + 'a {
     resources
         .iter()
-        .map(move |resource| Child::for_resource(kind, account, resource))
+        .filter_map(move |resource| Child::for_resource(kind, account, resource))
 }
 
 #[cfg(test)]
@@ -730,6 +754,102 @@ mod tests {
         assert_eq!(split_shared_identity("A2/C1"), Some(("A2", "C1")));
         for whole in ["C1", "/C1", "A2/", "A/B/C", ""] {
             assert_eq!(split_shared_identity(whole), None, "{whole:?}");
+        }
+    }
+
+    #[test]
+    fn for_resource_and_for_shared_resource_refuse_a_slash_in_either_id() {
+        assert!(
+            Child::for_resource(ChildKind::Calendar, &account("S1"), &resource("C1/x", "n"))
+                .is_none()
+        );
+        assert!(
+            Child::for_resource(ChildKind::Calendar, &account("S1/x"), &resource("C1", "n"))
+                .is_none()
+        );
+        assert!(
+            Child::for_resource(ChildKind::Calendar, &account("S1"), &resource("C1", "n"))
+                .is_some()
+        );
+
+        assert!(
+            Child::for_shared_resource(
+                ChildKind::Calendar,
+                &account("S1"),
+                &resource("sub/C1", "n")
+            )
+            .is_none()
+        );
+        assert!(
+            Child::for_shared_resource(ChildKind::Calendar, &account("S1/x"), &resource("C1", "n"))
+                .is_none()
+        );
+        assert!(
+            Child::for_shared_resource(ChildKind::Calendar, &account("S1"), &resource("C1", "n"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_slash_in_a_collection_or_account_id_drops_the_child_instead_of_flipping_its_identity() {
+        let fanout = Fanout {
+            parts: Parts::ALL,
+            layout: CollectionLayout {
+                mail: None,
+                contacts: None,
+                calendars: Some(account("A1")),
+            },
+            address_books: Vec::new(),
+            calendars: vec![
+                resource("S1/C1", "Personal-looking"),
+                resource("C2", "Normal"),
+            ],
+            shared: vec![shared(
+                "S1",
+                None,
+                Some(vec![
+                    resource("sub/C1", "Shared-with-slash"),
+                    resource("C3", "Normal-shared"),
+                ]),
+            )],
+        };
+
+        let children = fanout.children();
+
+        // The malformed resources never become a child at all: there is no
+        // safe identity to give them.
+        assert!(
+            !children
+                .iter()
+                .any(|child| child.display_name.contains("looking")
+                    || child.display_name.contains("slash")),
+            "{children:?}"
+        );
+        // The clean resources are unaffected.
+        assert!(
+            children
+                .iter()
+                .any(|child| child.collection_id.as_str() == "C2")
+        );
+        assert!(
+            children
+                .iter()
+                .any(|child| child.collection_id.as_str() == "C3")
+        );
+        // No child's identity ever flips primary and shared.
+        for child in &children {
+            assert!(!child.account_id.as_str().contains('/'), "{child:?}");
+            assert!(!child.collection_id.as_str().contains('/'), "{child:?}");
+            let parsed = split_shared_identity(child.identity());
+            if child.account_id == Id::new("A1") {
+                assert_eq!(parsed, None, "{child:?}");
+            } else {
+                assert_eq!(
+                    parsed,
+                    Some((child.account_id.as_str(), child.collection_id.as_str())),
+                    "{child:?}"
+                );
+            }
         }
     }
 }

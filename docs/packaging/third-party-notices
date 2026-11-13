@@ -12,7 +12,11 @@ adler2 2.0.1 -- 0BSD OR MIT OR Apache-2.0 -- https://github.com/oyvindln/adler2
 ahash 0.8.12 -- MIT OR Apache-2.0 -- https://github.com/tkaitchuck/ahash
 aho-corasick 1.1.5 -- Unlicense OR MIT -- https://github.com/BurntSushi/aho-corasick
 android_system_properties 0.1.6 -- MIT OR Apache-2.0 -- https://github.com/nical/android_system_properties
+arc-swap 1.9.3 -- MIT OR Apache-2.0 -- https://github.com/vorner/arc-swap
 base64 0.22.1 -- MIT OR Apache-2.0 -- https://github.com/marshallpierce/rust-base64
+bit-set 0.8.0 -- Apache-2.0 OR MIT -- https://github.com/contain-rs/bit-set
+bit-vec 0.8.0 -- Apache-2.0 OR MIT -- https://github.com/contain-rs/bit-vec
+bitflags 2.13.1 -- MIT OR Apache-2.0 -- https://github.com/bitflags/bitflags
 block-buffer 0.10.4 -- MIT OR Apache-2.0 -- https://github.com/RustCrypto/utils
 bumpalo 3.20.3 -- MIT OR Apache-2.0 -- https://github.com/fitzgen/bumpalo
 bytes 1.12.1 -- MIT -- https://github.com/tokio-rs/bytes
@@ -28,11 +32,14 @@ crypto-common 0.1.7 -- MIT OR Apache-2.0 -- https://github.com/RustCrypto/traits
 digest 0.10.7 -- MIT OR Apache-2.0 -- https://github.com/RustCrypto/traits
 encoding_rs 0.8.44 -- (Apache-2.0 OR MIT) AND BSD-3-Clause -- https://github.com/hsivonen/encoding_rs
 equivalent 1.0.2 -- Apache-2.0 OR MIT -- https://github.com/indexmap-rs/equivalent
+errno 0.3.14 -- MIT OR Apache-2.0 -- https://github.com/lambda-fairy/rust-errno
+fancy-regex 0.19.2 -- MIT -- https://github.com/fancy-regex/fancy-regex
 flate2 1.1.9 -- MIT OR Apache-2.0 -- https://github.com/rust-lang/flate2-rs
 futures-core 0.3.33 -- MIT OR Apache-2.0 -- https://github.com/rust-lang/futures-rs
 futures-task 0.3.33 -- MIT OR Apache-2.0 -- https://github.com/rust-lang/futures-rs
 futures-util 0.3.33 -- MIT OR Apache-2.0 -- https://github.com/rust-lang/futures-rs
 generic-array 0.14.7 -- MIT -- https://github.com/fizyk20/generic-array.git
+gethostname 1.1.0 -- Apache-2.0 -- https://codeberg.org/swsnr/gethostname.rs.git
 getrandom 0.2.17 -- MIT OR Apache-2.0 -- https://github.com/rust-random/getrandom
 getrandom 0.3.4 -- MIT OR Apache-2.0 -- https://github.com/rust-random/getrandom
 gio-sys 0.22.8 -- MIT -- https://github.com/gtk-rs/gtk-rs-core
@@ -49,7 +56,9 @@ itoa 1.0.18 -- MIT OR Apache-2.0 -- https://github.com/dtolnay/itoa
 js-sys 0.3.104 -- MIT OR Apache-2.0 -- https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys
 lazy_static 1.5.0 -- MIT OR Apache-2.0 -- https://github.com/rust-lang-nursery/lazy-static.rs
 libc 0.2.189 -- MIT OR Apache-2.0 -- https://github.com/rust-lang/libc
+linux-raw-sys 0.12.1 -- Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT -- https://github.com/sunfishcode/linux-raw-sys
 log 0.4.33 -- MIT OR Apache-2.0 -- https://github.com/rust-lang/log
+mail-builder 0.5.0 -- Apache-2.0 OR MIT -- https://github.com/stalwartlabs/mail-builder
 mail-builder 1.0.0 -- Apache-2.0 OR MIT -- https://github.com/stalwartlabs/mail-builder
 mail-parser 0.11.5 -- Apache-2.0 OR MIT -- https://github.com/stalwartlabs/mail-parser
 matchers 0.2.0 -- MIT -- https://github.com/hawkw/matchers
@@ -69,9 +78,11 @@ r-efi 5.3.0 -- MIT OR Apache-2.0 OR LGPL-2.1-or-later -- https://github.com/r-ef
 regex-automata 0.4.18 -- MIT OR Apache-2.0 -- https://github.com/rust-lang/regex
 regex-syntax 0.8.11 -- MIT OR Apache-2.0 -- https://github.com/rust-lang/regex
 ring 0.17.14 -- Apache-2.0 AND ISC -- https://github.com/briansmith/ring
+rustix 1.1.4 -- Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT -- https://github.com/bytecodealliance/rustix
 rustls 0.23.46 -- Apache-2.0 OR ISC OR MIT -- https://github.com/rustls/rustls
 rustls-pki-types 1.15.1 -- MIT OR Apache-2.0 -- https://github.com/rustls/pki-types
 rustls-webpki 0.103.16 -- ISC -- https://github.com/rustls/webpki
+rustversion 1.0.23 -- MIT OR Apache-2.0 -- https://github.com/dtolnay/rustversion
 scopeguard 1.2.0 -- MIT OR Apache-2.0 -- https://github.com/bluss/scopeguard
 serde 1.0.229 -- MIT OR Apache-2.0 -- https://github.com/serde-rs/serde
 serde_core 1.0.229 -- MIT OR Apache-2.0 -- https://github.com/serde-rs/serde
@@ -79,6 +90,8 @@ serde_derive 1.0.229 -- MIT OR Apache-2.0 -- https://github.com/serde-rs/serde
 serde_json 1.0.151 -- MIT OR Apache-2.0 -- https://github.com/serde-rs/json
 sha2 0.10.9 -- MIT OR Apache-2.0 -- https://github.com/RustCrypto/hashes
 sharded-slab 0.1.7 -- MIT -- https://github.com/hawkw/sharded-slab
+shlex 1.3.0 -- MIT OR Apache-2.0 -- https://github.com/comex/rust-shlex
+sieve-rs 0.7.3 -- AGPL-3.0-only -- https://github.com/stalwartlabs/sieve
 simd-adler32 0.3.10 -- MIT -- https://github.com/mcountryman/simd-adler32
 simdutf8 0.1.5 -- MIT OR Apache-2.0 -- https://github.com/rusticstuff/simdutf8
 siphasher 1.0.3 -- MIT/Apache-2.0 -- https://github.com/jedisct1/rust-siphash

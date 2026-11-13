@@ -339,6 +339,28 @@ fn write(
     outcome
 }
 
+/// What [`activate_now`] answers once its write succeeds.
+pub enum ActivateOutcome {
+    /// The write succeeded, and this reload shows it.
+    Reloaded(Loaded),
+    /// The write succeeded, but the reload after it failed. The activation
+    /// already took effect: the caller must not treat this as a refusal.
+    WrittenReloadFailed(String),
+}
+
+/// Writes `plan` and reloads, for the Activate and Deactivate buttons'
+/// instant apply (item 180(a)): the account editor's OK no longer is the
+/// only place a change reaches the server. A refusal of the write itself is
+/// still an `Err`, so the caller can undo the local activation change it
+/// staged before calling this.
+pub fn activate_now(link: &AccountLink, plan: &SavePlan) -> Result<ActivateOutcome, String> {
+    save(link, plan)?;
+    match load(link) {
+        Ok(loaded) => Ok(ActivateOutcome::Reloaded(loaded)),
+        Err(reason) => Ok(ActivateOutcome::WrittenReloadFailed(reason)),
+    }
+}
+
 /// Sends `request` and checks that every write of `plan` took effect.
 fn write_results(
     link: &AccountLink,
@@ -440,8 +462,8 @@ mod tests {
     use jmap_proto::Id;
 
     use super::{
-        ActivationChange, ActivationTarget, Baseline, SCRIPTS_CHANGED, SavePlan, ScriptWrite,
-        check, folders, load, save, translate,
+        ActivateOutcome, ActivationChange, ActivationTarget, Baseline, SCRIPTS_CHANGED, SavePlan,
+        ScriptWrite, activate_now, check, folders, load, save, translate,
     };
     use crate::link::AccountLink;
     use crate::session_cache::AccountFeatures;
@@ -984,6 +1006,119 @@ mod tests {
 
         assert!(error.contains("broken"), "error names the script: {error}");
         assert!(load(&link).unwrap().scripts.is_empty());
+    }
+
+    #[test]
+    fn activate_now_saves_and_reloads_in_one_call() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+
+        let outcome = activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "evolution-jmap".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
+            },
+        )
+        .unwrap();
+
+        match outcome {
+            ActivateOutcome::Reloaded(loaded) => {
+                assert_eq!(loaded.scripts.len(), 1);
+                assert!(loaded.scripts[0].script.is_active);
+            }
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("the reload must succeed against a live mock server: {reason}")
+            }
+        }
+    }
+
+    #[test]
+    fn activate_now_fails_and_writes_nothing_for_an_invalid_script() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+
+        let outcome = activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "broken".to_owned(),
+                    text: "if true {\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
+            },
+        );
+
+        match outcome {
+            Err(error) => assert!(error.contains("broken"), "error names the script: {error}"),
+            Ok(ActivateOutcome::Reloaded(_)) => panic!("an invalid script must not save"),
+            Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                panic!("an invalid script must not save: {reason}")
+            }
+        }
+        assert!(load(&link).unwrap().scripts.is_empty());
+    }
+
+    #[test]
+    fn activate_now_deactivates_and_reloads_in_one_call() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+
+        activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "evolution-jmap".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
+            },
+        )
+        .unwrap();
+
+        let outcome = activate_now(
+            &link,
+            &SavePlan {
+                writes: Vec::new(),
+                destroys: Vec::new(),
+                activation: ActivationChange::Deactivate,
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
+            },
+        )
+        .unwrap();
+
+        match outcome {
+            ActivateOutcome::Reloaded(loaded) => {
+                assert_eq!(loaded.scripts.len(), 1);
+                assert!(
+                    !loaded.scripts[0].script.is_active,
+                    "the script is still active after a Deactivate plan"
+                );
+            }
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("the reload must succeed against a live mock server: {reason}")
+            }
+        }
     }
 
     #[test]

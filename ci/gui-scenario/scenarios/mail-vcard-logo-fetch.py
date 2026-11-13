@@ -2,22 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Scenario: a vCard attached to a mail with LOGO but no PHOTO.
 
-Item 175 asks to look for any other place a sender-supplied URL could be
-fetched on its own. Reading `eab-contact-formatter.c` (3.52.3) shows both
-`render_title_block` and `render_compact` fall back to `E_CONTACT_LOGO`
-when a vCard carries no `E_CONTACT_PHOTO`, rendering it through the exact
-same `id="__evo-contact-photo"` element and `src` URI shape as PHOTO. A
-vCard attached to a mail is arbitrary sender bytes, not routed through
-this project's own vCard mapping (which drops LOGO on the way out), so a
-sender could attach one with only LOGO set. This scenario is
-`mail-vcard-photo-fetch.py` with LOGO in place of PHOTO and no PHOTO line
-at all, to measure whether the existing click-to-load placeholder
-(`external_photo::mail_script`), keyed on the element's id and attributes
-rather than on which vCard property produced it, already covers this
-case too.
-
-Item 178's own red test lives here too: see `mail-vcard-photo-fetch.py`'s
-docstring for why a forged HTML mail body reaches the same click handler.
+Reading `eab-contact-formatter.c` (3.52.3) shows both `render_title_block`
+and `render_compact` fall back to `E_CONTACT_LOGO` when a vCard carries no
+`E_CONTACT_PHOTO`, rendering it through the exact same
+`id="__evo-contact-photo"` element and `src` URI shape as PHOTO. A vCard
+attached to a mail is arbitrary sender bytes, not routed through this
+project's own vCard mapping (which drops LOGO on the way out), so a sender
+could attach one with only LOGO set. This scenario is
+`mail-vcard-photo-fetch.py` with LOGO in place of PHOTO and no PHOTO line at
+all, to measure whether Evolution's own, stock default-policy blocking
+(item 178) covers this case too.
 """
 
 import json
@@ -50,21 +44,7 @@ VCARD = (
     f"LOGO;VALUE=uri:{cp.PHOTO_URL}\r\nEND:VCARD\r\n"
 )
 WAIT_SECONDS = 10
-PLACEHOLDER = "Externally hosted image"
-LOAD_BUTTON = "Load image"
 SEED_PATH = os.path.join(os.environ.get("GUI_SCENARIO_ARTIFACTS", "."), "mail-vcard-logo-seed.json")
-
-# Item 178: same forged-button check as mail-vcard-photo-fetch.py, see that
-# scenario's docstring for why. The class must match `jmap_ui::
-# external_photo::mail_script::LOAD_CLASS`.
-FORGED_SUBJECT = "A forged load-image button"
-FORGED_LOAD_CLASS = "__jmap-mail-vcard-photo-load"
-EVIL_PATH = "/evil.png"
-EVIL_URL = f"http://127.0.0.1:{cp.PHOTO_PORT}{EVIL_PATH}"
-FORGED_HTML = (
-    "<p>Nothing to see here.</p>"
-    f'<button class="{FORGED_LOAD_CLASS}" value="{EVIL_URL}">{LOAD_BUTTON}</button>'
-)
 
 
 def write_seed():
@@ -98,16 +78,7 @@ def write_seed():
                                 "content": VCARD,
                             }
                         ],
-                    },
-                    {
-                        "mailboxId": "M1",
-                        "from": {"name": "Sender", "email": "sender@example.test"},
-                        "to": [{"name": "Alice", "email": "alice@example.com"}],
-                        "subject": FORGED_SUBJECT,
-                        "textBody": FORGED_HTML,
-                        "bodyIsHtml": True,
-                        "receivedAt": "2026-01-02T03:05:05Z",
-                    },
+                    }
                 ],
             }
         ]
@@ -173,43 +144,14 @@ def run():
     if not any("Helen Httplogo" in text for text in texts):
         raise ScenarioFailure(f"the compact vCard render never showed: {texts}")
     if photos.requests:
-        raise ScenarioFailure(f"expanding the vCard fetched the http logo: {photos.requests}")
-    say("mail reader: shows the compact vCard inline, still no logo fetch")
-
-    if not any(PLACEHOLDER in text for text in texts):
-        raise ScenarioFailure(f"the placeholder never showed for a LOGO-only vCard: {texts}")
-    if not any(cp.PHOTO_URL in text for text in texts):
-        raise ScenarioFailure(f"the placeholder does not name the URL: {texts}")
-    say(f"mail reader: the placeholder names {cp.PHOTO_URL} for the LOGO fallback too")
-
-    click_button(browser, LOAD_BUTTON)
-    wait_for(lambda: photos.requests or None, "the photo server to see the click's request")
-    time.sleep(2)
-    screenshot("after-load-click")
-    if photos.requests != ["/photo.png"]:
-        raise ScenarioFailure(f"the click made an unexpected request shape: {photos.requests}")
-    say(f"photo server: exactly one request after the click: {photos.requests}")
-
-    # Item 178: a sender's own HTML body, not a vCard at all, forges the same
-    # class our placeholder's button uses. This message carries no vCard.
-    select_message(FORGED_SUBJECT)
-    menu_item("Message/Open in New Window")
-    forged = wait_for(lambda: window(FORGED_SUBJECT), "the forged message window")
-    wait_for(
-        lambda: find(forged, "document web", name="Evolution Mail Display"),
-        "the forged message body",
-    )
-    time.sleep(WAIT_SECONDS)
-    screenshot("forged-button-shown")
-    click_button(forged, LOAD_BUTTON)
-    time.sleep(WAIT_SECONDS)
-    screenshot("after-forged-click")
-    if EVIL_PATH in photos.requests:
         raise ScenarioFailure(
-            f"a forged load button in the sender's own HTML body fetched its "
-            f"URL: {photos.requests}"
+            f"expanding the vCard fetched the http logo at the default "
+            f"image-loading-policy: {photos.requests}"
         )
-    say("mail reader: a forged load button in the sender's own HTML body made no request")
+    say(
+        "mail reader: shows the compact vCard inline, still no logo fetch at the "
+        "default image-loading-policy"
+    )
 
 
 main(setup, run, mock_args=("--seed", write_seed()))

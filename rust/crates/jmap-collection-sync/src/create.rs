@@ -179,7 +179,8 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
     }
     .ok_or_else(|| CreateFailure::Client(missing_id(requested.kind)))?;
 
-    Ok(Child::for_resource(requested.kind, account, &resource))
+    Child::for_resource(requested.kind, account, &resource)
+        .ok_or_else(|| CreateFailure::Client(slash_in_id(requested.kind, &resource.id)))
 }
 
 /// The [`Resource`] for a new collection, or `None` if the server gave it no id.
@@ -226,6 +227,19 @@ fn created_resource(
 fn missing_id(kind: ChildKind) -> jmap_client::Error {
     jmap_client::Error::Protocol(format!(
         "the server created {} and reported no id for it",
+        match kind {
+            ChildKind::AddressBook => "an address book",
+            ChildKind::Calendar => "a calendar",
+        }
+    ))
+}
+
+/// The error for a `/set` create whose reported id holds a `/`. A `/` in the
+/// id would make this child's identity ambiguous with a shared child's
+/// `<accountId>/<collectionId>` encoding (see [`Child::for_resource`]).
+fn slash_in_id(kind: ChildKind, id: &Id) -> jmap_client::Error {
+    jmap_client::Error::Protocol(format!(
+        "the server created {} with an id containing '/': {id}",
         match kind {
             ChildKind::AddressBook => "an address book",
             ChildKind::Calendar => "a calendar",

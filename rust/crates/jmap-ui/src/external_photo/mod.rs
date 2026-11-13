@@ -5,6 +5,4 @@
 
 pub mod display_ext;
 pub mod fetch;
-pub mod mail_display_ext;
-pub mod mail_script;
 pub mod script;

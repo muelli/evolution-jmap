@@ -227,3 +227,56 @@ fn a_message_may_not_be_left_in_no_mailbox_at_all() {
         BTreeMap::from([(inbox, true)])
     );
 }
+
+/// ROADMAP item 179(d): `Email/set` is a method call under one `accountId`,
+/// so filing a message of a shared account must carry that account, not the
+/// sync's own one. `file_message_as` is the entry point a caller that
+/// resolved the owning account (`FolderTree::owning_account`) uses instead
+/// of `file_message`.
+#[test]
+fn file_message_as_writes_into_the_named_account_not_the_syncs_own() {
+    let fixture = Fixture::start();
+
+    let shared = Id::new("A2");
+    let (shared_inbox, shared_archive, shared_uid) = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+        let inbox = sharer.seed_mailbox("Inbox", None);
+        let archive = sharer.seed_mailbox("Archive", None);
+        let uid = sharer.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        (inbox, archive, uid)
+    };
+
+    fixture
+        .sync()
+        .file_message_as(
+            &shared,
+            &shared_uid,
+            &Filing::moved(shared_inbox.clone(), shared_archive.clone()),
+        )
+        .expect("the filing writes into the named account");
+
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert_eq!(
+        state
+            .account(&shared)
+            .unwrap()
+            .emails
+            .get(&shared_uid)
+            .unwrap()
+            .mailbox_ids
+            .clone()
+            .unwrap_or_default(),
+        BTreeMap::from([(shared_archive, true)]),
+        "the message must move in the named shared account"
+    );
+}

@@ -12,6 +12,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::SyncError;
 use crate::path::{SEPARATOR, encode_component, join};
+use crate::shared::SharedMailAccount;
+
+/// The path of the synthetic root [`FolderTree::merge_shared`] adds.
+const SHARED_ROOT_PATH: &str = "Shared";
+
+/// Whether `id` names a synthetic folder [`FolderTree::merge_shared`] adds:
+/// the "Shared" root, or an owner heading below it.
+///
+/// Neither is a real mailbox. The id routes to no account and no server has
+/// ever heard of it (ROADMAP item 179(b), finding F2: a real Evolution sent
+/// one to a real JMAP server and got back `invalidArguments: invalid JMAP
+/// ID`). A caller that is about to ask the server about a mailbox id must
+/// check this first and treat a match as an always-empty folder that never
+/// changes.
+pub fn is_synthetic_folder_id(id: &Id) -> bool {
+    let id = id.as_str();
+    id == "shared-root" || id.starts_with("shared-owner:")
+}
 
 /// The maximum depth of a `parentId` chain. A deeper mailbox becomes
 /// top-level.
@@ -101,6 +119,22 @@ pub struct FolderInfo {
     /// and reading that silence as a refusal would mark every ordinary
     /// folder of every account read-only.
     pub may_add_items: Option<bool>,
+    /// The account this folder belongs to, if not the account that the
+    /// enclosing `MailSync`/`CamelJmapStore` is itself configured for.
+    ///
+    /// `None` for an ordinary folder of the store's own account: the
+    /// common case, and every folder [`FolderTree::from_mailboxes`] builds.
+    /// [`FolderTree::merge_shared`] sets `Some` on each folder of a shared
+    /// account's subtree, so [`FolderTree::owning_account`] can tell a
+    /// caller which account to address for that mailbox (ROADMAP item
+    /// 163's next slice: routing folder, message and flag operations to
+    /// the owning account, not only building the merged tree).
+    ///
+    /// `#[serde(default)]` lets an on-disk cache written before this field
+    /// existed (`folder_tree_to_json`) still deserialise, as a tree with no
+    /// shared folders, rather than being discarded as unreadable.
+    #[serde(default)]
+    pub account_id: Option<Id>,
     pub children: Vec<FolderInfo>,
 }
 
@@ -142,6 +176,7 @@ impl FolderInfo {
             unread: self.unread,
             subscribed: self.subscribed,
             may_add_items: self.may_add_items,
+            account_id: self.account_id.clone(),
             children: Vec::new(),
         }
     }
@@ -234,6 +269,110 @@ impl FolderTree {
         })
     }
 
+    /// Merges other accounts' mail into this tree, the shape evolution-ews
+    /// and stock IMAP both use for a foreign mailbox (`notes/
+    /// SHARED-MAILBOXES-2026-10-30.md` section 4, Option 1): one extra,
+    /// always-present "Shared" root, one child per shared account named for
+    /// its owner, that account's own folders moved below it unchanged
+    /// otherwise.
+    ///
+    /// `shared` pairs each account [`crate::shared_mail_accounts`] found
+    /// with the `FolderTree` that account's own `MailSync` already builds.
+    /// An empty `shared` returns `self` unchanged: no "Shared" root appears
+    /// unless at least one account shares mail.
+    ///
+    /// A merged folder keeps the mailbox id and role its own account's
+    /// listing gave it, so [`FolderTree::by_id`] still finds it by that id.
+    /// [`FolderTree::find`] then searches the whole merged tree, including
+    /// shared accounts, which is correct: a user clicks a path under
+    /// `Shared/<owner>` the same as any other. [`FolderTree::role`] excludes
+    /// a folder this function stamped with `account_id`, so it still answers
+    /// only for the store's own account, not a shared one.
+    ///
+    /// An account whose [`SharedMailAccount::read_only`] is true gets
+    /// `may_add_items: Some(false)` on every one of its folders, even one
+    /// whose own `myRights` said otherwise: the account-level restriction
+    /// cannot be looser than the share itself.
+    ///
+    /// Every merged folder also gets `subscribed: true`, regardless of the
+    /// owner's own `isSubscribed` for it (ROADMAP item 179(a) finding F3): a
+    /// grantee often cannot change that flag, and it was never a sign of the
+    /// grantee's own wish to see the folder. This is the same "show what the
+    /// server grants, regardless of `isSubscribed`" rule item 163 already
+    /// applies to shared calendars and address books.
+    pub fn merge_shared(mut self, shared: &[(SharedMailAccount, FolderTree)]) -> Self {
+        if shared.is_empty() {
+            return self;
+        }
+
+        // A personal mailbox named "Shared" already took this path: give the
+        // synthetic root a disambiguated one instead, the same `%23` marker
+        // `paths` uses for a duplicate sibling name (no encoded name ever
+        // contains `%23`, because the encoding escapes `%`).
+        let shared_root_path = if self.roots.iter().any(|root| root.path == SHARED_ROOT_PATH) {
+            format!("{SHARED_ROOT_PATH}%23shared-root")
+        } else {
+            SHARED_ROOT_PATH.to_owned()
+        };
+
+        let mut owner_paths: BTreeSet<String> = BTreeSet::new();
+        let owners = shared
+            .iter()
+            .map(|(account, tree)| {
+                let mut path = join(Some(&shared_root_path), &encode_component(&account.name));
+                if owner_paths.contains(&path) {
+                    path = format!("{path}%23{}", encode_component(account.id.as_str()));
+                }
+                owner_paths.insert(path.clone());
+
+                let mut children = tree.roots.clone();
+                for child in &mut children {
+                    if account.read_only {
+                        lock_read_only(child);
+                    }
+                    stamp_account(child, &account.id);
+                    force_visible(child);
+                    let component = child
+                        .path
+                        .rsplit(SEPARATOR)
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
+                    let below = join(Some(&path), &component);
+                    repath(child, below);
+                }
+                FolderInfo {
+                    id: Id::new(format!("shared-owner:{}", account.id)),
+                    path,
+                    display_name: account.name.clone(),
+                    role: None,
+                    total: 0,
+                    unread: 0,
+                    subscribed: true,
+                    may_add_items: Some(false),
+                    // Not a real mailbox: no operation can ever address this
+                    // synthetic id, so it names no account to route to.
+                    account_id: None,
+                    children,
+                }
+            })
+            .collect();
+
+        self.roots.push(FolderInfo {
+            id: Id::new("shared-root"),
+            path: shared_root_path,
+            display_name: "Shared".to_owned(),
+            role: None,
+            total: 0,
+            unread: 0,
+            subscribed: true,
+            may_add_items: Some(false),
+            account_id: None,
+            children: owners,
+        });
+        self
+    }
+
     /// The top-level folders of the account, in sibling order.
     pub fn roots(&self) -> &[FolderInfo] {
         &self.roots
@@ -315,6 +454,18 @@ impl FolderTree {
         self.iter().find(|folder| folder.id == *id)
     }
 
+    /// The account that owns the mailbox `id`, if it is not the store's own
+    /// account.
+    ///
+    /// `None` both for an id this tree does not have and for an ordinary
+    /// folder of the store's own account: a caller that routes a folder,
+    /// message or flag operation (ROADMAP item 163's next slice) treats
+    /// `None` as "use the account this `MailSync` already addresses", and
+    /// `Some` as "address this account instead, over the same client".
+    pub fn owning_account(&self, id: &Id) -> Option<&Id> {
+        self.by_id(id)?.account_id.as_ref()
+    }
+
     /// The folder with a role, if a mailbox of the account has that role.
     ///
     /// Callers use it for the inbox, trash and junk lookups of Camel, and for
@@ -325,8 +476,29 @@ impl FolderTree {
     /// It reads the role that `claim_roles` assigned, not the `role` property
     /// of the mailbox. `claim_roles` gives a role to the first claimant only,
     /// so this result agrees with the folder types of the listing.
+    ///
+    /// Only the store's own account answers: a folder [`FolderTree::merge_
+    /// shared`] stamped with `account_id` never does, even when the store's
+    /// own account has no mailbox with that role. Reading a shared account's
+    /// role here would file or expunge the user's own mail into a mailbox
+    /// another principal owns (SECURITY-AUDIT Area 13, S13-3).
     pub fn role(&self, role: FolderRole) -> Option<&FolderInfo> {
-        self.iter().find(|folder| folder.role == Some(role))
+        self.iter()
+            .find(|folder| folder.role == Some(role) && folder.account_id.is_none())
+    }
+
+    /// The folder with a role, in a shared account's own part of the tree.
+    ///
+    /// [`Self::role`] answers only for the store's own account, by design
+    /// (S13-3 above). A write that must land in `account`'s own trash or
+    /// junk, not the store's own, needs this instead: a caller that
+    /// resolves a mailbox's owner with [`Self::owning_account`] and finds
+    /// that it is shared uses this to find that same account's trash
+    /// (ROADMAP item 179(d), `trash_message`), rather than the store's own
+    /// trash or no trash at all.
+    pub fn shared_role(&self, account: &Id, role: FolderRole) -> Option<&FolderInfo> {
+        self.iter()
+            .find(|folder| folder.role == Some(role) && folder.account_id.as_ref() == Some(account))
     }
 
     /// Sets the subscription of a mailbox. Returns `false` if the tree does not
@@ -614,6 +786,9 @@ impl FolderTree {
                     .my_rights
                     .as_ref()
                     .and_then(|rights| rights.may_add_items),
+                // This listing came from the account's own `Mailbox/get`;
+                // `merge_shared` is what sets `Some` for a shared account.
+                account_id: None,
                 children,
             };
             match parent[index] {
@@ -705,6 +880,45 @@ fn repath(folder: &mut FolderInfo, path: String) {
     }
 }
 
+/// Sets `may_add_items` to `Some(false)` on a folder and every folder below
+/// it, for [`FolderTree::merge_shared`]'s read-only accounts.
+fn lock_read_only(folder: &mut FolderInfo) {
+    let mut stack: Vec<&mut FolderInfo> = vec![folder];
+    while let Some(folder) = stack.pop() {
+        folder.may_add_items = Some(false);
+        stack.extend(folder.children.iter_mut());
+    }
+}
+
+/// Marks `folder` and every folder below it as belonging to `id`, for
+/// [`FolderTree::owning_account`].
+fn stamp_account(folder: &mut FolderInfo, id: &Id) {
+    let mut stack: Vec<&mut FolderInfo> = vec![folder];
+    while let Some(folder) = stack.pop() {
+        folder.account_id = Some(id.clone());
+        stack.extend(folder.children.iter_mut());
+    }
+}
+
+/// Sets `subscribed` to `true` on a folder and every folder below it, for
+/// [`FolderTree::merge_shared`].
+///
+/// `isSubscribed` on a shared mailbox is the owner's own flag, not the
+/// grantee's wish to see it, and a grantee often cannot change it. Camel's
+/// `Request` hides an unsubscribed folder's children when Evolution asks
+/// with `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`, so without this a shared
+/// folder whose owner never subscribed to it would show in the tree with
+/// no children: the owner's own folder list decides what the grantee sees,
+/// the same bug ROADMAP item 163 already avoids for shared calendars and
+/// address books by showing them regardless of `isSubscribed`.
+fn force_visible(folder: &mut FolderInfo) {
+    let mut stack: Vec<&mut FolderInfo> = vec![folder];
+    while let Some(folder) = stack.pop() {
+        folder.subscribed = true;
+        stack.extend(folder.children.iter_mut());
+    }
+}
+
 /// A JMAP count in the 32 bits of Camel. Saturating: a count that wraps to a
 /// small number makes a full folder look almost empty.
 fn saturate(count: Option<u64>) -> u32 {
@@ -790,6 +1004,21 @@ mod tests {
         let after = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
 
         assert!(!before.same_shape(&after));
+    }
+
+    /// A mailbox named with a `\r` or `\n` still gets a path `find` can look
+    /// up by. `jmap-mail`'s `c_string` rewrites either character to U+FFFD
+    /// when the path crosses into Camel (SECURITY-AUDIT item 167(a), Area
+    /// 13); before `encode_component` escaped them here too, the path
+    /// `find` held never matched the one Camel echoed back.
+    #[test]
+    fn a_mailbox_named_with_a_control_character_has_a_path_find_can_use() {
+        let tree = FolderTree::from_mailboxes(&[mailbox("1", "Inbox\r\nX", None, 0, 0)]).unwrap();
+
+        let folder = tree
+            .find("Inbox%0D%0AX")
+            .expect("the escaped path is found");
+        assert_eq!(folder.display_name, "Inbox\r\nX");
     }
 
     /// A rename changes `display_name` and `path`. Each is a shape change.
@@ -945,5 +1174,237 @@ mod tests {
         .unwrap();
 
         assert_eq!(before.change_to(&after), FolderListChange::Reshaped);
+    }
+
+    /// An on-disk listing from before this field existed still deserialises,
+    /// as a tree with no shared folders, instead of being discarded as
+    /// unreadable (the `#[serde(default)]` on `FolderInfo::account_id`).
+    #[test]
+    fn folder_tree_from_json_reads_a_listing_with_no_account_id_field() {
+        let json = serde_json::json!({
+            "state": State::new("s1"),
+            "tree": {
+                "roots": [{
+                    "id": "1",
+                    "path": "Inbox",
+                    "display_name": "Inbox",
+                    "role": null,
+                    "total": 3,
+                    "unread": 1,
+                    "subscribed": true,
+                    "may_add_items": null,
+                    "children": [],
+                }],
+            },
+        })
+        .to_string();
+
+        let (_, tree) = folder_tree_from_json(&json).expect("an old-format listing still reads");
+        assert_eq!(tree.by_id(&Id::new("1")).unwrap().account_id, None);
+    }
+
+    /// `folder_tree_to_json`/`folder_tree_from_json` round-trip an
+    /// `account_id`, the same as every other field.
+    #[test]
+    fn folder_tree_json_round_trip_keeps_account_id() {
+        let shared = FolderTree::from_mailboxes(&[mailbox("S1", "Inbox", None, 0, 0)]).unwrap();
+        let tree = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 0, 0)])
+            .unwrap()
+            .merge_shared(&[(
+                SharedMailAccount {
+                    id: Id::new("bob"),
+                    name: "bob@example.com".to_owned(),
+                    read_only: false,
+                },
+                shared,
+            )]);
+
+        let json = folder_tree_to_json(&State::new("s1"), &tree);
+        let (_, read_back) = folder_tree_from_json(&json).expect("a written listing reads back");
+
+        assert_eq!(
+            read_back.owning_account(&Id::new("S1")),
+            Some(&Id::new("bob"))
+        );
+        assert_eq!(read_back.owning_account(&Id::new("1")), None);
+    }
+
+    /// An empty shared `Account.name` must still give a non-empty owner
+    /// path, not the bare "Shared" root with a trailing slash:
+    /// CROSS-PROTOCOL-AUDIT X5-5(a). Before the fix, `encode_component("")`
+    /// returned `""`, so the owner path joined it onto `SHARED_ROOT_PATH` as
+    /// `"Shared/"`.
+    #[test]
+    fn an_empty_shared_account_name_gets_a_non_empty_owner_path() {
+        let shared = FolderTree::from_mailboxes(&[mailbox("s1", "Inbox", None, 0, 0)]).unwrap();
+
+        let tree = FolderTree::from_mailboxes(&[]).unwrap().merge_shared(&[(
+            SharedMailAccount {
+                id: Id::new("acc"),
+                name: String::new(),
+                read_only: false,
+            },
+            shared,
+        )]);
+
+        let owner = tree
+            .iter()
+            .find(|folder| folder.id == Id::new("shared-owner:acc"))
+            .unwrap();
+        assert!(!owner.path.ends_with(SEPARATOR));
+        assert_ne!(owner.path, SHARED_ROOT_PATH);
+    }
+
+    /// A personal mailbox named "Shared" must not collide with the synthetic
+    /// "Shared" root `merge_shared` adds, and two shared accounts with the
+    /// same display name must not collide with each other either:
+    /// CROSS-PROTOCOL-AUDIT X5-5(b).
+    #[test]
+    fn merge_shared_dedupes_against_a_personal_shared_folder_and_duplicate_owner_names() {
+        let team_a = FolderTree::from_mailboxes(&[mailbox("sa1", "Inbox", None, 0, 0)]).unwrap();
+        let team_b = FolderTree::from_mailboxes(&[mailbox("sb1", "Inbox", None, 0, 0)]).unwrap();
+
+        let tree = FolderTree::from_mailboxes(&[mailbox("1", "Shared", None, 0, 0)])
+            .unwrap()
+            .merge_shared(&[
+                (
+                    SharedMailAccount {
+                        id: Id::new("acc-a"),
+                        name: "Team".to_owned(),
+                        read_only: false,
+                    },
+                    team_a,
+                ),
+                (
+                    SharedMailAccount {
+                        id: Id::new("acc-b"),
+                        name: "Team".to_owned(),
+                        read_only: false,
+                    },
+                    team_b,
+                ),
+            ]);
+
+        let mut paths = Vec::new();
+        for folder in tree.iter() {
+            assert!(
+                !paths.contains(&folder.path),
+                "duplicate path: {}",
+                folder.path
+            );
+            paths.push(folder.path.clone());
+        }
+        assert_eq!(tree.by_id(&Id::new("sa1")).unwrap().path, {
+            let owner_a = tree
+                .iter()
+                .find(|folder| folder.id == Id::new("shared-owner:acc-a"))
+                .unwrap();
+            format!("{}/Inbox", owner_a.path)
+        });
+    }
+
+    /// ROADMAP item 179(a) finding F3 (confirmed live against Stalwart): a
+    /// grantee's own `Mailbox/get` for a shared account returns the owner's
+    /// `isSubscribed`, not anything about the grantee's own wish to see it,
+    /// and a grantee often cannot change it. Camel hides an unsubscribed
+    /// folder's children from the tree whenever Evolution asks with
+    /// `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`, so a merged folder must show
+    /// regardless of the owner's own flag, not inherit it.
+    #[test]
+    fn merge_shared_shows_a_folder_the_owner_never_subscribed_to() {
+        let shared = FolderTree::from_mailboxes(&[
+            Mailbox::new("Team Shared")
+                .with_id(Id::from("t"))
+                .is_subscribed(false),
+            Mailbox::new("Q4")
+                .with_id(Id::from("q"))
+                .with_parent_id(Id::from("t"))
+                .is_subscribed(false),
+        ])
+        .unwrap();
+
+        let tree = FolderTree::from_mailboxes(&[]).unwrap().merge_shared(&[(
+            SharedMailAccount {
+                id: Id::new("bob"),
+                name: "bob@example.com".to_owned(),
+                read_only: false,
+            },
+            shared,
+        )]);
+
+        assert!(tree.by_id(&Id::new("t")).unwrap().subscribed);
+        assert!(tree.by_id(&Id::new("q")).unwrap().subscribed);
+    }
+
+    /// `role` must never answer with a shared account's folder, even when
+    /// the store's own account has no mailbox with that role: a caller that
+    /// reads it for the account's own Trash or Junk (SECURITY-AUDIT Area 13,
+    /// S13-3) would file or expunge the user's own mail into a mailbox
+    /// another principal owns.
+    #[test]
+    fn role_never_answers_from_a_shared_account() {
+        let own = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 0, 0)]).unwrap();
+        let shared = FolderTree::from_mailboxes(&[with_role(
+            mailbox("s1", "Papierkorb", None, 0, 0),
+            role::TRASH,
+        )])
+        .unwrap();
+
+        let tree = own.merge_shared(&[(
+            SharedMailAccount {
+                id: Id::new("bob"),
+                name: "bob@example.com".to_owned(),
+                read_only: false,
+            },
+            shared,
+        )]);
+
+        assert!(tree.role(FolderRole::Trash).is_none());
+    }
+
+    /// `shared_role` is `role`'s counterpart for a shared account: it finds
+    /// that account's own trash, not the store's, and answers `None` for a
+    /// different account or for the store's own account.
+    #[test]
+    fn shared_role_finds_only_the_named_accounts_folder() {
+        let own = FolderTree::from_mailboxes(&[with_role(
+            mailbox("1", "Trash", None, 0, 0),
+            role::TRASH,
+        )])
+        .unwrap();
+        let shared = FolderTree::from_mailboxes(&[with_role(
+            mailbox("s1", "Papierkorb", None, 0, 0),
+            role::TRASH,
+        )])
+        .unwrap();
+        let bob = Id::new("bob");
+
+        let tree = own.merge_shared(&[(
+            SharedMailAccount {
+                id: bob.clone(),
+                name: "bob@example.com".to_owned(),
+                read_only: false,
+            },
+            shared,
+        )]);
+
+        assert_eq!(
+            tree.shared_role(&bob, FolderRole::Trash).unwrap().id,
+            Id::new("s1"),
+            "bob's own trash, not the store's"
+        );
+        assert!(
+            tree.shared_role(&Id::new("nobody"), FolderRole::Trash)
+                .is_none()
+        );
+        assert!(
+            tree.shared_role(&bob, FolderRole::Junk).is_none(),
+            "bob has no mailbox with that role"
+        );
+    }
+
+    fn with_role(mut mailbox: Mailbox, role: &str) -> Mailbox {
+        mailbox.role = Some(role.to_owned());
+        mailbox
     }
 }

@@ -190,3 +190,19 @@ fn session_sieve_capability_accessor() {
         vec!["fileinto".to_string(), "reject".to_string()]
     );
 }
+
+#[test]
+fn sieve_capability_deserializes_max_size_script_name() {
+    let json = json!({
+        "maxSizeScript": 65536,
+        "maxSizeScriptName": 512
+    });
+    let cap: SieveCapability = serde_json::from_value(json).expect("deserialize SieveCapability");
+    assert_eq!(cap.max_size_script, 65536);
+    assert_eq!(cap.max_size_script_name, Some(512));
+
+    let round_trip = cap.clone().with_max_size_script_name(1024);
+    assert_eq!(round_trip.max_size_script_name, Some(1024));
+    let val = serde_json::to_value(&round_trip).expect("serialize SieveCapability");
+    assert_eq!(val["maxSizeScriptName"], 1024);
+}

@@ -42,6 +42,7 @@ use jmap_mail::manage;
 use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail_sync::{FolderInfo, FolderTree};
 use jmap_mock::{EmailSeed, MockServer};
+use jmap_proto::Id;
 use jmap_proto::mail::role;
 
 mod common;
@@ -710,5 +711,123 @@ fn a_store_with_no_connection_cannot_rename_a_folder() {
     assert!(
         matches!(failure, StoreError::Disconnected),
         "expected a disconnected store, got {failure:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ROADMAP item 179(d): owning-account routing for a shared mailbox
+
+/// A new child of a shared parent must be created in the parent's own
+/// account, not this store's: `Mailbox/set` is a method call under one
+/// `accountId`. Mirrors `subscriptions.rs`'s
+/// `set_subscribed_reaches_the_shared_mailboxs_owning_account`.
+#[test]
+fn create_folder_reaches_the_shared_parents_owning_account() {
+    let server = MockServer::builder().start();
+    let shared_account_id = Id::new("agent-shared-owner");
+    let shared_parent_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    let tree = store.folders(CACHED).expect("listed");
+    let parent = tree
+        .by_id(&shared_parent_id)
+        .cloned()
+        .expect("the shared parent is in the merged tree");
+
+    let created = store
+        .create_folder(Some(&parent), "JMAP")
+        .expect("the create reaches the shared parent's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state
+            .account(&shared_account_id)
+            .unwrap()
+            .mailboxes
+            .contains(&created.id),
+        "the new folder must exist in the shared account, not this store's own"
+    );
+}
+
+/// A shared mailbox must be deleted in its own account, the same reason as
+/// the create test above.
+#[test]
+fn delete_folder_reaches_the_shared_mailboxs_owning_account() {
+    let server = MockServer::builder().start();
+    let shared_account_id = Id::new("agent-shared-owner");
+    let shared_folder_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    store.folders(CACHED).expect("listed");
+
+    store
+        .delete_folder(&shared_folder_id)
+        .expect("the delete reaches the shared mailbox's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        !state
+            .account(&shared_account_id)
+            .unwrap()
+            .mailboxes
+            .contains(&shared_folder_id),
+        "the folder must be gone from the shared account"
+    );
+}
+
+/// A shared mailbox must be renamed in its own account, the same reason as
+/// the two tests above.
+#[test]
+fn rename_folder_reaches_the_shared_mailboxs_owning_account() {
+    let server = MockServer::builder().start();
+    let shared_account_id = Id::new("agent-shared-owner");
+    let shared_folder_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    let tree = store.folders(CACHED).expect("listed");
+    let folder = tree
+        .by_id(&shared_folder_id)
+        .cloned()
+        .expect("the shared folder is in the merged tree");
+
+    store
+        .rename_folder(&folder, None, "Work")
+        .expect("the rename reaches the shared mailbox's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert_eq!(
+        state
+            .account(&shared_account_id)
+            .unwrap()
+            .mailboxes
+            .get(&shared_folder_id)
+            .unwrap()
+            .name,
+        "Work",
+        "the rename must change the name in the shared account, not this store's own"
     );
 }

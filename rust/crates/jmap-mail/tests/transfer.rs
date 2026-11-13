@@ -93,19 +93,20 @@ use common::array::StringArray;
 use common::signals::{Context, Emission, emissions, watch};
 use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
-    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_SEEN, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
-    CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
-    camel_folder_error_quark, camel_folder_get_folder_summary, camel_folder_lock,
-    camel_folder_refresh_info_sync, camel_folder_summary_get,
-    camel_folder_transfer_messages_to_sync, camel_folder_unlock, camel_message_info_set_flags,
-    camel_service_error_quark, camel_store_get_folder_sync,
+    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_SEEN, CAMEL_STORE_FOLDER_NONE, CamelFolder,
+    CamelFolderClass, CamelMessageInfo, camel_folder_error_quark, camel_folder_get_folder_summary,
+    camel_folder_lock, camel_folder_refresh_info_sync, camel_folder_summary_get,
+    camel_folder_synchronize_sync, camel_folder_transfer_messages_to_sync, camel_folder_unlock,
+    camel_message_info_set_flags, camel_store_get_folder_sync,
 };
-use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_free, g_ptr_array_free, gboolean};
+#[cfg(camel_folder_get_uids)]
+use glib_sys::g_free;
+use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_free, gboolean};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
 use jmap_mail_sync::MailSync;
-use jmap_mock::{EmailSeed, MockServer};
+use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 
@@ -157,7 +158,13 @@ impl Fixture {
     }
 
     fn seeded(messages: usize) -> Self {
-        let server = MockServer::builder().start();
+        Self::seeded_with(messages, MockServer::builder())
+    }
+
+    /// [`Self::seeded`], with a caller-built server instead of the default
+    /// one, for a test against a hostile or edge-case server.
+    fn seeded_with(messages: usize, builder: MockServerBuilder) -> Self {
+        let server = builder.start();
         let account_id = server.account_id();
         let (inbox_id, archive_id, uids) = {
             let state = server.state();
@@ -362,6 +369,26 @@ impl Fixture {
             g_object_unref(info.cast());
         }
     }
+
+    /// Installs a new connection, the way Camel reconnects a store after an
+    /// outage. The store forgets its folder listing; the next request lists
+    /// it again.
+    fn reconnect(&self) {
+        let client = Client::connect(self.server.origin(), Credentials::none()).expect("connected");
+        self.account
+            .connect(MailSync::new(client, self.server.account_id()));
+    }
+
+    /// Through Camel's own wrapper, the way Evolution's generic reconnect
+    /// flush calls it on every open folder.
+    fn synchronize(&self, folder: *mut CamelFolder) -> Synchronised {
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: a live folder, and an out-parameter that is writable and
+        // currently NULL.
+        let ok =
+            unsafe { camel_folder_synchronize_sync(folder, GFALSE, ptr::null_mut(), &mut error) };
+        Synchronised::new(ok, error)
+    }
 }
 
 impl Drop for Fixture {
@@ -497,16 +524,67 @@ impl Transferred {
 impl Drop for Transferred {
     fn drop(&mut self) {
         // SAFETY: both are references this value took from the call that
-        // made it. The array is owned whole: Camel's own callers free its
-        // members with `g_free`, then the array. The error is one
-        // allocation.
+        // made it. The array is owned whole, but how a filled slot's string
+        // is released depends on the installed EDS, the split
+        // `jmap_mail::transfer::Reported`'s own doc names: before EDS 3.58,
+        // Camel's own callers free the members with `g_free`, then the
+        // array; from 3.58, the array carries its own `g_free` and one call
+        // frees everything. The error is one allocation.
         unsafe {
             if !self.uids.is_null() {
+                #[cfg(camel_folder_get_uids)]
                 for index in 0..(*self.uids).len {
                     g_free(*(*self.uids).pdata.add(index as usize));
                 }
                 g_ptr_array_free(self.uids, GTRUE);
             }
+            if !self.error.is_null() {
+                glib_sys::g_error_free(self.error);
+            }
+        }
+    }
+}
+
+/// One synchronisation, and both of its answers, owned the same way
+/// [`Transferred`] owns its own.
+struct Synchronised {
+    ok: bool,
+    error: *mut GError,
+}
+
+impl Synchronised {
+    fn new(ok: gboolean, error: *mut GError) -> Self {
+        Self {
+            ok: ok != GFALSE,
+            error,
+        }
+    }
+
+    fn expect_ok(&self) {
+        assert!(self.ok, "the synchronisation failed: {}", self.message());
+        assert!(
+            self.error.is_null(),
+            "a synchronisation that worked set an error"
+        );
+    }
+
+    fn message(&self) -> String {
+        if self.error.is_null() {
+            return "no error".to_owned();
+        }
+        // SAFETY: a live GError whose message is NUL-terminated.
+        unsafe {
+            CStr::from_ptr((*self.error).message)
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+}
+
+impl Drop for Synchronised {
+    fn drop(&mut self) {
+        // SAFETY: an allocation this value owns from the call that made it.
+        unsafe {
             if !self.error.is_null() {
                 glib_sys::g_error_free(self.error);
             }
@@ -678,32 +756,86 @@ fn a_transfer_of_no_messages_needs_no_server() {
         .expect_ok();
 }
 
-/// The folder is asked, but the connection belongs to the store.
-/// `NOT_CONNECTED` is the code that makes Camel connect and ask again,
-/// rather than showing the account as broken. The other three folder
-/// vfuncs follow the same rule. The message stays where it is, row and all.
+/// ROADMAP item 176(b): a move or copy made with no connection must not fail
+/// outright. `file_message` queues the filing on the row and reports success,
+/// the same way an offline flag change or an offline Expunge already
+/// succeeds locally, and the row stays in this folder until
+/// `synchronize_sync`'s reconnect walk actually lands it (see
+/// [`a_queued_move_lands_once_the_store_reconnects`]).
 #[test]
-fn a_folder_whose_store_has_no_connection_reports_it() {
+fn a_move_with_no_connection_is_queued_and_the_row_stays() {
     let fixture = Fixture::start();
     assert!(fixture.account.jmap().drop_connection());
 
     let transferred =
         fixture.transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true);
 
-    assert!(!transferred.ok, "a disconnected folder transferred anyway");
-    assert!(!transferred.error.is_null(), "it failed without saying why");
-    // SAFETY: a live GError, and the quark accessor takes no arguments.
-    unsafe {
-        assert_eq!((*transferred.error).domain, camel_service_error_quark());
-        assert_eq!(
-            (*transferred.error).code,
-            CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32
-        );
-    }
+    transferred.expect_ok();
+    assert_eq!(
+        transferred.reported(),
+        vec![Some(fixture.uid().to_string())],
+        "a queued filing must be reported as landed, the same as an \
+         immediate one, so the caller sees the move as done"
+    );
     assert_eq!(
         listed(fixture.inbox),
         vec![fixture.uid().to_string()],
-        "a message that never moved was taken out of its folder"
+        "the row must stay in the folder while offline: removal happens \
+         only after a server write actually confirms the move"
+    );
+}
+
+/// The queued filing reaches the server once the store reconnects, with no
+/// explicit `Email/set` call from the client beyond the generic
+/// `CamelOfflineStore` reconnect flush: the same flush
+/// `expunge.rs`'s own offline test already proves exists for a deleted mark.
+#[test]
+fn a_queued_move_lands_once_the_store_reconnects() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    fixture.reconnect();
+    fixture.synchronize(fixture.inbox).expect_ok();
+
+    assert_eq!(
+        fixture.mailboxes_on_server(fixture.uid()),
+        BTreeMap::from([(fixture.archive_id.clone(), true)]),
+        "the queued move never reached the server after reconnecting"
+    );
+    assert!(
+        listed(fixture.inbox).is_empty(),
+        "the row stayed in the source folder after the queued move finally landed"
+    );
+}
+
+/// A queued copy behaves the same way as a queued move, except that it never
+/// removes the row: a copy leaves every mailbox the message was already in.
+#[test]
+fn a_queued_copy_lands_once_the_store_reconnects() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], false)
+        .expect_ok();
+
+    fixture.reconnect();
+    fixture.synchronize(fixture.inbox).expect_ok();
+
+    assert_eq!(
+        fixture.mailboxes_on_server(fixture.uid()),
+        BTreeMap::from([
+            (fixture.inbox_id.clone(), true),
+            (fixture.archive_id.clone(), true)
+        ]),
+        "the queued copy never reached the server after reconnecting"
+    );
+    assert_eq!(
+        listed(fixture.inbox),
+        vec![fixture.uid().to_string()],
+        "a copy must never remove the row it came from"
     );
 }
 
@@ -733,6 +865,58 @@ fn a_message_another_client_deleted_is_reported_and_leaves_the_folder() {
     assert!(
         listed(fixture.inbox).is_empty(),
         "the folder still lists a message the server does not have"
+    );
+}
+
+/// A hostile or merely buggy server can answer `notFound` for an id that it
+/// still lists everywhere else (SECURITY-AUDIT-2026-11-01 row S3-3). This
+/// code cannot tell that apart from the genuine deletion race the test
+/// above covers, so it removes the row the same way, for a copy as much as
+/// for a move: a failed `Email/set` never touches the server's own
+/// `mailboxIds` for the message, so the server's data stays correct.
+///
+/// This does not "self heal" on a later refresh, unlike the audit row's own
+/// first guess. `refresh_info_sync` asks `Email/changes` since the state the
+/// folder already recorded; the failed `Email/set` never moved that state,
+/// so the answer has nothing new to say, and the row stays gone until
+/// something else invalidates the folder's recorded state (`refresh.rs`'s
+/// own module doc: "a folder that has none has never listed this mailbox,
+/// and lists"). A plain reconnect does not do that either: the state lives
+/// in the folder's own summary, not the connection.
+#[test]
+fn a_notfound_copy_from_a_server_that_still_lists_the_message_stays_gone() {
+    let fixture = Fixture::seeded_with(1, MockServer::builder().email_update_always_not_found());
+    let before = fixture.mailboxes_on_server(fixture.uid());
+
+    assert!(
+        !fixture.transfer(&[fixture.uid()], false).ok,
+        "a copy the server answered notFound for was reported as transferred"
+    );
+    assert!(
+        listed(fixture.inbox).is_empty(),
+        "the folder still lists a message the server answered notFound for"
+    );
+    assert_eq!(
+        fixture.mailboxes_on_server(fixture.uid()),
+        before,
+        "a failed Email/set must not have changed the server's own mailboxIds"
+    );
+
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: a live folder of ours, and an out-parameter that is writable
+    // and currently NULL.
+    unsafe {
+        assert_ne!(
+            camel_folder_refresh_info_sync(fixture.inbox, ptr::null_mut(), &mut error),
+            GFALSE,
+            "the inbox would not refresh"
+        );
+    }
+    assert!(
+        listed(fixture.inbox).is_empty(),
+        "the ordinary incremental refresh, Email/changes since a state the \
+         failed Email/set never moved, has nothing to report, so it does \
+         NOT bring the row back; see this test's module-level note"
     );
 }
 
@@ -830,12 +1014,17 @@ fn a_message_another_client_deleted_is_announced_as_its_row_goes() {
     );
 }
 
-/// Every other failure leaves the message list alone, because it leaves the
-/// rows alone. Camel retries a disconnected store after reconnecting. A
-/// folder that had announced the message as removed in the meantime would
-/// have taken it off the user's screen until the retry.
+/// A queued offline filing does not announce the row as removed, because it
+/// leaves the row where it is (see
+/// [`a_move_with_no_connection_is_queued_and_the_row_stays`]): only
+/// `replay_filing`'s later, successful write removes it and announces that. A
+/// folder that announced the message as removed before the server actually
+/// agreed would take it off the user's screen too soon. Camel still announces
+/// the row itself as *changed*: marking it for the reconnect walk to find is a
+/// real mutation of the row (`CAMEL_MESSAGE_FOLDER_FLAGGED` goes from unset to
+/// set), the same as any other summary property change.
 #[test]
-fn a_transfer_that_failed_leaves_the_message_list_alone() {
+fn a_queued_transfer_does_not_announce_the_row_as_removed() {
     let context = Context::push();
     let fixture = Fixture::start().watched(&context, |fixture| fixture.inbox);
     assert!(fixture.account.jmap().drop_connection());
@@ -843,11 +1032,17 @@ fn a_transfer_that_failed_leaves_the_message_list_alone() {
     let transferred =
         fixture.transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true);
 
-    assert!(!transferred.ok, "a disconnected folder transferred anyway");
-    let emissions = emissions(&context);
-    assert!(
-        emissions.is_empty(),
-        "a transfer that failed announced {emissions:?}"
+    transferred.expect_ok();
+    assert_eq!(
+        emissions(&context),
+        vec![Emission {
+            added: Vec::new(),
+            removed: Vec::new(),
+            changed: vec![fixture.uid().to_string()],
+            recent: Vec::new(),
+        }],
+        "a queued transfer must not announce the row as removed before the \
+         server agreed"
     );
 }
 
@@ -960,4 +1155,88 @@ fn the_rows_a_selection_left_behind_are_announced_together() {
             recent: Vec::new(),
         }]
     );
+}
+
+/// ROADMAP item 179(d): a mailbox
+/// [`jmap_mail_sync::FolderTree::merge_shared`] merges in from a shared
+/// account is a mailbox of a *different* JMAP account, and `Email/set` is a
+/// method call under one `accountId`. A transfer between two such mailboxes
+/// of the same shared account must reach that account, not the account this
+/// store otherwise addresses.
+#[test]
+fn transferring_between_two_shared_mailboxes_lands_in_their_owning_account() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    let (shared_archive_id, shared_uid) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let inbox = sharer.seed_mailbox("Inbox", None);
+        let archive = sharer.seed_mailbox("Archive", None);
+        let uid = sharer.seed_email(EmailSeed::new(
+            inbox,
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        (archive, uid)
+    };
+
+    let account = Account::open();
+    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
+    account.connect(MailSync::new(client, account_id.clone()));
+
+    let source = open(&account, "Shared/Bob/Inbox");
+    let destination = open(&account, "Shared/Bob/Archive");
+
+    let list = StringArray::of(&[&shared_uid]);
+    let mut transferred: *mut GPtrArray = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: two live folders of one store, an array of NUL-terminated uids
+    // alive across the call, and two out-parameters that are writable and
+    // currently NULL.
+    let ok = unsafe {
+        camel_folder_transfer_messages_to_sync(
+            source,
+            list.as_ptr(),
+            destination,
+            GTRUE,
+            &mut transferred,
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+    Transferred::new(ok, transferred, error).expect_ok();
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state.account(&account_id).unwrap().emails.is_empty(),
+        "the message must not change in this store's own account"
+    );
+    assert_eq!(
+        state
+            .account(&shared_account_id)
+            .unwrap()
+            .emails
+            .get(&shared_uid)
+            .unwrap()
+            .mailbox_ids
+            .clone()
+            .unwrap_or_default()
+            .into_keys()
+            .collect::<Vec<_>>(),
+        vec![shared_archive_id],
+        "the message must move in the shared mailbox's own account"
+    );
+
+    // SAFETY: the two references this test took from `get_folder_sync`.
+    unsafe {
+        g_object_unref(source.cast());
+        g_object_unref(destination.cast());
+    }
 }

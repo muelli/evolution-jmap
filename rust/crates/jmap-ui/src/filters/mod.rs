@@ -21,18 +21,29 @@
 //! - [`rule_dialog`] is the modal dialog that edits one rule. Its own pure
 //!   half decides what each combo offers and how an index maps back to the
 //!   model.
+//! - [`completion`] is the pure candidate list for step (c)'s completion:
+//!   commands, tests, tagged arguments and extension names, gated by the
+//!   account's `sieve_extensions` capability.
 //! - [`io`] does the round trips over a connected
 //!   [`jmap_client::Client`]. It runs on worker threads only.
 //! - [`page`] is the `GtkScrolledWindow` subclass that implements
 //!   `EMailConfigPage`.
 //! - [`extension`] is the `EExtension` on `EMailConfigNotebook`. It checks
 //!   the backend name of the account and adds the page.
+//! - [`validate`] is a local, offline syntax check of the text-mode script,
+//!   for the editor to show a problem before the Check button's own round
+//!   trip to the server.
+//! - [`external_editor`] picks the command for step (d)'s "Edit in External
+//!   Editor…" button: the External Editor plugin's GSettings key, then
+//!   `$VISUAL`, then `$EDITOR`, else the desktop's default handler.
 //!
 //! Only [`page`], [`extension`] and the second half of [`rule_dialog`] have
 //! FFI. Every decision those widgets show belongs to [`form`] or to the
 //! pure half of [`rule_dialog`], both of which have unit tests.
 
+pub mod completion;
 pub mod extension;
+pub mod external_editor;
 pub mod form;
 pub mod io;
 pub mod page;
@@ -40,3 +51,4 @@ pub mod rule_dialog;
 pub mod rule_form;
 pub mod rules;
 pub mod script;
+pub mod validate;

@@ -36,6 +36,19 @@
 //! unchanged row this costs nothing: the diff is empty and there is no request.
 //! Without this step, a move would lose a flag change silently.
 //!
+//! ## Offline
+//!
+//! `JmapStore::file_message` fails with `StoreError::Disconnected` with no
+//! connection. `file_message` treats that failure as "write it later", the
+//! same rule [`crate::expunge`] applies to a deleted mark: it records the
+//! filing on the row ([`crate::message_info::pending_filing`]) and marks the
+//! row the way an unsaved flag change already is, instead of failing the
+//! whole call. The row stays in *this* folder's listing, for a move as much
+//! as a copy, until `replay_filing` actually lands the filing from
+//! `synchronize_sync`'s reconnect walk; only then is it removed and
+//! `camel_folder_changed` fired. Camel and the user still see a move or copy
+//! that succeeded right away, the same as a flag change does.
+//!
 //! ## What this module does not decide
 //!
 //! **The rows of the destination folder.** This module adds no row there. The
@@ -77,16 +90,19 @@ use std::ptr;
 use eds_sys::{
     CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_changed,
     camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_lock,
-    camel_folder_summary_remove_uid, camel_folder_unlock,
+    camel_folder_summary_get, camel_folder_summary_remove_uid, camel_folder_unlock,
+    camel_message_info_set_folder_flagged,
 };
 use gio_sys::GCancellable;
-use glib_sys::{
-    GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_new, g_ptr_array_set_size, g_strdup, gboolean,
-    gchar,
-};
+#[cfg(camel_folder_get_uids)]
+use glib_sys::g_ptr_array_new;
+use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_set_size, g_strdup, gboolean, gchar};
+#[cfg(not(camel_folder_get_uids))]
+use glib_sys::{g_free, g_ptr_array_new_with_free_func};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::fail_bool;
 use jmap_backend_core::marshal::{checked_borrow, read_string};
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_mail_sync::Filing;
 use jmap_proto::Id;
@@ -94,6 +110,7 @@ use jmap_proto::Id;
 use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, folder_type, parent_store};
+use crate::message_info::{pending_filing, set_pending_filing};
 use crate::synchronize::push_row;
 
 /// Installs the filing vfunc of the folder on a class whose first member is a
@@ -192,12 +209,23 @@ unsafe extern "C" fn transfer_messages_to_sync(
             let mut changes = Changes::new();
             let mut failure = None;
             for (index, uid) in uids.iter().enumerate() {
+                // A NULL slot in Camel's own array never happens in practice
+                // (see `uid_list`'s doc). There is no uid to file, so this
+                // slot stays unreported, the same as a message this loop
+                // never reached.
+                let Some(uid) = uid else {
+                    continue;
+                };
                 let filed = file_message(source, summary, uid, &filing, moving);
                 // A message that is not on the server is also not in this
-                // folder, for a copy and for a move.
+                // folder, for a copy and for a move. A queued filing stays in
+                // this folder until `synchronize_sync`'s walk confirms it:
+                // removing it now would say "moved" before the server has
+                // agreed, the offline instance of the module doc's "effect of
+                // a move on the source folder" rule.
                 let leaves = match &filed {
-                    Ok(true) => moving,
-                    Ok(false) => false,
+                    Ok(Filed::Landed) => moving,
+                    Ok(Filed::Queued) | Ok(Filed::NoOp) => false,
                     Err(StoreError::NoMessage(_)) => true,
                     Err(_) => false,
                 };
@@ -208,8 +236,8 @@ unsafe extern "C" fn transfer_messages_to_sync(
                     }
                 }
                 match filed {
-                    Ok(true) => reported.set(index, uid),
-                    Ok(false) => {}
+                    Ok(Filed::Landed) | Ok(Filed::Queued) => reported.set(index, uid),
+                    Ok(Filed::NoOp) => {}
                     Err(problem) => {
                         failure.get_or_insert(problem);
                     }
@@ -259,15 +287,29 @@ impl Drop for FolderLock {
     }
 }
 
-/// Files one message, and returns whether it landed.
-///
-/// `Ok(false)` means neither landed nor failed: the uid is not valid text, so
-/// the server cannot receive it, and this provider did not make that row. The
-/// row stays as it is: not reported as transferred, not removed, not a failure.
+/// What happened when this provider tried to file one message.
+enum Filed {
+    /// The filing reached the server.
+    Landed,
+    /// There is no connection. The row now carries the filing, and
+    /// `synchronize_sync`'s reconnect walk ([`replay_filing`]) sends it once
+    /// the store is back online, the offline-journal shape [`crate::expunge`]
+    /// already uses for a deleted mark.
+    Queued,
+    /// The uid is not valid text, or the row is already gone (a concurrent
+    /// refresh removed it): neither landed nor failed.
+    NoOp,
+}
+
+/// Files one message, and returns what happened.
 ///
 /// A move settles the row first (see the module header): the move removes the
 /// row, which is the only record of an unsaved change. An unchanged row sends
-/// no request there.
+/// no request there. If that settle fails, including with no connection, its
+/// failure is reported as is: an unsaved flag change that could not be
+/// written must not be folded silently into a filing that then "succeeds"
+/// differently (queued instead of sent). Only the filing request itself is
+/// offline-queued.
 ///
 /// # Safety
 ///
@@ -278,9 +320,9 @@ unsafe fn file_message(
     uid: &CStr,
     filing: &Filing,
     moving: bool,
-) -> Result<bool, StoreError> {
+) -> Result<Filed, StoreError> {
     let Ok(text) = uid.to_str() else {
-        return Ok(false);
+        return Ok(Filed::NoOp);
     };
     // SAFETY: the contract above. `push_row` has the same contract for this pair.
     unsafe {
@@ -288,9 +330,111 @@ unsafe fn file_message(
             push_row(folder, summary, uid)?;
         }
         let store = parent_store(folder).ok_or(StoreError::Disconnected)?;
-        store.file_message(&Id::new(text), filing)?;
+        match store.file_message(&Id::new(text), filing) {
+            Ok(()) => Ok(Filed::Landed),
+            Err(StoreError::Disconnected) => Ok(queue_filing(summary, uid, filing)),
+            Err(other) => Err(other),
+        }
     }
-    Ok(true)
+}
+
+/// Records `filing` on the row so [`replay_filing`] can send it once the
+/// store reconnects, and marks the row for that walk to find.
+///
+/// If the row vanished since the caller listed it (a concurrent refresh),
+/// there is nothing to mark, and the caller treats the uid as [`Filed::NoOp`].
+///
+/// # Safety
+///
+/// `summary` must point at a live `CamelFolderSummary`.
+unsafe fn queue_filing(summary: *mut CamelFolderSummary, uid: &CStr, filing: &Filing) -> Filed {
+    // SAFETY: the contract above. `Owned` releases the row's reference when it
+    // drops at the end of this function.
+    let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
+    else {
+        return Filed::NoOp;
+    };
+    // SAFETY: `info` is a live row for as long as this function holds it.
+    unsafe {
+        set_pending_filing(info.as_ptr(), Some(filing.clone()));
+        camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE);
+    }
+    Filed::Queued
+}
+
+/// Completes a filing that [`file_message`] could not send while offline, for
+/// one row of the work list [`crate::synchronize::synchronize_sync`] walks.
+///
+/// Returns whether the caller must remove the row from this folder's summary
+/// and tell Camel about it: only a landed move does, the same as an immediate
+/// move in [`transfer_messages_to_sync`] above. A copy never removes a row.
+///
+/// Still offline is not a failure, the same "write it later" rule
+/// [`crate::expunge`] uses for a deleted mark: the row and its filing stay,
+/// untouched, for the next walk. A server refusal (the destination gone, a
+/// lost right) is a failure: the row stays in the source folder, unmoved, not
+/// silently dropped, and Evolution's existing "synchronisation failed"
+/// reporting for the folder is enough.
+///
+/// # Safety
+///
+/// `folder` must point at a live `JmapFolder` and `summary` at its summary.
+pub(crate) unsafe fn replay_filing(
+    folder: *mut CamelFolder,
+    summary: *mut CamelFolderSummary,
+    uid: &CStr,
+) -> Result<bool, StoreError> {
+    // SAFETY: the contract above. `Owned` releases the row's reference when it
+    // drops at the end of this function.
+    let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
+    else {
+        return Ok(false);
+    };
+    // SAFETY: `info` is a live row for as long as this function holds it.
+    let Some(filing) = (unsafe { pending_filing(info.as_ptr()) }) else {
+        return Ok(false);
+    };
+    let Ok(text) = uid.to_str() else {
+        return Ok(false);
+    };
+    let moving = filing.out_of_mailbox().is_some();
+    // SAFETY: the contract above.
+    let result = match unsafe { parent_store(folder) } {
+        Some(store) => store.file_message(&Id::new(text), &filing),
+        None => Err(StoreError::Disconnected),
+    };
+    match result {
+        Ok(()) => {
+            // SAFETY: `info` is still the live row.
+            unsafe {
+                set_pending_filing(info.as_ptr(), None);
+                camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
+            }
+            Ok(moving)
+        }
+        Err(StoreError::Disconnected) => {
+            // Still offline. `push_row`, called just before this in the same
+            // walk, clears the row's mark whenever it finds no keyword change
+            // of its own to write; restore it here, or the row would fall off
+            // the work list with its filing still unsent.
+            // SAFETY: `info` is still the live row.
+            unsafe { camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE) };
+            Ok(false)
+        }
+        Err(StoreError::NoMessage(_)) => {
+            // Another client destroyed the message before this filing could
+            // land. There is nothing left to file. The row itself is not
+            // removed here, the same restraint `push_row` already applies to
+            // a vanished message: the next refresh finds it gone and removes it.
+            // SAFETY: `info` is still the live row.
+            unsafe {
+                set_pending_filing(info.as_ptr(), None);
+                camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
+            }
+            Ok(false)
+        }
+        Err(other) => Err(other),
+    }
 }
 
 /// The mailbox that `folder` shows, if `folder` is a folder of this provider.
@@ -304,16 +448,22 @@ unsafe fn mailbox_of<'a>(folder: *mut CamelFolder) -> Option<&'a Id> {
     unsafe { checked_borrow::<_, JmapFolder>(folder, folder_type())?.mailbox() }
 }
 
-/// A copy of the uids in Camel's array.
+/// A copy of the uids in Camel's array, one slot per input element, in order.
 ///
 /// A copy, not a borrow: the walk removes rows from the summary and makes one
 /// request per uid. The array belongs to the caller, and Camel's vee-folder path
 /// rebuilds it between calls.
 ///
+/// A slot is `None` only for a NULL element of `array`. Camel never puts one
+/// there in practice, but [`Reported::new`] sizes its own output array from
+/// this list's length, which must match the *input* array's length and keep
+/// its positions: dropping a hole instead of keeping its slot would shift
+/// every later uid's reported result one position out of place.
+///
 /// # Safety
 ///
 /// `array` must be NULL or a live `GPtrArray` of NUL-terminated strings.
-unsafe fn uid_list(array: *mut GPtrArray) -> Vec<CString> {
+unsafe fn uid_list(array: *mut GPtrArray) -> Vec<Option<CString>> {
     if array.is_null() {
         return Vec::new();
     }
@@ -321,7 +471,7 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<CString> {
     // array outlives this call, and this code copies each string.
     unsafe {
         (0..(*array).len)
-            .filter_map(|index| {
+            .map(|index| {
                 let uid: *const gchar = (*array).pdata.add(index as usize).read().cast();
                 (!uid.is_null()).then(|| CStr::from_ptr(uid).to_owned())
             })
@@ -337,7 +487,18 @@ unsafe fn uid_list(array: *mut GPtrArray) -> Vec<CString> {
 ///
 /// The array has the shape of Camel's generic transfer, because its callers free
 /// that shape. The array has one slot per uid from the start. A message that did
-/// not land has `NULL`. One `g_free` releases each string.
+/// not land has `NULL`.
+///
+/// The way a caller releases a filled slot's string depends on the installed
+/// EDS, the same split [`crate::message::new_uncached_uids_array`] already
+/// names. Before EDS 3.58, Camel's own `folder_transfer_messages_to_sync`
+/// builds this array with a plain `g_ptr_array_new()`, and every Camel-side
+/// consumer frees it as elements then container
+/// (`g_ptr_array_foreach(g_free)`, then `g_ptr_array_free`). From 3.58, the
+/// same function gives the array its own `g_free` and a caller frees it with
+/// one call. Giving the wrong one here either leaks (no free function, freed
+/// with one call) or double frees (free function present, a caller also
+/// frees each element the old way).
 struct Reported(*mut GPtrArray);
 
 impl Reported {
@@ -353,9 +514,13 @@ impl Reported {
         }
         // SAFETY: a new array, sized so that every slot exists before a write.
         // `set_size` sets the new slots to NULL, the value for a message that
-        // did not land.
+        // did not land. The ownership contract of a filled slot's string is
+        // the struct doc's EDS-version split.
         unsafe {
+            #[cfg(camel_folder_get_uids)]
             let array = g_ptr_array_new();
+            #[cfg(not(camel_folder_get_uids))]
+            let array = g_ptr_array_new_with_free_func(Some(g_free));
             g_ptr_array_set_size(array, len as c_int);
             *out = array;
             Self(array)
@@ -389,4 +554,46 @@ unsafe fn name_of(folder: *mut CamelFolder) -> String {
     // SAFETY: the accessor returns a string that the folder owns and that
     // outlives the call. `read_string` copies it.
     unsafe { read_string(camel_folder_get_full_name(folder)).unwrap_or_default() }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+    use std::ptr;
+
+    use glib_sys::{g_free, g_ptr_array_add, g_ptr_array_free, g_ptr_array_new_with_free_func};
+
+    use super::uid_list;
+
+    /// A NULL element of Camel's uid array never happens in practice, but
+    /// `uid_list` must keep its position rather than compact it away:
+    /// `Reported::new` sizes its own output array from this list's length,
+    /// which Camel's contract keys to the *input* array's length and
+    /// positions.
+    #[test]
+    fn a_null_hole_in_camels_array_keeps_its_own_position() {
+        // SAFETY: a `GPtrArray` built and freed entirely within this test,
+        // never shared with another thread or call.
+        unsafe {
+            let array = g_ptr_array_new_with_free_func(Some(g_free));
+            let first = CString::new("E1").unwrap();
+            let third = CString::new("E3").unwrap();
+            g_ptr_array_add(array, glib_sys::g_strdup(first.as_ptr()).cast());
+            g_ptr_array_add(array, ptr::null_mut());
+            g_ptr_array_add(array, glib_sys::g_strdup(third.as_ptr()).cast());
+
+            let uids = uid_list(array);
+
+            g_ptr_array_free(array, glib_sys::GTRUE);
+
+            assert_eq!(
+                uids.len(),
+                3,
+                "a hole must not shorten the list Reported::new sizes from"
+            );
+            assert_eq!(uids[0].as_deref(), Some(first.as_c_str()));
+            assert_eq!(uids[1], None, "the hole stays a hole, at its own index");
+            assert_eq!(uids[2].as_deref(), Some(third.as_c_str()));
+        }
+    }
 }

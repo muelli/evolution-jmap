@@ -1316,6 +1316,7 @@ pub fn email_set(
 ) -> Result<Value, MethodError> {
     let request: SetRequest<Email> = parse_arguments(arguments)?;
     let snooze_extension = state.snooze_extension;
+    let email_update_always_not_found = state.email_update_always_not_found;
     let account = account_mut(state, &request.account_id)?;
     let is_owner = account_is_owner(account, caller);
     if !is_owner {
@@ -1401,6 +1402,10 @@ pub fn email_set(
     // Patch emails before the transaction, then apply one state bump.
     let mut to_update: Vec<(Id, Email)> = Vec::new();
     for (id, patch) in request.update.unwrap_or_default() {
+        if email_update_always_not_found {
+            not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
+            continue;
+        }
         let Some(existing) = account.emails.get(&id) else {
             not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
             continue;
@@ -2184,6 +2189,12 @@ pub struct EmailSeed {
     /// Whether `text_body` is HTML. Picks the raw message's body part
     /// content type. Default is `false`, a plain text body.
     pub html: bool,
+    /// A verbatim `message/rfc822` blob to store instead of one `rfc5322`
+    /// builds from the other fields. A real EDS/Camel client reads a
+    /// message by this raw blob, not by JMAP structured properties, so
+    /// this is the only way to seed a MIME shape `rfc5322` cannot build
+    /// (for example `multipart/signed`).
+    pub raw_source: Option<Vec<u8>>,
 }
 
 impl EmailSeed {
@@ -2207,6 +2218,7 @@ impl EmailSeed {
             headers: Vec::new(),
             attachments: Vec::new(),
             html: false,
+            raw_source: None,
         }
     }
 
@@ -2218,6 +2230,15 @@ impl EmailSeed {
     /// Mark `text_body` as HTML, not plain text.
     pub fn html_body(mut self) -> Self {
         self.html = true;
+        self
+    }
+
+    /// Store `bytes` verbatim as the email's `message/rfc822` blob,
+    /// bypassing `rfc5322`'s own build. `text_body` still fills the JMAP
+    /// structured properties (preview, `bodyValues`), only the raw blob a
+    /// real Camel client downloads changes.
+    pub fn raw_source(mut self, bytes: Vec<u8>) -> Self {
+        self.raw_source = Some(bytes);
         self
     }
 
@@ -2492,12 +2513,15 @@ impl AccountState {
             })
             .collect();
 
-        let source = rfc5322(&id, &seed, &self.blobs);
+        let source: Vec<u8> = match &seed.raw_source {
+            Some(bytes) => bytes.clone(),
+            None => rfc5322(&id, &seed, &self.blobs).into_bytes(),
+        };
         // RFC 8621 §4.1 defines `size` as octets of the raw `blobId` payload.
         let size = source.len() as u64;
         let mut email = Email::default();
         email.id = Some(id.clone());
-        email.blob_id = Some(self.add_blob("message/rfc822", source.into_bytes()));
+        email.blob_id = Some(self.add_blob("message/rfc822", source));
         email.thread_id = Some(new_thread_id(&id));
         email.mailbox_ids = Some([(seed.mailbox_id, true)].into());
         email.keywords = Some(

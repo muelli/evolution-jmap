@@ -402,6 +402,85 @@ fn the_listing_is_the_connected_accounts() {
     assert_eq!(inbox.id, expected);
 }
 
+/// `get_folder_info_sync`'s first listing (no cached tree yet, so no
+/// `Mailbox/changes` delta to apply) must merge shared mail accounts in the
+/// same way `MailSync::folder_tree_with_shared` does on its own (ROADMAP item
+/// 163's `JmapStore`/Camel wiring slice).
+#[test]
+fn the_first_listing_merges_shared_mail_accounts() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX))
+    });
+    let projects = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(Id::new("shared-a"), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None)
+    };
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+
+    let tree = store.folders(CACHED).expect("listed");
+
+    assert!(
+        paths(&tree).contains(&"Inbox"),
+        "the primary account's own folder stays"
+    );
+    let shared = tree
+        .find("Shared/Bob/Projects")
+        .expect("the shared account's folder merges in under its owner");
+    assert_eq!(shared.id, projects);
+}
+
+/// ROADMAP item 179(a), finding F3: a real Evolution showed bob's shared
+/// folders in `folder-tree.json` with the right `account_id`, but no children
+/// under "Shared/bob@...". This is the vfunc call the folder tree makes when
+/// the user expands that node: `top` is the owner's own path, not the whole
+/// account. `the_first_listing_merges_shared_mail_accounts` above only checks
+/// [`FolderTree::find`], which walks the whole tree regardless of depth
+/// cutting; it would not have caught a depth or `top`-lookup bug in the
+/// vfunc layer.
+#[test]
+fn the_vfunc_answers_a_shared_owner_with_its_folders_when_expanded() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX))
+    });
+    let projects = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(Id::new("shared-a"), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None)
+    };
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+
+    let top_level = Answered::of(&store, None, CACHED);
+    assert_eq!(
+        top_level.paths(),
+        ["Inbox", "Shared"],
+        "the synthetic root appears at the top level"
+    );
+
+    let shared_root = Answered::of(&store, Some("Shared"), CACHED);
+    assert_eq!(
+        shared_root.paths(),
+        ["Shared", "Shared/Bob"],
+        "expanding \"Shared\" must show the owner"
+    );
+
+    let owner = Answered::of(&store, Some("Shared/Bob"), CACHED);
+    assert_eq!(
+        owner.paths(),
+        ["Shared/Bob", "Shared/Bob/Projects"],
+        "expanding the owner must show bob's own folders, not an empty node"
+    );
+    let _ = projects;
+}
+
 // ---------------------------------------------------------------------------
 // which part of the tree the call asks for
 

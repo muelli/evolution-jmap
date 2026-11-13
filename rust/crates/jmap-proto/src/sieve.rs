@@ -28,6 +28,9 @@ pub struct SieveCapability {
     /// The largest number of scripts the account may have, if the server limits it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_number_scripts: Option<u64>,
+    /// The maximum length allowed for the name of a SieveScript, in octets (RFC 9661 §1.2.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_size_script_name: Option<u64>,
     /// A free-text description of the Sieve engine running on the server, if given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub implementation: Option<String>,
@@ -45,10 +48,17 @@ impl SieveCapability {
         Self {
             max_size_script,
             max_number_scripts: None,
+            max_size_script_name: None,
             implementation: None,
             sieve_extensions: Vec::new(),
             extra: BTreeMap::new(),
         }
+    }
+
+    /// Set the maximum length allowed for the name of a SieveScript, in octets.
+    pub fn with_max_size_script_name(mut self, max: u64) -> Self {
+        self.max_size_script_name = Some(max);
+        self
     }
 
     /// Set the largest number of scripts the account may have.

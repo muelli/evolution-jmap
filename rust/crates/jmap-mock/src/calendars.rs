@@ -10,8 +10,8 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
     CalendarEventQueryFilter, CalendarEventSetRequest, CalendarRights, ParticipantIdentity,
-    ParticipantIdentitySetRequest, calendar_event_notification_type, calendar_event_set_error,
-    participant_identity_set_error,
+    ParticipantIdentitySetRequest, RecurrenceRule, calendar_event_notification_type,
+    calendar_event_set_error, participant_identity_set_error,
 };
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{
@@ -25,7 +25,7 @@ use crate::dispatch::project_properties;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::patch::apply_patch;
 use crate::scheduling::EventChange;
-use crate::setops::{simple_set, simple_set_with_validation};
+use crate::setops::simple_set_with_validation;
 use crate::state::{AccountState, ServerState};
 
 /// Deterministic stand-in for "now". The mock has no clock.
@@ -89,6 +89,23 @@ fn calendar_rights_for(calendar: &Calendar, principal: &Id) -> Option<CalendarRi
     calendar.share_with.as_ref()?.get(principal).cloned()
 }
 
+/// Reject account owner in shareWith (RFC 9670 §4).
+fn validate_calendar_share_with(
+    share_with: Option<&BTreeMap<Id, CalendarRights>>,
+    owner_principal_id: Option<&Id>,
+) -> Result<(), SetError> {
+    if let Some(map) = share_with {
+        for principal_id in map.keys() {
+            if Some(principal_id) == owner_principal_id {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("The account owner principal MUST NOT be in shareWith")
+                    .with_properties(["shareWith"]));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Owners get calendars unchanged. Shared viewers with `mayReadItems` get granted `myRights`.
 fn visible_calendar(calendar: &Calendar, is_owner: bool, caller: Option<&Id>) -> Option<Calendar> {
     if is_owner {
@@ -110,6 +127,16 @@ pub fn calendar_set(
     arguments: Value,
     caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
+    if state.calendar_destroy_rejects_remove_contents
+        && arguments.get("onDestroyRemoveContents").is_some()
+    {
+        return Err(
+            MethodError::new(error::method::INVALID_ARGUMENTS).with_extra(BTreeMap::from([(
+                "arguments".to_owned(),
+                Value::Array(vec![Value::String("onDestroyRemoveContents".to_owned())]),
+            )])),
+        );
+    }
     let mut request: SetRequest<Calendar> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
     let terse_collection_create = state.terse_collection_create;
@@ -195,25 +222,41 @@ pub fn calendar_set(
         })
         .collect();
 
-    let mut response = simple_set(&mut account.calendars, request, |id, calendar| {
-        if calendar.id.is_some() {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description("id is set by the server and must not be given in a create"));
-        }
-        if calendar.name.is_empty() {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description("name must not be empty"));
-        }
-        if reject_collection_create {
-            return Err(SetError::new(error::set::FORBIDDEN)
-                .with_description("this mock is configured to refuse calendar creates"));
-        }
-        calendar.id = Some(id.clone());
-        if default_unsubscribed && calendar.is_subscribed != Some(true) {
-            calendar.is_subscribed = Some(false);
-        }
-        Ok(())
-    })?;
+    let owner_principal_id = account.current_user_principal_id.clone();
+    let mut response = simple_set_with_validation(
+        &mut account.calendars,
+        request,
+        |id, calendar| {
+            if calendar.id.is_some() {
+                return Err(
+                    SetError::new(error::set::INVALID_PROPERTIES).with_description(
+                        "id is set by the server and must not be given in a create",
+                    ),
+                );
+            }
+            if calendar.name.is_empty() {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("name must not be empty"));
+            }
+            validate_calendar_share_with(
+                calendar.share_with.as_ref(),
+                owner_principal_id.as_ref(),
+            )?;
+            if reject_collection_create {
+                return Err(SetError::new(error::set::FORBIDDEN)
+                    .with_description("this mock is configured to refuse calendar creates"));
+            }
+            calendar.id = Some(id.clone());
+            if default_unsubscribed && calendar.is_subscribed != Some(true) {
+                calendar.is_subscribed = Some(false);
+            }
+            Ok(())
+        },
+        |_id, _before, patched| {
+            validate_calendar_share_with(patched.share_with.as_ref(), owner_principal_id.as_ref())
+        },
+        |_id, _existing| Ok(()),
+    )?;
 
     if !forbidden_created.is_empty() {
         response
@@ -400,6 +443,141 @@ fn rewrite_event_link_href_to_file_scheme(event: &mut CalendarEvent) {
 fn version_is_2_0(event: &CalendarEvent) -> Result<(), SetError> {
     if event.version.as_deref() != Some("2.0") {
         return Err(SetError::new(error::set::INVALID_PROPERTIES).with_properties(["version"]));
+    }
+    Ok(())
+}
+
+/// Validate JSCalendar (RFC 8984) event properties for create and update.
+fn validate_calendar_event_properties(event: &CalendarEvent) -> Result<(), SetError> {
+    // RFC 8984 §4.1.5 showWithoutTime invariants.
+    if event.show_without_time == Some(true) {
+        if event.time_zone.is_some() {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("showWithoutTime requires timeZone to be null or omitted")
+                .with_properties(["showWithoutTime", "timeZone"]));
+        }
+        if let Some(start) = event.start.as_deref()
+            && !start_has_midnight_time(start)
+        {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("showWithoutTime requires start time to be T00:00:00")
+                .with_properties(["showWithoutTime", "start"]));
+        }
+        if let Some(duration) = event.duration.as_deref()
+            && !duration_has_zero_time_components(duration)
+        {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("showWithoutTime requires duration to have zero time components")
+                .with_properties(["showWithoutTime", "duration"]));
+        }
+    }
+
+    // RFC 8984 §4.3.3 RecurrenceRule validation.
+    if let Some(rrule) = &event.recurrence_rule {
+        validate_recurrence_rule(rrule)?;
+    }
+    if let Some(rules) = event.extra.get("recurrenceRules").and_then(Value::as_array) {
+        for rule in rules {
+            validate_recurrence_rule_json(rule)?;
+        }
+    }
+
+    // RFC 8984 §4.4.1 priority range validation (0..=9).
+    if let Some(priority) = event.priority
+        && !(0..=9).contains(&priority)
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("priority {priority} out of range 0..9"))
+            .with_properties(["priority"]));
+    }
+
+    // RFC 8984 §4.4.2 freeBusyStatus vocabulary validation.
+    if let Some(fbs) = event.free_busy_status.as_deref()
+        && fbs != "free"
+        && fbs != "busy"
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid freeBusyStatus: {fbs}"))
+            .with_properties(["freeBusyStatus"]));
+    }
+
+    // RFC 8984 §4.4.3 privacy vocabulary validation.
+    if let Some(privacy) = event.privacy.as_deref()
+        && privacy != "public"
+        && privacy != "private"
+        && privacy != "secret"
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid privacy: {privacy}"))
+            .with_properties(["privacy"]));
+    }
+
+    // RFC 8984 §5.1.3 event status vocabulary validation.
+    if let Some(status) = event.status.as_deref()
+        && status != "confirmed"
+        && status != "tentative"
+        && status != "cancelled"
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid status: {status}"))
+            .with_properties(["status"]));
+    }
+
+    Ok(())
+}
+
+fn start_has_midnight_time(start: &str) -> bool {
+    if let Some((_date, time)) = start.split_once('T') {
+        if time == "00:00:00" {
+            return true;
+        }
+        if let Some(frac) = time.strip_prefix("00:00:00.") {
+            return !frac.chars().any(|c| c.is_ascii_digit() && c != '0');
+        }
+    }
+    false
+}
+
+fn duration_has_zero_time_components(duration: &str) -> bool {
+    if let Some((_date_part, time_part)) = duration.split_once('T') {
+        !time_part.chars().any(|c| c.is_ascii_digit() && c != '0')
+    } else {
+        true
+    }
+}
+
+fn validate_recurrence_rule(rrule: &RecurrenceRule) -> Result<(), SetError> {
+    const VALID_FREQUENCIES: &[&str] = &[
+        "secondly", "minutely", "hourly", "daily", "weekly", "monthly", "yearly",
+    ];
+    if !VALID_FREQUENCIES.contains(&rrule.frequency.as_str()) {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid recurrence frequency: {}", rrule.frequency))
+            .with_properties(["recurrenceRule"]));
+    }
+    if let Some(0) = rrule.interval {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description("recurrence interval must be a non-zero positive integer")
+            .with_properties(["recurrenceRule"]));
+    }
+    Ok(())
+}
+
+fn validate_recurrence_rule_json(rule: &Value) -> Result<(), SetError> {
+    const VALID_FREQUENCIES: &[&str] = &[
+        "secondly", "minutely", "hourly", "daily", "weekly", "monthly", "yearly",
+    ];
+    if let Some(freq) = rule.get("frequency").and_then(Value::as_str)
+        && !VALID_FREQUENCIES.contains(&freq)
+    {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description(format!("invalid recurrence frequency: {freq}"))
+            .with_properties(["recurrenceRules"]));
+    }
+    if let Some(0) = rule.get("interval").and_then(Value::as_u64) {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES)
+            .with_description("recurrence interval must be a non-zero positive integer")
+            .with_properties(["recurrenceRules"]));
     }
     Ok(())
 }
@@ -600,6 +778,7 @@ pub fn calendar_event_set(
                     .with_description("start is required"));
             }
             version_is_2_0(event)?;
+            validate_calendar_event_properties(event)?;
             if let Some(uid) = event.uid.as_ref().filter(|uid| taken.contains(*uid)) {
                 return Err(SetError::new(error::set::INVALID_PROPERTIES)
                     .with_description(format!("An event with UID {uid} already exists."))
@@ -826,7 +1005,26 @@ pub fn calendar_event_query(
             event_matches(event, &filter)
         })
         .collect();
-    matches.sort_by(|(_, a), (_, b)| a.start.cmp(&b.start));
+
+    if let Some(sort) = &request.sort {
+        for comparator in sort.iter().rev() {
+            let ascending = comparator.is_ascending;
+            match comparator.property.as_str() {
+                "start" => {
+                    matches.sort_by(|(_, a), (_, b)| {
+                        let ord = a.start.cmp(&b.start);
+                        if ascending { ord } else { ord.reverse() }
+                    });
+                }
+                other => {
+                    return Err(MethodError::new(error::method::UNSUPPORTED_SORT)
+                        .with_description(format!("mock cannot sort calendar events by {other}")));
+                }
+            }
+        }
+    } else {
+        matches.sort_by(|(_, a), (_, b)| a.start.cmp(&b.start));
+    }
 
     let total = matches.len() as u64;
     let (ids, limit) = paging.page(
@@ -853,6 +1051,34 @@ fn event_matches(event: &CalendarEvent, filter: &CalendarEventQueryFilter) -> bo
             .calendar_ids
             .as_ref()
             .is_some_and(|ids| ids.get(calendar_id).copied().unwrap_or(false))
+    {
+        return false;
+    }
+    if let Some(list) = &filter.in_calendar_list
+        && !event.calendar_ids.as_ref().is_some_and(|ids| {
+            list.iter()
+                .any(|cid| ids.get(cid).copied().unwrap_or(false))
+        })
+    {
+        return false;
+    }
+    if let Some(excluded) = &filter.excluded_from_calendar
+        && event
+            .calendar_ids
+            .as_ref()
+            .is_some_and(|ids| ids.get(excluded).copied().unwrap_or(false))
+    {
+        return false;
+    }
+    if let Some(status) = &filter.participation_status
+        && !event.participants.as_ref().is_some_and(|parts| {
+            parts.values().any(|p| {
+                p.as_object()
+                    .and_then(|obj| obj.get("participationStatus"))
+                    .and_then(|val| val.as_str())
+                    == Some(status.as_str())
+            })
+        })
     {
         return false;
     }
@@ -997,20 +1223,40 @@ pub fn calendar_event_notification_query(
         Some(recipient) == viewer && notification_matches(notification, &filter)
     };
 
-    let ids: Vec<Id> = account
+    let mut matching: Vec<(&Id, &CalendarEventNotification)> = account
         .calendar_event_notifications
         .iter()
         .filter(|(_, (recipient, notification))| visible(recipient, notification))
+        .map(|(id, (_, notification))| (id, notification))
+        .collect();
+
+    if let Some(sort) = &request.sort {
+        for comparator in sort.iter().rev() {
+            let ascending = comparator.is_ascending;
+            match comparator.property.as_str() {
+                "created" => {
+                    matching.sort_by(|(_, a), (_, b)| {
+                        let ord = a.created.cmp(&b.created);
+                        if ascending { ord } else { ord.reverse() }
+                    });
+                }
+                other => {
+                    return Err(MethodError::new(error::method::UNSUPPORTED_SORT)
+                        .with_description(format!(
+                            "mock cannot sort calendar event notifications by {other}"
+                        )));
+                }
+            }
+        }
+    }
+
+    let total = matching.len() as u64;
+    let ids: Vec<Id> = matching
+        .into_iter()
         .map(|(id, _)| id.clone())
         .skip(request.position.max(0) as usize)
         .take(request.limit.unwrap_or(u64::MAX) as usize)
         .collect();
-
-    let total = account
-        .calendar_event_notifications
-        .iter()
-        .filter(|(_, (recipient, notification))| visible(recipient, notification))
-        .count() as u64;
 
     let mut response = QueryResponse::new(
         request.account_id,
@@ -1029,7 +1275,7 @@ fn notification_matches(
     filter: &CalendarEventNotificationQueryFilter,
 ) -> bool {
     if let Some(after) = &filter.after
-        && notification.created.as_str() <= after.as_str()
+        && notification.created.as_str() < after.as_str()
     {
         return false;
     }
@@ -1247,6 +1493,25 @@ pub fn participant_identity_set(
             );
             continue;
         }
+        if let Some(addr) = identity.calendar_address.as_deref() {
+            let in_use = account
+                .participant_identities
+                .iter()
+                .any(|(_, existing)| existing.calendar_address.as_deref() == Some(addr))
+                || to_create
+                    .iter()
+                    .any(|(_, c)| c.calendar_address.as_deref() == Some(addr));
+            if in_use {
+                not_created.insert(
+                    creation_id,
+                    SetError::new(participant_identity_set_error::CALENDAR_ADDRESS_IN_USE)
+                        .with_description(
+                            "calendarAddress is already in use by another ParticipantIdentity",
+                        ),
+                );
+                continue;
+            }
+        }
         let id = account.participant_identities.alloc_id();
         identity.id = Some(id.clone());
         identity.is_default = Some(!assigned_default);
@@ -1299,6 +1564,30 @@ pub fn participant_identity_set(
                 ),
             );
             continue;
+        }
+        if let Some(addr) = patched.calendar_address.as_deref() {
+            let in_use = account
+                .participant_identities
+                .iter()
+                .any(|(existing_id, existing)| {
+                    existing_id != &id && existing.calendar_address.as_deref() == Some(addr)
+                })
+                || to_create
+                    .iter()
+                    .any(|(_, c)| c.calendar_address.as_deref() == Some(addr))
+                || to_update.iter().any(|(other_id, u)| {
+                    other_id != &id && u.calendar_address.as_deref() == Some(addr)
+                });
+            if in_use {
+                not_updated.insert(
+                    id,
+                    SetError::new(participant_identity_set_error::CALENDAR_ADDRESS_IN_USE)
+                        .with_description(
+                            "calendarAddress is already in use by another ParticipantIdentity",
+                        ),
+                );
+                continue;
+            }
         }
         to_update.push((id, patched));
     }

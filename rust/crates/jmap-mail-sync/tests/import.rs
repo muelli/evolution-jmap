@@ -434,3 +434,48 @@ b2xkX2Z1bmMoKTsKKyBuZXdfZnVuYygpOwo=\r\n\
         .expect("readable source");
     assert_eq!(read_back, wire_bytes);
 }
+
+/// ROADMAP item 179(d), the append-path slice: `Email/import` is a method
+/// call under one `accountId`, so a write to a mailbox of a different,
+/// shared account must carry that account, not the sync's own one.
+/// `import_message_as` is the entry point a caller that resolved the owning
+/// account (`FolderTree::owning_account`) uses instead of `import_message`.
+#[test]
+fn import_message_as_writes_into_the_named_account_not_the_syncs_own() {
+    let fixture = Fixture::start();
+
+    let shared = Id::new("A2");
+    let shared_mailbox = {
+        let state = fixture.server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared.clone(), "Bob");
+        sharer.is_personal = false;
+        sharer.seed_mailbox("Projects", None)
+    };
+
+    let uid = fixture
+        .sync()
+        .import_message_as(
+            &shared,
+            &shared_mailbox,
+            MESSAGE.to_vec(),
+            &Keywords::default(),
+            None,
+        )
+        .expect("the message imports into the named account");
+
+    let state = fixture.server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        !state
+            .account(&fixture.account_id)
+            .unwrap()
+            .emails
+            .contains(&uid),
+        "the message must not land in the sync's own account"
+    );
+    assert!(
+        state.account(&shared).unwrap().emails.contains(&uid),
+        "the message must land in the named shared account"
+    );
+}
