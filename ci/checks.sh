@@ -99,10 +99,10 @@ cd ..
 echo "== CMake/CTest suite, if EDS dev headers/cmake/ninja are present =="
 # This step runs everything the build job's own `ctest --test-dir build`
 # runs, except plain `rust-test` (already covered by `cargo test --locked`
-# above). It covers: rust-test-eds (the crates the EDS-gated default-members
-# list excludes), rust-clippy-workspace (clippy over those same crates),
-# the translations/release-workflow/install-*-backend staging tests, and
-# the packaging checks below.
+# above). It covers: rust-test-eds and rust-test-jmap-ui (the crates the
+# EDS-gated default-members list excludes), rust-clippy-workspace (clippy
+# over those same crates), the translations/release-workflow/
+# install-*-backend staging tests, and the packaging checks below.
 #
 # Do not narrow this step to just the packaging checks. That narrowing has
 # already let real regressions in the other legs sit red in CI unnoticed.

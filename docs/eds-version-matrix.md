@@ -12,10 +12,11 @@ Without the matrix, the drift causes a segfault on the machine of a user.
 
 - **Pinned 3.52**: the `build` job in `.github/workflows/ci.yml`.
   `ci/install-deps.sh` installs the EDS 3.52 headers of Ubuntu 24.04.
-  `ctest --test-dir build` includes the `rust-test-eds` target
-  (`cmake/Rust.cmake`). This target runs `cargo test` for `eds-sys`, `evo-sys`
-  and every crate that needs EDS headers. The plugin ships against this
-  version.
+  `ctest --test-dir build` includes the `rust-test-eds` and `rust-test-jmap-ui`
+  targets (`cmake/Rust.cmake`). Together they run `cargo test` for `eds-sys`,
+  `evo-sys` and every crate that needs EDS headers. `jmap-ui` runs on its own,
+  one test at a time: its tests build GTK objects, and GTK is not
+  thread-safe. The plugin ships against this version.
 - **Newer EDS**: the `eds-version-matrix` job. It runs on `workflow_dispatch`
   or on a pull request with the label `run-eds-version-matrix`. It runs
   `ci/eds-matrix.sh` (clippy with `-D warnings`, then `cargo test` for the

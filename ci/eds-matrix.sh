@@ -28,4 +28,11 @@ fi
 
 cargo clippy --locked "${CRATES[@]}" --all-targets -- -D warnings
 
-cargo test --locked "${CRATES[@]}"
+# jmap-ui runs apart from the rest, one test at a time. Its tests build GTK
+# objects straight from test functions, and the default test harness gives
+# every test its own thread. GTK is not thread-safe: two threads that build a
+# GTK object at the same time can corrupt process-wide GTK state and crash.
+cargo test --locked -p eds-sys -p evo-sys -p jmap-backend-core \
+    -p jmap-backend-book -p jmap-backend-cal -p jmap-mail \
+    -p jmap-backend-collection -p jmap-config
+cargo test --locked -p jmap-ui -- --test-threads=1
