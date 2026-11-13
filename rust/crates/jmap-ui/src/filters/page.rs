@@ -8,12 +8,14 @@
 //! state box, the asynchronous load and the `GTask` submit.
 //!
 //! This page shows the account's Sieve scripts as a list, and the source of
-//! the selected one in a text view. Most of what the user does is staged in
-//! a [`FiltersForm`] and written when the account editor saves. Four
-//! actions are instant instead (item 180(a)'s apply-at-once sweep, one
-//! action per commit): "Check" asks the server at once and writes nothing;
-//! "Activate", "Deactivate" and "Rename" write the account's current plan
-//! at once and reload the list from the server.
+//! the selected one in a text view. Every change stages in a [`FiltersForm`]
+//! first; item 180(a)'s apply-at-once sweep (one action per commit) then
+//! writes most of them at once instead of waiting for the account editor's
+//! save: "Check" asks the server and writes nothing; "Activate",
+//! "Deactivate", "Rename", "Add" and "Remove" write the account's current
+//! plan and reload the list from the server; a script's text saves the same
+//! way once it parses, after the debounce that also drives [`validate`] and
+//! completion (`maybe_save_text`).
 //!
 //! The widgets hold no decisions. The form answers which buttons are usable
 //! and what one submit writes, and it has unit tests. This file reads the
@@ -191,6 +193,13 @@ const REMOVE_FAILED: &CStr = N_(c"The script could not be removed: %1$s");
 // TRANSLATORS: %1$s is the reason the mail server gave. The script was
 // already removed; only the list on this page could not be refreshed.
 const REMOVE_RELOAD_FAILED: &CStr = N_(c"Removed. The list could not be refreshed: %1$s");
+const SAVING_TEXT: &CStr = N_(c"Saving…");
+// TRANSLATORS: %1$s is the reason the mail server gave. The text stays in
+// the editor either way.
+const SAVE_TEXT_FAILED: &CStr = N_(c"The script could not be saved: %1$s");
+// TRANSLATORS: %1$s is the reason the mail server gave. The save already
+// took effect; only the list on this page could not be refreshed.
+const SAVE_TEXT_RELOAD_FAILED: &CStr = N_(c"Saved. The list could not be refreshed: %1$s");
 // Neither list has a visible label of its own to name it for a screen
 // reader through a `labelled-by` relation (item 174d), unlike the text
 // view below, which has "_Script:".
@@ -271,6 +280,12 @@ struct UiState {
     /// pending. [`Drop`] cancels it, so a page closed mid-debounce never runs
     /// the callback against a freed page.
     validate_timeout: c_uint,
+    /// True while the script text's own debounce save (item 180(a)) is in
+    /// flight. The debounce reschedules itself instead of starting a second
+    /// write while this is set, the same way the Activate/Deactivate/Rename
+    /// instant-apply writes rely on insensitive controls to block a second
+    /// click.
+    saving_text: bool,
     /// Item 171c's completion popup: a standalone `GTK_WINDOW_POPUP`, never
     /// a child of this page's own widget tree, so [`Drop`] destroys it
     /// explicitly. Created once, in [`build_widgets`], and kept for the
@@ -737,6 +752,7 @@ unsafe fn build_widgets(page: *mut GObject) {
                 check_generation: 0,
                 error_tag,
                 validate_timeout: 0,
+                saving_text: false,
                 completion_window,
                 completion_list,
                 completion_candidates: Vec::new(),
@@ -1320,8 +1336,10 @@ unsafe extern "C" fn on_script_changed(_buffer: *mut GObject, page: gpointer) {
 
 /// The debounce timeout `on_script_changed` schedules. Runs the local Sieve
 /// parse over the whole script and marks the line of its first problem, if
-/// any, with a themed error underline and a tooltip of the message. Fires at
-/// most once per burst of edits.
+/// any, with a themed error underline and a tooltip of the message, drives
+/// completion while typing (item 180(e)), and, on a script that parses,
+/// saves its text (item 180(a), [`maybe_save_text`]). Fires at most once per
+/// burst of edits.
 ///
 /// # Safety
 ///
@@ -1342,14 +1360,15 @@ unsafe extern "C" fn on_validate_timeout(page: gpointer) -> gboolean {
         };
         // SAFETY: every widget is a live child of the page, and no borrow of
         // `cell` is held across these calls.
-        unsafe {
+        let problem = unsafe {
             let text = get_text(buffer.cast());
             let mut start = GtkTextIter::default();
             let mut end = GtkTextIter::default();
             gtk_text_buffer_get_start_iter(buffer, &mut start);
             gtk_text_buffer_get_end_iter(buffer, &mut end);
             gtk_text_buffer_remove_tag(buffer, error_tag, &start, &end);
-            match validate::find_problem(&text) {
+            let problem = validate::find_problem(&text);
+            match &problem {
                 Some(problem) => {
                     let line = problem.line.saturating_sub(1) as c_int;
                     let mut line_start = GtkTextIter::default();
@@ -1362,7 +1381,8 @@ unsafe extern "C" fn on_validate_timeout(page: gpointer) -> gboolean {
                 }
                 None => gtk_widget_set_tooltip_text(source_view.cast(), ptr::null()),
             }
-        }
+            problem
+        };
         // Item 180(e): the same debounce also drives completion while
         // typing, with no Ctrl+Space needed. `show_completion_for_word`
         // refreshes the popup for the word now under the cursor; if that
@@ -1375,8 +1395,130 @@ unsafe extern "C" fn on_validate_timeout(page: gpointer) -> gboolean {
                 close_completion(cell);
             }
         }
+        // Item 180(a)'s last open row: a script that parses locally also
+        // gets its text saved now, instead of only on the account editor's
+        // OK. The debounce is the chosen trigger over "leaving the script":
+        // it needs no new signal connection and already fires on every
+        // pause in typing, so a script left open and untouched still saves.
+        // SAFETY: as `maybe_save_text`.
+        if problem.is_none() {
+            unsafe { maybe_save_text(cell, page) };
+        }
         G_SOURCE_REMOVE
     })
+}
+
+/// Saves the script text at the earliest safe point (item 180(a)) instead of
+/// waiting for the account editor's OK: [`on_validate_timeout`] calls this
+/// once the local Sieve parse finds no problem. The server's own validation
+/// inside [`io::save`] (through [`io::activate_now`]) still decides whether
+/// anything is written, so a script invalid only server-side (RFC 9661
+/// Section 2.5) is refused the same way the Check button refuses it, and
+/// the buffer keeps the user's text either way: nothing here reverts it.
+///
+/// Reuses [`io::activate_now`]'s write-and-reload round trip, the same one
+/// the Activate, Deactivate, Rename, Add and Remove buttons use, so any
+/// other change already staged on another row saves at the same time, same
+/// as those buttons do today.
+///
+/// # Safety
+///
+/// `cell` is the state of the live page `page` points to.
+unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
+    if cell.borrow().saving_text {
+        // A save from an earlier debounce is still in flight: reschedule
+        // instead of dropping this edit, so it is retried once that one
+        // answers.
+        // SAFETY: `page` is live for the duration of this call; the timeout
+        // either fires on this same main loop while it still is, or this
+        // page's `Drop` cancels it first.
+        let id = unsafe {
+            g_timeout_add(
+                VALIDATE_DEBOUNCE_MS,
+                Some(on_validate_timeout as unsafe extern "C" fn(gpointer) -> gboolean),
+                page.cast(),
+            )
+        };
+        cell.borrow_mut().validate_timeout = id;
+        return;
+    }
+    // SAFETY: the widgets are live, and no borrow is held.
+    unsafe { flush(cell) };
+    let Some(row) = cell.borrow().form.selected() else {
+        return;
+    };
+    let planned = {
+        let ui = cell.borrow();
+        (ui.link.clone(), ui.form.plan())
+    };
+    let (link, plan) = match planned {
+        (_, Ok(None)) | (None, Ok(Some(_))) => return,
+        (_, Err(reason)) => {
+            // SAFETY: as above.
+            unsafe { set_status(cell, &reason) };
+            return;
+        }
+        (Some(link), Ok(Some(plan))) => (link, plan),
+    };
+
+    cell.borrow_mut().saving_text = true;
+    // SAFETY: the widgets are live, and no borrow is held.
+    unsafe {
+        set_script_controls_sensitive(cell, false);
+        set_status(cell, &translate(SAVING_TEXT));
+    }
+
+    let work = move || io::activate_now(&link, &plan);
+    let finish = move |page: *mut GObject, outcome: Result<ActivateOutcome, String>| {
+        // SAFETY: `with_strong` gives the live page.
+        let Some(cell) = (unsafe { state(page) }) else {
+            return;
+        };
+        cell.borrow_mut().saving_text = false;
+        match outcome {
+            Ok(ActivateOutcome::Reloaded(loaded)) => {
+                let name = cell
+                    .borrow()
+                    .form
+                    .entries()
+                    .get(row)
+                    .map(|entry| entry.name.clone());
+                {
+                    let mut ui = cell.borrow_mut();
+                    ui.form = FiltersForm::from_loaded(loaded);
+                    if let Some(name) = name {
+                        let found = ui.form.entries().iter().position(|e| e.name == name);
+                        ui.form.select(found);
+                    }
+                }
+                // SAFETY: as above.
+                unsafe {
+                    set_status(cell, "");
+                    refresh(cell);
+                }
+            }
+            Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                let text = translate_with(SAVE_TEXT_RELOAD_FAILED, &[&reason]);
+                // SAFETY: as above.
+                unsafe {
+                    set_status(cell, &text);
+                    refresh(cell);
+                }
+            }
+            Err(reason) => {
+                let text = translate_with(SAVE_TEXT_FAILED, &[&reason]);
+                // SAFETY: as above.
+                unsafe {
+                    set_status(cell, &text);
+                    refresh(cell);
+                }
+            }
+        }
+    };
+    // SAFETY: `page` is live, the same invariant `on_validate_timeout` relies
+    // on: this page's own `Drop` cancels the debounce before freeing it, and
+    // this call runs from that debounce.
+    unsafe { dispatch::spawn_for(page, work, finish) };
 }
 
 /// Item 171c's completion popup. The text before `iter` on `iter`'s own
@@ -3748,6 +3890,7 @@ mod tests {
             check_generation: 0,
             error_tag: ptr::null_mut(),
             validate_timeout: 0,
+            saving_text: false,
             completion_window: ptr::null_mut(),
             completion_list: ptr::null_mut(),
             completion_candidates: Vec::new(),
@@ -4225,6 +4368,105 @@ mod tests {
 
             gtk_widget_destroy(page.cast());
         }
+    }
+
+    /// Item 180(a)'s last open row: editing a script's text saves it at
+    /// once, once the local Sieve parse accepts it and the same debounce
+    /// that drives that parse (item 171b) and completion (item 180(e))
+    /// fires, instead of waiting for the account editor's OK. Verifies
+    /// through a second, independent connection that the server actually
+    /// holds the new text, not only that the page's own copy of it changed.
+    /// Needs a display; skips without one.
+    #[test]
+    fn editing_the_script_text_saves_it_once_the_debounce_fires() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = AccountLink::without_refresh(client, features);
+
+        // Seeds one inactive script under a name other than
+        // `MANAGED_SCRIPT_NAME`, so the page stays in text mode: rules mode
+        // (item 171a) replaces the text view the debounce save needs.
+        let loaded = match io::activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![io::ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "custom".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: io::ActivationChange::Keep,
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: io::Baseline::default(),
+            },
+        )
+        .unwrap()
+        {
+            ActivateOutcome::Reloaded(loaded) => loaded,
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("seeding the script failed: {reason}")
+            }
+        };
+
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens here: the load above already ran. The
+        // window gives the page a real `GdkWindow`, the same as the
+        // completion tests need for their buffer edits.
+        unsafe {
+            let window = gtk_window_new(0);
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            gtk_container_add(window.cast(), page.cast());
+            gtk_widget_show_all(window);
+
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+
+            let cell = state(page.cast()).expect("a loaded page has state");
+            let buffer = cell.borrow().buffer;
+
+            let view = cell.borrow().view;
+            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+            gtk_tree_path_free(path);
+
+            let mut end = GtkTextIter::default();
+            gtk_text_buffer_get_end_iter(buffer, &mut end);
+            let added = cstring_lossy("stop;\n");
+            gtk_text_buffer_insert(buffer, &mut end, added.as_ptr(), -1);
+
+            pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
+            pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+
+            gtk_widget_destroy(window);
+        }
+
+        // A second, independent connection: the save must have reached the
+        // server, not only the page's own form.
+        let verify_client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let verify_features =
+            crate::session_cache::AccountFeatures::from_session(verify_client.session()).unwrap();
+        let verify_link = AccountLink::without_refresh(verify_client, verify_features);
+        let reloaded = io::load(&verify_link).expect("the server still answers SieveScript/get");
+        let saved = reloaded
+            .scripts
+            .iter()
+            .find(|script| script.script.name == "custom")
+            .expect("the seeded script is still there");
+        assert_eq!(
+            saved.text, "keep;\nstop;\n",
+            "the debounce must have saved the appended line to the server"
+        );
     }
 
     /// Item 180(a)'s Add mirrors Rename once the name dialog answers: it
