@@ -9,11 +9,11 @@
 //!
 //! This page shows the account's Sieve scripts as a list, and the source of
 //! the selected one in a text view. Most of what the user does is staged in
-//! a [`FiltersForm`] and written when the account editor saves. Three
+//! a [`FiltersForm`] and written when the account editor saves. Four
 //! actions are instant instead (item 180(a)'s apply-at-once sweep, one
 //! action per commit): "Check" asks the server at once and writes nothing;
-//! "Activate" and "Deactivate" write the account's current plan at once and
-//! reload the list from the server.
+//! "Activate", "Deactivate" and "Rename" write the account's current plan
+//! at once and reload the list from the server.
 //!
 //! The widgets hold no decisions. The form answers which buttons are usable
 //! and what one submit writes, and it has unit tests. This file reads the
@@ -173,6 +173,12 @@ const DEACTIVATE_FAILED: &CStr = N_(c"The script could not be deactivated: %1$s"
 // TRANSLATORS: %1$s is the reason the mail server gave. The deactivation
 // already took effect; only the list on this page could not be refreshed.
 const DEACTIVATE_RELOAD_FAILED: &CStr = N_(c"Deactivated. The list could not be refreshed: %1$s");
+const RENAMING: &CStr = N_(c"Renaming…");
+// TRANSLATORS: %1$s is the reason the mail server gave.
+const RENAME_FAILED: &CStr = N_(c"The script could not be renamed: %1$s");
+// TRANSLATORS: %1$s is the reason the mail server gave. The rename already
+// took effect; only the list on this page could not be refreshed.
+const RENAME_RELOAD_FAILED: &CStr = N_(c"Renamed. The list could not be refreshed: %1$s");
 // Neither list has a visible label of its own to name it for a screen
 // reader through a `labelled-by` relation (item 174d), unlike the text
 // view below, which has "_Script:".
@@ -1715,7 +1721,6 @@ unsafe extern "C" fn on_edit_as_text_toggled(_button: *mut GObject, page: gpoint
 /// What one button press asks the form to do.
 enum Action {
     Add,
-    Rename,
     Remove,
 }
 
@@ -1726,7 +1731,7 @@ unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
 
 unsafe extern "C" fn on_rename(_button: *mut GObject, page: gpointer) {
     // SAFETY: as above.
-    unsafe { act(page, Action::Rename) };
+    unsafe { rename_now(page) };
 }
 
 unsafe extern "C" fn on_remove(_button: *mut GObject, page: gpointer) {
@@ -1993,6 +1998,134 @@ unsafe fn deactivate_now(page: gpointer) {
     });
 }
 
+/// Renames the selected script at once instead of staging it for the
+/// account editor's OK (item 180(a)): asks for the new name in the same
+/// modal dialog the staged rename used, then writes the account's current
+/// plan on a worker thread and reloads the list from the server, the same
+/// round trip [`activate_now`] uses. The script list and buttons stay
+/// insensitive meanwhile. A write the server refuses restores the previous
+/// name; nothing else staged is touched either way.
+///
+/// # Safety
+///
+/// `page` must be the live page the Rename button belongs to.
+unsafe fn rename_now(page: gpointer) {
+    guard("JmapFiltersPage::rename", (), || {
+        // SAFETY: the page is live, per the contract. The hold keeps the
+        // page and its state alive through the dialog below.
+        let hold = unsafe { Hold::new(page.cast()) };
+        // SAFETY: as above.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        // SAFETY: the widgets are live, and no borrow is held.
+        unsafe { flush(cell) };
+        let Some(row) = cell.borrow().form.selected() else {
+            return refuse(cell, NO_SCRIPT_SELECTED);
+        };
+        let previous_name = cell
+            .borrow()
+            .form
+            .entries()
+            .get(row)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_default();
+
+        // The name dialog runs a nested main loop, so it must run with no
+        // borrow of the state held: the handlers it lets through take their
+        // own.
+        // SAFETY: the page is live, per the contract.
+        let typed = unsafe { ask_for_name(page.cast(), RENAME_TITLE, &previous_name) };
+        // The shell can destroy the page while the dialog runs. Its children
+        // are then gone.
+        if hold.disposed() {
+            return;
+        }
+        let Some(name) = typed else {
+            return;
+        };
+        if let Err(reason) = cell.borrow_mut().form.rename(row, &name) {
+            return refuse(cell, reason);
+        }
+
+        let planned = {
+            let ui = cell.borrow();
+            (ui.link.clone(), ui.form.plan())
+        };
+        let (link, plan) = match planned {
+            // The rename above always makes the form dirty, so a `None`
+            // plan or link is not expected; leave nothing written either
+            // way.
+            (_, Ok(None)) | (None, Ok(Some(_))) => {
+                cell.borrow_mut().form.restore_name(row, previous_name);
+                // SAFETY: as above.
+                unsafe { refresh(cell) };
+                return;
+            }
+            (_, Err(reason)) => {
+                cell.borrow_mut().form.restore_name(row, previous_name);
+                let text = translate_with(RENAME_FAILED, &[&reason]);
+                // SAFETY: as above.
+                unsafe {
+                    set_status(cell, &text);
+                    refresh(cell);
+                }
+                return;
+            }
+            (Some(link), Ok(Some(plan))) => (link, plan),
+        };
+
+        // SAFETY: the widgets are live, and no borrow is held.
+        unsafe {
+            set_script_controls_sensitive(cell, false);
+            set_status(cell, &translate(RENAMING));
+        }
+
+        let work = move || io::activate_now(&link, &plan);
+        let finish = move |page: *mut GObject, outcome: Result<ActivateOutcome, String>| {
+            // SAFETY: `with_strong` gives the live page.
+            let Some(cell) = (unsafe { state(page) }) else {
+                return;
+            };
+            match outcome {
+                Ok(ActivateOutcome::Reloaded(loaded)) => {
+                    {
+                        let mut ui = cell.borrow_mut();
+                        ui.form = FiltersForm::from_loaded(loaded);
+                        let found = ui.form.entries().iter().position(|e| e.name == name);
+                        ui.form.select(found);
+                    }
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, "");
+                        refresh(cell);
+                    }
+                }
+                Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    let text = translate_with(RENAME_RELOAD_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+                Err(reason) => {
+                    cell.borrow_mut().form.restore_name(row, previous_name);
+                    let text = translate_with(RENAME_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+            }
+        };
+        // SAFETY: the page is live and the signal emission holds a reference
+        // to it for all of this call.
+        unsafe { dispatch::spawn_for(page.cast(), work, finish) };
+    });
+}
+
 /// Runs one staged action and shows the list again. A refusal goes to the
 /// status label; nothing reaches the server here.
 ///
@@ -2031,23 +2164,6 @@ unsafe fn act(page: gpointer, action: Action) {
                 match unsafe { ask_for_name(page.cast(), ADD_TITLE, suggested) } {
                     None => Ok(false),
                     Some(name) => cell.borrow_mut().form.add(&name).map(|_| true),
-                }
-            }
-            Action::Rename => {
-                let Some(row) = selected else {
-                    return refuse(cell, NO_SCRIPT_SELECTED);
-                };
-                let current = cell
-                    .borrow()
-                    .form
-                    .entries()
-                    .get(row)
-                    .map(|entry| entry.name.clone())
-                    .unwrap_or_default();
-                // SAFETY: as above.
-                match unsafe { ask_for_name(page.cast(), RENAME_TITLE, &current) } {
-                    None => Ok(false),
-                    Some(name) => cell.borrow_mut().form.rename(row, &name).map(|()| true),
                 }
             }
             Action::Remove => match selected {
@@ -2602,6 +2718,40 @@ mod tests {
                 let window = (*node).data;
                 if g_type_check_instance_is_a(window.cast(), dialog_type) != GFALSE {
                     note("dialog answered");
+                    gtk_dialog_response(window.cast(), GTK_RESPONSE_OK);
+                }
+                node = (*node).next;
+            }
+            g_list_free(list);
+        }
+        G_SOURCE_REMOVE
+    }
+
+    /// Types a new name into the name dialog [`rename_now`] opened, then
+    /// answers OK, the way [`answer_ok`] answers a dialog whose initial
+    /// text needs no change. The entry is the dialog content area's one
+    /// row's second child, the layout [`build_name_dialog`] builds.
+    unsafe extern "C" fn answer_rename(_data: gpointer) -> gboolean {
+        // SAFETY: the dialog `rename_now` opened is live on this thread,
+        // inside the nested main loop this idle runs in. Every list is
+        // freed once walked; GTK owns the windows and their children.
+        unsafe {
+            let dialog_type = g_type_from_name(c"GtkDialog".as_ptr());
+            let list = gtk_window_list_toplevels();
+            let mut node = list;
+            while !node.is_null() {
+                let window = (*node).data;
+                if g_type_check_instance_is_a(window.cast(), dialog_type) != GFALSE {
+                    let content = gtk_dialog_get_content_area(window.cast());
+                    let rows = gtk_container_get_children(content.cast());
+                    if !rows.is_null() {
+                        let fields = gtk_container_get_children((*rows).data.cast());
+                        if !fields.is_null() && !(*fields).next.is_null() {
+                            set_text((*(*fields).next).data.cast(), "Renamed");
+                        }
+                        g_list_free(fields);
+                    }
+                    g_list_free(rows);
                     gtk_dialog_response(window.cast(), GTK_RESPONSE_OK);
                 }
                 node = (*node).next;
@@ -3332,6 +3482,103 @@ mod tests {
                 text,
                 translate(DEACTIVATING),
                 "the status label does not show progress while Deactivate's write is in flight"
+            );
+
+            gtk_widget_destroy(page.cast());
+        }
+    }
+
+    /// Item 180(a)'s Rename mirrors Activate/Deactivate once the name
+    /// dialog answers: it writes at once instead of waiting for the account
+    /// editor's OK, with every script-list control insensitive and a
+    /// progress status while that write is in flight. Needs a display;
+    /// skips without one.
+    #[test]
+    fn renaming_asks_for_a_name_then_disables_the_controls_before_the_worker_answers() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = AccountLink::without_refresh(client, features);
+
+        // Seeds one inactive script, the same way
+        // `deactivating_disables_the_controls_before_the_worker_answers`
+        // seeds an active one: a rename needs no active script.
+        let loaded = match io::activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![io::ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "evolution-jmap".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: io::ActivationChange::Keep,
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: io::Baseline::default(),
+            },
+        )
+        .unwrap()
+        {
+            ActivateOutcome::Reloaded(loaded) => loaded,
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("seeding the script failed: {reason}")
+            }
+        };
+
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens here: the load above already ran.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+
+            let (view, status, add, rename, remove, activate, deactivate, check) = {
+                let ui = state(page).unwrap().borrow();
+                (
+                    ui.view,
+                    ui.status,
+                    ui.add,
+                    ui.rename,
+                    ui.remove,
+                    ui.activate,
+                    ui.deactivate,
+                    ui.check,
+                )
+            };
+
+            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+            gtk_tree_path_free(path);
+
+            // Runs inside the dialog's own nested main loop: types a new
+            // name, then answers OK, the way
+            // `destroying_the_page_during_the_name_dialog_keeps_it_until_
+            // the_action_ends` answers Add's dialog.
+            g_idle_add(Some(answer_rename), ptr::null_mut());
+            rename_now(page.cast());
+
+            for control in [add, rename, remove, activate, deactivate, check] {
+                assert!(
+                    !get_sensitive(control),
+                    "a control stayed usable while Rename's write was in flight"
+                );
+            }
+            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                text,
+                translate(RENAMING),
+                "the status label does not show progress while Rename's write is in flight"
             );
 
             gtk_widget_destroy(page.cast());

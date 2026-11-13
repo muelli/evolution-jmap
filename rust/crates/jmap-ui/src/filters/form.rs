@@ -337,6 +337,15 @@ impl FiltersForm {
         }
     }
 
+    /// Sets row `index`'s name back to `name`, with no other check. For the
+    /// Rename button's instant apply (item 180(a)): undoes a staged
+    /// [`FiltersForm::rename`] the server refused to write.
+    pub fn restore_name(&mut self, index: usize, name: String) {
+        if let Some(entry) = self.entries.get_mut(index) {
+            entry.name = name;
+        }
+    }
+
     /// True when a submit has anything to write.
     pub fn dirty(&self) -> bool {
         !self.destroys.is_empty()
@@ -780,6 +789,18 @@ mod tests {
 
         assert_eq!(form.active_row(), Some(0));
         assert!(!form.entries()[1].active);
+    }
+
+    #[test]
+    fn restore_name_undoes_a_staged_rename() {
+        let mut form = form(vec![script("a", "work", false)]);
+
+        form.rename(0, "renamed").unwrap();
+        assert_eq!(form.entries()[0].name, "renamed");
+
+        form.restore_name(0, "work".to_owned());
+
+        assert_eq!(form.entries()[0].name, "work");
     }
 
     #[test]
