@@ -937,6 +937,7 @@ dependencies = [
  "jmap-config",
  "serde",
  "serde_json",
+ "shlex 1.3.0",
  "sieve-rs",
  "tracing",
 ]

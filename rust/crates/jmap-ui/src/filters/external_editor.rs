@@ -4,10 +4,14 @@
 //! Which command opens the script text in an external editor (item 180
 //! step (d)).
 //!
-//! Pure precedence logic only: no GSettings read, process spawn or file
-//! monitor here. A later step wires [`choose_command`] to the External
-//! Editor plugin's own `org.gnome.evolution.plugin.external-editor`
-//! GSettings key and to `$VISUAL`/`$EDITOR`, then spawns the result.
+//! Pure precedence and argv logic only: no GSettings read, process spawn
+//! or file monitor here. A later step wires [`choose_command`] to the
+//! External Editor plugin's own
+//! `org.gnome.evolution.plugin.external-editor` GSettings key and to
+//! `$VISUAL`/`$EDITOR`, builds the temp file, and spawns [`build_argv`]'s
+//! result.
+
+use std::path::Path;
 
 /// The external editor command to run, or [`EditorCommand::Default`] to
 /// hand the file to the desktop's default handler for text instead of
@@ -38,6 +42,27 @@ pub fn choose_command(
             (!trimmed.is_empty()).then(|| EditorCommand::Command(trimmed.to_string()))
         })
         .unwrap_or(EditorCommand::Default)
+}
+
+/// Splits an editor command line into an argv, with `file_path` appended
+/// as its final argument. `command` is the string inside
+/// [`EditorCommand::Command`]; the [`EditorCommand::Default`] case has no
+/// command line to build an argv from.
+///
+/// Mirrors the GNOME External Editor plugin: the configured command plus
+/// the file path, shell-word split so quoting in `command` still works.
+/// The file path itself is appended whole, not shell-split, so a space in
+/// the path stays one argument.
+///
+/// Returns `None` when `command` does not parse as a shell word sequence
+/// (for example, an unmatched quote) or names no program at all.
+pub fn build_argv(command: &str, file_path: &Path) -> Option<Vec<String>> {
+    let mut argv = shlex::split(command)?;
+    if argv.is_empty() {
+        return None;
+    }
+    argv.push(file_path.to_string_lossy().into_owned());
+    Some(argv)
 }
 
 #[cfg(test)]
@@ -95,5 +120,63 @@ mod tests {
             choose_command(Some("  gedit --wait  "), None, None),
             EditorCommand::Command("gedit --wait".to_string())
         );
+    }
+
+    #[test]
+    fn a_bare_command_gets_the_file_path_appended() {
+        assert_eq!(
+            build_argv("gedit", Path::new("/tmp/x.sieve")),
+            Some(vec!["gedit".to_string(), "/tmp/x.sieve".to_string()])
+        );
+    }
+
+    #[test]
+    fn command_flags_split_on_whitespace() {
+        assert_eq!(
+            build_argv("gedit --wait", Path::new("/tmp/x.sieve")),
+            Some(vec![
+                "gedit".to_string(),
+                "--wait".to_string(),
+                "/tmp/x.sieve".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn quoting_in_the_command_line_still_works() {
+        assert_eq!(
+            build_argv(r#"emacsclient -c -a "" --wait"#, Path::new("/tmp/x.sieve")),
+            Some(vec![
+                "emacsclient".to_string(),
+                "-c".to_string(),
+                "-a".to_string(),
+                String::new(),
+                "--wait".to_string(),
+                "/tmp/x.sieve".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_space_in_the_file_path_stays_one_argument() {
+        assert_eq!(
+            build_argv("gedit", Path::new("/tmp/my file.sieve")),
+            Some(vec!["gedit".to_string(), "/tmp/my file.sieve".to_string()])
+        );
+    }
+
+    #[test]
+    fn an_unmatched_quote_is_refused() {
+        assert_eq!(build_argv(r#"gedit ""#, Path::new("/tmp/x.sieve")), None);
+    }
+
+    #[test]
+    fn an_empty_command_names_no_program() {
+        assert_eq!(build_argv("", Path::new("/tmp/x.sieve")), None);
+    }
+
+    #[test]
+    fn a_whitespace_only_command_names_no_program() {
+        assert_eq!(build_argv("   ", Path::new("/tmp/x.sieve")), None);
     }
 }
