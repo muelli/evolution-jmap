@@ -30,7 +30,7 @@
 //! zero-sized handle; see the comment on its `build.rs` definition.
 
 use std::cell::RefCell;
-use std::ffi::{CStr, c_int, c_uint};
+use std::ffi::{CStr, c_int, c_uint, c_ulong};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,8 +43,8 @@ use evo_sys::{
     GTK_SELECTION_BROWSE, GTK_TEXT_WINDOW_WIDGET, GTK_WINDOW_POPUP, GdkEventKey, GdkRectangle,
     GtkCellRenderer, GtkListStore, GtkSourceBuffer, GtkTextBuffer, GtkTextIter, GtkTextTag,
     GtkTreeModel, GtkTreePath, GtkTreeSelection, GtkWidget, GtkWindow, e_mail_config_page_get_type,
-    gdk_event_get_keyval, gdk_event_get_state, gdk_window_get_origin, gtk_box_new,
-    gtk_box_pack_start, gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new,
+    e_shell_get_default, gdk_event_get_keyval, gdk_event_get_state, gdk_window_get_origin,
+    gtk_box_new, gtk_box_pack_start, gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new,
     gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_container_get_children,
     gtk_container_set_border_width, gtk_dialog_add_button, gtk_dialog_get_content_area,
     gtk_dialog_new, gtk_dialog_run, gtk_dialog_set_default_response, gtk_entry_new,
@@ -83,8 +83,8 @@ use glib_sys::{
 };
 use gobject_sys::{
     G_TYPE_STRING, GObject, GObjectClass, GTypeInstance, GValue, g_object_ref, g_object_unref,
-    g_signal_connect_data, g_type_check_instance_is_a, g_type_from_name, g_value_init,
-    g_value_set_string, g_value_unset,
+    g_signal_connect_data, g_signal_handler_disconnect, g_type_check_instance_is_a,
+    g_type_from_name, g_value_init, g_value_set_string, g_value_unset,
 };
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::error::cstring_lossy;
@@ -286,6 +286,22 @@ struct UiState {
     /// The index into `completion_candidates` Up/Down moves, and Tab/Enter
     /// accepts.
     completion_selected: usize,
+    /// Item 180(c)'s "went offline while the page was open" half: true once
+    /// [`apply_offline_change`] has made this page read-only. A page whose
+    /// initial load never finished (`link` is still `None`) never sets this:
+    /// it already shows its own offline message, and a cold start showing
+    /// the last loaded scripts read-only is a separate, still open, slice.
+    offline: bool,
+    /// The shell singleton [`build_widgets`] connected the two handlers
+    /// below to, or null if none was running yet (a headless test, or no
+    /// shell instance up). Kept only so [`Drop`] can disconnect from the
+    /// same instance.
+    shell: *mut GObject,
+    /// The `notify::online` handler id on `shell`, or 0 if never connected.
+    shell_online_handler: c_ulong,
+    /// The `notify::network-available` handler id on `shell`, or 0 if never
+    /// connected.
+    shell_network_handler: c_ulong,
 }
 
 /// A fresh generation for one Check click, process-wide so it never repeats.
@@ -307,13 +323,15 @@ impl UiState {
 }
 
 impl Drop for UiState {
-    /// Cancels a pending debounce timeout and destroys the completion
-    /// popup. Without the first, closing the account editor while a
-    /// timeout is still pending would run it against a page
-    /// `g_object_set_data_full` is already in the middle of freeing.
-    /// Without the second, the popup would leak: it is a standalone
-    /// toplevel window, not a child this page's own container destroys
-    /// for it.
+    /// Cancels a pending debounce timeout, destroys the completion popup
+    /// and disconnects from the shell singleton. Without the first, closing
+    /// the account editor while a timeout is still pending would run it
+    /// against a page `g_object_set_data_full` is already in the middle of
+    /// freeing. Without the second, the popup would leak: it is a
+    /// standalone toplevel window, not a child this page's own container
+    /// destroys for it. Without the third, the shell (which outlives this
+    /// page) would call back into freed memory the next time it goes
+    /// online or offline (item 180(c)).
     fn drop(&mut self) {
         if self.validate_timeout != 0 {
             // SAFETY: a source id this page itself added with `g_timeout_add`
@@ -324,6 +342,20 @@ impl Drop for UiState {
             // SAFETY: a window this page created in `build_widgets` and
             // never shares with anything else.
             unsafe { gtk_widget_destroy(self.completion_window) };
+        }
+        if !self.shell.is_null() {
+            // SAFETY: `shell` is the live singleton `build_widgets` connected
+            // these handlers to; it outlives this page. A 0 id was never
+            // connected, and `g_signal_handler_disconnect` is only called
+            // for the other case.
+            unsafe {
+                if self.shell_online_handler != 0 {
+                    g_signal_handler_disconnect(self.shell, self.shell_online_handler);
+                }
+                if self.shell_network_handler != 0 {
+                    g_signal_handler_disconnect(self.shell, self.shell_network_handler);
+                }
+            }
         }
     }
 }
@@ -630,6 +662,41 @@ unsafe fn build_widgets(page: *mut GObject) {
             0,
         );
 
+        // Item 180(c): watch the shell's online state, so a page already
+        // open and loaded notices the user going offline at once instead
+        // of only on the next write. No shell instance (a headless test,
+        // or none started yet) leaves both ids at 0: nothing to watch,
+        // nothing for `Drop` to disconnect later.
+        let shell = e_shell_get_default();
+        let (shell_online_handler, shell_network_handler) = if shell.is_null() {
+            (0, 0)
+        } else {
+            (
+                g_signal_connect_data(
+                    shell.cast(),
+                    c"notify::online".as_ptr(),
+                    gcallback(
+                        on_shell_online_changed
+                            as unsafe extern "C" fn(*mut GObject, gpointer, gpointer),
+                    ),
+                    page.cast(),
+                    None,
+                    0,
+                ),
+                g_signal_connect_data(
+                    shell.cast(),
+                    c"notify::network-available".as_ptr(),
+                    gcallback(
+                        on_shell_online_changed
+                            as unsafe extern "C" fn(*mut GObject, gpointer, gpointer),
+                    ),
+                    page.cast(),
+                    None,
+                    0,
+                ),
+            )
+        };
+
         STATE.set(
             page,
             RefCell::new(UiState {
@@ -669,6 +736,10 @@ unsafe fn build_widgets(page: *mut GObject) {
                 completion_list,
                 completion_candidates: Vec::new(),
                 completion_selected: 0,
+                offline: false,
+                shell: shell.cast(),
+                shell_online_handler,
+                shell_network_handler,
             }),
         );
     }
@@ -898,6 +969,11 @@ struct ShowPlan {
     rule_rows: Vec<(String, String)>,
     rule_selected: Option<usize>,
     rule_buttons: rule_form::RuleButtons,
+    /// Item 180(c): true while the shell is offline. Every sensitivity flag
+    /// below is cleared when this is set, so a selection change made while
+    /// offline (which runs this same plan) cannot re-enable a control
+    /// [`apply_offline_change`] just disabled.
+    offline: bool,
 }
 
 /// Puts the selected script's source in the text view, or the managed
@@ -974,6 +1050,7 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             rule_rows,
             rule_selected,
             rule_buttons,
+            offline: ui.offline,
         }
     };
 
@@ -1029,13 +1106,16 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             plan.buttons.check,
         ];
         for (control, on) in script_controls.iter().zip(script_sensitive) {
-            gtk_widget_set_sensitive(*control, flag(on));
+            gtk_widget_set_sensitive(*control, flag(on && !plan.offline));
         }
 
         gtk_widget_set_visible(source_label, flag(!plan.want_rules));
         gtk_widget_set_visible(source_view, flag(!plan.want_rules));
-        gtk_widget_set_sensitive(source_view, flag(!plan.want_rules && plan.buttons.edit));
-        gtk_text_view_set_editable(source_view.cast(), flag(plan.buttons.edit));
+        gtk_widget_set_sensitive(
+            source_view,
+            flag(!plan.want_rules && plan.buttons.edit && !plan.offline),
+        );
+        gtk_text_view_set_editable(source_view.cast(), flag(plan.buttons.edit && !plan.offline));
         set_text(
             buffer.cast(),
             if plan.want_rules {
@@ -1046,7 +1126,7 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
         );
 
         gtk_widget_set_visible(rules_box, flag(plan.want_rules));
-        gtk_widget_set_sensitive(rule_controls[0], flag(plan.want_rules));
+        gtk_widget_set_sensitive(rule_controls[0], flag(plan.want_rules && !plan.offline));
         let rule_sensitive = [
             plan.want_rules,
             plan.want_rules && plan.rule_buttons.edit,
@@ -1057,11 +1137,14 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             plan.want_rules && plan.rule_buttons.disable,
         ];
         for (control, on) in rule_controls.iter().zip(rule_sensitive) {
-            gtk_widget_set_sensitive(*control, flag(on));
+            gtk_widget_set_sensitive(*control, flag(on && !plan.offline));
         }
 
         gtk_widget_set_visible(edit_as_text, flag(plan.edit_as_text_visible));
-        gtk_widget_set_sensitive(edit_as_text, flag(plan.edit_as_text_sensitive));
+        gtk_widget_set_sensitive(
+            edit_as_text,
+            flag(plan.edit_as_text_sensitive && !plan.offline),
+        );
 
         // Rewriting the rules store moves its cursor, which emits "changed"
         // on its selection, and `set_bool` below emits "toggled" when the
@@ -1088,6 +1171,68 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             set_status(cell, &translate(note));
         }
     }
+}
+
+/// Item 180(c)'s "went offline while the page was open" half. Flushes the
+/// buffer into the form first, so going offline never loses a keystroke
+/// made just before it (the buffer and the form stay in step either way,
+/// since neither this function nor the later [`show_selected`] ever writes
+/// one from a stale copy of the other). Then redraws through
+/// [`show_selected`], whose own sensitivity computation now clears every
+/// control while [`UiState::offline`] is set, and sets or clears the
+/// offline note. A page whose initial load never finished (`link` is
+/// `None`) ignores this: it already shows its own offline message, and a
+/// cold start showing the last loaded scripts read-only is a separate,
+/// still open, slice.
+///
+/// # Safety
+///
+/// As [`show_selected`].
+unsafe fn apply_offline_change(cell: &RefCell<UiState>, offline: bool) {
+    {
+        let mut ui = cell.borrow_mut();
+        if ui.link.is_none() || ui.offline == offline {
+            return;
+        }
+        ui.offline = offline;
+    }
+    let note = if offline {
+        translate(OFFLINE)
+    } else {
+        String::new()
+    };
+    // SAFETY: as `show_selected`.
+    unsafe {
+        flush(cell);
+        show_selected(cell);
+        set_status(cell, &note);
+    }
+}
+
+/// The shell's `notify::online` and `notify::network-available` handler
+/// (item 180(c)). Both signals share it: either firing is reason enough to
+/// recheck [`link::shell_is_offline`] and apply the change, if any.
+///
+/// # Safety
+///
+/// The GLib signal system calls this with the page as the data pointer.
+unsafe extern "C" fn on_shell_online_changed(
+    _shell: *mut GObject,
+    _pspec: gpointer,
+    page: gpointer,
+) {
+    guard("JmapFiltersPage::shell-notify", (), || {
+        // SAFETY: the page is live: `Drop` disconnects this handler before
+        // the page is freed.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        // SAFETY: this handler runs on the main loop, the same thread that
+        // writes the shell's `online` and `network-available` properties.
+        let offline = unsafe { link::shell_is_offline() };
+        // SAFETY: as `show_selected`.
+        unsafe { apply_offline_change(cell, offline) };
+    });
 }
 
 /// Copies the text view back into the script it belongs to. Every action
@@ -3517,6 +3662,10 @@ mod tests {
             completion_list: ptr::null_mut(),
             completion_candidates: Vec::new(),
             completion_selected: 0,
+            offline: false,
+            shell: ptr::null_mut(),
+            shell_online_handler: 0,
+            shell_network_handler: 0,
         }
     }
 
@@ -3775,6 +3924,25 @@ mod tests {
             );
         }
         sensitive == GTRUE
+    }
+
+    /// A `GtkTextView`'s own `editable` property, for item 180(c)'s tests.
+    ///
+    /// # Safety
+    ///
+    /// `view` must be a live `GtkTextView`.
+    unsafe fn get_editable(view: *mut GtkWidget) -> bool {
+        let mut editable: gboolean = GTRUE;
+        // SAFETY: as the contract of this function.
+        unsafe {
+            g_object_get(
+                view.cast(),
+                c"editable".as_ptr(),
+                &mut editable as *mut gboolean,
+                ptr::null::<c_char>(),
+            );
+        }
+        editable == GTRUE
     }
 
     /// Item 180(a)'s Deactivate mirrors Activate exactly: clicking it writes
@@ -4139,6 +4307,197 @@ mod tests {
                 text,
                 translate(REMOVING),
                 "the status label does not show progress while Remove's write is in flight"
+            );
+
+            gtk_widget_destroy(page.cast());
+        }
+    }
+
+    /// Item 180(c)'s "went offline while the page was open" half: going
+    /// offline leaves every control insensitive and the buffer unchanged
+    /// and non-editable, with the offline note; coming back online restores
+    /// both the buffer's editability and the status label. Needs a
+    /// display; skips without one.
+    #[test]
+    fn going_offline_locks_the_page_without_touching_the_buffer() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = AccountLink::without_refresh(client, features);
+
+        // Seeds one editable, inactive script: the same create-only plan
+        // `activate_now_deactivates_and_reloads_in_one_call` seeds, minus
+        // its activation.
+        let loaded = match io::activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![io::ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "evolution-jmap".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: io::ActivationChange::Keep,
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: io::Baseline::default(),
+            },
+        )
+        .unwrap()
+        {
+            ActivateOutcome::Reloaded(loaded) => loaded,
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("seeding the script failed: {reason}")
+            }
+        };
+
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens here: the load above already ran.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+
+            let (
+                view,
+                status,
+                add,
+                rename,
+                remove,
+                activate,
+                deactivate,
+                check,
+                source_view,
+                buffer,
+            ) = {
+                let ui = state(page).unwrap().borrow();
+                (
+                    ui.view,
+                    ui.status,
+                    ui.add,
+                    ui.rename,
+                    ui.remove,
+                    ui.activate,
+                    ui.deactivate,
+                    ui.check,
+                    ui.source_view,
+                    ui.buffer,
+                )
+            };
+
+            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+            gtk_tree_path_free(path);
+
+            assert!(
+                get_sensitive(activate),
+                "the script's own button stayed insensitive before going offline"
+            );
+            let text_before = get_text(buffer.cast());
+
+            let cell = state(page).unwrap();
+            apply_offline_change(cell, true);
+
+            for control in [
+                add,
+                rename,
+                remove,
+                activate,
+                deactivate,
+                check,
+                source_view,
+            ] {
+                assert!(
+                    !get_sensitive(control),
+                    "a control stayed usable after the shell went offline"
+                );
+            }
+            assert!(
+                !get_editable(source_view),
+                "the script stayed editable after the shell went offline"
+            );
+            assert_eq!(
+                get_text(buffer.cast()),
+                text_before,
+                "going offline changed the buffer text"
+            );
+            let offline_text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                offline_text,
+                translate(OFFLINE),
+                "the status label does not say the shell is offline"
+            );
+
+            apply_offline_change(cell, false);
+
+            assert!(
+                get_sensitive(activate),
+                "the script's own button stayed insensitive after reconnecting"
+            );
+            assert!(
+                get_editable(source_view),
+                "the script stayed read-only after reconnecting"
+            );
+            assert_eq!(
+                get_text(buffer.cast()),
+                text_before,
+                "reconnecting changed the buffer text"
+            );
+            let online_text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                online_text, "",
+                "the offline note stayed after reconnecting"
+            );
+
+            gtk_widget_destroy(page.cast());
+        }
+    }
+
+    /// A page whose initial load never finished (offline from a cold start,
+    /// or a load that failed) has no link, so a later shell online/offline
+    /// change must not touch it: showing the last loaded scripts read-only
+    /// from a cold start is a separate, still open, slice (item 180(c)).
+    /// Needs a display; skips without one.
+    #[test]
+    fn a_page_with_no_link_ignores_a_shell_online_change() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens: `LoadOutcome::Offline` is applied directly.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+            apply_outcome(page, LoadOutcome::Offline);
+
+            let cell = state(page).unwrap();
+            apply_offline_change(cell, true);
+            assert!(
+                !cell.borrow().offline,
+                "a page with no link must not record a shell offline change"
+            );
+
+            let text = read_string(gtk_label_get_text(
+                state(page).unwrap().borrow().status.cast(),
+            ))
+            .unwrap_or_default();
+            assert_eq!(
+                text,
+                translate(OFFLINE),
+                "the cold-start offline message changed"
             );
 
             gtk_widget_destroy(page.cast());
