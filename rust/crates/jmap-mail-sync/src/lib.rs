@@ -519,16 +519,36 @@ impl MailSync {
     /// [`MailSync::set_keywords`] gives. The patch changes only the named
     /// members, so it does not conflict with changes to other members.
     pub fn file_message(&self, uid: &Id, filing: &Filing) -> Result<(), SyncError> {
+        self.file_message_as(&self.account_id, uid, filing)
+    }
+
+    /// [`Self::file_message`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Email/set` is a JMAP method call under one `accountId`, and both
+    /// mailboxes a [`Filing`] names belong to the message's own account
+    /// (RFC 8620 §5.3). A mailbox [`FolderTree::owning_account`] names as a
+    /// shared account's (ROADMAP item 179(d)) needs its filing write to
+    /// carry that account, not the account this `MailSync` addresses by
+    /// default: the caller resolves `account` from the held folder tree and
+    /// passes it here instead of assuming `self.account_id`.
+    pub fn file_message_as(
+        &self,
+        account: &Id,
+        uid: &Id,
+        filing: &Filing,
+    ) -> Result<(), SyncError> {
         if filing.is_empty() {
             return Ok(());
         }
-        let account_id = self.account_id().to_string();
+        let account_id = account.to_string();
         let message_uid = uid.to_string();
         tracing::debug!(account_id, uid = message_uid, "filing message");
-        self.update_email(uid, filing.patch()).map_err(|error| {
-            tracing::warn!(account_id, uid = message_uid, %error, "message filing failed");
-            error
-        })
+        self.update_email_as(account, uid, filing.patch())
+            .map_err(|error| {
+                tracing::warn!(account_id, uid = message_uid, %error, "message filing failed");
+                error
+            })
     }
 
     /// Removes one message from a mailbox permanently (`expunge_sync`).
@@ -1161,11 +1181,23 @@ impl MailSync {
         ))
     }
 
-    /// One `Email/set` update. A `notFound` refusal gives
-    /// [`SyncError::NoSuchMessage`], because the message is gone.
+    /// One `Email/set` update, against this sync's own account. A `notFound`
+    /// refusal gives [`SyncError::NoSuchMessage`], because the message is
+    /// gone.
     fn update_email(&self, uid: &Id, patch: serde_json::Value) -> Result<(), SyncError> {
+        self.update_email_as(&self.account_id, uid, patch)
+    }
+
+    /// [`Self::update_email`], against `account` instead of this sync's own
+    /// account.
+    fn update_email_as(
+        &self,
+        account: &Id,
+        uid: &Id,
+        patch: serde_json::Value,
+    ) -> Result<(), SyncError> {
         self.client
-            .email_update(&self.account_id, uid, patch)
+            .email_update(account, uid, patch)
             .map_err(|error| match &error {
                 jmap_client::Error::Set(set_error)
                     if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>

@@ -1156,3 +1156,87 @@ fn the_rows_a_selection_left_behind_are_announced_together() {
         }]
     );
 }
+
+/// ROADMAP item 179(d): a mailbox
+/// [`jmap_mail_sync::FolderTree::merge_shared`] merges in from a shared
+/// account is a mailbox of a *different* JMAP account, and `Email/set` is a
+/// method call under one `accountId`. A transfer between two such mailboxes
+/// of the same shared account must reach that account, not the account this
+/// store otherwise addresses.
+#[test]
+fn transferring_between_two_shared_mailboxes_lands_in_their_owning_account() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    let (shared_archive_id, shared_uid) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let inbox = sharer.seed_mailbox("Inbox", None);
+        let archive = sharer.seed_mailbox("Archive", None);
+        let uid = sharer.seed_email(EmailSeed::new(
+            inbox,
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        (archive, uid)
+    };
+
+    let account = Account::open();
+    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
+    account.connect(MailSync::new(client, account_id.clone()));
+
+    let source = open(&account, "Shared/Bob/Inbox");
+    let destination = open(&account, "Shared/Bob/Archive");
+
+    let list = StringArray::of(&[&shared_uid]);
+    let mut transferred: *mut GPtrArray = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: two live folders of one store, an array of NUL-terminated uids
+    // alive across the call, and two out-parameters that are writable and
+    // currently NULL.
+    let ok = unsafe {
+        camel_folder_transfer_messages_to_sync(
+            source,
+            list.as_ptr(),
+            destination,
+            GTRUE,
+            &mut transferred,
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+    Transferred::new(ok, transferred, error).expect_ok();
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state.account(&account_id).unwrap().emails.is_empty(),
+        "the message must not change in this store's own account"
+    );
+    assert_eq!(
+        state
+            .account(&shared_account_id)
+            .unwrap()
+            .emails
+            .get(&shared_uid)
+            .unwrap()
+            .mailbox_ids
+            .clone()
+            .unwrap_or_default()
+            .into_keys()
+            .collect::<Vec<_>>(),
+        vec![shared_archive_id],
+        "the message must move in the shared mailbox's own account"
+    );
+
+    // SAFETY: the two references this test took from `get_folder_sync`.
+    unsafe {
+        g_object_unref(source.cast());
+        g_object_unref(destination.cast());
+    }
+}

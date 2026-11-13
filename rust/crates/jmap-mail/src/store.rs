@@ -995,6 +995,13 @@ impl JmapStore {
     /// It takes no mailbox argument for the same reason: the [`Filing`] has
     /// the two mailboxes, and the message id identifies the message in the
     /// account, not in a folder.
+    ///
+    /// `filing`'s destination mailbox can be a mailbox of a shared account
+    /// merged into this account's folder tree ([`FolderTree::merge_shared`]).
+    /// `Email/set` is a method call under one `accountId`, so this resolves
+    /// the mailbox's real owner first ([`FolderTree::owning_account`]) and
+    /// files the message under that account instead of this store's own, the
+    /// same way [`Self::import_message`] already does (ROADMAP item 179(d)).
     pub fn file_message(&self, uid: &Id, filing: &Filing) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
@@ -1002,9 +1009,14 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = self
+            .folders(0)
+            .ok()
+            .and_then(|tree| tree.owning_account(filing.into_mailbox()).cloned())
+            .unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(uid = uid.as_str(), "filing message");
         match retry_once_after(
-            || sync.file_message(uid, filing),
+            || sync.file_message_as(&account, uid, filing),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
