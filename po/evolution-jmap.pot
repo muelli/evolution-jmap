@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-12 16:30+0000\n"
+"POT-Creation-Date: 2026-11-13 00:29+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -536,8 +536,8 @@ msgid "_Pick"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:137
-#: rust/crates/jmap-ui/src/filters/page.rs:448
-#: rust/crates/jmap-ui/src/filters/page.rs:541
+#: rust/crates/jmap-ui/src/filters/page.rs:454
+#: rust/crates/jmap-ui/src/filters/page.rs:547
 msgid "Name"
 msgstr ""
 
@@ -565,37 +565,36 @@ msgstr ""
 msgid "The search failed: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/delegates/page.rs:262
+#: rust/crates/jmap-ui/src/delegates/page.rs:261
 msgid "Delegates"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/delegates/page.rs:399
-#: rust/crates/jmap-ui/src/delegates/page.rs:410
+#: rust/crates/jmap-ui/src/delegates/page.rs:403
+#: rust/crates/jmap-ui/src/delegates/page.rs:414
 msgid "No access"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/delegates/page.rs:400
+#: rust/crates/jmap-ui/src/delegates/page.rs:404
 msgid "Free/busy only"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/delegates/page.rs:401
-#: rust/crates/jmap-ui/src/delegates/page.rs:411
+#: rust/crates/jmap-ui/src/delegates/page.rs:405
+#: rust/crates/jmap-ui/src/delegates/page.rs:415
 msgid "Reviewer"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/delegates/page.rs:402
-#: rust/crates/jmap-ui/src/delegates/page.rs:412
+#: rust/crates/jmap-ui/src/delegates/page.rs:406
+#: rust/crates/jmap-ui/src/delegates/page.rs:416
 msgid "Author"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/delegates/page.rs:403
-#: rust/crates/jmap-ui/src/delegates/page.rs:413
+#: rust/crates/jmap-ui/src/delegates/page.rs:407
 msgid "Editor"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/delegates/page.rs:690
-#: rust/crates/jmap-ui/src/delegates/page.rs:817
-#: rust/crates/jmap-ui/src/filters/page.rs:2209
+#: rust/crates/jmap-ui/src/delegates/page.rs:693
+#: rust/crates/jmap-ui/src/delegates/page.rs:820
+#: rust/crates/jmap-ui/src/filters/page.rs:2321
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:455
 #: rust/crates/jmap-ui/src/send_later/extension.rs:906
 msgid "_Cancel"
@@ -727,91 +726,108 @@ msgstr ""
 msgid "Activated. The list could not be refreshed: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:173
+#: rust/crates/jmap-ui/src/filters/page.rs:170
+msgid "Deactivating…"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/filters/page.rs:172
+#, c-format
+msgid "The script could not be deactivated: %1$s"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the reason the mail server gave. The deactivation
+#. already took effect; only the list on this page could not be refreshed.
+#: rust/crates/jmap-ui/src/filters/page.rs:175
+#, c-format
+msgid "Deactivated. The list could not be refreshed: %1$s"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/filters/page.rs:179
 msgid "Filter scripts"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:174
+#: rust/crates/jmap-ui/src/filters/page.rs:180
 msgid "Rules of the selected script"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:180
+#: rust/crates/jmap-ui/src/filters/page.rs:186
 msgid "New Rule"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:181
+#: rust/crates/jmap-ui/src/filters/page.rs:187
 msgid "Edit Rule"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:182
+#: rust/crates/jmap-ui/src/filters/page.rs:188
 msgid "_Edit as text"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:186
+#: rust/crates/jmap-ui/src/filters/page.rs:192
 msgid "Edi_t…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:189
+#: rust/crates/jmap-ui/src/filters/page.rs:195
 msgid "Deact_ivate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:193
+#: rust/crates/jmap-ui/src/filters/page.rs:199
 msgid "Acti_vate"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:195
+#: rust/crates/jmap-ui/src/filters/page.rs:201
 msgid "A_dd…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:196
+#: rust/crates/jmap-ui/src/filters/page.rs:202
 msgid "Not in Evolution's rules format, so it shows as text."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:370
+#: rust/crates/jmap-ui/src/filters/page.rs:376
 msgid "Server Filters"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:449
+#: rust/crates/jmap-ui/src/filters/page.rs:455
 msgid "Active"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:463
+#: rust/crates/jmap-ui/src/filters/page.rs:469
 msgid "Re_move"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:479
+#: rust/crates/jmap-ui/src/filters/page.rs:485
 msgid "_Script:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:540
+#: rust/crates/jmap-ui/src/filters/page.rs:546
 msgid "Enabled"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:554
+#: rust/crates/jmap-ui/src/filters/page.rs:560
 msgid "Rem_ove"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:555
+#: rust/crates/jmap-ui/src/filters/page.rs:561
 msgid "Move _Up"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:556
+#: rust/crates/jmap-ui/src/filters/page.rs:562
 msgid "Move Do_wn"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:557
+#: rust/crates/jmap-ui/src/filters/page.rs:563
 msgid "E_nable"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:558
+#: rust/crates/jmap-ui/src/filters/page.rs:564
 msgid "Disa_ble"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:560
+#: rust/crates/jmap-ui/src/filters/page.rs:566
 msgid "C_heck"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:2212
+#: rust/crates/jmap-ui/src/filters/page.rs:2324
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:458
 msgid "_OK"
 msgstr ""
