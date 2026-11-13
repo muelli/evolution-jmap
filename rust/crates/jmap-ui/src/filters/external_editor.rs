@@ -4,14 +4,15 @@
 //! Which command opens the script text in an external editor (item 180
 //! step (d)).
 //!
-//! Pure precedence and argv logic only: no GSettings read, process spawn
-//! or file monitor here. A later step wires [`choose_command`] to the
-//! External Editor plugin's own
+//! Pure precedence, argv and temp-file logic only: no GSettings read,
+//! process spawn or file monitor here. A later step wires
+//! [`choose_command`] to the External Editor plugin's own
 //! `org.gnome.evolution.plugin.external-editor` GSettings key and to
-//! `$VISUAL`/`$EDITOR`, builds the temp file, and spawns [`build_argv`]'s
-//! result.
+//! `$VISUAL`/`$EDITOR`, adds the button, and spawns [`build_argv`]'s
+//! result on [`write_temp_file`]'s path.
 
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 /// The external editor command to run, or [`EditorCommand::Default`] to
 /// hand the file to the desktop's default handler for text instead of
@@ -63,6 +64,47 @@ pub fn build_argv(command: &str, file_path: &Path) -> Option<Vec<String>> {
     }
     argv.push(file_path.to_string_lossy().into_owned());
     Some(argv)
+}
+
+/// Writes `script_text` to a new, private file inside `dir` and returns
+/// its path, for a later step to spawn an external editor on.
+///
+/// The file is mode 600 from creation, with no window where it is
+/// readable by another local account, and its name is unpredictable, so
+/// another local process cannot pre-create or symlink the path before
+/// this call opens it. Retries on a name collision; gives up after a
+/// bounded number of tries.
+pub fn write_temp_file(dir: &Path, script_text: &str) -> io::Result<PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let pid = std::process::id();
+    for attempt in 0..100u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = dir.join(format!(
+            "evolution-jmap-filter-{pid}-{nanos}-{attempt}.sieve"
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(script_text.as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create a unique external-editor temp file",
+    ))
 }
 
 #[cfg(test)]
@@ -178,5 +220,39 @@ mod tests {
     #[test]
     fn a_whitespace_only_command_names_no_program() {
         assert_eq!(build_argv("   ", Path::new("/tmp/x.sieve")), None);
+    }
+
+    #[test]
+    fn the_temp_file_holds_the_script_text() {
+        let dir = std::env::temp_dir();
+        let path = write_temp_file(&dir, "require [\"fileinto\"];").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "require [\"fileinto\"];"
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn the_temp_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir();
+        let path = write_temp_file(&dir, "").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn two_calls_do_not_collide() {
+        let dir = std::env::temp_dir();
+        let a = write_temp_file(&dir, "a").unwrap();
+        let b = write_temp_file(&dir, "b").unwrap();
+        assert_ne!(a, b);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "a");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "b");
+        std::fs::remove_file(&a).unwrap();
+        std::fs::remove_file(&b).unwrap();
     }
 }
