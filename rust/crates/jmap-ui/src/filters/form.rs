@@ -157,6 +157,33 @@ impl FiltersForm {
         form
     }
 
+    /// Builds a read-only view from item 180(c)'s cold-start cache. Every
+    /// field a submit would need (`id`, `key`, the server's capability and
+    /// size limits) stays unset: the page's own offline state already
+    /// disables every control that could act on it, so nothing reads them
+    /// while this form is in use.
+    pub fn from_cached(scripts: &[crate::filters::cache::CachedScript]) -> Self {
+        let mut form = Self {
+            offered: true,
+            ..Self::default()
+        };
+        for script in scripts {
+            form.entries.push(ScriptEntry {
+                id: None,
+                key: String::new(),
+                original_name: script.name.clone(),
+                original_text: script.text.clone(),
+                protected: is_vacation_script(&script.name),
+                name: script.name.clone(),
+                text: script.text.clone(),
+                active: script.active,
+                edited_as_text: false,
+            });
+        }
+        form.selected = (!form.entries.is_empty()).then_some(0);
+        form
+    }
+
     /// True when the server offers Sieve to this account.
     pub fn offered(&self) -> bool {
         self.offered

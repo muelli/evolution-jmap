@@ -33,11 +33,12 @@
 
 use std::cell::RefCell;
 use std::ffi::{CStr, c_int, c_uint, c_ulong};
+use std::path::Path;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use eds_sys::ESource;
+use eds_sys::{ESource, e_source_get_uid};
 use evo_sys::{
     EMailConfigPage, EMailConfigPageInterface, GDK_CONTROL_MASK, GDK_KEY_Down, GDK_KEY_Escape,
     GDK_KEY_Return, GDK_KEY_Right, GDK_KEY_Tab, GDK_KEY_Up, GDK_KEY_space,
@@ -91,12 +92,13 @@ use gobject_sys::{
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
-use jmap_backend_core::marshal::take_string;
+use jmap_backend_core::marshal::{read_string, take_string};
 use jmap_backend_core::object_data::ObjectData;
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, TypeSizes};
 use jmap_backend_core::trampoline::{guard, log_critical};
 
 use crate::dispatch;
+use crate::filters::cache;
 use crate::filters::completion;
 use crate::filters::form::{Buttons, FiltersForm, NO_SCRIPT_SELECTED, ScriptEntry};
 use crate::filters::io::{self, ActivateOutcome, Loaded, SavePlan};
@@ -301,11 +303,13 @@ struct UiState {
     /// The index into `completion_candidates` Up/Down moves, and Tab/Enter
     /// accepts.
     completion_selected: usize,
-    /// Item 180(c)'s "went offline while the page was open" half: true once
-    /// [`apply_offline_change`] has made this page read-only. A page whose
-    /// initial load never finished (`link` is still `None`) never sets this:
-    /// it already shows its own offline message, and a cold start showing
-    /// the last loaded scripts read-only is a separate, still open, slice.
+    /// True once this page is read-only: set either by
+    /// [`apply_offline_change`], item 180(c)'s "went offline while the page
+    /// was open" half, or by [`apply_outcome`] finding a cold-start cache
+    /// hit for a page whose initial load never ran at all (`link` stays
+    /// `None` in that second case). A page whose initial load never ran and
+    /// found no cache leaves this `false`: it shows its own offline message
+    /// instead, with nothing to lock.
     offline: bool,
     /// The shell singleton [`build_widgets`] connected the two handlers
     /// below to, or null if none was running yet (a headless test, or no
@@ -851,6 +855,10 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
     // SAFETY: `create` runs on the main loop, per its own contract (it builds
     // a GTK widget above).
     let offline = unsafe { link::shell_is_offline() };
+    // SAFETY: `connect_source` is valid, per the contract of this function.
+    // This read happens before any worker thread also touches the source.
+    let uid = unsafe { read_string(e_source_get_uid(connect_source)) };
+    let cache_dir = cache::cache_dir();
     // SAFETY: the source is valid, per the contract of this function. The
     // worker owns the reference and releases it.
     let source = unsafe { SendSource::adopt(g_object_ref(connect_source.cast()).cast()) };
@@ -871,9 +879,15 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
         drop(source);
         outcome
     };
-    let finish = |page: *mut GObject, outcome| {
+    // Item 180(c)'s cold-start cache: `None` when the source had no UID to
+    // read, which skips both halves below.
+    let cache_slot = uid.map(|uid| (cache_dir, uid));
+    let finish = move |page: *mut GObject, outcome| {
+        let slot = cache_slot
+            .as_ref()
+            .map(|(dir, uid)| (dir.as_path(), uid.as_str()));
         // SAFETY: `with_strong` gives the live page.
-        unsafe { apply_outcome(page, outcome) };
+        unsafe { apply_outcome(page, outcome, slot) };
     };
     // SAFETY: `page` is the live new instance, and this function holds its reference.
     unsafe { dispatch::spawn_for(page, work, finish) };
@@ -883,10 +897,21 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
 
 /// Fills the widgets with the load result, or shows why the load failed.
 ///
+/// `cache`, item 180(c)'s cold-start cache slot (the cache directory and
+/// this account's `ESource` UID), is `None` for a page with no UID to key
+/// the cache by, or a caller that does not care about it (most tests here).
+/// A successful load then saves to it; an offline load with no server
+/// connection loads from it and shows what it finds, read-only, instead of
+/// just this page's own offline message.
+///
 /// # Safety
 ///
 /// `page` must be the live page of the load.
-unsafe fn apply_outcome(page: *mut GObject, outcome: LoadOutcome<(Arc<AccountLink>, Loaded)>) {
+unsafe fn apply_outcome(
+    page: *mut GObject,
+    outcome: LoadOutcome<(Arc<AccountLink>, Loaded)>,
+    cache: Option<(&Path, &str)>,
+) {
     // SAFETY: the page is live, per the contract.
     let Some(cell) = (unsafe { state(page) }) else {
         return;
@@ -897,6 +922,22 @@ unsafe fn apply_outcome(page: *mut GObject, outcome: LoadOutcome<(Arc<AccountLin
                 let mut ui = cell.borrow_mut();
                 ui.form = FiltersForm::from_loaded(loaded);
                 ui.link = Some(link);
+            }
+            if let Some((dir, uid)) = cache {
+                let scripts: Vec<cache::CachedScript> = cell
+                    .borrow()
+                    .form
+                    .entries()
+                    .iter()
+                    .map(|entry| cache::CachedScript {
+                        name: entry.name.clone(),
+                        text: entry.text.clone(),
+                        active: entry.active,
+                    })
+                    .collect();
+                if let Err(failure) = cache::save(dir, uid, &scripts) {
+                    tracing::debug!(%failure, "could not save the Server Filters cold-start cache");
+                }
             }
             // SAFETY: the widgets are live children of the page, and no
             // borrow is held across the GTK calls inside.
@@ -910,8 +951,22 @@ unsafe fn apply_outcome(page: *mut GObject, outcome: LoadOutcome<(Arc<AccountLin
             unsafe { set_status(cell, &translate(NOT_OFFERED)) };
         }
         LoadOutcome::Offline => {
-            // SAFETY: as above.
-            unsafe { set_status(cell, &translate(OFFLINE)) };
+            let cached = cache.and_then(|(dir, uid)| cache::load(dir, uid));
+            if let Some(scripts) = cached {
+                {
+                    let mut ui = cell.borrow_mut();
+                    ui.form = FiltersForm::from_cached(&scripts);
+                    ui.offline = true;
+                }
+                // SAFETY: as above.
+                unsafe {
+                    set_status(cell, &translate(OFFLINE));
+                    refresh(cell);
+                }
+            } else {
+                // SAFETY: as above.
+                unsafe { set_status(cell, &translate(OFFLINE)) };
+            }
         }
         LoadOutcome::Failed(message) => {
             let text = translate_with(LOAD_FAILED, &[&message]);
@@ -4125,7 +4180,7 @@ mod tests {
         unsafe {
             let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Offline);
+            apply_outcome(page, LoadOutcome::Offline, None);
 
             let status = state(page).unwrap().borrow().status;
             let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
@@ -4137,6 +4192,155 @@ mod tests {
 
             gtk_widget_destroy(page.cast());
         }
+    }
+
+    /// A private directory for one test's cache files, removed again when
+    /// the test ends.
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "evolution-jmap-filters-page-cache-test-{name}-{}-{:?}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Item 180(c)'s cold-start half: a page built already offline, with a
+    /// cache hit for its account, shows the cached script read-only instead
+    /// of the plain offline message. Needs a display; skips without one.
+    #[test]
+    fn a_cold_start_cache_hit_shows_the_cached_script_read_only() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let dir = TempDir::new("cold-start-hit");
+        cache::save(
+            &dir.0,
+            "account-1",
+            &[cache::CachedScript {
+                name: "evolution-jmap".to_owned(),
+                text: "keep;\n".to_owned(),
+                active: true,
+            }],
+        )
+        .unwrap();
+
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens: `LoadOutcome::Offline` is applied directly.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+            apply_outcome(page, LoadOutcome::Offline, Some((&dir.0, "account-1")));
+
+            let cell = state(page).unwrap();
+            assert_eq!(
+                cell.borrow().form.entries().len(),
+                1,
+                "the cached script must show in the list"
+            );
+            assert!(
+                cell.borrow().offline,
+                "a cache hit must lock the page like any other offline state"
+            );
+
+            let status = cell.borrow().status;
+            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(text, translate(OFFLINE));
+
+            let source_view = cell.borrow().source_view;
+            assert!(
+                !get_editable(source_view),
+                "a cached script must not be editable offline"
+            );
+
+            gtk_widget_destroy(page.cast());
+        }
+    }
+
+    /// Item 180(c)'s cold-start half: a successful online load saves what it
+    /// found, so a later cold start while offline can show it. Needs a
+    /// display; skips without one.
+    #[test]
+    fn a_successful_load_saves_the_scripts_to_the_cache() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let dir = TempDir::new("save-on-load");
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = AccountLink::without_refresh(client, features);
+
+        // Seeds one active script, the same way
+        // `deactivating_disables_the_controls_before_the_worker_answers` does.
+        let loaded = match io::activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![io::ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "evolution-jmap".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: io::ActivationChange::Activate(io::ActivationTarget::Created(
+                    "new".to_owned(),
+                )),
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: io::Baseline::default(),
+            },
+        )
+        .unwrap()
+        {
+            ActivateOutcome::Reloaded(loaded) => loaded,
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("seeding the active script failed: {reason}")
+            }
+        };
+
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens here: the load above already ran.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+            apply_outcome(
+                page,
+                LoadOutcome::Loaded((Arc::new(link), loaded)),
+                Some((&dir.0, "account-1")),
+            );
+
+            gtk_widget_destroy(page.cast());
+        }
+
+        let cached =
+            cache::load(&dir.0, "account-1").expect("a successful load must write the cache");
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].name, "evolution-jmap");
+        assert_eq!(cached[0].text, "keep;\n");
+        assert!(cached[0].active);
     }
 
     /// `widget`'s `sensitive` property, the same way
@@ -4231,7 +4435,7 @@ mod tests {
         unsafe {
             let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
             let (view, status, add, rename, remove, activate, deactivate, check) = {
                 let ui = state(page).unwrap().borrow();
@@ -4326,7 +4530,7 @@ mod tests {
         unsafe {
             let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
             let (view, status, add, rename, remove, activate, deactivate, check) = {
                 let ui = state(page).unwrap().borrow();
@@ -4430,7 +4634,7 @@ mod tests {
             gtk_container_add(window.cast(), page.cast());
             gtk_widget_show_all(window);
 
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
             let cell = state(page.cast()).expect("a loaded page has state");
             let buffer = cell.borrow().buffer;
@@ -4516,7 +4720,7 @@ mod tests {
         unsafe {
             let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
             let (status, add, rename, remove, activate, deactivate, check) = {
                 let ui = state(page).unwrap().borrow();
@@ -4606,7 +4810,7 @@ mod tests {
         unsafe {
             let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
             let (view, status, add, rename, remove, activate, deactivate, check) = {
                 let ui = state(page).unwrap().borrow();
@@ -4698,7 +4902,7 @@ mod tests {
         unsafe {
             let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
             let (
                 view,
@@ -4813,7 +5017,7 @@ mod tests {
         unsafe {
             let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Offline);
+            apply_outcome(page, LoadOutcome::Offline, None);
 
             let cell = state(page).unwrap();
             apply_offline_change(cell, true);
