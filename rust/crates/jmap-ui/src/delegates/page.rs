@@ -27,7 +27,7 @@
 //! to the store's rows, not from the store itself.
 
 use std::cell::RefCell;
-use std::ffi::{CStr, c_int};
+use std::ffi::{CStr, c_int, c_ulong};
 use std::ptr;
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ use evo_sys::{
     EMailConfigPage, EMailConfigPageInterface, GTK_ORIENTATION_HORIZONTAL,
     GTK_ORIENTATION_VERTICAL, GTK_RESPONSE_CANCEL, GTK_RESPONSE_OK, GTK_SELECTION_BROWSE,
     GtkCellRenderer, GtkListStore, GtkTreeModel, GtkTreePath, GtkTreeSelection, GtkWidget,
-    GtkWindow, e_mail_config_page_get_type, gtk_box_new, gtk_box_pack_start,
+    GtkWindow, e_mail_config_page_get_type, e_shell_get_default, gtk_box_new, gtk_box_pack_start,
     gtk_button_new_with_mnemonic, gtk_cell_renderer_text_new, gtk_combo_box_get_active,
     gtk_combo_box_set_active, gtk_combo_box_text_append, gtk_combo_box_text_new, gtk_container_add,
     gtk_container_set_border_width, gtk_dialog_add_button, gtk_dialog_get_content_area,
@@ -60,8 +60,8 @@ use gio_sys::{
 use glib_sys::{GFALSE, GTRUE, GType, g_list_free_full, gpointer};
 use gobject_sys::{
     G_TYPE_STRING, GObject, GObjectClass, GTypeInstance, GValue, g_object_ref, g_object_unref,
-    g_signal_connect_data, g_type_check_instance_is_a, g_type_from_name, g_value_init,
-    g_value_set_string, g_value_unset,
+    g_signal_connect_data, g_signal_handler_disconnect, g_type_check_instance_is_a,
+    g_type_from_name, g_value_init, g_value_set_string, g_value_unset,
 };
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::error::cstring_lossy;
@@ -182,6 +182,43 @@ struct UiState {
     /// division [`crate::filters::page`]'s own form keeps between the
     /// widgets and the data they show.
     delegates: Vec<Id>,
+    /// Item 180(c)'s "went offline while the page was open" half: true once
+    /// [`apply_offline_change`] has made this page read-only. A page whose
+    /// initial load never finished (`link` is still `None`) never sets this:
+    /// it already shows its own offline message.
+    offline: bool,
+    /// The shell singleton [`build_widgets`] connected the two handlers
+    /// below to, or null if none was running yet (a headless test, or no
+    /// shell instance up). Kept only so [`Drop`] can disconnect from the
+    /// same instance.
+    shell: *mut GObject,
+    /// The `notify::online` handler id on `shell`, or 0 if never connected.
+    shell_online_handler: c_ulong,
+    /// The `notify::network-available` handler id on `shell`, or 0 if never
+    /// connected.
+    shell_network_handler: c_ulong,
+}
+
+impl Drop for UiState {
+    /// Disconnects from the shell singleton. Without this, the shell (which
+    /// outlives this page) would call back into freed memory the next time
+    /// it goes online or offline (item 180(c)).
+    fn drop(&mut self) {
+        if !self.shell.is_null() {
+            // SAFETY: `shell` is the live singleton `build_widgets` connected
+            // these handlers to; it outlives this page. A 0 id was never
+            // connected, and `g_signal_handler_disconnect` is only called
+            // for the other case.
+            unsafe {
+                if self.shell_online_handler != 0 {
+                    g_signal_handler_disconnect(self.shell, self.shell_online_handler);
+                }
+                if self.shell_network_handler != 0 {
+                    g_signal_handler_disconnect(self.shell, self.shell_network_handler);
+                }
+            }
+        }
+    }
 }
 
 /// State of the principal picker dialog ([`ask_for_principal`]), in a box as
@@ -477,6 +514,41 @@ unsafe fn build_widgets(page: *mut GObject) {
 
         gtk_widget_show_all(page.cast());
 
+        // Item 180(c): watch the shell's online state, so a page already
+        // open and loaded notices the user going offline at once instead
+        // of only on the next write. No shell instance (a headless test, or
+        // none started yet) leaves both ids at 0: nothing to watch, nothing
+        // for `Drop` to disconnect later.
+        let shell = e_shell_get_default();
+        let (shell_online_handler, shell_network_handler) = if shell.is_null() {
+            (0, 0)
+        } else {
+            (
+                g_signal_connect_data(
+                    shell.cast(),
+                    c"notify::online".as_ptr(),
+                    gcallback(
+                        on_shell_online_changed
+                            as unsafe extern "C" fn(*mut GObject, gpointer, gpointer),
+                    ),
+                    page.cast(),
+                    None,
+                    0,
+                ),
+                g_signal_connect_data(
+                    shell.cast(),
+                    c"notify::network-available".as_ptr(),
+                    gcallback(
+                        on_shell_online_changed
+                            as unsafe extern "C" fn(*mut GObject, gpointer, gpointer),
+                    ),
+                    page.cast(),
+                    None,
+                    0,
+                ),
+            )
+        };
+
         STATE.set(
             page,
             RefCell::new(UiState {
@@ -487,6 +559,10 @@ unsafe fn build_widgets(page: *mut GObject) {
                 revoke,
                 add,
                 delegates: Vec::new(),
+                offline: false,
+                shell: shell.cast(),
+                shell_online_handler,
+                shell_network_handler,
             }),
         );
 
@@ -590,6 +666,76 @@ unsafe fn update_revoke_sensitivity(cell: &RefCell<UiState>) {
 /// `GFALSE`/`GTRUE` for a `bool`.
 fn flag(value: bool) -> glib_sys::gboolean {
     if value { GTRUE } else { GFALSE }
+}
+
+/// Item 180(c)'s "went offline while the page was open" half. Leaves the
+/// loaded list and the parallel `delegates` vector untouched: only the
+/// list's, Add's and Revoke's sensitivity, and the status note, change. A
+/// page whose initial load never finished, or did not offer the feature
+/// (`link` is `None`), ignores this: it already shows its own offline or
+/// "not offered" message.
+///
+/// # Safety
+///
+/// `cell` must be the live state of a page whose widgets are still alive.
+unsafe fn apply_offline_change(cell: &RefCell<UiState>, offline: bool) {
+    {
+        let mut ui = cell.borrow_mut();
+        if ui.link.is_none() || ui.offline == offline {
+            return;
+        }
+        ui.offline = offline;
+    }
+    let (view, add, revoke, status) = {
+        let ui = cell.borrow();
+        (ui.view, ui.add, ui.revoke, ui.status)
+    };
+    // SAFETY: these are live children of the page. No borrow of `cell` is
+    // held during these calls.
+    unsafe {
+        if offline {
+            gtk_widget_set_sensitive(view, GFALSE);
+            gtk_widget_set_sensitive(add, GFALSE);
+            gtk_widget_set_sensitive(revoke, GFALSE);
+            let text = cstring_lossy(&translate(OFFLINE));
+            gtk_label_set_text(status.cast(), text.as_ptr());
+        } else {
+            gtk_widget_set_sensitive(view, GTRUE);
+            gtk_widget_set_sensitive(add, GTRUE);
+            gtk_label_set_text(status.cast(), c"".as_ptr());
+        }
+    }
+    if !offline {
+        // SAFETY: as above; Revoke's sensitivity also depends on the
+        // selection, which going offline never changed.
+        unsafe { update_revoke_sensitivity(cell) };
+    }
+}
+
+/// The shell's `notify::online` and `notify::network-available` handler
+/// (item 180(c)). Both signals share it: either firing is reason enough to
+/// recheck [`link::shell_is_offline`] and apply the change, if any.
+///
+/// # Safety
+///
+/// The GLib signal system calls this with the page as the data pointer.
+unsafe extern "C" fn on_shell_online_changed(
+    _shell: *mut GObject,
+    _pspec: gpointer,
+    page: gpointer,
+) {
+    guard("JmapDelegatesPage::shell-notify", (), || {
+        // SAFETY: the page is live: `Drop` disconnects this handler before
+        // the page is freed.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        // SAFETY: this handler runs on the main loop, the same thread that
+        // writes the shell's `online` and `network-available` properties.
+        let offline = unsafe { link::shell_is_offline() };
+        // SAFETY: as `apply_offline_change`.
+        unsafe { apply_offline_change(cell, offline) };
+    });
 }
 
 /// The `changed` handler of the list selection: only the Revoke button's
@@ -1714,6 +1860,137 @@ mod tests {
             assert!(
                 get_sensitive(add),
                 "Add stays insensitive after a load with no delegates"
+            );
+
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// Item 180(c)'s "went offline while the page was open" half: going
+    /// offline leaves the list, Add and Revoke insensitive, with the
+    /// offline note, and does not drop the loaded rows or the selection;
+    /// coming back online restores all three. Needs a display; skips
+    /// without one.
+    #[test]
+    fn going_offline_locks_the_page_without_losing_the_loaded_rows() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = Arc::new(AccountLink::without_refresh(client, features));
+        let loaded = Loaded {
+            delegates: vec![crate::delegation::Delegate {
+                principal_id: Id::new("P-bob"),
+                calendar_level: CalendarDelegationLevel::Reviewer,
+                address_book_level: AddressBookDelegationLevel::None,
+            }],
+            offered: true,
+            labels: Default::default(),
+        };
+
+        // SAFETY: as the tests above; no network call happens here.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+
+            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
+
+            let (view, add, revoke, status) = {
+                let ui = state(page.cast()).unwrap().borrow();
+                (ui.view, ui.add, ui.revoke, ui.status)
+            };
+
+            let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+            evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+            evo_sys::gtk_tree_path_free(path);
+            assert!(get_sensitive(revoke), "Revoke did not enable on selection");
+
+            let cell = state(page.cast()).unwrap();
+            apply_offline_change(cell, true);
+
+            assert!(!get_sensitive(view), "the list stayed usable while offline");
+            assert!(!get_sensitive(add), "Add stayed usable while offline");
+            assert!(!get_sensitive(revoke), "Revoke stayed usable while offline");
+            let offline_text =
+                read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                offline_text,
+                translate(OFFLINE),
+                "the status label does not say the account is offline"
+            );
+            assert!(
+                !evo_sys::gtk_tree_view_get_column(view.cast(), 0).is_null(),
+                "going offline dropped the list's columns"
+            );
+
+            apply_offline_change(cell, false);
+
+            assert!(
+                get_sensitive(view),
+                "the list stayed insensitive after reconnecting"
+            );
+            assert!(
+                get_sensitive(add),
+                "Add stayed insensitive after reconnecting"
+            );
+            assert!(
+                get_sensitive(revoke),
+                "Revoke did not restore after reconnecting with a row still selected"
+            );
+            let online_text =
+                read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                online_text, "",
+                "the offline note stayed after reconnecting"
+            );
+
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// A page whose initial load never finished (offline from a cold start,
+    /// a load that failed, or a server that does not offer the feature) has
+    /// no link, so a later shell online/offline change must not touch it.
+    /// Needs a display; skips without one.
+    #[test]
+    fn a_page_with_no_link_ignores_a_shell_online_change() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: see the tests above; the same stand-in instance works
+        // here. No network call happens: `LoadOutcome::Offline` is applied
+        // directly.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+
+            apply_outcome(page.cast(), LoadOutcome::Offline);
+
+            let cell = state(page.cast()).unwrap();
+            apply_offline_change(cell, true);
+            assert!(
+                !cell.borrow().offline,
+                "a page with no link must not record a shell offline change"
+            );
+
+            let text = read_string(evo_sys::gtk_label_get_text(
+                state(page.cast()).unwrap().borrow().status.cast(),
+            ))
+            .unwrap_or_default();
+            assert_eq!(
+                text,
+                translate(OFFLINE),
+                "the cold-start offline message changed"
             );
 
             gtk_widget_destroy(page);
