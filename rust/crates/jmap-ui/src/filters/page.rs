@@ -981,6 +981,19 @@ struct ShowPlan {
     offline: bool,
 }
 
+/// Item 180(b): true when the external-edit banner ([`EXTERNAL_EDIT`]) should
+/// show. Only the first time the selection lands on a managed script that
+/// does not parse as rules; a text edit made in this page clears it for
+/// good, since that edit is not one from outside Evolution.
+fn show_external_edit_note(
+    script_changed: bool,
+    is_managed: bool,
+    can_parse: bool,
+    edited_as_text: bool,
+) -> bool {
+    script_changed && is_managed && !can_parse && !edited_as_text
+}
+
 /// Puts the selected script's source in the text view, or the managed
 /// script's rules in the rules list, and sets the sensitivity of every
 /// control.
@@ -1050,8 +1063,13 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             edit_as_text_visible: is_managed,
             edit_as_text_sensitive: is_managed && can_parse,
             edit_as_text_checked: is_managed && (!can_parse || ui.force_text),
-            status_note: (script_changed && is_managed && !can_parse && !edited_as_text)
-                .then_some(EXTERNAL_EDIT),
+            status_note: show_external_edit_note(
+                script_changed,
+                is_managed,
+                can_parse,
+                edited_as_text,
+            )
+            .then_some(EXTERNAL_EDIT),
             rule_rows,
             rule_selected,
             rule_buttons,
@@ -3178,6 +3196,40 @@ mod tests {
     #[test]
     fn rule_edit_and_edit_as_text_keep_different_mnemonics() {
         assert_ne!(mnemonic(RULE_EDIT_LABEL), mnemonic(EDIT_AS_TEXT_LABEL));
+    }
+
+    /// Item 180(b): the banner shows the first time the selection lands on a
+    /// managed script that does not parse as rules.
+    #[test]
+    fn external_edit_note_shows_for_a_freshly_selected_unparseable_managed_script() {
+        assert!(show_external_edit_note(true, true, false, false));
+    }
+
+    /// Item 180(b): a later redraw of the same script (no new selection)
+    /// leaves the status label alone, so the banner is not forced again.
+    #[test]
+    fn external_edit_note_does_not_show_on_a_later_redraw_of_the_same_script() {
+        assert!(!show_external_edit_note(false, true, false, false));
+    }
+
+    /// Item 180(b): a script that parses as rules is not "changed outside
+    /// Evolution".
+    #[test]
+    fn external_edit_note_does_not_show_for_a_parseable_script() {
+        assert!(!show_external_edit_note(true, true, true, false));
+    }
+
+    /// Item 180(b): the note is for the managed script only.
+    #[test]
+    fn external_edit_note_does_not_show_for_an_unmanaged_script() {
+        assert!(!show_external_edit_note(true, false, false, false));
+    }
+
+    /// Item 180(b): a text edit made in this page is not an edit from
+    /// outside Evolution, so it clears the note for good.
+    #[test]
+    fn external_edit_note_does_not_show_once_the_user_edited_this_script_as_text() {
+        assert!(!show_external_edit_note(true, true, false, true));
     }
 
     /// "Deactivate" and the rules list's "Add" button can show at the same
