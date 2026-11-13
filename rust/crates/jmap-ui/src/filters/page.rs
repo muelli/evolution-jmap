@@ -1195,6 +1195,18 @@ unsafe extern "C" fn on_validate_timeout(page: gpointer) -> gboolean {
                 None => gtk_widget_set_tooltip_text(source_view.cast(), ptr::null()),
             }
         }
+        // Item 180(e): the same debounce also drives completion while
+        // typing, with no Ctrl+Space needed. `show_completion_for_word`
+        // refreshes the popup for the word now under the cursor; if that
+        // word is too short or matches nothing, close whatever the last
+        // edit left open rather than show a stale list.
+        // SAFETY: as `show_completion_for_word`'s and `close_completion`'s
+        // own contracts.
+        unsafe {
+            if !show_completion_for_word(cell, AUTO_COMPLETE_MIN_CHARS) {
+                close_completion(cell);
+            }
+        }
         G_SOURCE_REMOVE
     })
 }
@@ -1326,14 +1338,24 @@ unsafe fn position_completion_window(
     }
 }
 
-/// Opens the completion popup near the cursor (item 171c, Ctrl+Space).
-/// Does nothing if no candidate matches the word being typed: an empty
-/// popup would only be a key away from closing again anyway.
+/// The word under the cursor must be at least this many characters before
+/// typing on its own opens the completion popup (item 180(e)). Below this,
+/// the popup only ever opens from the explicit Ctrl+Space trigger
+/// ([`open_completion`], which passes 0 here instead).
+const AUTO_COMPLETE_MIN_CHARS: usize = 2;
+
+/// Shows the completion popup for the word under the cursor, if it has at
+/// least `min_chars` characters and at least one candidate matches it.
+/// Returns whether the popup now shows. Shared by [`open_completion`]
+/// (item 171c, Ctrl+Space, `min_chars` 0: any word, even empty, that
+/// matches something) and [`on_validate_timeout`] (item 180(e), typing,
+/// [`AUTO_COMPLETE_MIN_CHARS`]: never steal keys while the word being typed
+/// is still too short to narrow the list usefully).
 ///
 /// # Safety
 ///
 /// As [`refresh`].
-unsafe fn open_completion(cell: &RefCell<UiState>) {
+unsafe fn show_completion_for_word(cell: &RefCell<UiState>, min_chars: usize) -> bool {
     let (buffer, source_view, extensions) = {
         let ui = cell.borrow();
         (ui.buffer, ui.source_view, ui.form.extensions().to_vec())
@@ -1346,12 +1368,15 @@ unsafe fn open_completion(cell: &RefCell<UiState>) {
         gtk_text_buffer_get_iter_at_mark(buffer, &mut cursor, mark);
         let prefix = line_prefix(buffer, &cursor);
         let word = completion::word_under_cursor(&prefix);
+        if word.chars().count() < min_chars {
+            return false;
+        }
         let matches: Vec<&'static completion::Candidate> =
             completion::candidates(word, &extensions)
                 .take(MAX_COMPLETION_ROWS)
                 .collect();
         if matches.is_empty() {
-            return;
+            return false;
         }
         tracing::trace!(
             word,
@@ -1367,7 +1392,20 @@ unsafe fn open_completion(cell: &RefCell<UiState>) {
         let window = cell.borrow().completion_window;
         position_completion_window(window, source_view, &cursor);
         gtk_widget_show_all(window);
+        true
     }
+}
+
+/// Opens the completion popup near the cursor (item 171c, Ctrl+Space).
+/// Does nothing if no candidate matches the word being typed: an empty
+/// popup would only be a key away from closing again anyway.
+///
+/// # Safety
+///
+/// As [`refresh`].
+unsafe fn open_completion(cell: &RefCell<UiState>) {
+    // SAFETY: as `show_completion_for_word`'s own contract.
+    unsafe { show_completion_for_word(cell, 0) };
 }
 
 /// Hides the popup and clears its candidate list (item 171c). Safe to call
@@ -2875,12 +2913,13 @@ unsafe extern "C" fn submit_finish(
 mod tests {
     use std::os::raw::c_char;
     use std::sync::Mutex;
+    use std::time::{Duration, Instant};
 
     use evo_sys::{
         gtk_container_get_border_width, gtk_label_get_text, gtk_source_buffer_get_language,
         gtk_text_buffer_new, gtk_tree_view_get_column, gtk_window_get_default_widget,
     };
-    use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free};
+    use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free, g_main_context_iteration};
     use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
     use jmap_backend_core::marshal::read_string;
     use jmap_backend_core::subclass::register_static;
@@ -3249,6 +3288,116 @@ mod tests {
             completion_key_action(GDK_KEY_Right, 0, false),
             CompletionKey::Ignore
         );
+    }
+
+    /// Iterates the default main context, blocking between rounds, until
+    /// `done` is true or `timeout` elapses. The validate debounce (180(e)'s
+    /// typing-triggered completion included) only fires on a real
+    /// `g_timeout_add` source, so a test that waits for it must pump the
+    /// loop itself; nothing else in this process does.
+    fn pump_until(done: impl Fn() -> bool, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while !done() {
+            assert!(
+                Instant::now() < deadline,
+                "main loop never fired the debounce"
+            );
+            // SAFETY: the default context; this test owns the thread.
+            unsafe { g_main_context_iteration(ptr::null_mut(), GTRUE) };
+        }
+    }
+
+    /// Item 180(e): typing two or more characters of a matching word opens
+    /// the completion popup on its own, once the existing validate debounce
+    /// fires, with no Ctrl+Space needed. Needs a display; skips without one.
+    #[test]
+    fn typing_two_characters_of_a_match_opens_completion_after_the_debounce() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; the window sinks the floating
+        // page and owns its only reference, as the account editor does.
+        unsafe {
+            let window = gtk_window_new(0);
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            gtk_container_add(window.cast(), page.cast());
+            gtk_widget_show_all(window);
+
+            let cell = state(page.cast()).expect("a freshly built page has state");
+            let buffer = cell.borrow().buffer;
+            let text = cstring_lossy("el");
+            let mut start = GtkTextIter::default();
+            gtk_text_buffer_get_start_iter(buffer, &mut start);
+            gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+            let mut end = GtkTextIter::default();
+            gtk_text_buffer_get_end_iter(buffer, &mut end);
+            gtk_text_buffer_place_cursor(buffer, &end);
+
+            pump_until(
+                || !cell.borrow().completion_candidates.is_empty(),
+                Duration::from_secs(5),
+            );
+            let texts: Vec<&str> = cell
+                .borrow()
+                .completion_candidates
+                .iter()
+                .map(|c| c.text)
+                .collect();
+            assert_eq!(
+                texts,
+                vec!["elsif", "else", "exists"],
+                "typing \"el\" should auto-open the same matches an explicit trigger would"
+            );
+
+            gtk_widget_destroy(window);
+        }
+    }
+
+    /// Item 180(e): typing a single character never auto-opens the popup
+    /// (the "2+ characters" gate), even once the debounce fires. Needs a
+    /// display; skips without one.
+    #[test]
+    fn typing_one_character_does_not_auto_open_completion() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: as the test above.
+        unsafe {
+            let window = gtk_window_new(0);
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            gtk_container_add(window.cast(), page.cast());
+            gtk_widget_show_all(window);
+
+            let cell = state(page.cast()).expect("a freshly built page has state");
+            let buffer = cell.borrow().buffer;
+            let text = cstring_lossy("e");
+            let mut start = GtkTextIter::default();
+            gtk_text_buffer_get_start_iter(buffer, &mut start);
+            gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+            let mut end = GtkTextIter::default();
+            gtk_text_buffer_get_end_iter(buffer, &mut end);
+            gtk_text_buffer_place_cursor(buffer, &end);
+
+            // Wait past the debounce with no predicate to reach: there is
+            // nothing to pump_until for here, so iterate a fixed stretch.
+            // SAFETY: the default context; this test owns the thread.
+            let deadline = Instant::now() + Duration::from_millis(VALIDATE_DEBOUNCE_MS as u64 * 3);
+            while Instant::now() < deadline {
+                g_main_context_iteration(ptr::null_mut(), GFALSE);
+            }
+            assert!(
+                cell.borrow().completion_candidates.is_empty(),
+                "a single typed character must not auto-open the popup"
+            );
+
+            gtk_widget_destroy(window);
+        }
     }
 
     /// Item 182(c): the completion popup's open/close/accept states are
