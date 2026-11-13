@@ -52,25 +52,25 @@ use evo_sys::{
     gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign, gtk_list_store_clear,
     gtk_list_store_insert_with_valuesv, gtk_list_store_newv, gtk_scrolled_window_get_type,
     gtk_source_buffer_set_language, gtk_source_language_manager_get_default,
-    gtk_source_language_manager_get_language, gtk_source_view_new, gtk_text_buffer_apply_tag,
-    gtk_text_buffer_delete, gtk_text_buffer_get_end_iter, gtk_text_buffer_get_insert,
-    gtk_text_buffer_get_iter_at_line, gtk_text_buffer_get_iter_at_mark,
+    gtk_source_language_manager_get_language, gtk_source_view_new, gtk_source_view_set_auto_indent,
+    gtk_text_buffer_apply_tag, gtk_text_buffer_delete, gtk_text_buffer_get_end_iter,
+    gtk_text_buffer_get_insert, gtk_text_buffer_get_iter_at_line, gtk_text_buffer_get_iter_at_mark,
     gtk_text_buffer_get_start_iter, gtk_text_buffer_get_tag_table, gtk_text_buffer_get_text,
     gtk_text_buffer_insert, gtk_text_buffer_place_cursor, gtk_text_buffer_remove_tag,
     gtk_text_iter_backward_chars, gtk_text_iter_forward_to_line_end, gtk_text_iter_get_line,
     gtk_text_tag_new, gtk_text_tag_table_add, gtk_text_view_buffer_to_window_coords,
-    gtk_text_view_get_buffer, gtk_text_view_get_iter_location, gtk_text_view_set_editable,
-    gtk_text_view_set_monospace, gtk_tree_path_free, gtk_tree_path_get_indices_with_depth,
-    gtk_tree_path_new_from_indicesv, gtk_tree_selection_get_selected_rows,
-    gtk_tree_selection_set_mode, gtk_tree_view_append_column, gtk_tree_view_column_add_attribute,
-    gtk_tree_view_column_new, gtk_tree_view_column_pack_start, gtk_tree_view_column_set_expand,
-    gtk_tree_view_column_set_title, gtk_tree_view_get_selection, gtk_tree_view_new_with_model,
-    gtk_tree_view_set_cursor, gtk_tree_view_set_headers_visible, gtk_widget_destroy,
-    gtk_widget_get_toplevel, gtk_widget_get_window, gtk_widget_hide, gtk_widget_set_hexpand,
-    gtk_widget_set_sensitive, gtk_widget_set_size_request, gtk_widget_set_tooltip_text,
-    gtk_widget_set_vexpand, gtk_widget_set_visible, gtk_widget_show_all, gtk_window_get_type,
-    gtk_window_move, gtk_window_new, gtk_window_set_accept_focus, gtk_window_set_title,
-    gtk_window_set_transient_for,
+    gtk_text_view_get_buffer, gtk_text_view_get_iter_location, gtk_text_view_set_accepts_tab,
+    gtk_text_view_set_editable, gtk_text_view_set_monospace, gtk_tree_path_free,
+    gtk_tree_path_get_indices_with_depth, gtk_tree_path_new_from_indicesv,
+    gtk_tree_selection_get_selected_rows, gtk_tree_selection_set_mode, gtk_tree_view_append_column,
+    gtk_tree_view_column_add_attribute, gtk_tree_view_column_new, gtk_tree_view_column_pack_start,
+    gtk_tree_view_column_set_expand, gtk_tree_view_column_set_title, gtk_tree_view_get_selection,
+    gtk_tree_view_new_with_model, gtk_tree_view_set_cursor, gtk_tree_view_set_headers_visible,
+    gtk_widget_destroy, gtk_widget_get_toplevel, gtk_widget_get_window, gtk_widget_hide,
+    gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_size_request,
+    gtk_widget_set_tooltip_text, gtk_widget_set_vexpand, gtk_widget_set_visible,
+    gtk_widget_show_all, gtk_window_get_type, gtk_window_move, gtk_window_new,
+    gtk_window_set_accept_focus, gtk_window_set_title, gtk_window_set_transient_for,
 };
 use gio_sys::{
     GAsyncReadyCallback, GAsyncResult, GCancellable, GTask, g_io_error_quark, g_task_new,
@@ -530,6 +530,11 @@ unsafe fn build_widgets(page: *mut GObject) {
         // pointer. `set_sieve_language` tags its buffer for highlighting.
         let source_view = gtk_source_view_new();
         gtk_text_view_set_monospace(source_view.cast(), GTRUE);
+        // Item 180(e): with no completion suggestion showing, Tab moves
+        // focus to the next field instead of inserting a tab character;
+        // auto-indent takes over the indenting work Tab no longer does.
+        gtk_text_view_set_accepts_tab(source_view.cast(), GFALSE);
+        gtk_source_view_set_auto_indent(source_view.cast(), GTRUE);
         widget::set_enum_named(source_view.cast(), c"wrap-mode", GTK_WRAP_WORD_CHAR);
         gtk_widget_set_vexpand(source_view, GTRUE);
         let source_label = gtk_label_new_with_mnemonic(translate_static(N_(c"_Script:")));
@@ -3062,7 +3067,8 @@ mod tests {
 
     use evo_sys::{
         gtk_container_get_border_width, gtk_label_get_text, gtk_source_buffer_get_language,
-        gtk_text_buffer_new, gtk_tree_view_get_column, gtk_window_get_default_widget,
+        gtk_source_view_get_auto_indent, gtk_text_buffer_new, gtk_text_view_get_accepts_tab,
+        gtk_tree_view_get_column, gtk_window_get_default_widget,
     };
     use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free, g_main_context_iteration};
     use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
@@ -3272,6 +3278,38 @@ mod tests {
                  sieve.lang installed in GtkSourceView's search path?"
             );
             gtk_widget_destroy(view);
+        }
+    }
+
+    /// Item 180(e): with no completion suggestion showing, Tab must move
+    /// focus to the next field, not insert a tab character; auto-indent
+    /// takes over the indenting work Tab no longer does. Needs a display;
+    /// skips without one.
+    #[test]
+    fn the_script_view_lets_tab_move_focus_instead_of_indenting() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            let source_view = state(page).unwrap().borrow().source_view;
+
+            assert_eq!(
+                gtk_text_view_get_accepts_tab(source_view.cast()),
+                GFALSE,
+                "Tab inserts a tab character instead of moving focus"
+            );
+            assert_eq!(
+                gtk_source_view_get_auto_indent(source_view.cast()),
+                GTRUE,
+                "auto-indent is off, so Tab was the only way to indent"
+            );
+
+            gtk_widget_destroy(page.cast());
         }
     }
 

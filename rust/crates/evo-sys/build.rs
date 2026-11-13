@@ -444,6 +444,8 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // The Vacation Responder's message body: without this, Tab inserts a
     // tab character instead of moving focus to the next field.
     "gtk_text_view_set_accepts_tab",
+    // A test reads the property back to confirm a setter reached it.
+    "gtk_text_view_get_accepts_tab",
     // The Server Filters page's text mode (item 171a). GtkSourceView is a
     // GtkTextView subclass, so the calls above keep working against the
     // same pointer; only the constructor and the language lookup are new.
@@ -451,6 +453,11 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_source_language_manager_get_default",
     "gtk_source_language_manager_get_language",
     "gtk_source_buffer_set_language",
+    // Item 180(e): with no completion suggestion showing, Tab moves focus
+    // out of the editor (`gtk_text_view_set_accepts_tab` above, FALSE), so
+    // auto-indent takes over the indenting work Tab no longer does.
+    "gtk_source_view_set_auto_indent",
+    "gtk_source_view_get_auto_indent",
     // A test reads the language back to confirm `set_sieve_language` found
     // and applied it, without needing a display to inspect highlighting.
     "gtk_source_buffer_get_language",
