@@ -1099,6 +1099,13 @@ impl JmapStore {
     /// It takes a read lock although it destroys, for the reason that
     /// [`JmapStore::set_keywords`] gives: the lock protects the connection,
     /// and Evolution empties a trash while the account continues to refresh.
+    ///
+    /// `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`FolderTree::merge_shared`]). `Email/get` and
+    /// `Email/set` are method calls under one `accountId`, so this resolves
+    /// the mailbox's real owner first ([`FolderTree::owning_account`]) and
+    /// expunges under that account instead of this store's own, the same
+    /// way [`Self::file_message`] already does (ROADMAP item 179(d)).
     pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
@@ -1106,13 +1113,18 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = self
+            .folders(0)
+            .ok()
+            .and_then(|tree| tree.owning_account(mailbox).cloned())
+            .unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             uid = uid.as_str(),
             mailbox_id = mailbox.as_str(),
             "expunging message"
         );
         match retry_once_after(
-            || sync.expunge_message(uid, mailbox),
+            || sync.expunge_message_as(&account, uid, mailbox),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {

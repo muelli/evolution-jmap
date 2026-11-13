@@ -591,10 +591,29 @@ impl MailSync {
     /// writes have this window. To close it, the server must supply a "destroy
     /// if in no other mailbox" operation, and JMAP has none.
     pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), SyncError> {
-        let account_id = self.account_id().to_string();
+        self.expunge_message_as(&self.account_id, uid, mailbox)
+    }
+
+    /// [`Self::expunge_message`], against `account` instead of this sync's
+    /// own account.
+    ///
+    /// `Email/get` and `Email/set` are method calls under one `accountId`,
+    /// and `mailbox` can be a mailbox of a shared account merged into this
+    /// account's folder tree ([`crate::FolderTree::merge_shared`]). The
+    /// caller resolves `account` from the held folder tree
+    /// ([`crate::FolderTree::owning_account`]) and passes it here instead of
+    /// assuming `self.account_id` (ROADMAP item 179(d)), the same way
+    /// [`Self::file_message_as`] already does.
+    pub fn expunge_message_as(
+        &self,
+        account: &Id,
+        uid: &Id,
+        mailbox: &Id,
+    ) -> Result<(), SyncError> {
+        let account_id = account.to_string();
         let message_uid = uid.to_string();
         let mailbox_id = mailbox.to_string();
-        let filed_in = self.message_mailboxes(uid).map_err(|error| {
+        let filed_in = self.message_mailboxes_as(account, uid).map_err(|error| {
             tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message expunge failed");
             error
         })?;
@@ -609,14 +628,14 @@ impl MailSync {
         );
         if filed_in.len() > 1 {
             return self
-                .update_email(uid, mailboxes::out_of(mailbox))
+                .update_email_as(account, uid, mailboxes::out_of(mailbox))
                 .map_err(|error| {
                     tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message expunge failed");
                     error
                 });
         }
         self.client
-            .email_destroy(&self.account_id, uid)
+            .email_destroy(account, uid)
             .map_err(|error| match &error {
                 jmap_client::Error::Set(set_error)
                     if set_error.error_type == jmap_proto::error::set::NOT_FOUND =>
@@ -677,8 +696,14 @@ impl MailSync {
     /// this function refuses it, as `identity_for` refuses an identity without
     /// an id. It does not count the value as membership or as absence.
     fn message_mailboxes(&self, uid: &Id) -> Result<BTreeSet<Id>, SyncError> {
+        self.message_mailboxes_as(&self.account_id, uid)
+    }
+
+    /// [`Self::message_mailboxes`], against `account` instead of this sync's
+    /// own account.
+    fn message_mailboxes_as(&self, account: &Id, uid: &Id) -> Result<BTreeSet<Id>, SyncError> {
         let found = self.client.email_get(
-            &self.account_id,
+            account,
             std::slice::from_ref(uid),
             Some(&[mailboxes::MAILBOX_IDS]),
         )?;

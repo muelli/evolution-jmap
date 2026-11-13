@@ -50,6 +50,7 @@ use std::ptr;
 
 use common::Account;
 use common::signals::{Context, emissions, watch};
+use common::sync_against;
 use eds_sys::compat::{summary_dup_uids, summary_free_uids};
 use eds_sys::{
     CAMEL_MESSAGE_DELETED, CamelFolder, CamelFolderClass, camel_folder_expunge_sync,
@@ -62,6 +63,7 @@ use glib_sys::{GError, GFALSE};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
+use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
@@ -910,6 +912,58 @@ fn a_synchronisation_with_nothing_deleted_makes_no_request() {
     fixture.synchronize(true).expect_ok();
 
     assert_eq!(fixture.server.api_requests(), before);
+}
+
+/// ROADMAP item 179(d): `Email/get` and `Email/set` are method calls under
+/// one `accountId`, so expunging a message of a
+/// [`jmap_mail_sync::FolderTree::merge_shared`] mailbox must reach that
+/// mailbox's own account, not the account this store otherwise addresses.
+///
+/// This goes through [`JmapStore::expunge_message`] directly, not the
+/// `expunge_sync` vfunc: the vfunc needs a prior Camel summary listing of
+/// the shared folder, and [`JmapStore::messages`] (the listing behind
+/// `refresh_info_sync`) does not yet resolve the owning account either,
+/// a separate, unclaimed gap (`JmapStore::search` has the same one). This
+/// test is scoped to the write `expunge_message` makes, the same way
+/// `manage.rs`'s `connected()`/`held()` pair reaches `JmapStore` directly.
+#[test]
+fn expunge_message_destroys_in_the_shared_mailboxs_owning_account() {
+    let server = MockServer::builder().start();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    let (shared_inbox_id, shared_uid) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let inbox = sharer.seed_mailbox("Inbox", None);
+        let uid = sharer.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        (inbox, uid)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+
+    store
+        .expunge_message(&shared_uid, &shared_inbox_id)
+        .expect("the expunge to reach the shared mailbox's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        !state
+            .account(&shared_account_id)
+            .unwrap()
+            .emails
+            .contains(&shared_uid),
+        "the message must be destroyed in the shared mailbox's own account"
+    );
 }
 
 #[test]
