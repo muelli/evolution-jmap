@@ -9,11 +9,11 @@
 //!
 //! This page shows the account's Sieve scripts as a list, and the source of
 //! the selected one in a text view. Most of what the user does is staged in
-//! a [`FiltersForm`] and written when the account editor saves. Two actions
-//! are instant instead (item 180(a)'s apply-at-once sweep, one action per
-//! commit): "Check" asks the server at once and writes nothing; "Activate"
-//! writes the account's current plan at once and reloads the list from the
-//! server.
+//! a [`FiltersForm`] and written when the account editor saves. Three
+//! actions are instant instead (item 180(a)'s apply-at-once sweep, one
+//! action per commit): "Check" asks the server at once and writes nothing;
+//! "Activate" and "Deactivate" write the account's current plan at once and
+//! reload the list from the server.
 //!
 //! The widgets hold no decisions. The form answers which buttons are usable
 //! and what one submit writes, and it has unit tests. This file reads the
@@ -167,6 +167,12 @@ const ACTIVATE_FAILED: &CStr = N_(c"The script could not be activated: %1$s");
 // TRANSLATORS: %1$s is the reason the mail server gave. The activation
 // already took effect; only the list on this page could not be refreshed.
 const ACTIVATE_RELOAD_FAILED: &CStr = N_(c"Activated. The list could not be refreshed: %1$s");
+const DEACTIVATING: &CStr = N_(c"Deactivating…");
+// TRANSLATORS: %1$s is the reason the mail server gave.
+const DEACTIVATE_FAILED: &CStr = N_(c"The script could not be deactivated: %1$s");
+// TRANSLATORS: %1$s is the reason the mail server gave. The deactivation
+// already took effect; only the list on this page could not be refreshed.
+const DEACTIVATE_RELOAD_FAILED: &CStr = N_(c"Deactivated. The list could not be refreshed: %1$s");
 // Neither list has a visible label of its own to name it for a screen
 // reader through a `labelled-by` relation (item 174d), unlike the text
 // view below, which has "_Script:".
@@ -1701,7 +1707,6 @@ enum Action {
     Add,
     Rename,
     Remove,
-    Deactivate,
 }
 
 unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
@@ -1864,7 +1869,118 @@ unsafe fn set_script_controls_sensitive(cell: &RefCell<UiState>, sensitive: bool
 
 unsafe extern "C" fn on_deactivate(_button: *mut GObject, page: gpointer) {
     // SAFETY: as above.
-    unsafe { act(page, Action::Deactivate) };
+    unsafe { deactivate_now(page) };
+}
+
+/// Deactivates the selected script at once instead of staging it for the
+/// account editor's OK (item 180(a)): mirrors [`activate_now`] exactly,
+/// down to the worker round trip and the control-disable while it runs. A
+/// write the server refuses restores the previous activation; nothing else
+/// staged is touched either way.
+///
+/// # Safety
+///
+/// `page` must be the live page the Deactivate button belongs to.
+unsafe fn deactivate_now(page: gpointer) {
+    guard("JmapFiltersPage::deactivate", (), || {
+        // SAFETY: the page is live, because its button emitted.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        // SAFETY: the widgets are live, and no borrow is held.
+        unsafe { flush(cell) };
+        let Some(row) = cell.borrow().form.selected() else {
+            return refuse(cell, NO_SCRIPT_SELECTED);
+        };
+        let previous_active = cell.borrow().form.active_row();
+        if let Err(reason) = cell.borrow_mut().form.deactivate(row) {
+            return refuse(cell, reason);
+        }
+
+        let planned = {
+            let ui = cell.borrow();
+            (ui.link.clone(), ui.form.plan())
+        };
+        let (link, plan) = match planned {
+            // The deactivation above always makes the form dirty, so a
+            // `None` plan or link is not expected; leave nothing written
+            // either way.
+            (_, Ok(None)) | (None, Ok(Some(_))) => {
+                cell.borrow_mut().form.restore_active(previous_active);
+                // SAFETY: as above.
+                unsafe { refresh(cell) };
+                return;
+            }
+            (_, Err(reason)) => {
+                cell.borrow_mut().form.restore_active(previous_active);
+                let text = translate_with(DEACTIVATE_FAILED, &[&reason]);
+                // SAFETY: as above.
+                unsafe {
+                    set_status(cell, &text);
+                    refresh(cell);
+                }
+                return;
+            }
+            (Some(link), Ok(Some(plan))) => (link, plan),
+        };
+
+        // SAFETY: the widgets are live, and no borrow is held.
+        unsafe {
+            set_script_controls_sensitive(cell, false);
+            set_status(cell, &translate(DEACTIVATING));
+        }
+
+        let work = move || io::activate_now(&link, &plan);
+        let finish = move |page: *mut GObject, outcome: Result<ActivateOutcome, String>| {
+            // SAFETY: `with_strong` gives the live page.
+            let Some(cell) = (unsafe { state(page) }) else {
+                return;
+            };
+            match outcome {
+                Ok(ActivateOutcome::Reloaded(loaded)) => {
+                    let name = cell
+                        .borrow()
+                        .form
+                        .entries()
+                        .get(row)
+                        .map(|entry| entry.name.clone());
+                    {
+                        let mut ui = cell.borrow_mut();
+                        ui.form = FiltersForm::from_loaded(loaded);
+                        if let Some(name) = name {
+                            let found = ui.form.entries().iter().position(|e| e.name == name);
+                            ui.form.select(found);
+                        }
+                    }
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, "");
+                        refresh(cell);
+                    }
+                }
+                Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    let text = translate_with(DEACTIVATE_RELOAD_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+                Err(reason) => {
+                    cell.borrow_mut().form.restore_active(previous_active);
+                    let text = translate_with(DEACTIVATE_FAILED, &[&reason]);
+                    // SAFETY: as above.
+                    unsafe {
+                        set_status(cell, &text);
+                        refresh(cell);
+                    }
+                }
+            }
+        };
+        // SAFETY: the page is live and the signal emission holds a reference
+        // to it for all of this call.
+        unsafe { dispatch::spawn_for(page.cast(), work, finish) };
+    });
 }
 
 /// Runs one staged action and shows the list again. A refusal goes to the
@@ -1927,10 +2043,6 @@ unsafe fn act(page: gpointer, action: Action) {
             Action::Remove => match selected {
                 None => return refuse(cell, NO_SCRIPT_SELECTED),
                 Some(row) => cell.borrow_mut().form.remove(row).map(|()| true),
-            },
-            Action::Deactivate => match selected {
-                None => return refuse(cell, NO_SCRIPT_SELECTED),
-                Some(row) => cell.borrow_mut().form.deactivate(row).map(|()| true),
             },
         };
         // The shell can destroy the page while the dialog runs. Its children
@@ -3043,6 +3155,121 @@ mod tests {
                 text,
                 translate(OFFLINE),
                 "the status label does not say the account is offline"
+            );
+
+            gtk_widget_destroy(page.cast());
+        }
+    }
+
+    /// `widget`'s `sensitive` property, the same way
+    /// `delegates::page::get_sensitive` reads it.
+    ///
+    /// # Safety
+    ///
+    /// `widget` must be a live `GObject` with a `sensitive` property.
+    unsafe fn get_sensitive(widget: *mut GtkWidget) -> bool {
+        let mut sensitive: gboolean = GTRUE;
+        // SAFETY: as the contract of this function.
+        unsafe {
+            g_object_get(
+                widget.cast(),
+                c"sensitive".as_ptr(),
+                &mut sensitive as *mut gboolean,
+                ptr::null::<c_char>(),
+            );
+        }
+        sensitive == GTRUE
+    }
+
+    /// Item 180(a)'s Deactivate mirrors Activate exactly: clicking it writes
+    /// at once instead of waiting for the account editor's OK, and every
+    /// script-list control stays insensitive, with a progress status, while
+    /// that write is in flight. Needs a display; skips without one.
+    #[test]
+    fn deactivating_disables_the_controls_before_the_worker_answers() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = AccountLink::without_refresh(client, features);
+
+        // Seeds one already-active script, the same way the io-level test
+        // `activate_now_deactivates_and_reloads_in_one_call` does.
+        let loaded = match io::activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![io::ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "evolution-jmap".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: io::ActivationChange::Activate(io::ActivationTarget::Created(
+                    "new".to_owned(),
+                )),
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: io::Baseline::default(),
+            },
+        )
+        .unwrap()
+        {
+            ActivateOutcome::Reloaded(loaded) => loaded,
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("seeding the active script failed: {reason}")
+            }
+        };
+
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        // No network call happens here: the load above already ran.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)));
+
+            let (view, status, add, rename, remove, activate, deactivate, check) = {
+                let ui = state(page).unwrap().borrow();
+                (
+                    ui.view,
+                    ui.status,
+                    ui.add,
+                    ui.rename,
+                    ui.remove,
+                    ui.activate,
+                    ui.deactivate,
+                    ui.check,
+                )
+            };
+
+            // Moving the list's cursor to row 0 also selects it (single
+            // selection mode), the same way `selecting_a_delegate_enables_
+            // revoke` (delegates/page.rs) selects a row with no real click.
+            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+            gtk_tree_path_free(path);
+
+            deactivate_now(page.cast());
+
+            for control in [add, rename, remove, activate, deactivate, check] {
+                assert!(
+                    !get_sensitive(control),
+                    "a control stayed usable while Deactivate's write was in flight"
+                );
+            }
+            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(
+                text,
+                translate(DEACTIVATING),
+                "the status label does not show progress while Deactivate's write is in flight"
             );
 
             gtk_widget_destroy(page.cast());

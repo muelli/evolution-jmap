@@ -348,10 +348,11 @@ pub enum ActivateOutcome {
     WrittenReloadFailed(String),
 }
 
-/// Writes `plan` and reloads, for the Activate button's instant apply (item
-/// 180(a)): the account editor's OK no longer is the only place a change
-/// reaches the server. A refusal of the write itself is still an `Err`, so
-/// the caller can undo the local activation it staged before calling this.
+/// Writes `plan` and reloads, for the Activate and Deactivate buttons'
+/// instant apply (item 180(a)): the account editor's OK no longer is the
+/// only place a change reaches the server. A refusal of the write itself is
+/// still an `Err`, so the caller can undo the local activation change it
+/// staged before calling this.
 pub fn activate_now(link: &AccountLink, plan: &SavePlan) -> Result<ActivateOutcome, String> {
     save(link, plan)?;
     match load(link) {
@@ -1069,6 +1070,55 @@ mod tests {
             }
         }
         assert!(load(&link).unwrap().scripts.is_empty());
+    }
+
+    #[test]
+    fn activate_now_deactivates_and_reloads_in_one_call() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+
+        activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "evolution-jmap".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: ActivationChange::Activate(ActivationTarget::Created("new".to_owned())),
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
+            },
+        )
+        .unwrap();
+
+        let outcome = activate_now(
+            &link,
+            &SavePlan {
+                writes: Vec::new(),
+                destroys: Vec::new(),
+                activation: ActivationChange::Deactivate,
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: Baseline::default(),
+            },
+        )
+        .unwrap();
+
+        match outcome {
+            ActivateOutcome::Reloaded(loaded) => {
+                assert_eq!(loaded.scripts.len(), 1);
+                assert!(
+                    !loaded.scripts[0].script.is_active,
+                    "the script is still active after a Deactivate plan"
+                );
+            }
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("the reload must succeed against a live mock server: {reason}")
+            }
+        }
     }
 
     #[test]
