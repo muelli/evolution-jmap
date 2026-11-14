@@ -1366,6 +1366,7 @@ unsafe fn apply_offline_change(cell: &RefCell<UiState>, offline: bool) {
         }
         ui.offline = offline;
     }
+    tracing::trace!(offline, "filters: page offline state changed");
     let note = if offline {
         translate(OFFLINE)
     } else {
@@ -1592,6 +1593,19 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
         (Some(link), Ok(Some(plan))) => (link, plan),
     };
 
+    let name = cell
+        .borrow()
+        .form
+        .entries()
+        .get(row)
+        .map(|entry| entry.name.clone())
+        .unwrap_or_default();
+    // Item 182(c): the script text passed its local parse and is about to
+    // write (vs. staying only staged in the buffer, the earlier returns
+    // above). The script's own body never appears in a trace line, only
+    // its name.
+    tracing::trace!(script = name, "filters: script text write started");
+
     cell.borrow_mut().saving_text = true;
     // SAFETY: the widgets are live, and no borrow is held.
     unsafe {
@@ -1608,7 +1622,8 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
         cell.borrow_mut().saving_text = false;
         match outcome {
             Ok(ActivateOutcome::Reloaded(loaded)) => {
-                let name = cell
+                tracing::trace!(script = name, "filters: script text written");
+                let found_name = cell
                     .borrow()
                     .form
                     .entries()
@@ -1617,8 +1632,8 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
                 {
                     let mut ui = cell.borrow_mut();
                     ui.form = FiltersForm::from_loaded(loaded);
-                    if let Some(name) = name {
-                        let found = ui.form.entries().iter().position(|e| e.name == name);
+                    if let Some(found_name) = found_name {
+                        let found = ui.form.entries().iter().position(|e| e.name == found_name);
                         ui.form.select(found);
                     }
                 }
@@ -1629,6 +1644,7 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
                 }
             }
             Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                tracing::trace!(script = name, "filters: script text written");
                 let text = translate_with(SAVE_TEXT_RELOAD_FAILED, &[&reason]);
                 // SAFETY: as above.
                 unsafe {
@@ -1637,6 +1653,7 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
                 }
             }
             Err(reason) => {
+                tracing::trace!(script = name, "filters: script text write failed");
                 let text = translate_with(SAVE_TEXT_FAILED, &[&reason]);
                 // SAFETY: as above.
                 unsafe {
@@ -4964,13 +4981,40 @@ mod tests {
             gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
             gtk_tree_path_free(path);
 
-            let mut end = GtkTextIter::default();
-            gtk_text_buffer_get_end_iter(buffer, &mut end);
-            let added = cstring_lossy("stop;\n");
-            gtk_text_buffer_insert(buffer, &mut end, added.as_ptr(), -1);
+            let (_, captured) = capture(|| {
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                let added = cstring_lossy("stop;\n");
+                gtk_text_buffer_insert(buffer, &mut end, added.as_ptr(), -1);
 
-            pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
-            pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+                pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
+                pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+            });
+            // Item 182(c): the debounce save is invisible outside a trace
+            // line, since nothing on screen distinguishes "staged" from
+            // "written" at the moment it happens.
+            assert!(
+                has(&captured, Level::TRACE, "script", "custom"),
+                "expected the write to trace the script's name, got {captured:?}"
+            );
+            assert!(
+                has(
+                    &captured,
+                    Level::TRACE,
+                    "message",
+                    "filters: script text write started"
+                ),
+                "expected a write-started trace line, got {captured:?}"
+            );
+            assert!(
+                has(
+                    &captured,
+                    Level::TRACE,
+                    "message",
+                    "filters: script text written"
+                ),
+                "expected a write-succeeded trace line, got {captured:?}"
+            );
 
             gtk_widget_destroy(window);
         }
@@ -5466,7 +5510,14 @@ mod tests {
             let text_before = get_text(buffer.cast());
 
             let cell = state(page).unwrap();
-            apply_offline_change(cell, true);
+            let (_, captured) = capture(|| apply_offline_change(cell, true));
+            // Item 182(c): going offline while the page is open is invisible
+            // to AT-SPI beyond the status label text, which a screen reader
+            // already announces; the trace line is for a log-based check.
+            assert!(
+                has(&captured, Level::TRACE, "offline", "true"),
+                "expected an offline=true trace line, got {captured:?}"
+            );
 
             for control in [
                 add,
@@ -5498,7 +5549,11 @@ mod tests {
                 "the status label does not say the shell is offline"
             );
 
-            apply_offline_change(cell, false);
+            let (_, captured) = capture(|| apply_offline_change(cell, false));
+            assert!(
+                has(&captured, Level::TRACE, "offline", "false"),
+                "expected an offline=false trace line, got {captured:?}"
+            );
 
             assert!(
                 get_sensitive(activate),
