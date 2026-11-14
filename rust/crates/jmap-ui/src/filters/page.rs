@@ -424,13 +424,15 @@ impl Drop for UiState {
         // Item 180(d): a page closed mid-edit cancels the poll loop (the
         // same reason as `validate_timeout` above) and best-effort removes
         // the temp file; the editor process itself, if still running, is
-        // left alone rather than killed out from under the user.
+        // left alone rather than killed out from under the user, but still
+        // needs reaping (see `reap_in_background`'s own doc).
         if let Some(session) = self.external_editor_session.take() {
             if session.poll_timeout != 0 {
                 // SAFETY: as `validate_timeout` above.
                 unsafe { g_source_remove(session.poll_timeout) };
             }
             let _ = std::fs::remove_file(&session.path);
+            external_editor::reap_in_background(session.child);
         }
     }
 }
