@@ -94,8 +94,9 @@ use common::signals::{Context, Emission, emissions, watch};
 use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
     CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_FOLDER_FLAGGED,
-    CAMEL_MESSAGE_SEEN, CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
-    camel_folder_error_quark, camel_folder_expunge_sync, camel_folder_get_folder_summary,
+    CAMEL_MESSAGE_SEEN, CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_FOLDER_NONE, CamelFolder,
+    CamelFolderClass, CamelMessageInfo, CamelStoreClass, camel_folder_error_quark,
+    camel_folder_expunge_sync, camel_folder_get_folder_summary, camel_folder_info_free,
     camel_folder_lock, camel_folder_refresh_info_sync, camel_folder_summary_get,
     camel_folder_synchronize_sync, camel_folder_transfer_messages_to_sync, camel_folder_unlock,
     camel_message_info_get_flags, camel_message_info_get_subject, camel_message_info_set_flags,
@@ -108,6 +109,7 @@ use glib_sys::{
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
+use jmap_mail::store::store_type;
 use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
 use jmap_proto::Id;
@@ -177,6 +179,9 @@ impl Fixture {
             let account = state.account_mut(&account_id).unwrap();
             let inbox_id = account.seed_mailbox("Inbox", Some(role::INBOX));
             let archive_id = account.seed_mailbox("Archive", None);
+            // A third folder, for the tests that move a message twice while
+            // offline. It stays closed until such a test opens it.
+            account.seed_mailbox("Projects", None);
             let uids = MESSAGES[..messages]
                 .iter()
                 .map(|(name, address, subject, body, received_at)| {
@@ -457,6 +462,31 @@ impl Fixture {
             let flags = camel_message_info_get_flags(info);
             g_object_unref(info.cast());
             flags
+        }
+    }
+
+    /// Asks the store for its folder tree, the way Evolution does when it
+    /// shows the folder list. The store holds the answer, so a later offline
+    /// call can still name the folder that shows a mailbox.
+    fn list_folders(&self) {
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: referencing the class runs the class_init that installs the
+        // vfunc. A NULL `top` asks for the whole tree, as Camel does, and the
+        // out-parameter is writable and currently NULL. The tree comes back
+        // owned, and is freed with the function Camel documents for it.
+        unsafe {
+            let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
+            let vfunc = (*class).get_folder_info_sync.expect("a listing vfunc");
+            let tree = vfunc(
+                self.account.store,
+                ptr::null(),
+                CAMEL_STORE_FOLDER_INFO_REFRESH,
+                ptr::null_mut(),
+                &mut error,
+            );
+            g_type_class_unref(class.cast());
+            assert!(!tree.is_null() && error.is_null(), "the listing failed");
+            camel_folder_info_free(tree);
         }
     }
 
@@ -1135,11 +1165,10 @@ fn a_queued_copy_shows_the_row_in_the_destination() {
 /// `camel_store_synchronize_sync` walks the open folders of the store
 /// (`camel-store.c`, `store_synchronize_sync`), and a restart leaves that
 /// list empty. Thus a reconnect flush can reach the destination folder and
-/// not the source folder. The destination row carries a filing of its own,
-/// shaped as a copy into the destination, so that walk alone puts the
-/// message where the user put it. The source row keeps the move filing and
-/// removes the message from the source mailbox when its own folder is
-/// walked. Both requests are idempotent, so the order does not matter.
+/// not the source folder. The destination row carries the same filing as
+/// the source row, so that walk alone lands the whole move: the message
+/// arrives where the user put it and leaves the mailbox it came from. The
+/// two requests are equal, so the order does not matter.
 #[test]
 fn a_queued_filing_lands_from_the_destination_folder_alone() {
     let fixture = Fixture::start();
@@ -1157,6 +1186,13 @@ fn a_queued_filing_lands_from_the_destination_folder_alone() {
             .get(&fixture.archive_id),
         Some(&true),
         "a walk of the destination folder alone must put the message there"
+    );
+    assert_eq!(
+        fixture
+            .mailboxes_on_server(fixture.uid())
+            .get(&fixture.inbox_id),
+        None,
+        "that walk must also finish the move, not only half of it"
     );
 }
 
@@ -1289,6 +1325,149 @@ fn a_refused_move_un_hides_its_source_row() {
         fixture.flags_of(fixture.inbox, fixture.uid()) & CAMEL_MESSAGE_DELETED,
         0,
         "a refused move must show its source row again"
+    );
+}
+
+/// ROADMAP item 181(a): the destination row of a queued move must not
+/// inherit the hide mark of the source row.
+///
+/// `queue_filing` marks the source row `CAMEL_MESSAGE_DELETED` to hide it,
+/// and the destination row is a clone of that row, taken afterwards. A
+/// clone that keeps the mark is hidden in the destination too, which leaves
+/// the user with a message that shows in neither folder.
+#[test]
+fn a_queued_move_does_not_hide_its_destination_row() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    assert_eq!(
+        fixture.flags_of(fixture.archive, fixture.uid()) & CAMEL_MESSAGE_DELETED,
+        0,
+        "a queued move must show its destination row, not hide it too"
+    );
+}
+
+/// ROADMAP item 181(a): the user can move a message twice before the first
+/// move reaches the server, because the first move already shows it in its
+/// new folder. The two moves must land as one.
+///
+/// A request that files the message into the folder it only passed through
+/// must not stay queued. Nothing orders the walks of two folders, so such a
+/// request can reach the server after the request that files the message
+/// into the folder the user chose last. The message then sits in both.
+#[test]
+fn a_message_moved_twice_while_offline_lands_only_in_the_last_folder() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+    fixture
+        .transfer_straight(projects, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    eprintln!(
+        "DBG inbox rows before reconnect: {:?}",
+        listed(fixture.inbox)
+    );
+    eprintln!(
+        "DBG inbox flags {:x}",
+        fixture.flags_of(fixture.inbox, fixture.uid())
+    );
+    fixture.reconnect();
+    // The folder the message came from is walked first, the order a
+    // reconnect flush takes when only that folder is open. Its row holds
+    // the first move, and that is the request this test is about.
+    fixture.synchronize(fixture.inbox).expect_ok();
+    fixture.synchronize(projects).expect_ok();
+    fixture.synchronize(fixture.archive).expect_ok();
+
+    let mailboxes: Vec<Id> = fixture
+        .mailboxes_on_server(fixture.uid())
+        .keys()
+        .cloned()
+        .collect();
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    assert_eq!(
+        mailboxes,
+        vec![fixture.archive_id.clone()],
+        "a message moved twice while offline must land only where it went last"
+    );
+}
+
+/// The folder a message only passed through keeps no row for it: the
+/// message was never there on the server, and the row is the record of a
+/// request that is now part of the second move.
+#[test]
+fn a_second_queued_move_empties_the_folder_it_passed_through() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+    fixture
+        .transfer_straight(projects, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    let passed_through = listed(projects);
+    let landed = listed(fixture.archive);
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    assert!(
+        passed_through.is_empty(),
+        "the folder the message passed through must keep no row, got {passed_through:?}"
+    );
+    assert_eq!(
+        landed,
+        vec![fixture.uid().to_string()],
+        "the second move must show the message where it went last"
+    );
+}
+
+/// A second queued move back into the folder the message came from cancels
+/// the first one. The message never left that mailbox, so there is nothing
+/// left to ask the server for, and the source row shows again.
+#[test]
+fn a_queued_move_back_to_the_source_cancels_itself() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+    fixture
+        .transfer_straight(projects, fixture.inbox, &[fixture.uid()], true)
+        .expect_ok();
+
+    let hidden = fixture.flags_of(fixture.inbox, fixture.uid()) & CAMEL_MESSAGE_DELETED;
+    fixture.reconnect();
+    let walked = fixture.synchronize(fixture.inbox).ok;
+    let mailboxes: Vec<Id> = fixture
+        .mailboxes_on_server(fixture.uid())
+        .keys()
+        .cloned()
+        .collect();
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    assert_eq!(hidden, 0, "a move that came back must show its row again");
+    assert!(walked, "the walk must send nothing and report no failure");
+    assert_eq!(
+        mailboxes,
+        vec![fixture.inbox_id.clone()],
+        "a move that came back must leave the message where it started"
     );
 }
 

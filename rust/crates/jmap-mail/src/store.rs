@@ -731,6 +731,19 @@ impl JmapStore {
         tree.by_id(mailbox)?.may_add_items
     }
 
+    /// The Camel path of the folder that shows `mailbox`, from the held
+    /// listing alone.
+    ///
+    /// It calls [`Self::folders`] with `flags` of 0, as [`Self::may_add_items`]
+    /// does. A held listing answers with no request, and a restart reads the
+    /// listing of the last session from disk. The caller is offline, so a
+    /// listing that still needs the server gives `None`, and so does a
+    /// listing without the mailbox.
+    pub fn folder_path(&self, mailbox: &Id) -> Option<String> {
+        let tree = self.folders(0).ok()?;
+        Some(tree.by_id(mailbox)?.path.clone())
+    }
+
     /// The folder-list half of a pushed `Mailbox` change. It refreshes the
     /// held tree and tells how the folders changed. A count change is
     /// [`FolderListChange::Same`]. The module docs of [`crate::push`] tell
