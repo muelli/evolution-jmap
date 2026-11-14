@@ -5,9 +5,10 @@
 //! step (d)).
 //!
 //! Precedence, argv, temp-file and spawn logic, plus the GSettings read
-//! [`gsettings_command`] feeds into [`choose_command`]. Still open: the
-//! button and the file monitor that watches [`write_temp_file`]'s path
-//! so an edit reaches the script buffer.
+//! [`gsettings_command`] feeds into [`choose_command`]. [`read_if_changed`]
+//! tells a poll loop whether [`write_temp_file`]'s path changed since its
+//! last check. Still open: the button, and wiring a poll loop and the
+//! script buffer to this module.
 
 use std::ffi::CStr;
 use std::io;
@@ -185,6 +186,29 @@ pub fn spawn(argv: &[String]) -> io::Result<Child> {
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty external editor argv"))?;
     std::process::Command::new(program).args(args).spawn()
+}
+
+/// What [`write_temp_file`]'s path held last time a poll loop checked it,
+/// for [`read_if_changed`] to compare against.
+pub struct FileSnapshot(String);
+
+/// Reads `path`'s current content, to compare against on a later poll.
+pub fn snapshot_file(path: &Path) -> io::Result<FileSnapshot> {
+    Ok(FileSnapshot(std::fs::read_to_string(path)?))
+}
+
+/// Re-reads `path` and returns its new content when it differs from
+/// `since`, or `None` when the external editor has not written a
+/// different script to it yet.
+///
+/// Compares content, not the file's modify time: a poll loop ties this
+/// to a timer, not a filesystem event, so a save that lands within one
+/// tick's resolution of the last poll is still caught, and a rewrite of
+/// the same text (for example, the editor's own "save" on an unchanged
+/// buffer) is correctly not reported as a change.
+pub fn read_if_changed(path: &Path, since: &FileSnapshot) -> io::Result<Option<String>> {
+    let contents = std::fs::read_to_string(path)?;
+    Ok((contents != since.0).then_some(contents))
 }
 
 #[cfg(test)]
@@ -370,6 +394,38 @@ mod tests {
     #[test]
     fn spawn_refuses_an_empty_argv() {
         assert_eq!(spawn(&[]).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn an_unchanged_file_reads_as_no_change() {
+        let dir = std::env::temp_dir();
+        let path = write_temp_file(&dir, "require [\"fileinto\"];").unwrap();
+        let since = snapshot_file(&path).unwrap();
+        assert_eq!(read_if_changed(&path, &since).unwrap(), None);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn an_edited_file_reads_back_its_new_text() {
+        let dir = std::env::temp_dir();
+        let path = write_temp_file(&dir, "require [\"fileinto\"];").unwrap();
+        let since = snapshot_file(&path).unwrap();
+        std::fs::write(&path, "require [\"vacation\"];").unwrap();
+        assert_eq!(
+            read_if_changed(&path, &since).unwrap(),
+            Some("require [\"vacation\"];".to_string())
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_rewrite_with_the_same_text_is_not_a_change() {
+        let dir = std::env::temp_dir();
+        let path = write_temp_file(&dir, "require [\"fileinto\"];").unwrap();
+        let since = snapshot_file(&path).unwrap();
+        std::fs::write(&path, "require [\"fileinto\"];").unwrap();
+        assert_eq!(read_if_changed(&path, &since).unwrap(), None);
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

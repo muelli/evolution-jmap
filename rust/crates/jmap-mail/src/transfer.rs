@@ -433,7 +433,16 @@ pub(crate) unsafe fn replay_filing(
             }
             Ok(false)
         }
-        Err(other) => Err(other),
+        Err(other) => {
+            // Still pending: a transport failure (a DNS failure, a refused
+            // connection, a TLS failure) is as unsent as `Disconnected`
+            // above, and needs the same restore of the mark `push_row`
+            // may have cleared, or the filing falls off the work list with
+            // no way back onto it.
+            // SAFETY: `info` is still the live row.
+            unsafe { camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE) };
+            Err(other)
+        }
     }
 }
 
