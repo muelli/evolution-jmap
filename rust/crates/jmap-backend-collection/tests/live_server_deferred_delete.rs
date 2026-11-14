@@ -239,9 +239,24 @@ impl Shared {
             .expect("the write-test account needs the calendars capability");
         let principal = owner
             .principal_query(&owner_account, PrincipalQueryFilter::email(&recipient.user))
-            .expect("Principal/query failed against the real server")
-            .into_iter()
-            .next()
+            .ok()
+            .and_then(|ids| ids.into_iter().next())
+            .or_else(|| {
+                // Cyrus default-domain accounts have `email == ""` (CYRUS-RFC-FINDINGS.md Finding 3)
+                // and `Principal/query` may be disabled by server policy or omit unshared accounts.
+                // Resolve the recipient's principal ID from the recipient's own session capability
+                // (`currentUserPrincipalId` in RFC 9670 Section 2).
+                eprintln!(
+                    "Principal/query by email did not resolve recipient; falling back to recipient's own currentUserPrincipalId (CYRUS-RFC-FINDINGS.md Finding 3)"
+                );
+                let recipient_client = recipient.connect();
+                let recipient_account =
+                    recipient_client.primary_account(CAPABILITY_PRINCIPALS).ok()?;
+                recipient_client
+                    .current_user_principal_id(&recipient_account)
+                    .ok()
+                    .flatten()
+            })
             .expect("the owner cannot find the principal of the recipient");
         let calendar_id = owner
             .calendar_create(
