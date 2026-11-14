@@ -176,18 +176,19 @@ unsafe extern "C" fn synchronize_sync(
                 // `CAMEL_MESSAGE_FOLDER_FLAGGED` for either reason, and a row
                 // can carry both at once (a flag changed, then the message
                 // was moved, both offline).
-                match replay_filing(folder, summary, &uid) {
-                    Ok(true) => {
-                        // SAFETY: a live summary and a uid it holds a row for.
-                        camel_folder_summary_remove_uid(summary, uid.as_ptr());
-                        if let Ok(text) = uid.to_str() {
-                            changes.remove(text);
-                        }
+                // A removal and a failure can both come back: a filing the
+                // server refuses for good takes its own destination row away
+                // and still reports the reason.
+                let replay = replay_filing(folder, summary, &uid);
+                if replay.remove {
+                    // SAFETY: a live summary and a uid it holds a row for.
+                    camel_folder_summary_remove_uid(summary, uid.as_ptr());
+                    if let Ok(text) = uid.to_str() {
+                        changes.remove(text);
                     }
-                    Ok(false) => {}
-                    Err(problem) => {
-                        failure.get_or_insert(problem);
-                    }
+                }
+                if let Some(problem) = replay.failure {
+                    failure.get_or_insert(problem);
                 }
                 // A pending append (`crate::append`'s own offline queue)
                 // shares this same walk and work list: the uid this row

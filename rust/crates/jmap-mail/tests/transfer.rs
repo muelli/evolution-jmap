@@ -410,6 +410,24 @@ impl Fixture {
         });
     }
 
+    /// Destroys the destination mailbox, as another client would. The
+    /// queued filing then names a mailbox the account no longer has, and
+    /// the server refuses the `Email/set` with `invalidProperties`
+    /// (RFC 8621 §4.6).
+    fn destination_destroyed_elsewhere(&self) {
+        let account_id = self.server.account_id();
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let archive = self.archive_id.clone();
+        account.mailboxes.transaction(|mailboxes| {
+            assert!(
+                mailboxes.destroy(&archive),
+                "the seeded mailbox was not there"
+            );
+        });
+    }
+
     /// Changes the message's flags the way Evolution's message list does,
     /// without saving them.
     fn mark_read(&self) {
@@ -1074,6 +1092,93 @@ fn a_queued_filing_of_an_unsent_append_adds_no_destination_row() {
     assert!(
         listed(fixture.archive).is_empty(),
         "a message with no id on the server must not get a destination row"
+    );
+}
+
+/// ROADMAP item 181(a): a refusal that no retry can fix must roll the
+/// queued filing back, and show the reason the server gave.
+///
+/// The destination row is a promise this provider made on its own, before
+/// the server saw the move. A server that then refuses the filing breaks
+/// that promise, so the walk of the destination folder takes the row away
+/// again. A row left there would say "the message is here" for ever, for a
+/// message the server never files.
+#[test]
+fn a_refused_filing_takes_the_destination_row_away_again() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+    assert_eq!(
+        listed(fixture.archive),
+        vec![fixture.uid().to_string()],
+        "the queued move must show in the destination before the refusal"
+    );
+
+    fixture.destination_destroyed_elsewhere();
+    fixture.reconnect();
+    let (synced, logs) = capture(|| fixture.synchronize(fixture.archive));
+
+    assert!(
+        !synced.ok,
+        "a refusal that no retry can fix must be reported, not swallowed"
+    );
+    assert!(
+        synced.message().contains("invalidProperties"),
+        "the report must carry the reason of the server, got {:?}",
+        synced.message()
+    );
+    assert!(
+        listed(fixture.archive).is_empty(),
+        "the promised destination row must go again when the server refuses"
+    );
+    assert!(
+        has(&logs, Level::TRACE, "message", "rolled back filing"),
+        "expected a rolled-back-filing trace event, got {logs:?}"
+    );
+}
+
+/// The source row of a refused move stays where it is, because the message
+/// never left that mailbox. Only its filing goes, so the next walk does not
+/// send a request that the server refuses again.
+#[test]
+fn a_refused_move_keeps_the_row_it_came_from_and_stops_retrying() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    fixture.destination_destroyed_elsewhere();
+    fixture.reconnect();
+    assert!(
+        !fixture.synchronize(fixture.inbox).ok,
+        "a refusal that no retry can fix must be reported, not swallowed"
+    );
+
+    assert_eq!(
+        listed(fixture.inbox),
+        vec![fixture.uid().to_string()],
+        "a move the server refused must leave the message where it was"
+    );
+    let uid = CString::new(fixture.uid().as_str()).expect("a uid with no NUL");
+    // SAFETY: a live folder with a summary, a NUL-terminated uid alive
+    // across the call, and one reference to the row, released here.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(fixture.inbox);
+        let info: *mut CamelMessageInfo = camel_folder_summary_get(summary, uid.as_ptr());
+        assert!(!info.is_null(), "the refused move removed the source row");
+        assert_eq!(
+            camel_message_info_get_flags(info) & CAMEL_MESSAGE_FOLDER_FLAGGED,
+            0,
+            "a filing the server refused for good must leave the work list"
+        );
+        g_object_unref(info.cast());
+    }
+    assert!(
+        fixture.synchronize(fixture.inbox).ok,
+        "the second walk must send nothing, because the filing is gone"
     );
 }
 
