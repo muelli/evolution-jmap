@@ -84,15 +84,29 @@ set_tests_properties(rust-test PROPERTIES ENVIRONMENT "${_test_env}")
 # EDS/Evolution development headers, so plain `cargo test` skips them. CMake
 # has already found the headers, so run them here. This is the only test that
 # runs the g_type_query layout checks in eds-sys and evo-sys.
+#
+# jmap-ui is not in this list: see rust-test-jmap-ui below.
 add_test(
 	NAME rust-test-eds
 	COMMAND ${CARGO_EXECUTABLE} test --locked -p eds-sys -p evo-sys
 		-p jmap-backend-core
 		-p jmap-backend-book -p jmap-backend-cal -p jmap-mail
-		-p jmap-backend-collection -p jmap-config -p jmap-ui
+		-p jmap-backend-collection -p jmap-config
 	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 )
 set_tests_properties(rust-test-eds PROPERTIES ENVIRONMENT "${_test_env}")
+
+# jmap-ui builds many GTK objects (text buffers, widgets, types) straight from
+# its test functions, and the default test harness gives every test its own
+# thread. GTK is not thread-safe: two threads that build a GTK object at the
+# same time can corrupt process-wide GTK state and crash. Run this crate's
+# tests one at a time so only one thread ever touches GTK.
+add_test(
+	NAME rust-test-jmap-ui
+	COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-ui -- --test-threads=1
+	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+)
+set_tests_properties(rust-test-jmap-ui PROPERTIES ENVIRONMENT "${_test_env}")
 
 # Plain `cargo clippy` lints only the default members. This test lints the
 # full workspace, so the crates that need EDS also get the -D warnings check.

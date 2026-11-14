@@ -5,11 +5,12 @@
 //! (c)'s cold-start half), so a page opened while already offline can show
 //! them read-only instead of an empty page.
 //!
-//! Only the read and write of the cache file live here: no GTK, no
-//! `ESource`, no cache-directory lookup. A later step wires [`save`] to a
-//! successful load and [`load`] to a cold start that finds the shell
-//! offline, and picks the real cache directory to pass in.
+//! The read and write of the cache file, and [`cache_dir`], the real
+//! directory `page.rs` passes to both: no GTK, no `ESource` here. `page.rs`
+//! wires [`save`] to a successful load and [`load`] to a cold start that
+//! finds the shell offline.
 
+use std::ffi::CStr;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -28,6 +29,20 @@ pub struct CachedScript {
 /// account's `ESource` UID so two accounts never collide.
 fn cache_path(cache_dir: &Path, source_uid: &str) -> PathBuf {
     cache_dir.join(format!("filters-{source_uid}.json"))
+}
+
+/// This plugin's own cache directory, in the shape `jmap-mail`'s folder-tree
+/// cache already uses for its module name: `g_get_user_cache_dir()`, then
+/// `evolution`, then `evolution-jmap`, then `filters`.
+pub fn cache_dir() -> PathBuf {
+    // SAFETY: `g_get_user_cache_dir` takes no arguments and always returns a
+    // process-owned, NUL-terminated string GLib keeps for the process's
+    // life; `CStr::from_ptr` only borrows it, nothing here frees it.
+    let base = unsafe { CStr::from_ptr(glib_sys::g_get_user_cache_dir()) };
+    PathBuf::from(base.to_string_lossy().into_owned())
+        .join("evolution")
+        .join("evolution-jmap")
+        .join("filters")
 }
 
 /// Writes `scripts` as this account's cache, replacing what was there.
