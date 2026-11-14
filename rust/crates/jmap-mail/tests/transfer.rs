@@ -93,13 +93,13 @@ use common::array::StringArray;
 use common::signals::{Context, Emission, emissions, watch};
 use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
-    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_FOLDER_FLAGGED, CAMEL_MESSAGE_SEEN,
-    CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
-    camel_folder_error_quark, camel_folder_get_folder_summary, camel_folder_lock,
-    camel_folder_refresh_info_sync, camel_folder_summary_get, camel_folder_synchronize_sync,
-    camel_folder_transfer_messages_to_sync, camel_folder_unlock, camel_message_info_get_flags,
-    camel_message_info_get_subject, camel_message_info_set_flags, camel_mime_message_new,
-    camel_store_get_folder_sync,
+    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_FOLDER_FLAGGED,
+    CAMEL_MESSAGE_SEEN, CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
+    camel_folder_error_quark, camel_folder_expunge_sync, camel_folder_get_folder_summary,
+    camel_folder_lock, camel_folder_refresh_info_sync, camel_folder_summary_get,
+    camel_folder_synchronize_sync, camel_folder_transfer_messages_to_sync, camel_folder_unlock,
+    camel_message_info_get_flags, camel_message_info_get_subject, camel_message_info_set_flags,
+    camel_mime_message_new, camel_store_get_folder_sync,
 };
 use eds_sys::{CamelDataWrapper, camel_data_wrapper_construct_from_data_sync};
 use glib_sys::{
@@ -442,6 +442,32 @@ impl Fixture {
             camel_message_info_set_flags(info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
             g_object_unref(info.cast());
         }
+    }
+
+    /// The Camel flags of the row for `uid` in `folder`.
+    fn flags_of(&self, folder: *mut CamelFolder, uid: &Id) -> u32 {
+        let uid = CString::new(uid.as_str()).expect("a uid with no NUL");
+        // SAFETY: a live folder with a summary, a NUL-terminated uid alive
+        // across the call, and one reference to the row, released here.
+        unsafe {
+            let summary = camel_folder_get_folder_summary(folder);
+            assert!(!summary.is_null(), "the folder has no summary");
+            let info: *mut CamelMessageInfo = camel_folder_summary_get(summary, uid.as_ptr());
+            assert!(!info.is_null(), "the folder has no row for this uid");
+            let flags = camel_message_info_get_flags(info);
+            g_object_unref(info.cast());
+            flags
+        }
+    }
+
+    /// Through Camel's own wrapper, the way Evolution's "Expunge" command
+    /// calls it.
+    fn expunge(&self, folder: *mut CamelFolder) -> Synchronised {
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: a live folder, and an out-parameter that is writable and
+        // currently NULL.
+        let ok = unsafe { camel_folder_expunge_sync(folder, ptr::null_mut(), &mut error) };
+        Synchronised::new(ok, error)
     }
 
     /// Installs a new connection, the way Camel reconnects a store after an
@@ -879,6 +905,64 @@ fn a_move_with_no_connection_is_queued_and_the_row_stays() {
     );
 }
 
+/// ROADMAP item 181(a): the user already dragged the message away, so the
+/// source row must not still look present while the move waits to land.
+/// `queue_filing` hides it the way a queued delete already hides its own
+/// row, by setting the same `CAMEL_MESSAGE_DELETED` mark.
+#[test]
+fn a_queued_move_hides_its_source_row() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    assert_ne!(
+        fixture.flags_of(fixture.inbox, fixture.uid()) & CAMEL_MESSAGE_DELETED,
+        0,
+        "a queued move must hide its source row"
+    );
+}
+
+/// A queued copy never hides its source row: the message never left that
+/// mailbox.
+#[test]
+fn a_queued_copy_does_not_hide_its_source_row() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], false)
+        .expect_ok();
+
+    assert_eq!(
+        fixture.flags_of(fixture.inbox, fixture.uid()) & CAMEL_MESSAGE_DELETED,
+        0,
+        "a queued copy must not hide its source row"
+    );
+}
+
+/// ROADMAP item 181(a): the hide mark above is `CAMEL_MESSAGE_DELETED`, the
+/// same mark a real deletion uses. "Expunge" must not read it as one: the
+/// message is only mid-move, and destroying it would lose the user's data.
+#[test]
+fn expunge_does_not_destroy_a_row_that_only_hides_a_queued_move() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    fixture.expunge(fixture.inbox).expect_ok();
+
+    assert_eq!(
+        listed(fixture.inbox),
+        vec![fixture.uid().to_string()],
+        "expunge destroyed a message that was only waiting for its own move"
+    );
+}
+
 /// The queued filing reaches the server once the store reconnects, with no
 /// explicit `Email/set` call from the client beyond the generic
 /// `CamelOfflineStore` reconnect flush: the same flush
@@ -1179,6 +1263,32 @@ fn a_refused_move_keeps_the_row_it_came_from_and_stops_retrying() {
     assert!(
         fixture.synchronize(fixture.inbox).ok,
         "the second walk must send nothing, because the filing is gone"
+    );
+}
+
+/// ROADMAP item 181(a): a refusal rolls back the hide from
+/// [`a_queued_move_hides_its_source_row`] as well as the filing. Leaving the
+/// mark would strand the row looking deleted forever, with no retry left to
+/// clear it.
+#[test]
+fn a_refused_move_un_hides_its_source_row() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    fixture.destination_destroyed_elsewhere();
+    fixture.reconnect();
+    assert!(
+        !fixture.synchronize(fixture.inbox).ok,
+        "a refusal that no retry can fix must be reported, not swallowed"
+    );
+
+    assert_eq!(
+        fixture.flags_of(fixture.inbox, fixture.uid()) & CAMEL_MESSAGE_DELETED,
+        0,
+        "a refused move must show its source row again"
     );
 }
 

@@ -56,6 +56,14 @@
 //! to the next one. A later walk, whether the user's own or the generic
 //! reconnect flush `CamelOfflineStore` runs, finds the row again and writes
 //! the removal then.
+//!
+//! ## A row that is `CAMEL_MESSAGE_DELETED` for a different reason
+//!
+//! [`crate::transfer`] also sets this mark, to hide the source row of a
+//! queued move while it waits for its own walk. Such a row still has a
+//! [`crate::message_info::pending_filing`]; this walk's work list skips it,
+//! so "Expunge" or "Empty Trash" never destroys a message that is only
+//! mid-move.
 
 use std::ffi::{CStr, CString};
 
@@ -78,6 +86,7 @@ use jmap_proto::Id;
 use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, parent_store};
+use crate::message_info::pending_filing;
 
 /// Installs the folder's expunge vfunc on a class whose first member is a
 /// `CamelFolderClass`.
@@ -171,7 +180,7 @@ pub(crate) unsafe fn expunge_folder(
     // the walk uses them.
     let (marked, unmarked): (Vec<_>, Vec<_>) = unsafe { rows(summary) }
         .into_iter()
-        .partition(|(_, deleted)| *deleted);
+        .partition(|(_, expunge)| *expunge);
     if marked.is_empty() && walk != Walk::Expunge {
         // Evolution synchronises each folder when it closes it. This case
         // must make no request.
@@ -248,7 +257,7 @@ pub(crate) unsafe fn expunge_folder(
     }
 }
 
-/// Returns the uid of each row, and if the user marked the row deleted.
+/// Returns the uid of each row, and if this walk must expunge the row.
 ///
 /// This walks the full summary, not the changed list (the module docs tell
 /// why). It copies the uids before the walk, because the walk removes rows from
@@ -272,7 +281,7 @@ unsafe fn rows(summary: *mut CamelFolderSummary) -> Vec<(CString, bool)> {
                 if uid.is_null() {
                     return None;
                 }
-                Some((CStr::from_ptr(uid).to_owned(), is_deleted(summary, uid)))
+                Some((CStr::from_ptr(uid).to_owned(), should_expunge(summary, uid)))
             })
             .collect();
         summary_free_uids(rows);
@@ -280,7 +289,12 @@ unsafe fn rows(summary: *mut CamelFolderSummary) -> Vec<(CString, bool)> {
     }
 }
 
-/// Tells if the row for `uid` has `CAMEL_MESSAGE_DELETED`.
+/// Tells if the row for `uid` is a user deletion this walk must write.
+///
+/// A row with a pending filing is `CAMEL_MESSAGE_DELETED` for a different
+/// reason (the module doc's "A row that is `CAMEL_MESSAGE_DELETED` for a
+/// different reason"): it is only hidden while it waits for its own move or
+/// copy to land, and this walk must leave it alone.
 ///
 /// A concurrent refresh can remove a row after the uid array is copied. Such a
 /// row is not deleted, so the walk does not touch it.
@@ -289,13 +303,16 @@ unsafe fn rows(summary: *mut CamelFolderSummary) -> Vec<(CString, bool)> {
 ///
 /// `summary` must point at a live `CamelFolderSummary` and `uid` be
 /// NUL-terminated.
-unsafe fn is_deleted(summary: *mut CamelFolderSummary, uid: *const gchar) -> bool {
+unsafe fn should_expunge(summary: *mut CamelFolderSummary, uid: *const gchar) -> bool {
     // SAFETY: the contract above. `summary_get` returns a reference that this
     // function owns. The drop of `info` at the end of the scope releases it.
     unsafe {
         let Some(info) = Owned::from_raw(camel_folder_summary_get(summary, uid)) else {
             return false;
         };
+        if pending_filing(info.as_ptr()).is_some() {
+            return false;
+        }
         camel_message_info_get_flags(info.as_ptr()) & CAMEL_MESSAGE_DELETED != 0
     }
 }

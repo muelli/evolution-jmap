@@ -49,6 +49,18 @@
 //! `camel_folder_changed` fired. Camel and the user still see a move or copy
 //! that succeeded right away, the same as a flag change does.
 //!
+//! ## Hiding the source row of a queued move
+//!
+//! A queued move stays in the source folder's summary (the section above),
+//! but the user already dragged it away, so it must not still show there.
+//! `queue_filing` marks it `CAMEL_MESSAGE_DELETED`, the same local mark a
+//! queued delete uses to hide its own row by default. [`crate::expunge`]'s
+//! own walk skips a row with a pending filing, so "Expunge" or "Empty
+//! Trash" never destroys a message that is only mid-move. A refusal that no
+//! retry can fix (`replay_filing`) clears the mark again, the same change
+//! that clears the filing itself. A copy sets no mark: the message never
+//! left the source mailbox.
+//!
 //! ## The rows of the destination folder
 //!
 //! A filing that reached the server adds no row there. The message appears
@@ -120,11 +132,11 @@ use std::os::raw::c_int;
 use std::ptr;
 
 use eds_sys::{
-    CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_changed,
+    CAMEL_MESSAGE_DELETED, CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_changed,
     camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_lock,
     camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_get,
     camel_folder_summary_remove_uid, camel_folder_unlock, camel_message_info_clone,
-    camel_message_info_set_folder_flagged,
+    camel_message_info_set_flags, camel_message_info_set_folder_flagged,
 };
 use gio_sys::GCancellable;
 #[cfg(camel_folder_get_uids)]
@@ -403,6 +415,15 @@ unsafe fn queue_filing(summary: *mut CamelFolderSummary, uid: &CStr, filing: &Fi
     unsafe {
         set_pending_filing(info.as_ptr(), Some(filing.clone()));
         camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE);
+        // A move leaves this mailbox. Hide the row now, the module doc's
+        // "Hiding the source row of a queued move" section.
+        if filing.out_of_mailbox().is_some() {
+            camel_message_info_set_flags(
+                info.as_ptr(),
+                CAMEL_MESSAGE_DELETED,
+                CAMEL_MESSAGE_DELETED,
+            );
+        }
     }
     tracing::trace!(uid = uid.to_string_lossy().as_ref(), "queued filing");
     Filed::Queued
@@ -578,6 +599,15 @@ pub(crate) unsafe fn replay_filing(
             // SAFETY: `info` is still the live row.
             unsafe {
                 set_pending_filing(info.as_ptr(), None);
+                // Undoes queue_filing's hide, before the folder-flagged
+                // clear below: Camel's own `camel_message_info_set_flags`
+                // sets `CAMEL_MESSAGE_FOLDER_FLAGGED` again on any change
+                // it makes, so clearing it first would not last. A no-op
+                // for the destination row of a copy or a move, which this
+                // mark never reached.
+                if moving {
+                    camel_message_info_set_flags(info.as_ptr(), CAMEL_MESSAGE_DELETED, 0);
+                }
                 camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
             }
             tracing::trace!(uid = text, "rolled back filing");
