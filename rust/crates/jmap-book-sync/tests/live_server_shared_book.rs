@@ -49,6 +49,21 @@ fn is_forbidden(error: &SyncError) -> bool {
     matches!(error, SyncError::Client(error) if jmap_test_support::is_forbidden(error))
 }
 
+/// Cyrus returns `SetError { type: "invalidProperties", properties: ["addressBookIds"] }`
+/// instead of `forbidden` when creating a card in a read-only shared address book
+/// (`CYRUS-RFC-FINDINGS.md` Finding 18).
+fn is_read_only_invalid_properties(error: &SyncError) -> bool {
+    matches!(
+        error,
+        SyncError::Client(jmap_client::Error::Set(set_error))
+            if set_error.error_type == "invalidProperties"
+                && set_error
+                    .properties
+                    .as_deref()
+                    .is_some_and(|props| props == ["addressBookIds"])
+    )
+}
+
 /// Asserts that the recipient cannot see the contact of the owner through
 /// `recipient_sync`, which targets a book that is not shared (yet or any more).
 /// Like `assert_recipient_cannot_see_address_book` in
@@ -123,10 +138,25 @@ fn a_shared_address_books_contacts_are_readable_then_writable_as_the_grant_widen
             &owner_account_id,
             PrincipalQueryFilter::email(&recipient_address),
         )
-        .expect("Principal/query failed against the real server")
-        .into_iter()
-        .next()
-        .expect("the owner cannot resolve the recipient's principal id by email");
+        .ok()
+        .and_then(|ids| ids.into_iter().next())
+        .or_else(|| {
+            // Cyrus default-domain accounts have `email == ""` (CYRUS-RFC-FINDINGS.md Finding 3)
+            // and `Principal/query` may be disabled by server policy or omit unshared accounts.
+            // Resolve the recipient's principal ID from the recipient's own session capability
+            // (`currentUserPrincipalId` in RFC 9670 Section 2).
+            eprintln!(
+                "Principal/query by email did not resolve recipient; falling back to recipient's own currentUserPrincipalId (CYRUS-RFC-FINDINGS.md Finding 3)"
+            );
+            let recipient_account_id = recipient.primary_account(CAPABILITY_PRINCIPALS).ok()?;
+            recipient
+                .current_user_principal_id(&recipient_account_id)
+                .ok()
+                .flatten()
+        })
+        .expect(
+            "the owner cannot resolve the recipient's principal id by email or currentUserPrincipalId",
+        );
 
     let suffix = unique_suffix();
     let book_name = format!("agent-booksync-shared-{suffix}");
@@ -168,10 +198,19 @@ fn a_shared_address_books_contacts_are_readable_then_writable_as_the_grant_widen
     let write_without_grant = recipient_sync
         .save_contact(&vcard(&recipient_contact_name), None)
         .expect_err("a mayRead-only grant must not allow creating a contact");
-    assert!(
-        is_forbidden(&write_without_grant),
-        "expected forbidden for a write under a read-only grant, got: {write_without_grant:?}"
-    );
+    if is_read_only_invalid_properties(&write_without_grant) {
+        // Cyrus returns `invalidProperties` on `addressBookIds` instead of `forbidden`
+        // when creating a contact in a read-only shared address book
+        // (`CYRUS-RFC-FINDINGS.md` Finding 18).
+        eprintln!(
+            "skipping exact forbidden SetError type assertion: server returned invalidProperties for addressBookIds on a read-only shared address book (CYRUS-RFC-FINDINGS.md Finding 18)"
+        );
+    } else {
+        assert!(
+            is_forbidden(&write_without_grant),
+            "expected forbidden for a write under a read-only grant, got: {write_without_grant:?}"
+        );
+    }
 
     owner_sync
         .client()
