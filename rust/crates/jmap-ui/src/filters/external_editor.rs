@@ -4,17 +4,24 @@
 //! Which command opens the script text in an external editor (item 180
 //! step (d)).
 //!
-//! Pure precedence, argv, temp-file and spawn logic only: no GSettings
-//! read, button or file monitor here. A later step wires
-//! [`choose_command`] to the External Editor plugin's own
-//! `org.gnome.evolution.plugin.external-editor` GSettings key and to
-//! `$VISUAL`/`$EDITOR`, adds the button, and watches
-//! [`write_temp_file`]'s path with a file monitor so an edit reaches
-//! the script buffer.
+//! Precedence, argv, temp-file and spawn logic, plus the GSettings read
+//! [`gsettings_command`] feeds into [`choose_command`]. Still open: the
+//! button and the file monitor that watches [`write_temp_file`]'s path
+//! so an edit reaches the script buffer.
 
+use std::ffi::CStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Child;
+use std::ptr;
+
+use gio_sys::{
+    g_settings_get_string, g_settings_new_full, g_settings_schema_has_key,
+    g_settings_schema_source_get_default, g_settings_schema_source_lookup, g_settings_schema_unref,
+};
+use glib_sys::GTRUE;
+use gobject_sys::g_object_unref;
+use jmap_backend_core::marshal::take_string;
 
 /// The external editor command to run, or [`EditorCommand::Default`] to
 /// hand the file to the desktop's default handler for text instead of
@@ -45,6 +52,64 @@ pub fn choose_command(
             (!trimmed.is_empty()).then(|| EditorCommand::Command(trimmed.to_string()))
         })
         .unwrap_or(EditorCommand::Default)
+}
+
+/// Reads the External Editor plugin's own `command` GSettings key
+/// (`org.gnome.evolution.plugin.external-editor`), for [`choose_command`]'s
+/// first precedence source. `None` when the plugin's schema is not
+/// installed, has no such key, or the key holds an empty string.
+pub fn gsettings_command() -> Option<String> {
+    gsettings_string(c"org.gnome.evolution.plugin.external-editor", c"command")
+}
+
+/// Reads a string key from an installed GSettings schema, or `None` when
+/// the schema is not installed, has no such key, or the key holds an
+/// empty string.
+///
+/// `g_settings_new` aborts the whole process when `schema_id` names a
+/// schema GLib has not registered, so this looks `schema_id` up through
+/// `GSettingsSchemaSource` first: an uninstalled plugin's schema then
+/// reads as a plain `None`, never a crash.
+fn gsettings_string(schema_id: &CStr, key: &CStr) -> Option<String> {
+    // SAFETY: `g_settings_schema_source_get_default` returns GLib's own
+    // singleton (transfer none); nothing here frees it.
+    let source = unsafe { g_settings_schema_source_get_default() };
+    if source.is_null() {
+        return None;
+    }
+    // SAFETY: `source` is non-null; `schema_id` is a valid NUL-terminated
+    // string for the call's duration. The returned schema, if any, is
+    // transfer full and unreffed below on every path.
+    let schema = unsafe { g_settings_schema_source_lookup(source, schema_id.as_ptr(), GTRUE) };
+    if schema.is_null() {
+        return None;
+    }
+    // SAFETY: `schema` is non-null, owned by this call until the unref
+    // below; `key` is a valid NUL-terminated string for the call's
+    // duration.
+    let has_key = unsafe { g_settings_schema_has_key(schema, key.as_ptr()) } != 0;
+    let value = has_key
+        .then(|| {
+            // SAFETY: `schema` is non-null; NULL backend and path select
+            // GLib's default backend and the schema's own path.
+            let settings = unsafe { g_settings_new_full(schema, ptr::null_mut(), ptr::null()) };
+            if settings.is_null() {
+                return None;
+            }
+            // SAFETY: `settings` is non-null; `key` was just confirmed
+            // present on its schema.
+            let raw = unsafe { g_settings_get_string(settings, key.as_ptr()) };
+            // SAFETY: `settings` is a GObject this call owns.
+            unsafe { g_object_unref(settings.cast()) };
+            // SAFETY: `raw` is NULL or a GLib-owned string this call takes
+            // ownership of.
+            unsafe { take_string(raw) }
+        })
+        .flatten();
+    // SAFETY: `schema` is owned by this call; every path above returns
+    // before reaching here, so this runs exactly once.
+    unsafe { g_settings_schema_unref(schema) };
+    value
 }
 
 /// Splits an editor command line into an argv, with `file_path` appended
@@ -125,6 +190,35 @@ pub fn spawn(argv: &[String]) -> io::Result<Child> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_uninstalled_schema_reads_as_absent() {
+        assert_eq!(
+            gsettings_string(
+                c"org.gnome.evolution-jmap.no-such-schema-at-all",
+                c"command"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn an_installed_schema_with_an_unknown_key_reads_as_absent() {
+        assert_eq!(
+            gsettings_string(
+                c"org.gnome.evolution.plugin.external-editor",
+                c"no-such-key-at-all"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_real_schema_reads_as_absent_or_a_non_empty_string() {
+        if let Some(value) = gsettings_command() {
+            assert!(!value.is_empty());
+        }
+    }
 
     #[test]
     fn the_gsettings_key_wins_over_the_environment() {
