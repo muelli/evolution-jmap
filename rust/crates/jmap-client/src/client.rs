@@ -674,7 +674,14 @@ impl Client {
 
         let mut seen = std::collections::HashSet::new();
         for resp in resp_calls {
-            if !seen.insert(resp.call_id.as_str()) {
+            // Cyrus quirk (CYRUS-RFC-FINDINGS.md Finding 22): for EmailSubmission/set with
+            // onSuccessUpdateEmail or onSuccessDestroyEmail, Cyrus emits an extraneous Email/set
+            // response with the same call_id as EmailSubmission/set.
+            let is_cyrus_submission_subreq = resp.name == "Email/set"
+                && req_calls
+                    .iter()
+                    .any(|req| req.call_id == resp.call_id && req.name == "EmailSubmission/set");
+            if !is_cyrus_submission_subreq && !seen.insert(resp.call_id.as_str()) {
                 return Err(Error::Protocol(format!(
                     "duplicate method response call id {}",
                     resp.call_id

@@ -55,6 +55,30 @@ use jmap_proto::mail::{Envelope, EnvelopeAddress};
 use jmap_proto::session::CAPABILITY_MAIL;
 use jmap_test_support::{connect_for_write, connect_recipient, unique_suffix};
 
+/// Finds the sending identity ID for `sender_email`.
+///
+/// On conforming servers, `MailSync::identity_for` resolves the identity directly.
+/// On Cyrus default-domain accounts (Finding 3), `Identity/get` returns an empty
+/// string for `email`, so `identity_for` fails. We fall back to matching by identity
+/// ID or selecting the single provisioned account identity.
+fn resolve_sender_identity(sync: &MailSync, sender_email: &str) -> jmap_proto::Id {
+    sync.identity_for(sender_email).unwrap_or_else(|_| {
+        let identities = sync
+            .client()
+            .identities(sync.account_id())
+            .expect("fetching identities must succeed");
+        identities
+            .iter()
+            .find(|id| {
+                id.email.is_empty()
+                    && (id.id.as_ref().map(|i| i.as_str()) == Some(sender_email)
+                        || identities.len() == 1)
+            })
+            .and_then(|id| id.id.clone())
+            .unwrap_or_else(|| panic!("no sending identity found for {sender_email}"))
+    })
+}
+
 /// Sends a message from the write-test account to the recipient account and
 /// polls `MailSync::messages` of the recipient until the message arrives.
 /// This shows delivery, not only an accepted submission. Then it checks the
@@ -79,9 +103,7 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
         .expect("the write-test account needs the mail capability");
     let sync = MailSync::new(sender_client, sender_account_id);
 
-    let identity = sync
-        .identity_for(&sender_email)
-        .expect("the write-test account needs a sending identity for its own address");
+    let identity = resolve_sender_identity(&sync, &sender_email);
     let mailboxes = sync
         .outgoing_mailboxes()
         .expect("the write-test account needs somewhere to stage an outgoing message");
@@ -91,10 +113,21 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
         .clone()
         .expect("the write-test account needs a Sent mailbox to prove the filing half of this");
 
+    let sender_addr = if sender_email.contains('@') {
+        sender_email.clone()
+    } else {
+        format!("{sender_email}@example.com")
+    };
+    let recipient_addr = if recipient_email.contains('@') {
+        recipient_email.clone()
+    } else {
+        format!("{recipient_email}@example.com")
+    };
+
     let subject = format!("agent-mailsync-send-{}", unique_suffix());
     let message = format!(
-        "From: {sender_email}\r\n\
-         To: {recipient_email}\r\n\
+        "From: {sender_addr}\r\n\
+         To: {recipient_addr}\r\n\
          Subject: {subject}\r\n\
          Message-ID: <{subject}@agent-livewrite.net>\r\n\
          Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
@@ -107,8 +140,8 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
             source: message.into_bytes(),
             identity,
             envelope: Some(Envelope::new(
-                EnvelopeAddress::new(sender_email.clone()),
-                [EnvelopeAddress::new(recipient_email.clone())],
+                EnvelopeAddress::new(sender_addr.clone()),
+                [EnvelopeAddress::new(recipient_addr.clone())],
             )),
             staging: mailboxes.staging,
             destination: mailboxes.destination,
@@ -211,19 +244,28 @@ fn an_envelope_recipient_absent_from_every_header_is_still_delivered() {
         .expect("the write-test account needs the mail capability");
     let sync = MailSync::new(sender_client, sender_account_id);
 
-    let identity = sync
-        .identity_for(&sender_email)
-        .expect("the write-test account needs a sending identity for its own address");
+    let identity = resolve_sender_identity(&sync, &sender_email);
     let mailboxes = sync
         .outgoing_mailboxes()
         .expect("the write-test account needs somewhere to stage an outgoing message");
+
+    let sender_addr = if sender_email.contains('@') {
+        sender_email.clone()
+    } else {
+        format!("{sender_email}@example.com")
+    };
+    let recipient_addr = if recipient_email.contains('@') {
+        recipient_email.clone()
+    } else {
+        format!("{recipient_email}@example.com")
+    };
 
     let subject = format!("agent-mailsync-bcc-{}", unique_suffix());
     // `To` names the sender. The recipient address is not in the source
     // bytes, as for a real Bcc.
     let message = format!(
-        "From: {sender_email}\r\n\
-         To: {sender_email}\r\n\
+        "From: {sender_addr}\r\n\
+         To: {sender_addr}\r\n\
          Subject: {subject}\r\n\
          Message-ID: <{subject}@agent-livewrite.net>\r\n\
          Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
@@ -236,8 +278,8 @@ fn an_envelope_recipient_absent_from_every_header_is_still_delivered() {
             source: message.into_bytes(),
             identity,
             envelope: Some(Envelope::new(
-                EnvelopeAddress::new(sender_email.clone()),
-                [EnvelopeAddress::new(recipient_email.clone())],
+                EnvelopeAddress::new(sender_addr.clone()),
+                [EnvelopeAddress::new(recipient_addr.clone())],
             )),
             staging: mailboxes.staging,
             destination: mailboxes.destination,
@@ -283,9 +325,12 @@ fn an_envelope_recipient_absent_from_every_header_is_still_delivered() {
 
     assert_eq!(delivered.subject.as_deref(), Some(subject.as_str()));
     assert!(
-        delivered.to.iter().all(|to| to.email != recipient_email),
+        delivered
+            .to
+            .iter()
+            .all(|to| to.email != recipient_addr && to.email != recipient_email),
         "the delivered message's own To header names the envelope-only recipient \
-         ({recipient_email}); it should name only the sender, the same way a real Bcc \
+         ({recipient_addr}); it should name only the sender, the same way a real Bcc \
          recipient's address never appears in the headers"
     );
 }
