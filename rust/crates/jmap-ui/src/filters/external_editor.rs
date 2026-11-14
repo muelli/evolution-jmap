@@ -7,8 +7,8 @@
 //! Precedence, argv, temp-file and spawn logic, plus the GSettings read
 //! [`gsettings_command`] feeds into [`choose_command`]. [`read_if_changed`]
 //! tells a poll loop whether [`write_temp_file`]'s path changed since its
-//! last check. Still open: the button, and wiring a poll loop and the
-//! script buffer to this module.
+//! last check. [`reap_in_background`] waits for a still-running [`spawn`]ed
+//! child a closed page can no longer poll, so it does not sit as a zombie.
 
 use std::ffi::CStr;
 use std::io;
@@ -186,6 +186,22 @@ pub fn spawn(argv: &[String]) -> io::Result<Child> {
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty external editor argv"))?;
     std::process::Command::new(program).args(args).spawn()
+}
+
+/// Waits for `child` on a detached thread, for a caller that must not block
+/// its own thread until the editor exits.
+///
+/// `std::process::Child` does not wait on drop. A child nothing ever calls
+/// `wait` on again becomes a zombie once it exits, holding its process-table
+/// entry until this process itself exits. The page this module's session
+/// belongs to stops polling `child` (`try_wait`) the moment it is closed,
+/// which is exactly when the editor is still open as often as not; this
+/// gives the one `wait` call such a child still needs somewhere to finish
+/// without holding up the page's own teardown.
+pub fn reap_in_background(mut child: Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 /// What [`write_temp_file`]'s path held last time a poll loop checked it,
@@ -394,6 +410,38 @@ mod tests {
     #[test]
     fn spawn_refuses_an_empty_argv() {
         assert_eq!(spawn(&[]).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// A child still running when its last watcher stops polling it must
+    /// not sit as a zombie forever: [`reap_in_background`] is the one place
+    /// left to call `wait` on it. Linux-specific (`/proc`), the same as the
+    /// rest of this provider's host assumptions.
+    #[test]
+    fn a_still_running_child_does_not_become_a_zombie_once_reaped_in_the_background() {
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 0.2")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+
+        reap_in_background(child);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+                return; // reaped: the process table slot is gone
+            };
+            assert!(
+                !stat.contains(") Z "),
+                "the child was left a zombie: {stat}"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child was never reaped"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     #[test]
