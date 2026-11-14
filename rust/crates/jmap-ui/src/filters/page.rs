@@ -33,7 +33,8 @@
 
 use std::cell::RefCell;
 use std::ffi::{CStr, c_int, c_uint, c_ulong};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -81,8 +82,8 @@ use gio_sys::{
     g_task_set_task_data,
 };
 use glib_sys::{
-    G_SOURCE_REMOVE, GError, GFALSE, GTRUE, GType, g_error_new_literal, g_list_free,
-    g_list_free_full, g_source_remove, g_timeout_add, gboolean, gpointer,
+    G_SOURCE_CONTINUE, G_SOURCE_REMOVE, GError, GFALSE, GTRUE, GType, g_error_new_literal,
+    g_list_free, g_list_free_full, g_source_remove, g_timeout_add, gboolean, gpointer,
 };
 use gobject_sys::{
     G_TYPE_STRING, GObject, GObjectClass, GTypeInstance, GValue, g_object_ref, g_object_unref,
@@ -100,6 +101,7 @@ use jmap_backend_core::trampoline::{guard, log_critical};
 use crate::dispatch;
 use crate::filters::cache;
 use crate::filters::completion;
+use crate::filters::external_editor;
 use crate::filters::form::{Buttons, FiltersForm, NO_SCRIPT_SELECTED, ScriptEntry};
 use crate::filters::io::{self, ActivateOutcome, Loaded, SavePlan};
 use crate::filters::rule_dialog;
@@ -145,6 +147,12 @@ const VALIDATE_DEBOUNCE_MS: c_uint = 300;
 /// short, fixed list rather than a scrollable one: this slice's own later
 /// follow-up, not this one.
 const MAX_COMPLETION_ROWS: usize = 15;
+/// How often item 180(d)'s poll loop re-reads the external editor's temp
+/// file while a session is open. A timer, not a file-system watch: GLib's
+/// own `GFileMonitor` needs a `GMainContext` callback with the same shape
+/// this already uses for the debounce above, and polling needs no new
+/// signal connection for [`Drop`] to disconnect.
+const EXTERNAL_EDITOR_POLL_MS: c_uint = 500;
 
 const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"Your server does not offer server-side filters.");
@@ -229,6 +237,20 @@ const ACTIVATE_LABEL: &CStr = N_(c"Acti_vate");
 // GNOME HIG: a button that opens a dialog gets a trailing ellipsis.
 const RULE_ADD_LABEL: &CStr = N_(c"A_dd…");
 const EXTERNAL_EDIT: &CStr = N_(c"Not in Evolution's rules format, so it shows as text.");
+// Mnemonic on "x", not "E": "_Edit as text" owns Alt+E already. GNOME HIG: a
+// button that opens another window gets a trailing ellipsis.
+const EXTERNAL_EDITOR_LABEL: &CStr = N_(c"Edit in E_xternal Editor…");
+const NO_EXTERNAL_EDITOR: &CStr = N_(
+    c"No external editor is configured. Set the External Editor plugin's command, or $VISUAL or $EDITOR.",
+);
+const EXTERNAL_EDITOR_BAD_COMMAND: &CStr =
+    N_(c"The configured external editor command could not be parsed.");
+// TRANSLATORS: %1$s is the operating-system error.
+const EXTERNAL_EDITOR_WRITE_FAILED: &CStr =
+    N_(c"The script could not be opened in an external editor: %1$s");
+// TRANSLATORS: %1$s is the operating-system error.
+const EXTERNAL_EDITOR_SPAWN_FAILED: &CStr = N_(c"The external editor could not be started: %1$s");
+const CHECK_LABEL: &CStr = N_(c"C_heck");
 
 /// All page state, in a box as qdata. It holds the widget pointers (main
 /// thread only), the staged scripts, and the account link from the load.
@@ -260,6 +282,7 @@ struct UiState {
     activate: *mut GtkWidget,
     deactivate: *mut GtkWidget,
     check: *mut GtkWidget,
+    external_edit: *mut GtkWidget,
     edit_as_text: *mut GtkWidget,
     rules_box: *mut GtkWidget,
     rules_store: *mut GtkListStore,
@@ -321,6 +344,28 @@ struct UiState {
     /// The `notify::network-available` handler id on `shell`, or 0 if never
     /// connected.
     shell_network_handler: c_ulong,
+    /// Item 180(d)'s open external editor session, if any. At most one at a
+    /// time: [`start_external_edit`] refuses to start a second one, and the
+    /// button that starts it is insensitive while this is `Some`.
+    external_editor_session: Option<ExternalEditorSession>,
+}
+
+/// Item 180(d): one open "Edit in External Editor…" session. [`write_temp_file`]'s
+/// path and the child process [`spawn`] started, plus the poll timeout that
+/// watches the file for a change and the child for an exit.
+///
+/// [`write_temp_file`]: crate::filters::external_editor::write_temp_file
+/// [`spawn`]: crate::filters::external_editor::spawn
+struct ExternalEditorSession {
+    /// The script row the session edits. A poll tick that finds the user has
+    /// since selected a different row still updates this row's text in the
+    /// form; it only also updates the buffer when this row is still shown.
+    row: usize,
+    path: PathBuf,
+    snapshot: external_editor::FileSnapshot,
+    child: Child,
+    /// The `g_timeout_add` source id of the poll loop. [`Drop`] cancels it.
+    poll_timeout: c_uint,
 }
 
 /// A fresh generation for one Check click, process-wide so it never repeats.
@@ -375,6 +420,17 @@ impl Drop for UiState {
                     g_signal_handler_disconnect(self.shell, self.shell_network_handler);
                 }
             }
+        }
+        // Item 180(d): a page closed mid-edit cancels the poll loop (the
+        // same reason as `validate_timeout` above) and best-effort removes
+        // the temp file; the editor process itself, if still running, is
+        // left alone rather than killed out from under the user.
+        if let Some(session) = self.external_editor_session.take() {
+            if session.poll_timeout != 0 {
+                // SAFETY: as `validate_timeout` above.
+                unsafe { g_source_remove(session.poll_timeout) };
+            }
+            let _ = std::fs::remove_file(&session.path);
         }
     }
 }
@@ -637,7 +693,8 @@ unsafe fn build_widgets(page: *mut GObject) {
         let rule_enable = add_button(page, rule_buttons, N_(c"E_nable"), on_rule_enable);
         let rule_disable = add_button(page, rule_buttons, N_(c"Disa_ble"), on_rule_disable);
 
-        let check = add_button(page, content, N_(c"C_heck"), on_check);
+        let check = add_button(page, content, CHECK_LABEL, on_check);
+        let external_edit = add_button(page, content, EXTERNAL_EDITOR_LABEL, on_external_edit);
 
         for control in [
             add,
@@ -646,6 +703,7 @@ unsafe fn build_widgets(page: *mut GObject) {
             activate,
             deactivate,
             check,
+            external_edit,
             source_view,
             edit_as_text,
             rule_add,
@@ -742,6 +800,7 @@ unsafe fn build_widgets(page: *mut GObject) {
                 activate,
                 deactivate,
                 check,
+                external_edit,
                 edit_as_text,
                 rules_box,
                 rules_store,
@@ -765,6 +824,7 @@ unsafe fn build_widgets(page: *mut GObject) {
                 shell: shell.cast(),
                 shell_online_handler,
                 shell_network_handler,
+                external_editor_session: None,
             }),
         );
     }
@@ -1050,6 +1110,10 @@ struct ShowPlan {
     /// offline (which runs this same plan) cannot re-enable a control
     /// [`apply_offline_change`] just disabled.
     offline: bool,
+    /// Item 180(d): true while an external editor session is open on any
+    /// row. The external editor button is insensitive while this is set, so
+    /// only one session can ever be open at a time.
+    external_editor_open: bool,
 }
 
 /// Item 180(b): true when the external-edit banner ([`EXTERNAL_EDIT`]) should
@@ -1145,6 +1209,7 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             rule_selected,
             rule_buttons,
             offline: ui.offline,
+            external_editor_open: ui.external_editor_session.is_some(),
         }
     };
 
@@ -1152,6 +1217,7 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
         buffer,
         source_label,
         source_view,
+        external_edit,
         edit_as_text,
         rules_box,
         rules_store,
@@ -1164,6 +1230,7 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             ui.buffer,
             ui.source_label,
             ui.source_view,
+            ui.external_edit,
             ui.edit_as_text,
             ui.rules_box,
             ui.rules_store,
@@ -1210,6 +1277,15 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             flag(!plan.want_rules && plan.buttons.edit && !plan.offline),
         );
         gtk_text_view_set_editable(source_view.cast(), flag(plan.buttons.edit && !plan.offline));
+        gtk_widget_set_sensitive(
+            external_edit,
+            flag(
+                !plan.want_rules
+                    && plan.buttons.edit
+                    && !plan.offline
+                    && !plan.external_editor_open,
+            ),
+        );
         set_text(
             buffer.cast(),
             if plan.want_rules {
@@ -1290,6 +1366,7 @@ unsafe fn apply_offline_change(cell: &RefCell<UiState>, offline: bool) {
         }
         ui.offline = offline;
     }
+    tracing::trace!(offline, "filters: page offline state changed");
     let note = if offline {
         translate(OFFLINE)
     } else {
@@ -1516,6 +1593,19 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
         (Some(link), Ok(Some(plan))) => (link, plan),
     };
 
+    let name = cell
+        .borrow()
+        .form
+        .entries()
+        .get(row)
+        .map(|entry| entry.name.clone())
+        .unwrap_or_default();
+    // Item 182(c): the script text passed its local parse and is about to
+    // write (vs. staying only staged in the buffer, the earlier returns
+    // above). The script's own body never appears in a trace line, only
+    // its name.
+    tracing::trace!(script = name, "filters: script text write started");
+
     cell.borrow_mut().saving_text = true;
     // SAFETY: the widgets are live, and no borrow is held.
     unsafe {
@@ -1532,7 +1622,8 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
         cell.borrow_mut().saving_text = false;
         match outcome {
             Ok(ActivateOutcome::Reloaded(loaded)) => {
-                let name = cell
+                tracing::trace!(script = name, "filters: script text written");
+                let found_name = cell
                     .borrow()
                     .form
                     .entries()
@@ -1541,8 +1632,8 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
                 {
                     let mut ui = cell.borrow_mut();
                     ui.form = FiltersForm::from_loaded(loaded);
-                    if let Some(name) = name {
-                        let found = ui.form.entries().iter().position(|e| e.name == name);
+                    if let Some(found_name) = found_name {
+                        let found = ui.form.entries().iter().position(|e| e.name == found_name);
                         ui.form.select(found);
                     }
                 }
@@ -1553,6 +1644,7 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
                 }
             }
             Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                tracing::trace!(script = name, "filters: script text written");
                 let text = translate_with(SAVE_TEXT_RELOAD_FAILED, &[&reason]);
                 // SAFETY: as above.
                 unsafe {
@@ -1561,6 +1653,7 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
                 }
             }
             Err(reason) => {
+                tracing::trace!(script = name, "filters: script text write failed");
                 let text = translate_with(SAVE_TEXT_FAILED, &[&reason]);
                 // SAFETY: as above.
                 unsafe {
@@ -3160,6 +3253,235 @@ unsafe extern "C" fn on_check(_button: *mut GObject, page: gpointer) {
     });
 }
 
+unsafe extern "C" fn on_external_edit(_button: *mut GObject, page: gpointer) {
+    guard("JmapFiltersPage::external-edit", (), || {
+        // SAFETY: the page is live, because its button emitted.
+        let Some(cell) = (unsafe { state(page.cast()) }) else {
+            return;
+        };
+        // SAFETY: as `on_check`.
+        unsafe { start_external_edit(cell, page.cast()) };
+    });
+}
+
+/// Starts item 180(d)'s external editor session on the selected script:
+/// writes its text to a private temp file (mode 600), picks and starts the
+/// editor command, and begins the poll loop [`on_external_editor_poll`]
+/// runs. Does nothing if a session is already open: the button is
+/// insensitive then, so this only guards a stale event.
+///
+/// # Safety
+///
+/// `cell` is the state of the live page `page` points to.
+unsafe fn start_external_edit(cell: &RefCell<UiState>, page: *mut GObject) {
+    let command = external_editor::choose_command(
+        external_editor::gsettings_command().as_deref(),
+        std::env::var("VISUAL").ok().as_deref(),
+        std::env::var("EDITOR").ok().as_deref(),
+    );
+    // SAFETY: as this function's own contract.
+    unsafe { start_external_edit_with_command(cell, page, command) };
+}
+
+/// [`start_external_edit`]'s own logic, with the editor command already
+/// chosen: split out so a test can supply a known command instead of
+/// depending on this host's own GSettings, `$VISUAL` and `$EDITOR`.
+///
+/// # Safety
+///
+/// As [`start_external_edit`].
+unsafe fn start_external_edit_with_command(
+    cell: &RefCell<UiState>,
+    page: *mut GObject,
+    command: external_editor::EditorCommand,
+) {
+    if cell.borrow().external_editor_session.is_some() {
+        return;
+    }
+    // SAFETY: the widgets are live, and no borrow is held.
+    unsafe { flush(cell) };
+    let found = {
+        let ui = cell.borrow();
+        ui.form.selected().and_then(|row| {
+            ui.form
+                .entries()
+                .get(row)
+                .map(|entry| (row, entry.text.clone()))
+        })
+    };
+    let Some((row, text)) = found else {
+        return refuse(cell, NO_SCRIPT_SELECTED);
+    };
+
+    let external_editor::EditorCommand::Command(command) = command else {
+        // No command is configured anywhere; item 180(d)'s "else the
+        // default handler for text" is a separate, still open, follow-up
+        // (it needs a way to notice the handler has finished with no child
+        // process of our own to poll). Refusing cleanly here, rather than
+        // guessing at that completion signal, is the correct-over-fast
+        // choice for this slice.
+        // SAFETY: as above.
+        return unsafe { set_status(cell, &translate(NO_EXTERNAL_EDITOR)) };
+    };
+
+    let dir = std::env::temp_dir();
+    let path = match external_editor::write_temp_file(&dir, &text) {
+        Ok(path) => path,
+        Err(failure) => {
+            // SAFETY: as above.
+            return unsafe {
+                set_status(
+                    cell,
+                    &translate_with(EXTERNAL_EDITOR_WRITE_FAILED, &[&failure.to_string()]),
+                )
+            };
+        }
+    };
+    let Some(argv) = external_editor::build_argv(&command, &path) else {
+        let _ = std::fs::remove_file(&path);
+        // SAFETY: as above.
+        return unsafe { set_status(cell, &translate(EXTERNAL_EDITOR_BAD_COMMAND)) };
+    };
+    let snapshot = match external_editor::snapshot_file(&path) {
+        Ok(snapshot) => snapshot,
+        Err(failure) => {
+            let _ = std::fs::remove_file(&path);
+            // SAFETY: as above.
+            return unsafe {
+                set_status(
+                    cell,
+                    &translate_with(EXTERNAL_EDITOR_WRITE_FAILED, &[&failure.to_string()]),
+                )
+            };
+        }
+    };
+    let child = match external_editor::spawn(&argv) {
+        Ok(child) => child,
+        Err(failure) => {
+            let _ = std::fs::remove_file(&path);
+            // SAFETY: as above.
+            return unsafe {
+                set_status(
+                    cell,
+                    &translate_with(EXTERNAL_EDITOR_SPAWN_FAILED, &[&failure.to_string()]),
+                )
+            };
+        }
+    };
+
+    // SAFETY: `page` is live for the duration of this call; the timeout
+    // either fires on this same main loop while it still is, or this page's
+    // `Drop` cancels it first, the same contract `validate_timeout` relies
+    // on.
+    let poll_timeout = unsafe {
+        g_timeout_add(
+            EXTERNAL_EDITOR_POLL_MS,
+            Some(on_external_editor_poll as unsafe extern "C" fn(gpointer) -> gboolean),
+            page.cast(),
+        )
+    };
+    let external_edit = {
+        let mut ui = cell.borrow_mut();
+        ui.external_editor_session = Some(ExternalEditorSession {
+            row,
+            path,
+            snapshot,
+            child,
+            poll_timeout,
+        });
+        ui.external_edit
+    };
+    // SAFETY: the button is a live child of the page.
+    unsafe { gtk_widget_set_sensitive(external_edit, GFALSE) };
+}
+
+/// Item 180(d)'s poll loop: re-reads the open session's temp file, applies a
+/// change to the buffer when the session's row is still the one shown (so
+/// the local check and item 180(a)'s save apply, as a keystroke would
+/// trigger them) or straight to the form when the user has since selected
+/// another row, and ends the session once the editor process exits.
+///
+/// # Safety
+///
+/// `page` is the data pointer [`start_external_edit`] gave `g_timeout_add`.
+unsafe extern "C" fn on_external_editor_poll(page: gpointer) -> gboolean {
+    guard(
+        "JmapFiltersPage::external-editor-poll",
+        G_SOURCE_REMOVE,
+        || {
+            let page = page.cast::<GObject>();
+            // SAFETY: the page is live: this callback runs on the main loop
+            // this page's own `Drop` cancels it from before it is freed.
+            let Some(cell) = (unsafe { state(page) }) else {
+                return G_SOURCE_REMOVE;
+            };
+
+            let read = {
+                let ui = cell.borrow();
+                match ui.external_editor_session.as_ref() {
+                    Some(session) => {
+                        external_editor::read_if_changed(&session.path, &session.snapshot)
+                    }
+                    // Another tick already ended the session (should not
+                    // happen: `Drop` and the end of this function both
+                    // cancel the timeout first) or this ran after a `Drop`
+                    // that could not reach it in time.
+                    None => return G_SOURCE_REMOVE,
+                }
+            };
+            // The file briefly missing or unreadable is left for the next
+            // tick rather than treated as a reason to end the session; only
+            // the child exiting below does that.
+            if let Ok(Some(new_text)) = read {
+                let row = cell
+                    .borrow()
+                    .external_editor_session
+                    .as_ref()
+                    .map(|session| session.row);
+                if let Some(row) = row {
+                    let shown = cell.borrow().showing == Some(row);
+                    if shown {
+                        let buffer = cell.borrow().buffer;
+                        // SAFETY: the buffer is a live child of the page,
+                        // and no borrow of `cell` is held across the call.
+                        unsafe { set_text(buffer.cast(), &new_text) };
+                    } else {
+                        let _ = cell.borrow_mut().form.set_text(row, &new_text);
+                    }
+                }
+                let path = cell
+                    .borrow()
+                    .external_editor_session
+                    .as_ref()
+                    .map(|session| session.path.clone());
+                if let Some(path) = path
+                    && let Ok(snapshot) = external_editor::snapshot_file(&path)
+                    && let Some(session) = cell.borrow_mut().external_editor_session.as_mut()
+                {
+                    session.snapshot = snapshot;
+                }
+            }
+
+            let exited = cell
+                .borrow_mut()
+                .external_editor_session
+                .as_mut()
+                .map(|session| matches!(session.child.try_wait(), Ok(Some(_))))
+                .unwrap_or(true);
+            if !exited {
+                return G_SOURCE_CONTINUE;
+            }
+
+            if let Some(session) = cell.borrow_mut().external_editor_session.take() {
+                let _ = std::fs::remove_file(&session.path);
+            }
+            // SAFETY: the widgets are live, and no borrow of `cell` is held.
+            unsafe { show_selected(cell) };
+            G_SOURCE_REMOVE
+        },
+    )
+}
+
 /// The data that one submit writes, for the `GTask` thread. The link keeps
 /// the client alive. The plan is already checked against the server limits.
 struct SubmitJob {
@@ -3452,6 +3774,19 @@ mod tests {
     #[test]
     fn activate_does_not_take_the_dialogs_own_cancel_mnemonic() {
         assert_ne!(mnemonic(ACTIVATE_LABEL), 'c');
+    }
+
+    /// Item 180(d): "Edit in External Editor…" and "Check" are always shown
+    /// together in the script section, and "Edit as text" whenever the
+    /// managed script is selected; none of the three may share a mnemonic.
+    #[test]
+    fn external_editor_keeps_its_own_mnemonic() {
+        assert_ne!(mnemonic(EXTERNAL_EDITOR_LABEL), mnemonic(CHECK_LABEL));
+        assert_ne!(
+            mnemonic(EXTERNAL_EDITOR_LABEL),
+            mnemonic(EDIT_AS_TEXT_LABEL)
+        );
+        assert_ne!(mnemonic(EXTERNAL_EDITOR_LABEL), 'c');
     }
 
     /// GNOME HIG: a button that opens a dialog carries a trailing ellipsis,
@@ -3931,6 +4266,7 @@ mod tests {
             activate: ptr::null_mut(),
             deactivate: ptr::null_mut(),
             check: ptr::null_mut(),
+            external_edit: ptr::null_mut(),
             edit_as_text: ptr::null_mut(),
             rules_box: ptr::null_mut(),
             rules_store: ptr::null_mut(),
@@ -3954,6 +4290,7 @@ mod tests {
             shell: ptr::null_mut(),
             shell_online_handler: 0,
             shell_network_handler: 0,
+            external_editor_session: None,
         }
     }
 
@@ -4644,13 +4981,40 @@ mod tests {
             gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
             gtk_tree_path_free(path);
 
-            let mut end = GtkTextIter::default();
-            gtk_text_buffer_get_end_iter(buffer, &mut end);
-            let added = cstring_lossy("stop;\n");
-            gtk_text_buffer_insert(buffer, &mut end, added.as_ptr(), -1);
+            let (_, captured) = capture(|| {
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                let added = cstring_lossy("stop;\n");
+                gtk_text_buffer_insert(buffer, &mut end, added.as_ptr(), -1);
 
-            pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
-            pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+                pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
+                pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+            });
+            // Item 182(c): the debounce save is invisible outside a trace
+            // line, since nothing on screen distinguishes "staged" from
+            // "written" at the moment it happens.
+            assert!(
+                has(&captured, Level::TRACE, "script", "custom"),
+                "expected the write to trace the script's name, got {captured:?}"
+            );
+            assert!(
+                has(
+                    &captured,
+                    Level::TRACE,
+                    "message",
+                    "filters: script text write started"
+                ),
+                "expected a write-started trace line, got {captured:?}"
+            );
+            assert!(
+                has(
+                    &captured,
+                    Level::TRACE,
+                    "message",
+                    "filters: script text written"
+                ),
+                "expected a write-succeeded trace line, got {captured:?}"
+            );
 
             gtk_widget_destroy(window);
         }
@@ -4671,6 +5035,210 @@ mod tests {
             saved.text, "keep;\nstop;\n",
             "the debounce must have saved the appended line to the server"
         );
+    }
+
+    /// Item 180(d): clicking the button with no script selected refuses
+    /// instead of writing a temp file, the same guard [`on_check`] uses for
+    /// [`NO_SCRIPT_SELECTED`]. Needs a display; skips without one.
+    #[test]
+    fn external_edit_with_no_selection_refuses() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs
+        // `build_widgets`. No network call happens: nothing is ever loaded
+        // into the form.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            let cell = state(page).expect("a freshly built page has state");
+
+            start_external_edit_with_command(
+                cell,
+                page,
+                external_editor::EditorCommand::Command("true".to_owned()),
+            );
+
+            assert!(cell.borrow().external_editor_session.is_none());
+            let status = cell.borrow().status;
+            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(text, translate(NO_SCRIPT_SELECTED));
+
+            gtk_widget_destroy(page.cast());
+        }
+    }
+
+    /// Item 180(d): with no editor command configured anywhere, the button
+    /// shows a status note instead of guessing at the desktop's default
+    /// handler for text, which [`start_external_edit_with_command`]'s own
+    /// doc comment explains is a separate follow-up (that path starts no
+    /// child process of ours to poll for completion). Needs a display;
+    /// skips without one.
+    #[test]
+    fn external_edit_with_no_configured_command_shows_a_status_note() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs
+        // `build_widgets`. No network call happens: the form is filled
+        // directly, the same way a cold-start cache hit (item 180(c)) does.
+        unsafe {
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            let cell = state(page).expect("a freshly built page has state");
+            {
+                let mut ui = cell.borrow_mut();
+                ui.form = FiltersForm::from_cached(&[cache::CachedScript {
+                    name: "custom".to_owned(),
+                    text: "keep;\n".to_owned(),
+                    active: false,
+                }]);
+                ui.form.select(Some(0));
+            }
+
+            start_external_edit_with_command(cell, page, external_editor::EditorCommand::Default);
+
+            assert!(cell.borrow().external_editor_session.is_none());
+            let status = cell.borrow().status;
+            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+            assert_eq!(text, translate(NO_EXTERNAL_EDITOR));
+
+            gtk_widget_destroy(page.cast());
+        }
+    }
+
+    /// Item 180(d): clicking "Edit in External Editor…" writes the selected
+    /// script to a private temp file and starts the chosen command; once
+    /// that command changes the file and exits, the poll loop loads the new
+    /// text into the buffer (so the existing debounce save applies to it,
+    /// as a keystroke would) and removes the temp file. The command is a
+    /// real `sh` subprocess, not a mock, so this exercises `write_temp_file`,
+    /// `spawn` and `read_if_changed` together; [`start_external_edit_with_command`]
+    /// takes the command directly so the test does not depend on this
+    /// host's own GSettings, `$VISUAL` or `$EDITOR`. Needs a display; skips
+    /// without one.
+    #[test]
+    fn external_edit_reloads_the_buffer_once_the_command_changes_the_file() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = AccountLink::without_refresh(client, features);
+
+        // Seeds one inactive script under a name other than
+        // `MANAGED_SCRIPT_NAME`, so the page stays in text mode, as
+        // `editing_the_script_text_saves_it_once_the_debounce_fires` does.
+        let loaded = match io::activate_now(
+            &link,
+            &SavePlan {
+                writes: vec![io::ScriptWrite::Create {
+                    key: "new".to_owned(),
+                    name: "custom".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                destroys: Vec::new(),
+                activation: io::ActivationChange::Keep,
+                deactivate_first: false,
+                if_in_state: None,
+                baseline: io::Baseline::default(),
+            },
+        )
+        .unwrap()
+        {
+            ActivateOutcome::Reloaded(loaded) => loaded,
+            ActivateOutcome::WrittenReloadFailed(reason) => {
+                panic!("seeding the script failed: {reason}")
+            }
+        };
+
+        // The fixture the fake "editor" command copies over the real temp
+        // file once started, standing in for a user's edit and save.
+        let dir = std::env::temp_dir();
+        let fixture = dir.join(format!(
+            "jmap-ui-external-edit-fixture-{}-{}.sieve",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&fixture, "keep;\nstop;\n").unwrap();
+        // `build_argv` appends the real temp file path as the command's
+        // last argument; for `sh -c script arg0`, that path becomes `$0`
+        // inside the script.
+        let command = external_editor::EditorCommand::Command(format!(
+            "sh -c 'cat {} > \"$0\"'",
+            fixture.display()
+        ));
+
+        let gtype = register_static::<FiltersPage>();
+        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+        unsafe {
+            let window = gtk_window_new(0);
+            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            gtk_container_add(window.cast(), page.cast());
+            gtk_widget_show_all(window);
+
+            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
+
+            let cell = state(page.cast()).expect("a loaded page has state");
+            let view = cell.borrow().view;
+            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+            gtk_tree_path_free(path);
+
+            start_external_edit_with_command(cell, page.cast(), command);
+            let temp_path = cell
+                .borrow()
+                .external_editor_session
+                .as_ref()
+                .expect("a session starts when a command and a selection are present")
+                .path
+                .clone();
+            assert!(temp_path.exists(), "the script is written to a temp file");
+            assert_eq!(
+                std::fs::read_to_string(&temp_path).unwrap(),
+                "keep;\n",
+                "the temp file starts with the script's current text"
+            );
+            pump_until(
+                || cell.borrow().external_editor_session.is_none(),
+                Duration::from_secs(5),
+            );
+
+            let buffer = cell.borrow().buffer;
+            assert_eq!(
+                get_text(buffer.cast()),
+                "keep;\nstop;\n",
+                "the buffer picks up the command's change once it exits"
+            );
+            assert!(
+                !temp_path.exists(),
+                "the temp file is removed once the session ends"
+            );
+
+            // Lets the debounce save this reload triggered finish before the
+            // window (and the page's qdata) is torn down, the same
+            // ordering `editing_the_script_text_saves_it_once_the_debounce_fires`
+            // uses, so no timeout fires against a page mid-teardown.
+            pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
+            pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+
+            gtk_widget_destroy(window);
+        }
+        std::fs::remove_file(&fixture).ok();
     }
 
     /// Item 180(a)'s Add mirrors Rename once the name dialog answers: it
@@ -4942,7 +5510,14 @@ mod tests {
             let text_before = get_text(buffer.cast());
 
             let cell = state(page).unwrap();
-            apply_offline_change(cell, true);
+            let (_, captured) = capture(|| apply_offline_change(cell, true));
+            // Item 182(c): going offline while the page is open is invisible
+            // to AT-SPI beyond the status label text, which a screen reader
+            // already announces; the trace line is for a log-based check.
+            assert!(
+                has(&captured, Level::TRACE, "offline", "true"),
+                "expected an offline=true trace line, got {captured:?}"
+            );
 
             for control in [
                 add,
@@ -4974,7 +5549,11 @@ mod tests {
                 "the status label does not say the shell is offline"
             );
 
-            apply_offline_change(cell, false);
+            let (_, captured) = capture(|| apply_offline_change(cell, false));
+            assert!(
+                has(&captured, Level::TRACE, "offline", "false"),
+                "expected an offline=false trace line, got {captured:?}"
+            );
 
             assert!(
                 get_sensitive(activate),
