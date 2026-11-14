@@ -93,10 +93,11 @@ use common::array::StringArray;
 use common::signals::{Context, Emission, emissions, watch};
 use eds_sys::compat::{folder_dup_uids, folder_free_uids};
 use eds_sys::{
-    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_SEEN, CAMEL_STORE_FOLDER_NONE, CamelFolder,
-    CamelFolderClass, CamelMessageInfo, camel_folder_error_quark, camel_folder_get_folder_summary,
-    camel_folder_lock, camel_folder_refresh_info_sync, camel_folder_summary_get,
-    camel_folder_synchronize_sync, camel_folder_transfer_messages_to_sync, camel_folder_unlock,
+    CAMEL_FOLDER_ERROR_INVALID_UID, CAMEL_MESSAGE_FOLDER_FLAGGED, CAMEL_MESSAGE_SEEN,
+    CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
+    camel_folder_error_quark, camel_folder_get_folder_summary, camel_folder_lock,
+    camel_folder_refresh_info_sync, camel_folder_summary_get, camel_folder_synchronize_sync,
+    camel_folder_transfer_messages_to_sync, camel_folder_unlock, camel_message_info_get_flags,
     camel_message_info_set_flags, camel_store_get_folder_sync,
 };
 #[cfg(camel_folder_get_uids)]
@@ -809,6 +810,69 @@ fn a_queued_move_lands_once_the_store_reconnects() {
         listed(fixture.inbox).is_empty(),
         "the row stayed in the source folder after the queued move finally landed"
     );
+}
+
+/// ROADMAP item 181(b): a transport failure (a DNS failure, a refused
+/// connection, a TLS failure) is `StoreError::Client`, not
+/// `StoreError::Disconnected`. `push_row`, run just before `replay_filing` in
+/// the same walk, already cleared the row's `CAMEL_MESSAGE_FOLDER_FLAGGED`
+/// mark (this filing changes no keyword, so `push_row` sends no request of
+/// its own and settles the row on `Ok(())`). Unlike a `Disconnected` answer,
+/// nothing restored the mark for this other kind of failure, so the filing
+/// fell off `synchronize_sync`'s work list and the real server coming back
+/// later never saw it again (the roadmap's own report: "after the failed DNS
+/// replay and a restart, the queued move and copy never did [land]").
+///
+/// This checks the mark directly, not through a second `synchronize_sync`
+/// call: Camel's own `dirty` bit on the row (separate from
+/// `CAMEL_MESSAGE_FOLDER_FLAGGED`, and not `replay_filing`'s to restore)
+/// also keeps a uid on the work list, purely because `push_row`'s own write
+/// above changed the row at all, and stays set for as long as this row's
+/// `CamelMessageInfo` is loaded in memory. The roadmap's own reproduction
+/// needed a restart to lose that transient bit; this test does not restart,
+/// so it reads the one mark `replay_filing` actually owns instead.
+///
+/// `doomed` stands in for the real server's address while it cannot be
+/// reached: `account` connects to it successfully (so this looks like an
+/// ordinary reconnect, not `Disconnected`), and then `doomed` stops
+/// listening, so the next request against it fails at the transport level.
+#[test]
+fn a_transport_failure_restores_the_filing_mark() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    let doomed = MockServer::builder().start();
+    let client = Client::connect(doomed.origin(), Credentials::none()).expect("connected");
+    fixture
+        .account
+        .connect(MailSync::new(client, fixture.server.account_id()));
+    drop(doomed);
+
+    let synced = fixture.synchronize(fixture.inbox);
+    assert!(
+        !synced.ok,
+        "a transport failure must be reported, not swallowed"
+    );
+
+    let uid = CString::new(fixture.uid().as_str()).expect("a uid with no NUL");
+    // SAFETY: a live folder with a summary, a NUL-terminated uid alive
+    // across the call, and one reference to the row, released here.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(fixture.inbox);
+        let info: *mut CamelMessageInfo = camel_folder_summary_get(summary, uid.as_ptr());
+        assert!(!info.is_null(), "the refresh left no row for the message");
+        assert_ne!(
+            camel_message_info_get_flags(info) & CAMEL_MESSAGE_FOLDER_FLAGGED,
+            0,
+            "a transport failure must leave the row marked for retry, the \
+             same as a Disconnected answer does, or synchronize_sync's own \
+             work list drops this filing for good"
+        );
+        g_object_unref(info.cast());
+    }
 }
 
 /// A queued copy behaves the same way as a queued move, except that it never
