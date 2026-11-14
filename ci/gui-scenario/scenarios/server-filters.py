@@ -17,6 +17,10 @@
    marks its row and disables the buttons that would change it.
 6. A very long server refusal from Check still leaves every script list
    button inside the dialog, not scrolled off to the side.
+7. Typing a word opens the completion popup (item 180(e)); a real Right
+   arrow key press accepts the selected candidate (item 171c). AT-SPI
+   cannot see the popup itself, so this drives it with real key events and
+   asserts on the completion trace lines (item 182(c)) and the final text.
 """
 
 import json
@@ -31,6 +35,7 @@ from scenario import (
     descendants,
     do_action,
     evolution,
+    expect_log,
     expect_no_errors,
     find,
     folder_tree,
@@ -42,6 +47,7 @@ from scenario import (
     select_folder,
     set_text,
     text_field,
+    text_of,
     wait_for,
     window,
     write_collection_mail_account,
@@ -54,6 +60,19 @@ EDITOR = "Account Editor"
 PAGE = "Server Filters"
 # The X keysym of the Menu key.
 MENU_KEY = 0xFF67
+# The X keysym of the Right arrow key.
+RIGHT_KEY = 0xFF53
+
+# A base RFC 5228 command (no `require` needed), the only completion
+# candidate starting with this prefix (jmap-ui's completion.rs).
+COMPLETION_PREFIX = "head"
+COMPLETION_WORD = "header"
+COMPLETION_OPENED_LOG = (
+    f'jmap_ui.*sieve completion: popup opened.*word="{COMPLETION_PREFIX}".*candidate_count=1'
+)
+COMPLETION_ACCEPTED_LOG = (
+    f'jmap_ui.*sieve completion: candidate accepted.*accepted="{COMPLETION_WORD}"'
+)
 
 LEGACY_NAME = "legacy"
 LEGACY_TEXT = "keep;\n"
@@ -507,6 +526,28 @@ def run():
         )
         assert_inside(button, editor, f"the {name!r} button")
     say("page: a long Check refusal keeps every script list button inside the dialog")
+    close_with_cancel(editor)
+
+    # 7. Typing opens the completion popup, and a real Right arrow key press
+    # accepts it (items 171c, 180(e)). The popup itself is not in the AT-SPI
+    # tree, so this drives it with real key events and checks the trace
+    # lines item 182(c) added for exactly this gap, plus the final text.
+    editor = open_page()
+    loaded(editor)
+    select_script(editor, LEGACY_NAME)
+    source_view = wait_for(
+        lambda: text_field(editor, LEGACY_TEXT), f"the text view showing {LEGACY_TEXT!r}"
+    )
+    set_text(source_view, COMPLETION_PREFIX)
+    expect_log(COMPLETION_OPENED_LOG, f"the completion popup opened for {COMPLETION_PREFIX!r}")
+    say(f"page: typing {COMPLETION_PREFIX!r} opens the completion popup")
+
+    pyatspi.Registry.generateKeyboardEvent(RIGHT_KEY, None, pyatspi.KEY_SYM)
+    expect_log(COMPLETION_ACCEPTED_LOG, f"the Right arrow accepted {COMPLETION_WORD!r}")
+    wait_for(
+        lambda: text_of(source_view) == COMPLETION_WORD, f"the text view shows {COMPLETION_WORD!r}"
+    )
+    say("page: a real Right arrow key press accepts the candidate")
     close_with_cancel(editor)
 
     if any(is_showing(node) for node in descendants(evolution(), "alert", max_depth=2)):
