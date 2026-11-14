@@ -131,7 +131,8 @@ use jmap_proto::{Id, State};
 use crate::changes::Changes;
 use crate::folder_info::{c_string, sanitized};
 use crate::message_info::{
-    clear_pending_write, message_info_type, new_message_info, pending_append, update_message_info,
+    clear_pending_write, message_info_type, new_message_info, pending_append, pending_filing,
+    update_message_info,
 };
 
 /// The format number of the stored header. Increase it when the meaning of the
@@ -808,8 +809,17 @@ unsafe fn remove_absent(
             // the bytes still sitting in the pending-append cache.
             // `crate::append::replay_append` removes the row itself once the
             // upload lands and the real row takes its uid.
+            //
+            // A listing also does not name a message whose filing is still
+            // queued (`crate::transfer`), because the server does not have
+            // that change yet. The row is the only record of the filing, in
+            // the source folder and in the destination folder alike, so a
+            // listing must not remove it. `replay_filing` clears the filing
+            // once it settles, and the next listing then removes the row if
+            // the mailbox really does not hold the message.
             if let Some(info) = Owned::from_raw(camel_folder_summary_get(summary, uid))
-                && pending_append(info.as_ptr()).is_some()
+                && (pending_append(info.as_ptr()).is_some()
+                    || pending_filing(info.as_ptr()).is_some())
             {
                 continue;
             }

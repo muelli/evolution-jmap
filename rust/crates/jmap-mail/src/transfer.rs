@@ -49,12 +49,34 @@
 //! `camel_folder_changed` fired. Camel and the user still see a move or copy
 //! that succeeded right away, the same as a flag change does.
 //!
-//! ## What this module does not decide
+//! ## The rows of the destination folder
 //!
-//! **The rows of the destination folder.** This module adds no row there. The
-//! message appears when the next listing of that folder occurs. Only the listing
-//! knows the contents of a row: this module has only a uid. A row made from a
-//! uid only would show no subject, sender or date until the refresh replaced it.
+//! A filing that reached the server adds no row there. The message appears
+//! when the next listing of that folder occurs. Only the listing knows the
+//! contents of a row, and this module has only a uid.
+//!
+//! A *queued* filing is different, because no listing can show it: the server
+//! does not have the change yet. `place_in_destination` therefore clones the
+//! source row into the destination summary at queue time, under the same uid.
+//! A clone has the subject, the sender and the date, so the user sees the move
+//! or the copy at once.
+//!
+//! The clone carries a filing of its own, shaped as a copy into the
+//! destination. Thus the walk of the destination folder lands the message
+//! where the user put it, even when the source folder is not walked. This
+//! matters after a restart: `camel_store_synchronize_sync` walks only the
+//! folders that are open (`store_synchronize_sync` in `camel-store.c` of
+//! evolution-data-server 3.52.3), and a restart leaves that list empty. The
+//! source row keeps the full move filing and removes the message from the
+//! source mailbox when its own folder is walked. Both requests set the same
+//! `mailboxIds` member, so the order of the two walks does not change the
+//! result.
+//!
+//! This shape also keeps the walk of one folder inside that folder. A walk
+//! that opened a second folder to find its queued work would hold the lock of
+//! the first folder while it takes the lock of the second one. A concurrent
+//! walk of the second folder would do the opposite, and the two walks would
+//! then wait for each other.
 //!
 //! ## Stopping a transfer
 //!
@@ -90,7 +112,8 @@ use std::ptr;
 use eds_sys::{
     CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_changed,
     camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_lock,
-    camel_folder_summary_get, camel_folder_summary_remove_uid, camel_folder_unlock,
+    camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_get,
+    camel_folder_summary_remove_uid, camel_folder_unlock, camel_message_info_clone,
     camel_message_info_set_folder_flagged,
 };
 use gio_sys::GCancellable;
@@ -110,7 +133,7 @@ use jmap_proto::Id;
 use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, folder_type, parent_store};
-use crate::message_info::{pending_filing, set_pending_filing};
+use crate::message_info::{pending_append, pending_filing, set_pending_filing};
 use crate::synchronize::push_row;
 
 /// Installs the filing vfunc of the folder on a class whose first member is a
@@ -207,6 +230,7 @@ unsafe extern "C" fn transfer_messages_to_sync(
             }
 
             let mut changes = Changes::new();
+            let mut arrivals = Changes::new();
             let mut failure = None;
             for (index, uid) in uids.iter().enumerate() {
                 // A NULL slot in Camel's own array never happens in practice
@@ -235,6 +259,12 @@ unsafe extern "C" fn transfer_messages_to_sync(
                         changes.remove(text);
                     }
                 }
+                if matches!(filed, Ok(Filed::Queued))
+                    && place_in_destination(summary, destination, uid, into)
+                    && let Ok(text) = uid.to_str()
+                {
+                    arrivals.add(text);
+                }
                 match filed {
                     Ok(Filed::Landed) | Ok(Filed::Queued) => reported.set(index, uid),
                     Ok(Filed::NoOp) => {}
@@ -248,6 +278,11 @@ unsafe extern "C" fn transfer_messages_to_sync(
             // summary rows only supply the next list that is drawn.
             if !changes.is_empty() {
                 camel_folder_changed(source, changes.as_ptr());
+            }
+            // The same report for the destination folder, which a queued
+            // filing gives a row of its own.
+            if !arrivals.is_empty() {
+                camel_folder_changed(destination, arrivals.as_ptr());
             }
 
             match failure {
@@ -361,6 +396,75 @@ unsafe fn queue_filing(summary: *mut CamelFolderSummary, uid: &CStr, filing: &Fi
     }
     tracing::trace!(uid = uid.to_string_lossy().as_ref(), "queued filing");
     Filed::Queued
+}
+
+/// Gives the destination folder a row for a message whose filing is still
+/// queued, and reports whether it added one.
+///
+/// The row is a clone of the source row, under the same uid. JMAP gives a
+/// message one id per account (RFC 8621 §4.1), and filing it into another
+/// mailbox makes no second object, so the uid of the destination row is the
+/// uid the message already has.
+///
+/// The clone gets a filing of its own, shaped as a copy into the destination,
+/// instead of the move filing that [`camel_message_info_clone`] copied from
+/// the source row. The module header tells why: the walk of the destination
+/// folder must land the message there, and must not remove its own row.
+///
+/// Three rows get no clone:
+///
+/// - A row that waits for its own upload ([`crate::append`]'s queue). Its uid
+///   names nothing on the server, so a second row would ask for a second
+///   upload of the same message.
+/// - A row the destination already has. The destination is then a mailbox the
+///   message is already in, or a second queued filing of the same message.
+/// - A row that vanished since the caller listed it.
+///
+/// # Safety
+///
+/// `summary` must point at a live `CamelFolderSummary` and `destination` at a
+/// live `CamelFolder`.
+unsafe fn place_in_destination(
+    summary: *mut CamelFolderSummary,
+    destination: *mut CamelFolder,
+    uid: &CStr,
+    into: &Id,
+) -> bool {
+    // SAFETY: the contract above.
+    let target = unsafe { camel_folder_get_folder_summary(destination) };
+    if target.is_null() || target == summary {
+        return false;
+    }
+    // SAFETY: a live summary, and a uid that outlives the call.
+    if unsafe { camel_folder_summary_check_uid(target, uid.as_ptr()) } != GFALSE {
+        return false;
+    }
+    // SAFETY: the contract above. `Owned` releases the row's reference when it
+    // drops at the end of this function.
+    let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
+    else {
+        return false;
+    };
+    // SAFETY: `info` is a live row for as long as this function holds it.
+    if unsafe { pending_append(info.as_ptr()) }.is_some() {
+        return false;
+    }
+    // SAFETY: `info` is a live row and `target` a live summary of this
+    // provider, so the clone comes back as a row of this provider's own type
+    // with `target` as its summary.
+    let copy = unsafe { Owned::from_raw(camel_message_info_clone(info.as_ptr(), target)) };
+    let Some(copy) = copy else {
+        return false;
+    };
+    // SAFETY: `copy` is a row this function owns until `camel_folder_summary_
+    // add` below gives the summary its own reference. `add` also marks the row
+    // for the work list that `crate::synchronize` walks.
+    unsafe {
+        set_pending_filing(copy.as_ptr(), Some(Filing::copied_into(into.clone())));
+        camel_folder_summary_add(target, copy.as_ptr(), GTRUE);
+    }
+    tracing::trace!(uid = uid.to_string_lossy().as_ref(), "queued arrival");
+    true
 }
 
 /// Completes a filing that [`file_message`] could not send while offline, for
