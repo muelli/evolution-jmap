@@ -125,11 +125,11 @@ fn messages_and_messages_since_trace_structured_fields() {
     let store = fixture.store();
 
     let (_, logs) = capture(|| {
-        let (state, messages) = store.messages(&fixture.inbox_id).expect("messages");
+        let (state, messages) = store.messages(&fixture.inbox_id, None).expect("messages");
         assert!(messages.is_empty());
 
         let _update = store
-            .messages_since(&fixture.inbox_id, &state, 0)
+            .messages_since(&fixture.inbox_id, None, &state, 0)
             .expect("messages_since");
     });
 

@@ -99,7 +99,7 @@ fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight() {
     let store_ptr = unsafe { StorePtr::new(&store) };
 
     let mailbox = Id::new("mailbox-1");
-    let listing = thread::spawn(move || store_ptr.borrow().messages(&mailbox));
+    let listing = thread::spawn(move || store_ptr.borrow().messages(&mailbox, None));
 
     gate.wait_for_start();
 

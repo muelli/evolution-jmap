@@ -82,6 +82,22 @@ pub struct JmapFolder {
     /// struct starts zeroed and no destructor runs on it (the store keeps its
     /// connection in a slot for the same reason).
     mailbox: Slot<Id>,
+    /// The account that owns [`Self::mailbox`], when another account shares
+    /// that mailbox with this one.
+    ///
+    /// Empty for an ordinary folder of the store's own account, which is the
+    /// usual case. [`new_folder`] fills it from the `account_id` of the
+    /// `FolderInfo` it builds the folder from.
+    ///
+    /// A mailbox id is unique in one account only (RFC 8621 section 2), so
+    /// two accounts number their mailboxes from the same first id. The
+    /// folder must therefore keep the account it was opened for: a later
+    /// lookup of the owner by mailbox id alone
+    /// ([`jmap_mail_sync::FolderTree::owning_account`]) can find a different
+    /// account's folder with the same id. Camel opens a folder by path, and
+    /// a path names one account, so the answer is correct here and ambiguous
+    /// later.
+    owner: Slot<Id>,
     /// The downloaded messages of this account, on disk.
     ///
     /// [`new_folder`] fills it, because the cache needs the account cache
@@ -108,6 +124,13 @@ impl JmapFolder {
     /// condition and do not assume an id.
     pub fn mailbox(&self) -> Option<&Id> {
         self.mailbox.get()
+    }
+
+    /// The account that owns the mailbox of this folder, or `None` if the
+    /// store's own account owns it. Callers address the JMAP method calls
+    /// about this folder to the account this gives.
+    pub fn owner(&self) -> Option<&Id> {
+        self.owner.get()
     }
 
     /// The message cache of the account, or `None` if this folder has none.
@@ -319,6 +342,7 @@ unsafe impl ObjectSubclass for JmapFolder {
         // the cache on its `CamelDataCache` also leaks.
         unsafe {
             (*instance).mailbox.clear();
+            (*instance).owner.clear();
             (*instance).cache.clear();
         };
     }
@@ -641,6 +665,9 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
         (*folder.cast::<JmapFolder>())
             .mailbox
             .init(mailbox.id.clone());
+        if let Some(owner) = mailbox.account_id.clone() {
+            (*folder.cast::<JmapFolder>()).owner.init(owner);
+        }
         if let Some(cache) = account_cache(store) {
             (*folder.cast::<JmapFolder>()).cache.init(cache);
         }

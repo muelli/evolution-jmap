@@ -132,7 +132,7 @@ pub(crate) unsafe extern "C" fn refresh_info_sync(
             // every request below here stop when the user presses Stop.
             let _cancel = observe(cancellable);
 
-            let Some((mailbox, summary)) = target(folder) else {
+            let Some((mailbox, owner, summary)) = target(folder) else {
                 return fail_bool(
                     error,
                     &StoreError::NoFolder(name_of(folder)),
@@ -178,9 +178,9 @@ pub(crate) unsafe extern "C" fn refresh_info_sync(
             // because the folder is the only side that has the count without
             // asking for it.
             let update = match summary_state(summary) {
-                Some(since) => store.messages_since(mailbox, &since, summary_rows(summary)),
+                Some(since) => store.messages_since(mailbox, owner, &since, summary_rows(summary)),
                 None => store
-                    .messages(mailbox)
+                    .messages(mailbox, owner)
                     .map(|(state, messages)| MessageUpdate::Relisted { state, messages }),
             };
             let update = match update {
@@ -225,25 +225,33 @@ pub(crate) unsafe extern "C" fn refresh_info_sync(
     }
 }
 
-/// The two things a refresh writes to: the mailbox it lists, and the summary it
-/// lists into.
+/// The three things a refresh needs: the mailbox it lists, the account that
+/// owns that mailbox, and the summary it lists into.
 ///
-/// Both come from [`crate::folder::new_folder`] and neither can be absent on a
-/// folder it built, so `None` means a `CamelJmapFolder` that something else
-/// constructed — a `g_object_new` on the type, which is not how a folder is
-/// meant to arrive. Reported rather than asserted, because a vfunc is not the
-/// place to take the process down.
+/// The mailbox and the summary come from [`crate::folder::new_folder`] and
+/// neither can be absent on a folder it built, so `None` means a
+/// `CamelJmapFolder` that something else constructed: a `g_object_new` on the
+/// type, which is not how a folder is meant to arrive. Reported rather than
+/// asserted, because a vfunc is not the place to take the process down.
+///
+/// The owner is `None` for an ordinary folder of the store's own account.
+/// It comes from the folder and not from a lookup by mailbox id, because two
+/// accounts can give the same id to different mailboxes
+/// ([`crate::folder::JmapFolder::owner`]).
 ///
 /// # Safety
 ///
 /// `folder` must be NULL or point at a live `JmapFolder`.
-unsafe fn target<'a>(folder: *mut CamelFolder) -> Option<(&'a Id, *mut CamelFolderSummary)> {
+unsafe fn target<'a>(
+    folder: *mut CamelFolder,
+) -> Option<(&'a Id, Option<&'a Id>, *mut CamelFolderSummary)> {
     // SAFETY: the contract above, and the summary accessor borrows what the
     // folder owns for as long as the folder lives.
     unsafe {
-        let mailbox = JmapFolder::borrow(folder)?.mailbox()?;
+        let instance = JmapFolder::borrow(folder)?;
+        let mailbox = instance.mailbox()?;
         let summary = camel_folder_get_folder_summary(folder);
-        (!summary.is_null()).then_some((mailbox, summary))
+        (!summary.is_null()).then_some((mailbox, instance.owner(), summary))
     }
 }
 
