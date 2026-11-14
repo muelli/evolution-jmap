@@ -98,11 +98,13 @@ use eds_sys::{
     camel_folder_error_quark, camel_folder_get_folder_summary, camel_folder_lock,
     camel_folder_refresh_info_sync, camel_folder_summary_get, camel_folder_synchronize_sync,
     camel_folder_transfer_messages_to_sync, camel_folder_unlock, camel_message_info_get_flags,
-    camel_message_info_set_flags, camel_store_get_folder_sync,
+    camel_message_info_get_subject, camel_message_info_set_flags, camel_mime_message_new,
+    camel_store_get_folder_sync,
 };
-#[cfg(camel_folder_get_uids)]
-use glib_sys::g_free;
-use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_free, gboolean};
+use eds_sys::{CamelDataWrapper, camel_data_wrapper_construct_from_data_sync};
+use glib_sys::{
+    GError, GFALSE, GPtrArray, GTRUE, g_free, g_ptr_array_free, gboolean, gchar, gssize,
+};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
@@ -278,6 +280,57 @@ impl Fixture {
         Transferred::new(ok, transferred, error)
     }
 
+    /// Appends a message to `folder` while the store has no connection, and
+    /// gives back the synthetic uid of the row that waits for the upload.
+    ///
+    /// This goes through the pointer in the class for the reason
+    /// [`Self::transfer_straight`] gives: Camel's own wrapper reconnects the
+    /// store first, and the reconnection fails before the vfunc runs.
+    fn append_offline(&self, folder: *mut CamelFolder) -> Id {
+        let source = b"Subject: An offline draft\r\n\r\nBody.\r\n";
+        let mut uid: *mut gchar = ptr::null_mut();
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: a fresh message is a valid `CamelDataWrapper`, the buffer
+        // is live for the call, referencing the class runs the class_init
+        // that installs the vfunc, and both out-parameters are writable and
+        // currently NULL.
+        let appended = unsafe {
+            let message = camel_mime_message_new();
+            assert_ne!(
+                camel_data_wrapper_construct_from_data_sync(
+                    message.cast::<CamelDataWrapper>(),
+                    source.as_ptr().cast(),
+                    source.len() as gssize,
+                    ptr::null_mut(),
+                    &mut error,
+                ),
+                GFALSE,
+                "the fixture message would not parse"
+            );
+            let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
+            let vfunc = (*class)
+                .append_message_sync
+                .expect("the folder cannot append messages");
+            let ok = vfunc(
+                folder,
+                message,
+                ptr::null_mut(),
+                &mut uid,
+                ptr::null_mut(),
+                &mut error,
+            );
+            g_type_class_unref(class.cast());
+            g_object_unref(message.cast());
+            ok
+        };
+        assert_ne!(appended, GFALSE, "the offline append failed");
+        // SAFETY: a NUL-terminated string the vfunc gives to the caller.
+        let text = unsafe { CStr::from_ptr(uid).to_string_lossy().into_owned() };
+        // SAFETY: the same string, released the way Camel's own callers do.
+        unsafe { g_free(uid.cast()) };
+        Id::new(&text)
+    }
+
     /// Through the pointer in the class, skipping the checks Camel's own
     /// wrapper makes before calling a provider. Camel itself answers a
     /// transfer into the message's own folder, and a transfer of no
@@ -448,6 +501,26 @@ fn listed(folder: *mut CamelFolder) -> Vec<String> {
         let uids = uid_list(array);
         folder_free_uids(folder, array);
         uids
+    }
+}
+
+/// The subject the folder's own summary has for `uid`, if it has a row.
+fn subject_in(folder: *mut CamelFolder, uid: &Id) -> Option<String> {
+    let key = CString::new(uid.as_str()).expect("a uid with no NUL");
+    // SAFETY: a live folder of ours, and a key that outlives both calls.
+    // `camel_folder_summary_get` gives a reference that this function
+    // releases before it returns.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(folder);
+        let info = camel_folder_summary_get(summary, key.as_ptr());
+        if info.is_null() {
+            return None;
+        }
+        let subject = camel_message_info_get_subject(info);
+        let text =
+            (!subject.is_null()).then(|| CStr::from_ptr(subject).to_string_lossy().into_owned());
+        g_object_unref(info.cast());
+        text
     }
 }
 
@@ -902,6 +975,105 @@ fn a_queued_copy_lands_once_the_store_reconnects() {
         listed(fixture.inbox),
         vec![fixture.uid().to_string()],
         "a copy must never remove the row it came from"
+    );
+}
+
+/// ROADMAP item 181(a): a queued move or copy must show in the destination
+/// at once, the way the offline journal of IMAPX shows one. Until the
+/// filing lands, the server knows nothing about it, so only a local row
+/// can show it. The row is a clone of the source row, so it has the
+/// subject, sender and date, not only a uid.
+#[test]
+fn a_queued_move_shows_the_row_in_the_destination() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    assert_eq!(
+        listed(fixture.archive),
+        vec![fixture.uid().to_string()],
+        "a queued move must show the message in the destination at once"
+    );
+    assert_eq!(
+        subject_in(fixture.archive, fixture.uid()).as_deref(),
+        Some(MESSAGES[0].2),
+        "the destination row must be a full clone, not a bare uid"
+    );
+}
+
+/// A queued copy shows in the destination for the same reason, and also
+/// stays in the folder it came from.
+#[test]
+fn a_queued_copy_shows_the_row_in_the_destination() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], false)
+        .expect_ok();
+
+    assert_eq!(
+        listed(fixture.archive),
+        vec![fixture.uid().to_string()],
+        "a queued copy must show the message in the destination at once"
+    );
+    assert_eq!(
+        listed(fixture.inbox),
+        vec![fixture.uid().to_string()],
+        "a copy must never remove the row it came from"
+    );
+}
+
+/// The destination row is also the record that makes the filing land when
+/// the source folder is not walked.
+///
+/// `camel_store_synchronize_sync` walks the open folders of the store
+/// (`camel-store.c`, `store_synchronize_sync`), and a restart leaves that
+/// list empty. Thus a reconnect flush can reach the destination folder and
+/// not the source folder. The destination row carries a filing of its own,
+/// shaped as a copy into the destination, so that walk alone puts the
+/// message where the user put it. The source row keeps the move filing and
+/// removes the message from the source mailbox when its own folder is
+/// walked. Both requests are idempotent, so the order does not matter.
+#[test]
+fn a_queued_filing_lands_from_the_destination_folder_alone() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    fixture.reconnect();
+    fixture.synchronize(fixture.archive).expect_ok();
+
+    assert_eq!(
+        fixture
+            .mailboxes_on_server(fixture.uid())
+            .get(&fixture.archive_id),
+        Some(&true),
+        "a walk of the destination folder alone must put the message there"
+    );
+}
+
+/// A message that waits for its own upload has no id on the server, so a
+/// clone of its row in a second folder would name nothing there and would
+/// ask for a second upload. Such a row stays in the source folder only.
+#[test]
+fn a_queued_filing_of_an_unsent_append_adds_no_destination_row() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    let appended = fixture.append_offline(fixture.inbox);
+
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[&appended], true)
+        .expect_ok();
+
+    assert!(
+        listed(fixture.archive).is_empty(),
+        "a message with no id on the server must not get a destination row"
     );
 }
 
