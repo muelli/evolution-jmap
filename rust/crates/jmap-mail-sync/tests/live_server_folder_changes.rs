@@ -110,12 +110,16 @@ fn folder_tree_since_reports_a_create_a_rename_and_a_removal_against_the_real_se
     );
 }
 
-/// Gives `folder_tree_since` a state from a different account. The tree must
-/// be rebuilt (`FolderUpdate::Rebuilt`).
+/// Gives `folder_tree_since` an unrecognized state and a state from a different
+/// account. The tree must be rebuilt (`FolderUpdate::Rebuilt`).
 ///
-/// RFC 8620 makes a state opaque. Stalwart rejects most hand-written states
-/// with `invalidArguments` (see `jmap-book-sync/tests/live_server_changes.rs`).
-/// A valid state from a different account causes `cannotCalculateChanges`.
+/// RFC 8620 Section 5.2 specifies `cannotCalculateChanges` when a server cannot
+/// calculate changes from `sinceState`. Stalwart answers an unparseable state
+/// string with `invalidArguments` mentioning state (`STALWART-RFC-FINDINGS.md`
+/// Finding 17), and answers a valid state from a different account with
+/// `cannotCalculateChanges`. Cyrus answers an unparseable state string with
+/// `cannotCalculateChanges`, and treats a small numeric state borrowed from
+/// another account as a raw modseq (`CYRUS-RFC-FINDINGS.md` Finding 13).
 /// `MailSync::folder_tree_since` catches that error and rebuilds the tree.
 /// This test makes sure that the fallback occurs on the real error, not only
 /// on the mock error of `jmap-mock/src/setops.rs`.
@@ -143,7 +147,7 @@ fn folder_tree_since_rebuilds_the_tree_for_another_accounts_state() {
     // A live check showed that the "no changes yet" state of a new account
     // is valid for each other new account too. A new folder moves the owner
     // to a position in its own changelog. The other account does not have
-    // that position, thus the server returns cannotCalculateChanges.
+    // that position, thus a conforming server returns cannotCalculateChanges.
     let name = format!("agent-mailsync-cannotcalc-{}", unique_suffix());
     owner_sync
         .create_folder(None, &name)
@@ -157,11 +161,28 @@ fn folder_tree_since_rebuilds_the_tree_for_another_accounts_state() {
         .expect("the recipient account needs the mail capability");
     let other_sync = MailSync::new(other, other_account_id);
 
+    let unrecognized_state = jmap_proto::State::new("this-state-was-never-issued-by-the-server");
     let update = other_sync
-        .folder_tree_since(&owner_state)
+        .folder_tree_since(&unrecognized_state)
         .expect("folder_tree_since should rebuild rather than propagate cannotCalculateChanges");
     assert!(
         matches!(update, FolderUpdate::Rebuilt { .. }),
-        "expected the tree rebuilt for another account's state, got: {update:?}"
+        "expected the tree rebuilt for an unrecognized state, got: {update:?}"
     );
+
+    let update = other_sync
+        .folder_tree_since(&owner_state)
+        .expect("folder_tree_since should rebuild rather than propagate cannotCalculateChanges");
+    match update {
+        FolderUpdate::Rebuilt { .. } => {}
+        FolderUpdate::Unchanged(_) if owner_state.as_str().chars().all(|c| c.is_ascii_digit()) => {
+            // CYRUS-RFC-FINDINGS.md Finding 13: Cyrus Mailbox/changes treats a
+            // small numeric sinceState borrowed from another account as a raw
+            // modseq position and returns empty changes instead of cannotCalculateChanges.
+            eprintln!(
+                "skipping cross-account numeric state assertion: server accepted foreign numeric state {owner_state:?} (CYRUS-RFC-FINDINGS.md Finding 13)"
+            );
+        }
+        other => panic!("expected the tree rebuilt for another account's state, got: {other:?}"),
+    }
 }

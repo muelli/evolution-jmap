@@ -133,15 +133,16 @@ fn get_changes_reports_a_create_an_edit_and_a_removal_against_the_real_server() 
     );
 }
 
-/// A state is opaque per RFC 8620, but not free-form. Real Stalwart rejects
-/// almost any hand-written state with `invalidArguments` (a live check showed
-/// this). `jmap-mockd` (`jmap-mock/src/setops.rs`) rejects only a string that
-/// it cannot parse back into its internal counter. A well-formed state from a
-/// *different* account reliably gets `cannotCalculateChanges` from the real
-/// server. `jmap-mail-sync`, `jmap-book-sync` and `jmap-cal-sync` catch that
-/// error and do a full relist (`SyncError::is_cannot_calculate_changes`). This
-/// test confirms that the account mismatch gives exactly that method error, not
-/// an error type that the caller's check does not recognise.
+/// Checks that [`BookSync::get_changes`] classifies an unrecognized state and
+/// a state from another account with [`SyncError::is_cannot_calculate_changes`].
+///
+/// RFC 8620 Section 5.2 specifies `cannotCalculateChanges` when a server cannot
+/// calculate changes from `sinceState`. Real Stalwart answers an unparseable
+/// state string with `invalidArguments` mentioning state (`STALWART-RFC-FINDINGS.md`
+/// Finding 17), and answers a state borrowed from another account with
+/// `cannotCalculateChanges`. Cyrus answers an unparseable state string with
+/// `cannotCalculateChanges`, and treats a small numeric state borrowed from
+/// another account as a raw modseq (`CYRUS-RFC-FINDINGS.md` Finding 13).
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
@@ -185,13 +186,36 @@ fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
         .expect("the server named the address book");
     let other_sync = BookSync::new(other, other_account_id, other_book_id);
 
+    let unrecognized_state = jmap_proto::State::new("this-state-was-never-issued-by-the-server");
     let error = other_sync
-        .get_changes(&owner_state)
-        .expect_err("a state from a different account must not be answered as if it were valid");
+        .get_changes(&unrecognized_state)
+        .expect_err("an unrecognized state must not be answered as if it were valid");
     assert!(
         error.is_cannot_calculate_changes(),
-        "expected cannotCalculateChanges for another account's state, got: {error:?}"
+        "expected cannotCalculateChanges for an unrecognized state, got: {error:?}"
     );
+
+    match other_sync.get_changes(&owner_state) {
+        Err(error) => assert!(
+            error.is_cannot_calculate_changes(),
+            "expected cannotCalculateChanges for another account's state, got: {error:?}"
+        ),
+        Ok(changes)
+            if changes.changed.is_empty()
+                && changes.removed.is_empty()
+                && owner_state.as_str().chars().all(|c| c.is_ascii_digit()) =>
+        {
+            // CYRUS-RFC-FINDINGS.md Finding 13: Cyrus ContactCard/changes treats a
+            // small numeric sinceState borrowed from another account as a raw modseq
+            // position and returns empty changes instead of cannotCalculateChanges.
+            eprintln!(
+                "skipping cross-account numeric state assertion: server accepted foreign numeric state {owner_state:?} (CYRUS-RFC-FINDINGS.md Finding 13)"
+            );
+        }
+        Ok(changes) => panic!(
+            "a state from a different account must not be answered as if it were valid: {changes:?}"
+        ),
+    }
 }
 
 /// The doc comment of `BookSync::classify` reasons that `ContactCard/changes`

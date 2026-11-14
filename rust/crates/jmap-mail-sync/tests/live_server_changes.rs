@@ -183,12 +183,16 @@ fn messages_since_reports_a_create_an_edit_and_a_removal_against_the_real_server
     );
 }
 
-/// Gives `messages_since` a state from a different account. The mailbox must
-/// be listed again (`MessageUpdate::Relisted`).
+/// Gives `messages_since` an unrecognized state and a state from a different
+/// account. The mailbox must be listed again (`MessageUpdate::Relisted`).
 ///
-/// RFC 8620 makes a state opaque. Stalwart rejects most hand-written states
-/// with `invalidArguments` (see `jmap-book-sync/tests/live_server_changes.rs`).
-/// A valid state from a different account causes `cannotCalculateChanges`.
+/// RFC 8620 Section 5.2 specifies `cannotCalculateChanges` when a server cannot
+/// calculate changes from `sinceState`. Stalwart answers an unparseable state
+/// string with `invalidArguments` mentioning state (`STALWART-RFC-FINDINGS.md`
+/// Finding 17), and answers a valid state from a different account with
+/// `cannotCalculateChanges`. Cyrus answers an unparseable state string with
+/// `cannotCalculateChanges`, and treats a small numeric state borrowed from
+/// another account as a raw modseq (`CYRUS-RFC-FINDINGS.md` Finding 13).
 ///
 /// `BookSync::get_changes` and `CalSync::get_changes` return that error to
 /// the caller. `MailSync::messages_since` catches it and lists the mailbox
@@ -219,7 +223,7 @@ fn messages_since_relists_the_mailbox_for_another_accounts_state() {
     // A live check showed that the "no changes yet" state of a new account
     // is valid for each other new account too. An import moves the owner to
     // a position in its own changelog. The other account does not have that
-    // position, thus the server returns cannotCalculateChanges.
+    // position, thus a conforming server returns cannotCalculateChanges.
     let subject = format!("agent-mailsync-cannotcalc-{}", unique_suffix());
     let message = format!(
         "From: agent-mailsync@example.invalid\r\n\
@@ -248,11 +252,30 @@ fn messages_since_relists_the_mailbox_for_another_accounts_state() {
     let other_inbox_id = inbox_id(&other, &other_account_id);
     let other_sync = MailSync::new(other, other_account_id);
 
+    let unrecognized_state = jmap_proto::State::new("this-state-was-never-issued-by-the-server");
     let update = other_sync
-        .messages_since(&other_inbox_id, &owner_state, 0)
+        .messages_since(&other_inbox_id, &unrecognized_state, 0)
         .expect("messages_since should relist rather than propagate cannotCalculateChanges");
     assert!(
         matches!(update, MessageUpdate::Relisted { .. }),
-        "expected the mailbox relisted for another account's state, got: {update:?}"
+        "expected the mailbox relisted for an unrecognized state, got: {update:?}"
     );
+
+    let update = other_sync
+        .messages_since(&other_inbox_id, &owner_state, 0)
+        .expect("messages_since should relist rather than propagate cannotCalculateChanges");
+    match update {
+        MessageUpdate::Relisted { .. } => {}
+        MessageUpdate::Unchanged(_) if owner_state.as_str().chars().all(|c| c.is_ascii_digit()) => {
+            // CYRUS-RFC-FINDINGS.md Finding 13: Cyrus Email/changes treats a
+            // small numeric sinceState borrowed from another account as a raw
+            // modseq position and returns empty changes instead of cannotCalculateChanges.
+            eprintln!(
+                "skipping cross-account numeric state assertion: server accepted foreign numeric state {owner_state:?} (CYRUS-RFC-FINDINGS.md Finding 13)"
+            );
+        }
+        other => {
+            panic!("expected the mailbox relisted for another account's state, got: {other:?}")
+        }
+    }
 }
