@@ -264,16 +264,16 @@ def audit_send_later_dialog():
     dialog = wait_for(lambda: window("Send Later"), "the Send Later custom-time dialog")
     audit_dialog(dialog, "Send Later")
     audit_mnemonics(dialog, "Send Later")
-    # No audit_tab_reachability here: confirmed empirically that in this
-    # dialog specifically, a synthetic Tab from its first field (the
-    # EDateEdit's own date entry, with show_time true so its time combo is
-    # part of the chain here, unlike the Vacation Responder's date fields)
-    # leaves no STATE_FOCUSED node observable anywhere in the dialog for
-    # every later Tab press, not just the usual single-step combo box gap
-    # TAB_OBSERVABLE_ROLES documents. The gap is specific to this dialog:
-    # the structurally identical name and rule dialogs above, opened the
-    # same `gtk_dialog_run` way, walk cleanly. Root cause not pinned down;
-    # logged as an open row rather than guessed at.
+    # No audit_tab_reachability here: a synthetic Tab from its first field
+    # (the EDateEdit's own date entry) hangs the whole application (every
+    # thread blocked on futex_wait_queue), not just this AT-SPI walk; the
+    # structurally identical name and rule dialogs above, opened the same
+    # `gtk_dialog_run` way, walk cleanly, so the gap is specific to
+    # EDateEdit itself, not this crate's code. Cause pinned down as far as
+    # this container allows (no cap_sys_ptrace for a backtrace); see
+    # audits/ERGONOMY-A11Y-AUDIT-2026-11-01.md and
+    # upstream-drafts/dateedit-tab-hang.md. Flagged to the operator for a
+    # manual evo-test check; not a one-claim fix.
     click_button(dialog, "Cancel")
     wait_for(lambda: window("Send Later") is None, "the dialog closes")
 
