@@ -78,7 +78,7 @@ fn a_stale_bearer_token_is_reported_once_when_there_is_nothing_to_refresh_from()
     // The connection starts out good, so the failure below comes only
     // from the rotation.
     assert!(
-        store.messages(&fixture.inbox).is_ok(),
+        store.messages(&fixture.inbox, None).is_ok(),
         "a live token was refused"
     );
 
@@ -86,7 +86,7 @@ fn a_stale_bearer_token_is_reported_once_when_there_is_nothing_to_refresh_from()
     // still carries the old one: this is exactly the hourly bug.
     fixture.server.set_bearer_token(FRESH);
     let before = fixture.server.unauthorized_responses();
-    let result = store.messages(&fixture.inbox);
+    let result = store.messages(&fixture.inbox, None);
     assert!(result.is_err(), "a stale token was accepted");
 
     // A detached instance has no `CamelService`, so `refresh_credentials`
@@ -112,7 +112,7 @@ fn fresh_credentials_installed_on_the_live_connection_fix_the_very_next_call() {
     let store = fixture.detached(GOOD);
 
     fixture.server.set_bearer_token(FRESH);
-    assert!(store.messages(&fixture.inbox).is_err());
+    assert!(store.messages(&fixture.inbox, None).is_err());
 
     let installed = store.inspect_connection(|sync| {
         sync.client().set_credentials(Credentials::bearer(FRESH));
@@ -120,7 +120,7 @@ fn fresh_credentials_installed_on_the_live_connection_fix_the_very_next_call() {
     assert!(installed.is_some(), "there was no connection to refresh");
 
     assert!(
-        store.messages(&fixture.inbox).is_ok(),
+        store.messages(&fixture.inbox, None).is_ok(),
         "the connection did not pick up the fresh credentials"
     );
 }
@@ -134,7 +134,7 @@ fn a_failure_that_is_not_a_401_is_still_reported_unchanged() {
     let store = fixture.detached(GOOD);
     assert!(store.drop_connection());
 
-    let result = store.messages(&fixture.inbox);
+    let result = store.messages(&fixture.inbox, None);
     assert!(matches!(
         result,
         Err(jmap_mail::connect::StoreError::Disconnected)

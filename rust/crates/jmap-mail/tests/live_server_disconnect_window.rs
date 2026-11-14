@@ -81,7 +81,7 @@ fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight_on_the_
     // SAFETY: the test joins both threads before `store` drops.
     let store_ptr = unsafe { StorePtr::new(&store) };
     let mailbox = created.id.clone();
-    let listing = thread::spawn(move || store_ptr.borrow().messages(&mailbox));
+    let listing = thread::spawn(move || store_ptr.borrow().messages(&mailbox, None));
 
     // The listing's first request (the account's `Email` state) has now
     // been genuinely answered by the real server and is being held back
