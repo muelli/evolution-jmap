@@ -73,22 +73,36 @@
 //! A clone has the subject, the sender and the date, so the user sees the move
 //! or the copy at once.
 //!
-//! The clone carries a filing of its own, shaped as a copy into the
-//! destination. Thus the walk of the destination folder lands the message
-//! where the user put it, even when the source folder is not walked. This
-//! matters after a restart: `camel_store_synchronize_sync` walks only the
-//! folders that are open (`store_synchronize_sync` in `camel-store.c` of
-//! evolution-data-server 3.52.3), and a restart leaves that list empty. The
-//! source row keeps the full move filing and removes the message from the
-//! source mailbox when its own folder is walked. Both requests set the same
-//! `mailboxIds` member, so the order of the two walks does not change the
-//! result.
+//! The clone carries the same filing as the row it came from. Thus the walk
+//! of the destination folder alone lands the whole move, even when the
+//! source folder is not walked. This matters after a restart:
+//! `camel_store_synchronize_sync` walks only the folders that are open
+//! (`store_synchronize_sync` in `camel-store.c` of evolution-data-server
+//! 3.52.3), and a restart leaves that list empty. The source row keeps the
+//! same filing, so a walk there lands the move as well. The two requests are
+//! equal, thus the order of the two walks does not change the result. A walk
+//! removes its row only in the folder the message leaves (`left_here`).
 //!
 //! This shape also keeps the walk of one folder inside that folder. A walk
 //! that opened a second folder to find its queued work would hold the lock of
 //! the first folder while it takes the lock of the second one. A concurrent
 //! walk of the second folder would do the opposite, and the two walks would
 //! then wait for each other.
+//!
+//! ## A message the user moves twice before the first move is sent
+//!
+//! The first move already shows the message in its new folder, so the user
+//! can move it again from there. The two moves become one filing: from the
+//! mailbox the message started in, straight into the mailbox the user chose
+//! last (`rechain`). No request then names the mailbox the message only
+//! passes through, and the row in that folder goes away.
+//!
+//! One request per hop would not do. Nothing orders the walk of one folder
+//! against the walk of another, so the request of the first move can reach
+//! the server after the request of the second one. The message would then
+//! stay in the folder it only passed through. For the same reason the row
+//! that holds the first move must change with it, which is why `rechain`
+//! opens the folder that row is in.
 //!
 //! ## A filing that the server refuses for good
 //!
@@ -132,16 +146,21 @@ use std::os::raw::c_int;
 use std::ptr;
 
 use eds_sys::{
-    CAMEL_MESSAGE_DELETED, CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_changed,
-    camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_lock,
+    CAMEL_MESSAGE_DELETED, CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass,
+    CamelFolderSummary, camel_folder_changed, camel_folder_get_folder_summary,
+    camel_folder_get_full_name, camel_folder_get_parent_store, camel_folder_lock,
     camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_get,
     camel_folder_summary_remove_uid, camel_folder_unlock, camel_message_info_clone,
     camel_message_info_set_flags, camel_message_info_set_folder_flagged,
+    camel_store_get_folder_sync,
 };
 use gio_sys::GCancellable;
 #[cfg(camel_folder_get_uids)]
 use glib_sys::g_ptr_array_new;
-use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_set_size, g_strdup, gboolean, gchar};
+use glib_sys::{
+    GError, GFALSE, GPtrArray, GTRUE, g_clear_error, g_ptr_array_set_size, g_strdup, gboolean,
+    gchar,
+};
 #[cfg(not(camel_folder_get_uids))]
 use glib_sys::{g_free, g_ptr_array_new_with_free_func};
 use jmap_backend_core::cancel::observe;
@@ -268,27 +287,34 @@ unsafe extern "C" fn transfer_messages_to_sync(
                 // this folder until `synchronize_sync`'s walk confirms it:
                 // removing it now would say "moved" before the server has
                 // agreed, the offline instance of the module doc's "effect of
-                // a move on the source folder" rule.
+                // a move on the source folder" rule. A row this folder only
+                // passed through goes at once: it stands for a request that
+                // the second move has taken over.
                 let leaves = match &filed {
                     Ok(Filed::Landed) => moving,
-                    Ok(Filed::Queued) | Ok(Filed::NoOp) => false,
+                    Ok(Filed::Rechained(_)) => true,
+                    Ok(Filed::Queued(_)) | Ok(Filed::NoOp) => false,
                     Err(StoreError::NoMessage(_)) => true,
                     Err(_) => false,
                 };
+                // The destination row is a clone of this folder's row, so it
+                // is taken before the removal above can take that row away.
+                if let Ok(Filed::Queued(queued) | Filed::Rechained(queued)) = &filed
+                    && place_in_destination(summary, destination, uid, queued)
+                    && let Ok(text) = uid.to_str()
+                {
+                    arrivals.add(text);
+                }
                 if leaves {
                     camel_folder_summary_remove_uid(summary, uid.as_ptr());
                     if let Ok(text) = uid.to_str() {
                         changes.remove(text);
                     }
                 }
-                if matches!(filed, Ok(Filed::Queued))
-                    && place_in_destination(summary, destination, uid, into)
-                    && let Ok(text) = uid.to_str()
-                {
-                    arrivals.add(text);
-                }
                 match filed {
-                    Ok(Filed::Landed) | Ok(Filed::Queued) => reported.set(index, uid),
+                    Ok(Filed::Landed) | Ok(Filed::Queued(_)) | Ok(Filed::Rechained(_)) => {
+                        reported.set(index, uid)
+                    }
                     Ok(Filed::NoOp) => {}
                     Err(problem) => {
                         failure.get_or_insert(problem);
@@ -351,8 +377,14 @@ enum Filed {
     /// There is no connection. The row now carries the filing, and
     /// `synchronize_sync`'s reconnect walk ([`replay_filing`]) sends it once
     /// the store is back online, the offline-journal shape [`crate::expunge`]
-    /// already uses for a deleted mark.
-    Queued,
+    /// already uses for a deleted mark. The filing is also what the
+    /// destination row gets.
+    Queued(Filing),
+    /// There is no connection, and this row was itself waiting for an
+    /// earlier queued move: the folder is one the message only passes
+    /// through. [`rechain`] has made the two moves one filing, which the
+    /// destination row gets. The caller removes this row.
+    Rechained(Filing),
     /// The uid is not valid text, or the row is already gone (a concurrent
     /// refresh removed it): neither landed nor failed.
     NoOp,
@@ -389,7 +421,7 @@ unsafe fn file_message(
         let store = parent_store(folder).ok_or(StoreError::Disconnected)?;
         match store.file_message(&Id::new(text), filing) {
             Ok(()) => Ok(Filed::Landed),
-            Err(StoreError::Disconnected) => Ok(queue_filing(summary, uid, filing)),
+            Err(StoreError::Disconnected) => Ok(queue_filing(folder, summary, uid, filing)),
             Err(other) => Err(other),
         }
     }
@@ -401,16 +433,34 @@ unsafe fn file_message(
 /// If the row vanished since the caller listed it (a concurrent refresh),
 /// there is nothing to mark, and the caller treats the uid as [`Filed::NoOp`].
 ///
+/// A row that already waits for an earlier queued move takes the other path
+/// ([`rechain`]), which joins the two moves instead of queueing a second
+/// request beside the first.
+///
 /// # Safety
 ///
-/// `summary` must point at a live `CamelFolderSummary`.
-unsafe fn queue_filing(summary: *mut CamelFolderSummary, uid: &CStr, filing: &Filing) -> Filed {
+/// `folder` must point at a live `JmapFolder` and `summary` at its summary.
+unsafe fn queue_filing(
+    folder: *mut CamelFolder,
+    summary: *mut CamelFolderSummary,
+    uid: &CStr,
+    filing: &Filing,
+) -> Filed {
     // SAFETY: the contract above. `Owned` releases the row's reference when it
     // drops at the end of this function.
     let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
     else {
         return Filed::NoOp;
     };
+    // SAFETY: `info` is a live row for as long as this function holds it, and
+    // `folder` is a live folder of this provider.
+    if let Some(waiting) = unsafe { pending_filing(info.as_ptr()) }
+        && unsafe { arrived_here(folder, &waiting) }
+        && let Some(origin) = waiting.out_of_mailbox()
+    {
+        // SAFETY: the contract above.
+        return unsafe { rechain(folder, uid, origin, filing.into_mailbox()) };
+    }
     // SAFETY: `info` is a live row for as long as this function holds it.
     unsafe {
         set_pending_filing(info.as_ptr(), Some(filing.clone()));
@@ -426,7 +476,113 @@ unsafe fn queue_filing(summary: *mut CamelFolderSummary, uid: &CStr, filing: &Fi
         }
     }
     tracing::trace!(uid = uid.to_string_lossy().as_ref(), "queued filing");
-    Filed::Queued
+    Filed::Queued(filing.clone())
+}
+
+/// Joins a second queued move to the first one, and gives back the one
+/// filing that both folders then carry.
+///
+/// `origin` is the mailbox the first move takes the message out of, and
+/// `into` the mailbox the user chose this time. The joined filing moves the
+/// message straight from `origin` to `into`, so no request names the mailbox
+/// of `folder`, which the message only passes through. The caller removes
+/// the row of `folder` and clones the row into the new destination.
+///
+/// The row that holds the first move (the row in the folder of `origin`)
+/// must change with it. A request that still files the message into the
+/// mailbox the user has left would put it back there: nothing orders the
+/// walk of one folder against the walk of another, so that request can reach
+/// the server last. Thus this function opens the folder of `origin` and
+/// writes the joined filing on its row.
+///
+/// `camel_store_get_folder_sync` takes no folder lock, so the lock this
+/// vfunc holds on `folder` cannot meet one. It waits only while another
+/// thread builds that same folder. Writing the row of the other folder needs
+/// no folder lock either: the row has its own, as the clone that
+/// [`place_in_destination`] adds to another summary already relies on.
+///
+/// A move back into `origin` is empty. There is then nothing left to ask the
+/// server for, so the first move goes away: the row of `origin` loses its
+/// filing and shows again.
+///
+/// If the folder of `origin` cannot be opened (the account has no listing,
+/// or the folder is gone), the joined filing is still correct for the two
+/// folders this call has. The row of `origin` then keeps the first move.
+///
+/// # Safety
+///
+/// `folder` must point at a live `JmapFolder`.
+unsafe fn rechain(folder: *mut CamelFolder, uid: &CStr, origin: &Id, into: &Id) -> Filed {
+    let joined = Filing::moved(origin.clone(), into.clone());
+    // SAFETY: the contract above.
+    unsafe { rewrite_origin_row(folder, uid, origin, &joined) };
+    tracing::trace!(
+        uid = uid.to_string_lossy().as_ref(),
+        "rechained queued filing"
+    );
+    Filed::Rechained(joined)
+}
+
+/// Writes `joined` on the row that holds the first move, in the folder that
+/// shows `origin`. An empty `joined` clears that row's filing instead.
+///
+/// # Safety
+///
+/// `folder` must point at a live `JmapFolder`.
+unsafe fn rewrite_origin_row(folder: *mut CamelFolder, uid: &CStr, origin: &Id, joined: &Filing) {
+    // SAFETY: the contract above. The store outlives this vfunc call.
+    let Some(path) = (unsafe { parent_store(folder) }).and_then(|store| store.folder_path(origin))
+    else {
+        return;
+    };
+    let Ok(path) = CString::new(path) else {
+        return;
+    };
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: the contract above gives a live folder, thus a live store. The
+    // path is NUL-terminated and alive across the call, and the error
+    // out-parameter is writable and NULL. `Owned` releases the reference that
+    // the call returns.
+    let opened = unsafe {
+        let store = camel_folder_get_parent_store(folder);
+        let opened = camel_store_get_folder_sync(
+            store,
+            path.as_ptr(),
+            CAMEL_STORE_FOLDER_NONE,
+            ptr::null_mut(),
+            &mut error,
+        );
+        g_clear_error(&mut error);
+        Owned::from_raw(opened)
+    };
+    let Some(opened) = opened else {
+        return;
+    };
+    // SAFETY: a live folder, thus a live summary or NULL. `Owned` releases
+    // the row's reference when it drops at the end of this function.
+    let Some(info) = (unsafe {
+        let summary = camel_folder_get_folder_summary(opened.as_ptr());
+        if summary.is_null() {
+            return;
+        }
+        Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr()))
+    }) else {
+        return;
+    };
+    // SAFETY: `info` is a live row for as long as this function holds it.
+    unsafe {
+        if joined.is_empty() {
+            set_pending_filing(info.as_ptr(), None);
+            // Undo the hide first: `camel_message_info_set_flags` sets
+            // `CAMEL_MESSAGE_FOLDER_FLAGGED` again on any change it makes,
+            // so the clear below must come after it.
+            camel_message_info_set_flags(info.as_ptr(), CAMEL_MESSAGE_DELETED, 0);
+            camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
+        } else {
+            set_pending_filing(info.as_ptr(), Some(joined.clone()));
+            camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE);
+        }
+    }
 }
 
 /// Gives the destination folder a row for a message whose filing is still
@@ -437,12 +593,18 @@ unsafe fn queue_filing(summary: *mut CamelFolderSummary, uid: &CStr, filing: &Fi
 /// mailbox makes no second object, so the uid of the destination row is the
 /// uid the message already has.
 ///
-/// The clone gets a filing of its own, shaped as a copy into the destination,
-/// instead of the move filing that [`camel_message_info_clone`] copied from
-/// the source row. The module header tells why: the walk of the destination
-/// folder must land the message there, and must not remove its own row.
+/// The clone carries the same filing as the row it came from. Thus the walk
+/// of the destination folder alone completes the whole move: it files the
+/// message in and takes it out of the mailbox it came from, in one patch.
+/// The walk removes a row only in the folder the message leaves
+/// ([`left_here`]), so this row stays where the user put it.
 ///
-/// Three rows get no clone:
+/// The clone also loses the hide mark that the source row of a move carries
+/// ([`queue_filing`]). `camel_message_info_clone` copies the flags word, and
+/// a destination row that keeps that mark hides the message in the folder
+/// the user chose, as well as in the folder it came from.
+///
+/// Four rows get no clone:
 ///
 /// - A row that waits for its own upload ([`crate::append`]'s queue). Its uid
 ///   names nothing on the server, so a second row would ask for a second
@@ -450,6 +612,8 @@ unsafe fn queue_filing(summary: *mut CamelFolderSummary, uid: &CStr, filing: &Fi
 /// - A row the destination already has. The destination is then a mailbox the
 ///   message is already in, or a second queued filing of the same message.
 /// - A row that vanished since the caller listed it.
+/// - A row whose filing is empty: a second queued move that comes back to the
+///   mailbox the first one started from asks the server for nothing.
 ///
 /// # Safety
 ///
@@ -459,8 +623,11 @@ unsafe fn place_in_destination(
     summary: *mut CamelFolderSummary,
     destination: *mut CamelFolder,
     uid: &CStr,
-    into: &Id,
+    filing: &Filing,
 ) -> bool {
+    if filing.is_empty() {
+        return false;
+    }
     // SAFETY: the contract above.
     let target = unsafe { camel_folder_get_folder_summary(destination) };
     if target.is_null() || target == summary {
@@ -491,7 +658,8 @@ unsafe fn place_in_destination(
     // add` below gives the summary its own reference. `add` also marks the row
     // for the work list that `crate::synchronize` walks.
     unsafe {
-        set_pending_filing(copy.as_ptr(), Some(Filing::copied_into(into.clone())));
+        set_pending_filing(copy.as_ptr(), Some(filing.clone()));
+        camel_message_info_set_flags(copy.as_ptr(), CAMEL_MESSAGE_DELETED, 0);
         camel_folder_summary_add(target, copy.as_ptr(), GTRUE);
     }
     tracing::trace!(uid = uid.to_string_lossy().as_ref(), "queued arrival");
@@ -553,6 +721,8 @@ pub(crate) unsafe fn replay_filing(
         return Replay::nothing();
     };
     let moving = filing.out_of_mailbox().is_some();
+    // SAFETY: the contract above: a live folder of this provider.
+    let leaves_here = unsafe { left_here(folder, &filing) };
     // SAFETY: the contract above.
     let result = match unsafe { parent_store(folder) } {
         Some(store) => store.file_message(&Id::new(text), &filing),
@@ -567,7 +737,7 @@ pub(crate) unsafe fn replay_filing(
             }
             tracing::trace!(uid = text, "replayed filing");
             Replay {
-                remove: moving,
+                remove: leaves_here,
                 failure: None,
             }
         }
@@ -631,6 +801,25 @@ pub(crate) unsafe fn replay_filing(
             }
         }
     }
+}
+
+/// Whether the message leaves the mailbox of this folder when the filing
+/// lands, so that the row goes with it.
+///
+/// Only the folder the move takes the message out of loses its row. The
+/// destination row carries the same move filing ([`place_in_destination`]),
+/// and a walk there must keep its own row: the message arrives in that
+/// mailbox. A copy removes no row anywhere.
+///
+/// # Safety
+///
+/// `folder` must be NULL or point at a live `CamelFolder`.
+unsafe fn left_here(folder: *mut CamelFolder, filing: &Filing) -> bool {
+    let Some(out_of) = filing.out_of_mailbox() else {
+        return false;
+    };
+    // SAFETY: the contract above.
+    (unsafe { mailbox_of(folder) }) == Some(out_of)
 }
 
 /// Whether this row is the arrival record that the folder keeps for itself:
