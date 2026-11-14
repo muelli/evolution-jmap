@@ -686,6 +686,7 @@ unsafe fn apply_offline_change(cell: &RefCell<UiState>, offline: bool) {
         }
         ui.offline = offline;
     }
+    tracing::trace!(offline, "delegates: page offline state changed");
     let (view, add, revoke, status) = {
         let ui = cell.borrow();
         (ui.view, ui.add, ui.revoke, ui.status)
@@ -791,10 +792,11 @@ unsafe extern "C" fn on_revoke(_button: *mut GObject, page: gpointer) {
             gtk_widget_set_sensitive(revoke, GFALSE);
             gtk_widget_set_sensitive(add, GFALSE);
         }
+        tracing::trace!(action = "revoke", "delegates: action started");
         let work = move || io::revoke(&link, &principal_id);
         let finish = |page: *mut GObject, outcome: Result<Loaded, String>| {
             // SAFETY: `with_strong` gives the live page.
-            unsafe { apply_write_outcome(page, outcome, REVOKE_FAILED) };
+            unsafe { apply_write_outcome(page, outcome, REVOKE_FAILED, "revoke") };
         };
         // SAFETY: `page` is the live page handling this click.
         unsafe { dispatch::spawn_for(page.cast(), work, finish) };
@@ -1384,10 +1386,11 @@ unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
             gtk_widget_set_sensitive(revoke, GFALSE);
             gtk_widget_set_sensitive(add, GFALSE);
         }
+        tracing::trace!(action = "grant", "delegates: action started");
         let work = move || io::grant(&link, &principal_id, calendar_level, book_level);
         let finish = |page: *mut GObject, outcome: Result<Loaded, String>| {
             // SAFETY: `with_strong` gives the live page.
-            unsafe { apply_write_outcome(page, outcome, GRANT_FAILED) };
+            unsafe { apply_write_outcome(page, outcome, GRANT_FAILED, "grant") };
         };
         // SAFETY: `page` is the live page handling this click.
         unsafe { dispatch::spawn_for(page.cast(), work, finish) };
@@ -1397,21 +1400,30 @@ unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
 /// Applies the result of [`on_revoke`]'s or [`on_add`]'s round trip: the
 /// fresh list on success, or `failed` (with the server's reason) on the
 /// status label otherwise. Either way, the view, Add and Revoke become
-/// usable again.
+/// usable again. `action` is `"grant"` or `"revoke"`, for the item 182(c)
+/// trace line only; it never carries the principal id or the server's
+/// reason text.
 ///
 /// # Safety
 ///
 /// `page` must be the live page of the write.
-unsafe fn apply_write_outcome(page: *mut GObject, outcome: Result<Loaded, String>, failed: &CStr) {
+unsafe fn apply_write_outcome(
+    page: *mut GObject,
+    outcome: Result<Loaded, String>,
+    failed: &CStr,
+    action: &'static str,
+) {
     let Some(cell) = (unsafe { state(page.cast()) }) else {
         return;
     };
     match outcome {
         Ok(loaded) => {
+            tracing::trace!(action, "delegates: action written");
             // SAFETY: no borrow of `cell` is held across this call.
             unsafe { fill_list(cell, &loaded) };
         }
         Err(message) => {
+            tracing::trace!(action, "delegates: action failed");
             let text = translate_with(failed, &[&message]);
             let text = cstring_lossy(&text);
             let status = cell.borrow().status;
@@ -1575,11 +1587,31 @@ unsafe extern "C" fn submit_finish(
 #[cfg(test)]
 mod tests {
     use std::ffi::{c_char, c_int, c_void};
+    use std::time::{Duration, Instant};
 
+    use glib_sys::g_main_context_iteration;
     use gobject_sys::g_object_get;
     use jmap_backend_core::marshal::read_string;
+    use jmap_tracing_capture::{capture, has};
+    use tracing::Level;
 
     use super::*;
+
+    /// Iterates the default main context, blocking between rounds, until
+    /// `done` is true or `timeout` elapses. [`on_revoke`]'s round trip
+    /// finishes on a worker thread and reports back through the default
+    /// context, the same shape `crate::filters::page` tests pump.
+    fn pump_until(done: impl Fn() -> bool, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while !done() {
+            assert!(
+                Instant::now() < deadline,
+                "main loop never delivered the worker's answer"
+            );
+            // SAFETY: the default context; this test owns the thread.
+            unsafe { g_main_context_iteration(ptr::null_mut(), GTRUE) };
+        }
+    }
 
     #[test]
     fn level_at_reads_back_every_valid_index() {
@@ -1991,6 +2023,190 @@ mod tests {
                 text,
                 translate(OFFLINE),
                 "the cold-start offline message changed"
+            );
+
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// Item 182(c): going offline while the page is open is invisible to
+    /// AT-SPI beyond the status label text, which a screen reader already
+    /// announces; the trace line is for a log-based check. Needs a
+    /// display; skips without one.
+    #[test]
+    fn apply_offline_change_traces_the_new_state() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = Arc::new(AccountLink::without_refresh(client, features));
+        let loaded = Loaded {
+            delegates: vec![],
+            offered: true,
+            labels: Default::default(),
+        };
+
+        // SAFETY: no network call happens here.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
+            let cell = state(page.cast()).unwrap();
+
+            let (_, captured) = capture(|| apply_offline_change(cell, true));
+            assert!(
+                has(&captured, Level::TRACE, "offline", "true"),
+                "expected an offline=true trace line, got {captured:?}"
+            );
+
+            let (_, captured) = capture(|| apply_offline_change(cell, false));
+            assert!(
+                has(&captured, Level::TRACE, "offline", "false"),
+                "expected an offline=false trace line, got {captured:?}"
+            );
+
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// Item 182(c): the AT-SPI driver cannot see a Revoke round trip start
+    /// or land; both now trace, the same convention `filters::page` uses
+    /// for its own worker round trips. Needs a display; skips without one.
+    #[test]
+    fn revoking_a_delegate_traces_the_action_started_and_written() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        let server = MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+        let features =
+            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+        let link = Arc::new(AccountLink::without_refresh(client, features));
+        let loaded = Loaded {
+            delegates: vec![crate::delegation::Delegate {
+                principal_id: Id::new("P-bob"),
+                calendar_level: CalendarDelegationLevel::Reviewer,
+                address_book_level: AddressBookDelegationLevel::None,
+            }],
+            offered: true,
+            labels: Default::default(),
+        };
+
+        // SAFETY: a real worker thread runs `io::revoke` against the mock
+        // server below; the test pumps the default main context for its
+        // answer, the way `crate::filters::page`'s own worker tests do.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
+
+            let (view, add) = {
+                let ui = state(page.cast()).unwrap().borrow();
+                (ui.view, ui.add)
+            };
+            let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+            evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+            evo_sys::gtk_tree_path_free(path);
+
+            let (_, captured) = capture(|| {
+                on_revoke(ptr::null_mut(), page.cast());
+                pump_until(|| get_sensitive(add), Duration::from_secs(5));
+            });
+            assert!(
+                has(
+                    &captured,
+                    Level::TRACE,
+                    "message",
+                    "delegates: action started"
+                ),
+                "expected an action-started trace line, got {captured:?}"
+            );
+            assert!(
+                has(
+                    &captured,
+                    Level::TRACE,
+                    "message",
+                    "delegates: action written"
+                ),
+                "expected an action-written trace line, got {captured:?}"
+            );
+            assert!(
+                has(&captured, Level::TRACE, "action", "revoke"),
+                "expected the trace lines to name the revoke action, got {captured:?}"
+            );
+
+            gtk_widget_destroy(page);
+        }
+    }
+
+    /// Item 182(c): a failed Grant or Revoke also traces, so the driver can
+    /// tell a refused write from one that never reached the server. Checked
+    /// directly against [`apply_write_outcome`]: no display needed, since
+    /// the write never shows a dialog of its own.
+    #[test]
+    fn apply_write_outcome_traces_a_failed_grant_and_revoke() {
+        // SAFETY: no arguments. GTK stays on this thread for the whole test.
+        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+            eprintln!("skipped: no display for GTK");
+            return;
+        }
+        // SAFETY: a plain `GtkScrolledWindow` stands in for the page, as
+        // the tests above use it; no network call happens, the outcome is
+        // applied directly.
+        unsafe {
+            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+            build_widgets(page.cast());
+
+            let (_, captured) = capture(|| {
+                apply_write_outcome(page.cast(), Err("boom".to_string()), GRANT_FAILED, "grant")
+            });
+            assert!(
+                has(
+                    &captured,
+                    Level::TRACE,
+                    "message",
+                    "delegates: action failed"
+                ),
+                "expected an action-failed trace line, got {captured:?}"
+            );
+            assert!(
+                has(&captured, Level::TRACE, "action", "grant"),
+                "expected the trace line to name the grant action, got {captured:?}"
+            );
+
+            let (_, captured) = capture(|| {
+                apply_write_outcome(
+                    page.cast(),
+                    Err("boom".to_string()),
+                    REVOKE_FAILED,
+                    "revoke",
+                )
+            });
+            assert!(
+                has(
+                    &captured,
+                    Level::TRACE,
+                    "message",
+                    "delegates: action failed"
+                ),
+                "expected an action-failed trace line, got {captured:?}"
+            );
+            assert!(
+                has(&captured, Level::TRACE, "action", "revoke"),
+                "expected the trace line to name the revoke action, got {captured:?}"
             );
 
             gtk_widget_destroy(page);
