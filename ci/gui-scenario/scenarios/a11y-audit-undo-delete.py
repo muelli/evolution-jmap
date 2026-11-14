@@ -12,11 +12,14 @@ of that scenario's undo/wait/destroy steps are shared_delete.py's own
 job, not this audit's.
 
 Not run here: `audit_tab_reachability` (item 174(d)'s live Tab-key
-check, see a11y-audit.py). Confirmed empirically that pressing Tab after
-the info bar appears, right after a confirmation dialog closes, leaves
-no STATE_FOCUSED node observable anywhere for the rest of the walk, the
-same symptom a11y-audit.py's Send Later dialog hits and documents; root
-cause not pinned down, logged as an open row rather than guessed at.
+check, see a11y-audit.py). Cause pinned down, different from Send
+Later's: the alert is a stock `EAlertBar`/`GtkInfoBar`, which never
+grabs focus when shown (upstream `e-alert-bar.c` has no `grab_focus`
+call either), the same as every other Evolution info bar, so Tab from
+wherever focus already was never visits it. A fix would make this
+alert diverge from stock Evolution's own info bars, a HIG question for
+the operator, not a one-claim bug; see
+audits/ERGONOMY-A11Y-AUDIT-2026-11-01.md.
 """
 
 from scenario import audit_dialog, audit_mnemonics, confirm, info_bar, main, menu_item, select_source, wait_for
