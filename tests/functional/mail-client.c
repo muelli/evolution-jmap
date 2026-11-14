@@ -156,9 +156,11 @@ main (int argc,
 	gboolean offline_expunge_roundtrip;
 	gboolean offline_append_restart_prime;
 	gboolean offline_append_restart_second;
+	gboolean offline_move_restart_prime;
+	gboolean offline_move_restart_second;
 
 	if (argc != 2 && argc != 3) {
-		g_printerr ("usage: %s <source-uid> [offline-roundtrip|restart-prime|restart-second|offline-save-draft|offline-expunge-roundtrip|offline-append-restart-prime|offline-append-restart-second]\n", argv[0]);
+		g_printerr ("usage: %s <source-uid> [offline-roundtrip|restart-prime|restart-second|offline-save-draft|offline-expunge-roundtrip|offline-append-restart-prime|offline-append-restart-second|offline-move-restart-prime|offline-move-restart-second]\n", argv[0]);
 		return 2;
 	}
 
@@ -170,6 +172,8 @@ main (int argc,
 	offline_expunge_roundtrip = argc == 3 && g_strcmp0 (argv[2], "offline-expunge-roundtrip") == 0;
 	offline_append_restart_prime = argc == 3 && g_strcmp0 (argv[2], "offline-append-restart-prime") == 0;
 	offline_append_restart_second = argc == 3 && g_strcmp0 (argv[2], "offline-append-restart-second") == 0;
+	offline_move_restart_prime = argc == 3 && g_strcmp0 (argv[2], "offline-move-restart-prime") == 0;
+	offline_move_restart_second = argc == 3 && g_strcmp0 (argv[2], "offline-move-restart-second") == 0;
 
 	/* The harness points these at the scratch tree. Camel keeps a summary
 	 * database and a message cache for each service in them. The real XDG
@@ -227,7 +231,7 @@ main (int argc,
 	 * offline, the same as the shell's "Work Offline" state at startup:
 	 * no connection is ever attempted, so a dead or unreachable mock
 	 * cannot be told apart from "no network" here. */
-	if (restart_second || offline_append_restart_second)
+	if (restart_second || offline_append_restart_second || offline_move_restart_second)
 		camel_session_set_online (session, FALSE);
 
 	/* Camel dlopens the provider here. It finds the protocol in the table
@@ -354,6 +358,92 @@ main (int argc,
 		folder_free_uids (drafts, drafts_uids);
 
 		g_object_unref (drafts);
+		return 0;
+	}
+
+	/* `offline-move-restart-second` mode: the second half of item 181(a)
+	 * section 4's verification pair (`offline-move-restart-prime` above
+	 * primes the pending move). Starts offline like `restart_second`
+	 * above, with neither Inbox nor Trash opened in this process, and
+	 * goes straight online: Camel's own reconnect flush
+	 * (`camel_offline_store_set_online_sync` calling
+	 * `camel_store_synchronize_sync` with `expunge=FALSE`) walks only
+	 * `camel_store_dup_opened_folders`, a weak-ref bag of the folder
+	 * objects this process already has live (`camel-object-bag.c`,
+	 * `camel-store.c`'s `store_synchronize_sync`); a fresh process has
+	 * none. This checks whether that blind reconnect flushes the queued
+	 * move anyway, then opens both folders (as Evolution would once the
+	 * user selects or restores one) and synchronizes Inbox directly, to
+	 * see whether the queued filing still exists and lands once a
+	 * folder that holds it is actually opened and synchronized. */
+	if (offline_move_restart_second) {
+		CamelFolder *inbox;
+		CamelFolder *trash;
+		GPtrArray *uids;
+
+		camel_session_set_online (session, TRUE);
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), TRUE, NULL, &error))
+			return functional_fail ("offline-move-restart-second-go-online", error);
+		g_print ("went-online=1\n");
+
+		inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
+		if (!inbox)
+			return functional_fail ("offline-move-restart-second-inbox", error);
+		if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
+			g_object_unref (inbox);
+			return functional_fail ("offline-move-restart-second-refresh-inbox", error);
+		}
+		uids = folder_dup_uids (inbox);
+		g_print ("restart-inbox-count-blind-reconnect=%u\n", uids->len);
+		folder_free_uids (inbox, uids);
+
+		trash = camel_store_get_trash_folder_sync (store, NULL, &error);
+		if (!trash) {
+			g_object_unref (inbox);
+			return functional_fail ("offline-move-restart-second-trash", error);
+		}
+		if (!camel_folder_refresh_info_sync (trash, NULL, &error)) {
+			g_object_unref (inbox);
+			g_object_unref (trash);
+			return functional_fail ("offline-move-restart-second-refresh-trash", error);
+		}
+		uids = folder_dup_uids (trash);
+		g_print ("restart-trash-count-blind-reconnect=%u\n", uids->len);
+		folder_free_uids (trash, uids);
+
+		/* Inbox is open now, the same as the moment Evolution's own
+		 * mail view selects or closes a folder. Synchronize it
+		 * directly to see whether the queued move still exists and
+		 * lands once something actually synchronizes the folder that
+		 * holds it, as opposed to the blind reconnect flush above. */
+		if (!camel_folder_synchronize_sync (inbox, FALSE, NULL, &error)) {
+			g_object_unref (inbox);
+			g_object_unref (trash);
+			return functional_fail ("offline-move-restart-second-synchronize", error);
+		}
+		g_print ("inbox-synchronized-after-reopen=1\n");
+
+		if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
+			g_object_unref (inbox);
+			g_object_unref (trash);
+			return functional_fail ("offline-move-restart-second-refresh-inbox-after-sync", error);
+		}
+		uids = folder_dup_uids (inbox);
+		g_print ("restart-inbox-count-after-synchronize=%u\n", uids->len);
+		folder_free_uids (inbox, uids);
+
+		if (!camel_folder_refresh_info_sync (trash, NULL, &error)) {
+			g_object_unref (inbox);
+			g_object_unref (trash);
+			return functional_fail ("offline-move-restart-second-refresh-trash-after-sync", error);
+		}
+		uids = folder_dup_uids (trash);
+		g_print ("restart-trash-count-after-synchronize=%u\n", uids->len);
+		folder_free_uids (trash, uids);
+
+		g_object_unref (inbox);
+		g_object_unref (trash);
 		return 0;
 	}
 
@@ -498,6 +588,108 @@ main (int argc,
 
 		g_object_unref (drafts);
 		/* Exit while still offline: no reconnect in this process. */
+		return 0;
+	}
+
+	/* `offline-move-restart-prime` mode: the first half of item 181(a)
+	 * section 4's verification pair (`offline-move-restart-second` below
+	 * reads the result with neither folder reopened). Connects normally,
+	 * reads Inbox and Trash once so their folder tree and starting
+	 * summary reach disk (the `restart-prime` reason above), goes
+	 * offline, then moves the first inbox message into Trash:
+	 * `transfer_messages_to_sync` queues the filing on the inbox row
+	 * instead of failing (`jmap-mail/src/transfer.rs`), and leaves the
+	 * row in Inbox until the filing lands (176(b)'s existing rule).
+	 * Exits while still offline, dropping both folder objects, so the
+	 * second process starts with neither one open. */
+	if (offline_move_restart_prime) {
+		CamelFolder *inbox;
+		CamelFolder *trash;
+		GPtrArray *uids;
+		GPtrArray *transfer_uids;
+		GPtrArray *transferred = NULL;
+		gchar *move_uid;
+
+		inbox = camel_store_get_inbox_folder_sync (store, NULL, &error);
+		if (!inbox)
+			return functional_fail ("offline-move-restart-prime-inbox", error);
+		if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
+			g_object_unref (inbox);
+			return functional_fail ("offline-move-restart-prime-refresh-inbox", error);
+		}
+
+		trash = camel_store_get_trash_folder_sync (store, NULL, &error);
+		if (!trash) {
+			g_object_unref (inbox);
+			return functional_fail ("offline-move-restart-prime-trash", error);
+		}
+		if (!camel_folder_refresh_info_sync (trash, NULL, &error)) {
+			g_object_unref (inbox);
+			g_object_unref (trash);
+			return functional_fail ("offline-move-restart-prime-refresh-trash", error);
+		}
+
+		uids = folder_dup_uids (inbox);
+		if (uids->len == 0) {
+			folder_free_uids (inbox, uids);
+			g_object_unref (inbox);
+			g_object_unref (trash);
+			return functional_fail ("offline-move-restart-prime-no-message", NULL);
+		}
+		move_uid = g_strdup (uids->pdata[0]);
+		folder_free_uids (inbox, uids);
+		g_print ("offline-move-restart-uid=%s\n", move_uid);
+
+		if (!camel_offline_store_set_online_sync (
+				CAMEL_OFFLINE_STORE (store), FALSE, NULL, &error)) {
+			g_free (move_uid);
+			g_object_unref (inbox);
+			g_object_unref (trash);
+			return functional_fail ("offline-move-restart-prime-go-offline", error);
+		}
+		g_print ("went-offline=1\n");
+
+		transfer_uids = g_ptr_array_new ();
+		g_ptr_array_add (transfer_uids, move_uid);
+
+		if (!camel_folder_transfer_messages_to_sync (inbox, transfer_uids,
+							      trash, TRUE,
+							      &transferred, NULL, &error)) {
+			g_ptr_array_unref (transfer_uids);
+			g_free (move_uid);
+			g_object_unref (inbox);
+			g_object_unref (trash);
+			g_print ("offline-move-restart-queued=0\n");
+			return functional_fail ("offline-move-restart-prime-transfer", error);
+		}
+		g_ptr_array_unref (transfer_uids);
+		g_print ("offline-move-restart-queued=1\n");
+		if (transferred) {
+			guint t;
+
+			for (t = 0; t < transferred->len; t++)
+				g_free (transferred->pdata[t]);
+			g_ptr_array_unref (transferred);
+		}
+
+		uids = folder_dup_uids (inbox);
+		g_print ("inbox-count-after-offline-move=%u\n", uids->len);
+		folder_free_uids (inbox, uids);
+		uids = folder_dup_uids (trash);
+		g_print ("trash-count-after-offline-move=%u\n", uids->len);
+		folder_free_uids (trash, uids);
+
+		/* As in `restart-prime` above: `camel_folder_changed` and the
+		 * pending-filing mark both reach disk only once the default
+		 * handler runs on a low-priority idle. Drain it here. */
+		while (g_main_context_pending (NULL))
+			g_main_context_iteration (NULL, FALSE);
+
+		g_free (move_uid);
+		g_object_unref (inbox);
+		g_object_unref (trash);
+		/* Exit while still offline: no reconnect in this process, and
+		 * neither folder is reopened before it exits. */
 		return 0;
 	}
 

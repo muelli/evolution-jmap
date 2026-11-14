@@ -1105,6 +1105,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_CLIENT=$<TARGET_FILE:functional-mail-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
+	# ROADMAP item 181(a) section 4: whether a reconnect flushes a queued
+	# move whose folder this process has not reopened, a separate
+	# registration for the same reason as functional-mail-offline-expunge
+	# above: see
+	# rust/crates/jmap-functional/tests/mail-offline-move-restart.rs.
+	add_test(
+		NAME functional-mail-offline-move-restart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test mail-offline-move-restart
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-mail-offline-move-restart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_CLIENT=$<TARGET_FILE:functional-mail-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+	)
+
 	# functional-mail-live-client against a real Stalwart instead of the
 	# in-process mock. It stages the same module and `.urls` file as
 	# functional-mail, with the same two variable names, for the reason that
