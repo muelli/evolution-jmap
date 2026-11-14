@@ -78,6 +78,16 @@
 //! walk of the second folder would do the opposite, and the two walks would
 //! then wait for each other.
 //!
+//! ## A filing that the server refuses for good
+//!
+//! The destination row is a promise that this provider made alone, before
+//! the server saw the filing. A refusal that no retry changes
+//! ([`StoreError::refuses_retry`]) breaks that promise, so `replay_filing`
+//! takes the row away again and reports the reason of the server. The source
+//! row of a move keeps its place, because the message never left that
+//! mailbox; only its filing goes, so the next walk sends no request that the
+//! server refuses again.
+//!
 //! ## Stopping a transfer
 //!
 //! The vfunc [`observe`]s the `cancellable` for the full call. A stop between two
@@ -467,19 +477,38 @@ unsafe fn place_in_destination(
     true
 }
 
+/// What one [`replay_filing`] call leaves for its caller to do.
+pub(crate) struct Replay {
+    /// Whether the caller removes this row from the summary and tells Camel.
+    pub(crate) remove: bool,
+    /// The failure to report, if the call had one.
+    pub(crate) failure: Option<StoreError>,
+}
+
+impl Replay {
+    /// The row stays as it is and there is nothing to report.
+    fn nothing() -> Self {
+        Self {
+            remove: false,
+            failure: None,
+        }
+    }
+}
+
 /// Completes a filing that [`file_message`] could not send while offline, for
 /// one row of the work list [`crate::synchronize::synchronize_sync`] walks.
 ///
-/// Returns whether the caller must remove the row from this folder's summary
-/// and tell Camel about it: only a landed move does, the same as an immediate
+/// A landed move asks the caller to remove the row, the same as an immediate
 /// move in [`transfer_messages_to_sync`] above. A copy never removes a row.
 ///
 /// Still offline is not a failure, the same "write it later" rule
 /// [`crate::expunge`] uses for a deleted mark: the row and its filing stay,
-/// untouched, for the next walk. A server refusal (the destination gone, a
-/// lost right) is a failure: the row stays in the source folder, unmoved, not
-/// silently dropped, and Evolution's existing "synchronisation failed"
-/// reporting for the folder is enough.
+/// untouched, for the next walk. A transport failure gets the same treatment.
+///
+/// A refusal that no retry changes ends the filing instead (the module
+/// header, "A filing that the server refuses for good"). Both the removal of
+/// the destination row and the reason go back to the caller, which has the
+/// one `camel_folder_changed` of the walk and its error report.
 ///
 /// # Safety
 ///
@@ -488,19 +517,19 @@ pub(crate) unsafe fn replay_filing(
     folder: *mut CamelFolder,
     summary: *mut CamelFolderSummary,
     uid: &CStr,
-) -> Result<bool, StoreError> {
+) -> Replay {
     // SAFETY: the contract above. `Owned` releases the row's reference when it
     // drops at the end of this function.
     let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
     else {
-        return Ok(false);
+        return Replay::nothing();
     };
     // SAFETY: `info` is a live row for as long as this function holds it.
     let Some(filing) = (unsafe { pending_filing(info.as_ptr()) }) else {
-        return Ok(false);
+        return Replay::nothing();
     };
     let Ok(text) = uid.to_str() else {
-        return Ok(false);
+        return Replay::nothing();
     };
     let moving = filing.out_of_mailbox().is_some();
     // SAFETY: the contract above.
@@ -516,7 +545,10 @@ pub(crate) unsafe fn replay_filing(
                 camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
             }
             tracing::trace!(uid = text, "replayed filing");
-            Ok(moving)
+            Replay {
+                remove: moving,
+                failure: None,
+            }
         }
         Err(StoreError::Disconnected) => {
             // Still offline. `push_row`, called just before this in the same
@@ -525,7 +557,7 @@ pub(crate) unsafe fn replay_filing(
             // the work list with its filing still unsent.
             // SAFETY: `info` is still the live row.
             unsafe { camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE) };
-            Ok(false)
+            Replay::nothing()
         }
         Err(StoreError::NoMessage(_)) => {
             // Another client destroyed the message before this filing could
@@ -538,7 +570,22 @@ pub(crate) unsafe fn replay_filing(
                 camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
             }
             tracing::trace!(uid = text, "dropped filing");
-            Ok(false)
+            Replay::nothing()
+        }
+        // A refusal that no retry changes. Undo the filing, and the
+        // destination row that showed it, instead of asking again for ever.
+        Err(refusal) if refusal.refuses_retry() => {
+            // SAFETY: `info` is still the live row.
+            unsafe {
+                set_pending_filing(info.as_ptr(), None);
+                camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
+            }
+            tracing::trace!(uid = text, "rolled back filing");
+            Replay {
+                // SAFETY: the contract above: a live folder of this provider.
+                remove: unsafe { arrived_here(folder, &filing) },
+                failure: Some(refusal),
+            }
         }
         Err(other) => {
             // Still pending: a transport failure (a DNS failure, a refused
@@ -548,9 +595,29 @@ pub(crate) unsafe fn replay_filing(
             // no way back onto it.
             // SAFETY: `info` is still the live row.
             unsafe { camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE) };
-            Err(other)
+            Replay {
+                remove: false,
+                failure: Some(other),
+            }
         }
     }
+}
+
+/// Whether this row is the arrival record that the folder keeps for itself:
+/// the clone of [`place_in_destination`], not the row the transfer came from.
+///
+/// The mailbox of the folder gives the answer. Only the clone sits in the
+/// mailbox that its own filing names. A source row names a different mailbox,
+/// for a move and for a copy: a filing into the mailbox that the message is
+/// already in is empty, and `transfer_messages_to_sync` stops before it
+/// queues one.
+///
+/// # Safety
+///
+/// `folder` must be NULL or point at a live `CamelFolder`.
+unsafe fn arrived_here(folder: *mut CamelFolder, filing: &Filing) -> bool {
+    // SAFETY: the contract above.
+    (unsafe { mailbox_of(folder) }) == Some(filing.into_mailbox())
 }
 
 /// The mailbox that `folder` shows, if `folder` is a folder of this provider.

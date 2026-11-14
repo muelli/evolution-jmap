@@ -54,6 +54,7 @@ use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::source::{self, SourceError};
 use jmap_client::{Credentials, Error};
 use jmap_mail_sync::{FolderRole, MailSync, SyncError};
+use jmap_proto::error::{method, set};
 use jmap_proto::session::CAPABILITY_MAIL;
 
 use crate::server::ServerConfig;
@@ -312,6 +313,55 @@ impl StoreError {
         }
     }
 
+    /// Whether the server refused for a reason that no later retry changes.
+    ///
+    /// The offline queue of [`crate::transfer`] asks this. A queued change
+    /// waits on the work list until it lands. That is correct for a
+    /// connection that is down, for a rate limit and for a server that is
+    /// busy. It is wrong for a destination mailbox that the account lost, or
+    /// for a right that the user does not have: such a change can never
+    /// land, and the local row that shows it promises a move that never
+    /// happens.
+    ///
+    /// The list is short on purpose. A failure that this function does not
+    /// know stays queued, which is the behaviour of every caller before this
+    /// function existed. One more walk with a queued change costs one
+    /// request. To discard a change that a later retry lands loses the work
+    /// of the user.
+    pub fn refuses_retry(&self) -> bool {
+        match self {
+            // The last listing already gave the answer: this mailbox does
+            // not accept the message. See the two variant comments.
+            Self::NoFolder(_) | Self::NoPermission(_) => true,
+            // RFC 8620 §5.3: the same request gets the same answer until
+            // the account, the rights or the request itself change.
+            Self::Client(Error::Set(refusal)) => matches!(
+                refusal.error_type.as_str(),
+                set::FORBIDDEN
+                    | set::INVALID_PATCH
+                    | set::INVALID_PROPERTIES
+                    | set::TOO_LARGE
+                    | set::SINGLETON
+                    | set::ALREADY_EXISTS
+            ),
+            // RFC 8620 §3.6.2, the same rule one level up. `serverFail`,
+            // `serverUnavailable`, `serverPartialFail` and `stateMismatch`
+            // are absent: each of them asks the client to try again.
+            Self::Client(Error::Method(refusal)) => matches!(
+                refusal.error_type.as_str(),
+                method::FORBIDDEN
+                    | method::ACCOUNT_READ_ONLY
+                    | method::ACCOUNT_NOT_FOUND
+                    | method::ACCOUNT_NOT_SUPPORTED_BY_METHOD
+                    | method::UNKNOWN_METHOD
+                    | method::UNKNOWN_CAPABILITY
+                    | method::UNKNOWN_DATA_TYPE
+                    | method::INVALID_ARGUMENTS
+            ),
+            _ => false,
+        }
+    }
+
     /// Changes a server 401 on an OAuth 2.0 bearer token into the `OAuth2`
     /// failure that a failed *fetch* of that token gets.
     ///
@@ -518,4 +568,72 @@ pub fn open_mail(config: &ServerConfig, credentials: Credentials) -> Result<Mail
     let account_id = client.primary_account(CAPABILITY_MAIL)?;
 
     Ok(MailSync::new(client, account_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use jmap_client::Error;
+    use jmap_proto::error::{MethodError, SetError, method, set};
+
+    use super::StoreError;
+
+    /// The offline queue of `crate::transfer` undoes a queued filing only on
+    /// these answers. Each of them stays the same for every later request
+    /// with the same account, the same rights and the same mailboxes.
+    #[test]
+    fn a_refusal_that_a_retry_cannot_change_ends_the_queued_change() {
+        for error_type in [
+            set::FORBIDDEN,
+            set::INVALID_PATCH,
+            set::INVALID_PROPERTIES,
+            set::TOO_LARGE,
+        ] {
+            let refusal = StoreError::Client(Error::Set(SetError::new(error_type)));
+            assert!(refusal.refuses_retry(), "{error_type} must end the change");
+        }
+        for error_type in [method::FORBIDDEN, method::ACCOUNT_READ_ONLY] {
+            let refusal = StoreError::Client(Error::Method(MethodError::new(error_type)));
+            assert!(refusal.refuses_retry(), "{error_type} must end the change");
+        }
+        assert!(StoreError::NoFolder("Archive".into()).refuses_retry());
+        assert!(StoreError::NoPermission("Archive".into()).refuses_retry());
+    }
+
+    /// Every other answer keeps the change queued. A dropped change loses
+    /// the work of the user, so an answer this code does not know waits for
+    /// the next walk.
+    #[test]
+    fn an_answer_that_a_retry_can_change_keeps_the_queued_change() {
+        for error_type in [
+            set::OVER_QUOTA,
+            set::RATE_LIMIT,
+            set::STATE_MISMATCH,
+            set::REQUEST_TOO_LARGE,
+        ] {
+            let failure = StoreError::Client(Error::Set(SetError::new(error_type)));
+            assert!(!failure.refuses_retry(), "{error_type} must stay queued");
+        }
+        for error_type in [
+            method::SERVER_FAIL,
+            method::SERVER_UNAVAILABLE,
+            method::SERVER_PARTIAL_FAIL,
+            method::STATE_MISMATCH,
+        ] {
+            let failure = StoreError::Client(Error::Method(MethodError::new(error_type)));
+            assert!(!failure.refuses_retry(), "{error_type} must stay queued");
+        }
+        assert!(!StoreError::Disconnected.refuses_retry());
+        assert!(
+            !StoreError::Client(Error::Transport("no route to host".into())).refuses_retry(),
+            "a transport failure is the one item 181(b) keeps on the work list"
+        );
+        assert!(
+            !StoreError::Client(Error::Http {
+                status: 503,
+                problem: None
+            })
+            .refuses_retry(),
+            "an HTTP status alone does not say that the account refuses this"
+        );
+    }
 }
