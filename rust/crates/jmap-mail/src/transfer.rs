@@ -359,6 +359,7 @@ unsafe fn queue_filing(summary: *mut CamelFolderSummary, uid: &CStr, filing: &Fi
         set_pending_filing(info.as_ptr(), Some(filing.clone()));
         camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE);
     }
+    tracing::trace!(uid = uid.to_string_lossy().as_ref(), "queued filing");
     Filed::Queued
 }
 
@@ -410,6 +411,7 @@ pub(crate) unsafe fn replay_filing(
                 set_pending_filing(info.as_ptr(), None);
                 camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
             }
+            tracing::trace!(uid = text, "replayed filing");
             Ok(moving)
         }
         Err(StoreError::Disconnected) => {
@@ -431,6 +433,7 @@ pub(crate) unsafe fn replay_filing(
                 set_pending_filing(info.as_ptr(), None);
                 camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
             }
+            tracing::trace!(uid = text, "dropped filing");
             Ok(false)
         }
         Err(other) => {

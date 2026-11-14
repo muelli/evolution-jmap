@@ -110,6 +110,8 @@ use jmap_mail_sync::MailSync;
 use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
+use jmap_tracing_capture::{capture, has};
+use tracing::Level;
 
 /// The messages the fixture can seed, in seeding order. A transfer of a
 /// *message* uses the first. A transfer of a *selection* uses both.
@@ -900,6 +902,84 @@ fn a_queued_copy_lands_once_the_store_reconnects() {
         listed(fixture.inbox),
         vec![fixture.uid().to_string()],
         "a copy must never remove the row it came from"
+    );
+}
+
+/// ROADMAP item 182(c): the offline mail queue traces its own uid so a GUI
+/// scenario can assert "queued", "replayed" and "dropped" without reading
+/// server state.
+#[test]
+fn queuing_a_filing_offline_traces_the_uid() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+
+    let (transferred, logs) = capture(|| {
+        fixture.transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+    });
+
+    transferred.expect_ok();
+    assert!(
+        has(&logs, Level::TRACE, "message", "queued filing"),
+        "expected a queued-filing trace event, got {logs:?}"
+    );
+    assert!(
+        has(&logs, Level::TRACE, "uid", fixture.uid().as_str()),
+        "expected the queued uid as a field, got {logs:?}"
+    );
+}
+
+/// The reconnect walk's `replay_filing` traces the uid it actually sent, not
+/// only the one it queued: a test or a support report can tell the two
+/// events apart.
+#[test]
+fn a_queued_filing_landing_on_reconnect_traces_the_uid() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+    fixture.reconnect();
+
+    let (synced, logs) = capture(|| fixture.synchronize(fixture.inbox));
+
+    synced.expect_ok();
+    assert!(
+        has(&logs, Level::TRACE, "message", "replayed filing"),
+        "expected a replayed-filing trace event, got {logs:?}"
+    );
+    assert!(
+        has(&logs, Level::TRACE, "uid", fixture.uid().as_str()),
+        "expected the replayed uid as a field, got {logs:?}"
+    );
+}
+
+/// Another client can destroy the message between the offline queue and the
+/// reconnect walk. `replay_filing` then has nothing left to send: it clears
+/// the pending filing instead of retrying it forever, and traces that this
+/// uid's filing was dropped, not replayed.
+#[test]
+fn a_queued_filing_whose_message_is_gone_traces_dropped() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+    fixture.destroyed_elsewhere(fixture.uid());
+    fixture.reconnect();
+
+    let (_synced, logs) = capture(|| fixture.synchronize(fixture.inbox));
+
+    assert!(
+        has(&logs, Level::TRACE, "message", "dropped filing"),
+        "expected a dropped-filing trace event, got {logs:?}"
+    );
+    assert!(
+        has(&logs, Level::TRACE, "uid", fixture.uid().as_str()),
+        "expected the dropped uid as a field, got {logs:?}"
+    );
+    assert!(
+        !has(&logs, Level::TRACE, "message", "replayed filing"),
+        "a dropped filing must not also report as replayed, got {logs:?}"
     );
 }
 
