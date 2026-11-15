@@ -75,7 +75,7 @@ fuzz_target!(|data: &[u8]| {
         let _ = session.principals_availability_capability();
         let _ = session.webpush_vapid_capability();
 
-        let built_session = jmap_proto::session::Session::new(
+        let mut built_session = jmap_proto::session::Session::new(
             &session.username,
             &session.api_url,
             &session.download_url,
@@ -87,6 +87,15 @@ fuzz_target!(|data: &[u8]| {
         .with_primary_accounts(session.primary_accounts.clone())
         .with_event_source_url(&session.event_source_url)
         .with_extra(session.extra.clone());
+        for (cap, val) in &session.capabilities {
+            built_session = built_session.with_capability(cap, val.clone());
+        }
+        for (id, acc) in &session.accounts {
+            built_session = built_session.with_account(id.clone(), acc.clone());
+        }
+        for (cap, id) in &session.primary_accounts {
+            built_session = built_session.with_primary_account(cap, id.clone());
+        }
         let _ = built_session.primary_account(jmap_proto::session::CAPABILITY_CORE);
 
         for account in session.accounts.values() {
@@ -99,11 +108,14 @@ fuzz_target!(|data: &[u8]| {
             }
             let _ = account.submission_capability();
 
-            let built_account = jmap_proto::session::Account::new(&account.name)
+            let mut built_account = jmap_proto::session::Account::new(&account.name)
                 .is_personal(account.is_personal)
                 .is_read_only(account.is_read_only)
                 .with_capabilities(account.account_capabilities.clone())
                 .with_extra(account.extra.clone());
+            for (cap, val) in &account.account_capabilities {
+                built_account = built_account.with_capability(cap, val.clone());
+            }
             let _ = built_account.max_delayed_send();
         }
 
@@ -122,11 +134,14 @@ fuzz_target!(|data: &[u8]| {
         }
         let _ = account.submission_capability();
 
-        let built_account = jmap_proto::session::Account::new(&account.name)
+        let mut built_account = jmap_proto::session::Account::new(&account.name)
             .is_personal(account.is_personal)
             .is_read_only(account.is_read_only)
             .with_capabilities(account.account_capabilities.clone())
             .with_extra(account.extra.clone());
+        for (cap, val) in &account.account_capabilities {
+            built_account = built_account.with_capability(cap, val.clone());
+        }
         let _ = built_account.max_delayed_send();
 
         if let Ok(encoded) = serde_json::to_vec(&account) {
@@ -205,12 +220,18 @@ fuzz_target!(|data: &[u8]| {
     }
 
     if let Ok(vac) = serde_json::from_slice::<jmap_proto::mail::VacationResponseCapability>(data) {
+        let built =
+            jmap_proto::mail::VacationResponseCapability::new().with_extra(vac.extra.clone());
+        let _ = built.extra.len();
         if let Ok(enc) = serde_json::to_vec(&vac) {
             let _ = serde_json::from_slice::<jmap_proto::mail::VacationResponseCapability>(&enc);
         }
     }
 
     if let Ok(mdn) = serde_json::from_slice::<jmap_proto::mail::MDNCapability>(data) {
+        let built = jmap_proto::mail::MDNCapability::new()
+            .with_extra(serde_json::to_value(&mdn.extra).unwrap_or_default());
+        let _ = built.extra.len();
         if let Ok(enc) = serde_json::to_vec(&mdn) {
             let _ = serde_json::from_slice::<jmap_proto::mail::MDNCapability>(&enc);
         }
@@ -254,9 +275,30 @@ fuzz_target!(|data: &[u8]| {
         }
     }
 
+    if let Ok(cp) = serde_json::from_slice::<jmap_proto::calendars::CalendarPreferences>(data) {
+        let mut built = jmap_proto::calendars::CalendarPreferences::new();
+        if let Some(ref id) = cp.id {
+            built = built.with_id(id.clone());
+        }
+        if let Some(ref tz) = cp.time_zone {
+            built = built.with_time_zone(tz);
+        }
+        if let Some(ref fd) = cp.first_day_of_week {
+            built = built.with_first_day_of_week(fd);
+        }
+        built.extra = cp.extra.clone();
+        let _ = built.id;
+        if let Ok(enc) = serde_json::to_vec(&cp) {
+            let _ = serde_json::from_slice::<jmap_proto::calendars::CalendarPreferences>(&enc);
+        }
+    }
+
     if let Ok(cal_pref) =
         serde_json::from_slice::<jmap_proto::calendars::CalendarPreferencesCapability>(data)
     {
+        let built = jmap_proto::calendars::CalendarPreferencesCapability::new()
+            .with_extra(serde_json::to_value(&cal_pref.extra).unwrap_or_default());
+        let _ = built.extra.len();
         if let Ok(enc) = serde_json::to_vec(&cal_pref) {
             let _ = serde_json::from_slice::<jmap_proto::calendars::CalendarPreferencesCapability>(
                 &enc,
@@ -279,6 +321,14 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(pr_owner) =
         serde_json::from_slice::<jmap_proto::principals::PrincipalsOwnerCapability>(data)
     {
+        let built = jmap_proto::principals::PrincipalsOwnerCapability::new(
+            pr_owner.account_id_for_principal.clone(),
+            pr_owner.principal_id.clone(),
+        )
+        .with_account_id_for_principal(pr_owner.account_id_for_principal.clone())
+        .with_principal_id(pr_owner.principal_id.clone())
+        .with_extra(pr_owner.extra.clone());
+        let _ = built.principal_id;
         if let Ok(enc) = serde_json::to_vec(&pr_owner) {
             let _ =
                 serde_json::from_slice::<jmap_proto::principals::PrincipalsOwnerCapability>(&enc);
@@ -288,6 +338,12 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(pr_avail) =
         serde_json::from_slice::<jmap_proto::principals::PrincipalAvailabilityCapability>(data)
     {
+        let mut built = jmap_proto::principals::PrincipalAvailabilityCapability::new()
+            .with_extra(pr_avail.extra.clone());
+        if let Some(ref dur) = pr_avail.max_availability_duration {
+            built = built.with_max_availability_duration(dur);
+        }
+        let _ = built.max_availability_duration;
         if let Ok(enc) = serde_json::to_vec(&pr_avail) {
             let _ = serde_json::from_slice::<jmap_proto::principals::PrincipalAvailabilityCapability>(
                 &enc,
@@ -360,6 +416,9 @@ fuzz_target!(|data: &[u8]| {
     }
 
     if let Ok(sm) = serde_json::from_slice::<jmap_proto::mail::SmimeVerifyCapability>(data) {
+        let built = jmap_proto::mail::SmimeVerifyCapability::new()
+            .with_extra(serde_json::to_value(&sm.extra).unwrap_or_default());
+        let _ = built.extra.len();
         if let Ok(enc) = serde_json::to_vec(&sm) {
             let _ = serde_json::from_slice::<jmap_proto::mail::SmimeVerifyCapability>(&enc);
         }
@@ -380,8 +439,30 @@ fuzz_target!(|data: &[u8]| {
         }
     }
 
+    if let Ok(dt) = serde_json::from_slice::<jmap_proto::metadata::DataTypeMetadataInfo>(data) {
+        let mut built = jmap_proto::metadata::DataTypeMetadataInfo::new()
+            .with_namespaces(dt.namespaces.clone())
+            .supports_vendor_namespaces(dt.supports_vendor_namespaces)
+            .supports_private(dt.supports_private)
+            .with_extra(dt.extra.clone());
+        for ns in &dt.namespaces {
+            built = built.with_namespace(ns);
+        }
+        if let Some(depth) = dt.max_depth {
+            built = built.with_max_depth(depth);
+        }
+        let _ = built.max_depth;
+        if let Ok(enc) = serde_json::to_vec(&dt) {
+            let _ = serde_json::from_slice::<jmap_proto::metadata::DataTypeMetadataInfo>(&enc);
+        }
+    }
+
     if let Ok(meta) = serde_json::from_slice::<jmap_proto::metadata::MetadataCapability>(data) {
-        let built = jmap_proto::metadata::MetadataCapability::new().with_extra(meta.extra.clone());
+        let mut built =
+            jmap_proto::metadata::MetadataCapability::new().with_extra(meta.extra.clone());
+        for (name, info) in &meta.data_types {
+            built = built.with_data_type(name, info.clone());
+        }
         let _ = built.data_types.len();
         if let Ok(enc) = serde_json::to_vec(&meta) {
             let _ = serde_json::from_slice::<jmap_proto::metadata::MetadataCapability>(&enc);
@@ -389,6 +470,8 @@ fuzz_target!(|data: &[u8]| {
     }
 
     if let Ok(ms) = serde_json::from_slice::<jmap_proto::mail::MailShareCapability>(data) {
+        let built = jmap_proto::mail::MailShareCapability::new().with_extra(ms.extra.clone());
+        let _ = built.extra.len();
         if let Ok(enc) = serde_json::to_vec(&ms) {
             let _ = serde_json::from_slice::<jmap_proto::mail::MailShareCapability>(&enc);
         }
