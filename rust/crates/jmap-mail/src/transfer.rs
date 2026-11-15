@@ -102,7 +102,13 @@
 //! the server after the request of the second one. The message would then
 //! stay in the folder it only passed through. For the same reason the row
 //! that holds the first move must change with it, which is why `rechain`
-//! opens the folder that row is in.
+//! opens the folder that row is in, and writes the row to the summary
+//! database before it lets that folder go.
+//!
+//! A *copy* out of such a row joins nothing. It only adds a mailbox, and the
+//! queued move must still land, so the two requests are independent in any
+//! order. The row keeps the move it waits for, and the new destination row
+//! carries the copy alone.
 //!
 //! ## A filing that the server refuses for good
 //!
@@ -150,7 +156,8 @@ use eds_sys::{
     CamelFolderSummary, camel_folder_changed, camel_folder_get_folder_summary,
     camel_folder_get_full_name, camel_folder_get_parent_store, camel_folder_lock,
     camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_get,
-    camel_folder_summary_remove_uid, camel_folder_unlock, camel_message_info_clone,
+    camel_folder_summary_remove_uid, camel_folder_summary_save, camel_folder_summary_touch,
+    camel_folder_unlock, camel_message_info_clone, camel_message_info_set_dirty,
     camel_message_info_set_flags, camel_message_info_set_folder_flagged,
     camel_store_get_folder_sync,
 };
@@ -435,7 +442,10 @@ unsafe fn file_message(
 ///
 /// A row that already waits for an earlier queued move takes the other path
 /// ([`rechain`]), which joins the two moves instead of queueing a second
-/// request beside the first.
+/// request beside the first. Only a second *move* joins. A copy out of the
+/// same row asks for something the first filing does not give, so the row
+/// keeps the filing it waits for and only the new destination row carries
+/// the copy.
 ///
 /// # Safety
 ///
@@ -456,10 +466,22 @@ unsafe fn queue_filing(
     // `folder` is a live folder of this provider.
     if let Some(waiting) = unsafe { pending_filing(info.as_ptr()) }
         && unsafe { arrived_here(folder, &waiting) }
-        && let Some(origin) = waiting.out_of_mailbox()
     {
-        // SAFETY: the contract above.
-        return unsafe { rechain(folder, uid, origin, filing.into_mailbox()) };
+        // The message is not in this mailbox on the server yet. A copy out
+        // of it still only adds the new mailbox, so the two requests are
+        // independent and their order does not change the result. This row
+        // keeps the filing that brings the message here.
+        if filing.out_of_mailbox().is_none() {
+            tracing::trace!(
+                uid = uid.to_string_lossy().as_ref(),
+                "queued a copy beside a waiting filing"
+            );
+            return Filed::Queued(filing.clone());
+        }
+        if let Some(origin) = waiting.out_of_mailbox() {
+            // SAFETY: the contract above.
+            return unsafe { rechain(folder, uid, origin, filing.into_mailbox()) };
+        }
     }
     // SAFETY: `info` is a live row for as long as this function holds it.
     unsafe {
@@ -558,15 +580,15 @@ unsafe fn rewrite_origin_row(folder: *mut CamelFolder, uid: &CStr, origin: &Id, 
     let Some(opened) = opened else {
         return;
     };
-    // SAFETY: a live folder, thus a live summary or NULL. `Owned` releases
-    // the row's reference when it drops at the end of this function.
-    let Some(info) = (unsafe {
-        let summary = camel_folder_get_folder_summary(opened.as_ptr());
-        if summary.is_null() {
-            return;
-        }
-        Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr()))
-    }) else {
+    // SAFETY: a live folder, thus a live summary or NULL.
+    let summary = unsafe { camel_folder_get_folder_summary(opened.as_ptr()) };
+    if summary.is_null() {
+        return;
+    }
+    // SAFETY: a live summary, and a uid that outlives the call. `Owned`
+    // releases the row's reference when it drops at the end of this function.
+    let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
+    else {
         return;
     };
     // SAFETY: `info` is a live row for as long as this function holds it.
@@ -582,6 +604,19 @@ unsafe fn rewrite_origin_row(folder: *mut CamelFolder, uid: &CStr, origin: &Id, 
             set_pending_filing(info.as_ptr(), Some(joined.clone()));
             camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE);
         }
+    }
+    // Write the row to the database now. The filing itself is a column that
+    // no Camel accessor touches, and the one bit above is already set for a
+    // row that waits, so nothing else marks this row for a save. The folder
+    // is also open for this call alone, and Camel keeps only a weak
+    // reference to it, so it can go as soon as the reference below does.
+    // SAFETY: a live row, and the live summary that row belongs to.
+    unsafe {
+        camel_message_info_set_dirty(info.as_ptr(), GTRUE);
+        camel_folder_summary_touch(summary);
+        let mut save_error: *mut GError = ptr::null_mut();
+        camel_folder_summary_save(summary, &mut save_error);
+        g_clear_error(&mut save_error);
     }
 }
 
