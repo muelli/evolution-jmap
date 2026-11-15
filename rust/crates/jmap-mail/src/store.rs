@@ -957,16 +957,24 @@ impl JmapStore {
     /// message in the account, not in a folder. Thus the folder of a Camel uid
     /// adds no information. A message in two mailboxes is one message here,
     /// as it is on the server.
-    pub fn message_source(&self, uid: &Id) -> Result<Vec<u8>, StoreError> {
+    ///
+    /// `owner` is the folder's kept owner ([`crate::folder::JmapFolder::owner`]),
+    /// `None` for an ordinary folder of this store's own account. The caller
+    /// passes it the same way it does for [`JmapStore::messages`] (ROADMAP
+    /// item 179(d)): a message id, like a mailbox id, collides across
+    /// accounts, so a shared mailbox's message must be fetched from its own
+    /// account, not this store's.
+    pub fn message_source(&self, uid: &Id, owner: Option<&Id>) -> Result<Vec<u8>, StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(uid = uid.as_str(), "fetching message source");
         match retry_once_after(
-            || sync.message_source(uid),
+            || sync.message_source_as(&account, uid),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {

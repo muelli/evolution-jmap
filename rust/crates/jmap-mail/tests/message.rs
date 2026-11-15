@@ -52,6 +52,7 @@ use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_mail::cache::MessageCache;
 use jmap_mail::folder::folder_type;
 use jmap_mock::{EmailSeed, MockServer};
+use jmap_proto::Id;
 use jmap_proto::mail::role;
 
 /// The one message every test here opens. Named once so the assertions and the
@@ -584,4 +585,139 @@ fn an_opened_message_message_id_hashes_consistently() {
 
     drop(opened);
     unsafe { g_object_unref(folder.cast()) };
+}
+
+/// A shared mailbox's messages cache under the *owning* account, not the
+/// store's own, when the two accounts' message ids collide.
+///
+/// A JMAP email id is unique only within its own account (RFC 8621 section
+/// 2), so two accounts number their messages from the same first id, the
+/// same reason `tests/messages.rs`'s
+/// `a_shared_mailbox_lists_its_own_account_when_the_mailbox_ids_collide`
+/// gives for mailbox ids. Before this fix, every folder of the store, shared
+/// or not, cached under the one account directory `account_cache_dir`
+/// named from the store alone, so opening the colliding id in the shared
+/// folder served (or overwrote) the store's own cached entry for that id.
+#[test]
+fn a_shared_mailboxs_message_caches_under_its_owning_account() {
+    const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
+    const OWN_SUBJECT: &str = "Own message";
+    const OWN_BODY: &str = "In the user's own inbox.";
+    const SHARED_SUBJECT: &str = "Shared message";
+    const SHARED_BODY: &str = "In the shared inbox, a longer body than the own one.";
+
+    let server = MockServer::builder().start();
+    let shared_account_id = Id::new("agent-shared-owner");
+    let (own_uid, shared_uid) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+
+        let own = state
+            .account_mut(&server.account_id())
+            .expect("the mock's own account");
+        let own_mailbox_id = own.seed_mailbox("Inbox", None);
+        let own_uid = own.seed_email(EmailSeed::new(
+            own_mailbox_id,
+            ("Alice", "alice@example.com"),
+            OWN_SUBJECT,
+            OWN_BODY,
+            "2026-01-15T09:30:00Z",
+        ));
+
+        let sharer = state.add_account(shared_account_id.clone(), "agent-owner@example.test");
+        sharer.is_personal = false;
+        let shared_mailbox_id = sharer.seed_mailbox("Inbox", None);
+        let shared_uid = sharer.seed_email(EmailSeed::new(
+            shared_mailbox_id,
+            ("Bob", "bob@example.com"),
+            SHARED_SUBJECT,
+            SHARED_BODY,
+            "2026-01-15T10:30:00Z",
+        ));
+
+        (own_uid, shared_uid)
+    };
+    assert_eq!(
+        own_uid, shared_uid,
+        "the two accounts must number their messages from the same id"
+    );
+
+    let account = Account::open();
+    account.connect(sync_against(&server));
+    account.jmap().folders(CACHED).expect("listed");
+
+    let own_path = CString::new("Inbox").expect("a path with no NUL");
+    let shared_path =
+        CString::new("Shared/agent-owner@example.test/Inbox").expect("a path with no NUL");
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: a live store and NUL-terminated paths alive across the calls.
+    let own_folder = unsafe {
+        camel_store_get_folder_sync(
+            account.store,
+            own_path.as_ptr(),
+            CAMEL_STORE_FOLDER_NONE,
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+    assert!(!own_folder.is_null(), "the own inbox did not open");
+    // SAFETY: as above.
+    let shared_folder = unsafe {
+        camel_store_get_folder_sync(
+            account.store,
+            shared_path.as_ptr(),
+            CAMEL_STORE_FOLDER_NONE,
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+    assert!(!shared_folder.is_null(), "the shared inbox did not open");
+
+    let uid = CString::new(own_uid.as_str()).expect("a uid with no NUL");
+
+    let own_opened = Opened::of(own_folder, &uid);
+    let own_message = own_opened.expect_message();
+    let own_body = body_of(own_message);
+    assert!(
+        own_body.contains(OWN_BODY),
+        "the own inbox served the wrong message body: {own_body:?}"
+    );
+
+    let shared_opened = Opened::of(shared_folder, &uid);
+    let shared_message = shared_opened.expect_message();
+    let shared_body = body_of(shared_message);
+    assert!(
+        shared_body.contains(SHARED_BODY),
+        "the shared inbox served the wrong message body: {shared_body:?}"
+    );
+
+    // Each account's cache, read directly, holds only its own message.
+    let own_cache =
+        MessageCache::open(&account.cache_dir()).expect("the account's cache directory");
+    let own_cached = own_cache
+        .load(own_uid.as_str(), None)
+        .expect("the own message was not cached under the account");
+    assert!(
+        String::from_utf8_lossy(&own_cached).contains(OWN_BODY),
+        "the account's own cache entry is the shared message instead"
+    );
+
+    let shared_cache_dir = format!("{}/shared-{shared_account_id}", account.cache_dir());
+    let shared_cache =
+        MessageCache::open(&shared_cache_dir).expect("the shared owner's cache directory");
+    let shared_cached = shared_cache
+        .load(shared_uid.as_str(), None)
+        .expect("the shared message was not cached under its own account");
+    assert!(
+        String::from_utf8_lossy(&shared_cached).contains(SHARED_BODY),
+        "the shared owner's cache entry is the user's own message instead"
+    );
+
+    drop(own_opened);
+    drop(shared_opened);
+    // SAFETY: the one reference each open above took.
+    unsafe {
+        g_object_unref(own_folder.cast());
+        g_object_unref(shared_folder.cast());
+    }
 }

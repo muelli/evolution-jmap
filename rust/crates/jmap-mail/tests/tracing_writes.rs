@@ -167,7 +167,9 @@ fn message_source_and_keywords_trace_structured_fields() {
     let store = fixture.store();
 
     let (_, logs) = capture(|| {
-        let source = store.message_source(&message_uid).expect("message_source");
+        let source = store
+            .message_source(&message_uid, None)
+            .expect("message_source");
         assert!(!source.is_empty());
 
         let before = Keywords::default();

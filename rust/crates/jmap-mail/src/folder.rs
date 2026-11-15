@@ -98,7 +98,8 @@ pub struct JmapFolder {
     /// a path names one account, so the answer is correct here and ambiguous
     /// later.
     owner: Slot<Id>,
-    /// The downloaded messages of this account, on disk.
+    /// The downloaded messages of [`Self::owner`], or of this account when
+    /// `owner` is empty, on disk.
     ///
     /// [`new_folder`] fills it, because the cache needs the account cache
     /// directory, and that directory is known only when Camel has constructed
@@ -106,14 +107,15 @@ pub struct JmapFolder {
     /// the folder fetches each message that it opens (see [`crate::cache`]).
     ///
     /// This is not per-folder state. The entries are keyed by JMAP email id in
-    /// the *account* directory, so all folders of a message read one file.
+    /// the owning account's directory, so all folders of one such account
+    /// that show a message read one file.
     cache: Slot<MessageCache>,
     /// The not-yet-uploaded bytes of a message [`crate::append`] appended
-    /// while offline, for this account.
+    /// while offline, for [`Self::owner`].
     ///
     /// [`new_folder`] fills it the same way, and for the same reason, as
-    /// [`Self::cache`]: it lives in the account cache directory, not a
-    /// per-folder one.
+    /// [`Self::cache`]: it lives in the owning account's cache directory, not
+    /// a per-folder one.
     pending_append_cache: Slot<PendingAppendCache>,
 }
 
@@ -668,10 +670,10 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
         if let Some(owner) = mailbox.account_id.clone() {
             (*folder.cast::<JmapFolder>()).owner.init(owner);
         }
-        if let Some(cache) = account_cache(store) {
+        if let Some(cache) = account_cache(store, mailbox.account_id.as_ref()) {
             (*folder.cast::<JmapFolder>()).cache.init(cache);
         }
-        if let Some(cache) = account_pending_append_cache(store) {
+        if let Some(cache) = account_pending_append_cache(store, mailbox.account_id.as_ref()) {
             (*folder.cast::<JmapFolder>())
                 .pending_append_cache
                 .init(cache);
@@ -683,34 +685,49 @@ pub unsafe fn new_folder(store: *mut CamelStore, mailbox: &FolderInfo) -> *mut C
     folder
 }
 
-/// The message cache of the account that `store` is, or `None` if there is
-/// none. [`account_cache_dir`] names the directory.
+/// The message cache of the account that `store` is, or of `owner` when the
+/// mailbox belongs to another account that shares it. [`account_cache_dir`]
+/// names the directory.
 ///
 /// # Safety
 ///
 /// `store` must point at a live `CamelStore`, which is a `CamelService`.
-unsafe fn account_cache(store: *mut CamelStore) -> Option<MessageCache> {
+unsafe fn account_cache(store: *mut CamelStore, owner: Option<&Id>) -> Option<MessageCache> {
     // SAFETY: the contract above.
-    MessageCache::open(&unsafe { account_cache_dir(store) }?)
+    MessageCache::open(&unsafe { account_cache_dir(store, owner) }?)
 }
 
-/// The pending-append byte store of the account that `store` is, or `None` if
-/// there is none. Same directory as [`account_cache`]'s own, in a
-/// subdirectory of its own (see [`PendingAppendCache`]'s module docs for why
-/// the two need separate `CamelDataCache` instances).
+/// The pending-append byte store of the account that `store` is, or of
+/// `owner` when the mailbox belongs to another account that shares it. Same
+/// directory as [`account_cache`]'s own, in a subdirectory of its own (see
+/// [`PendingAppendCache`]'s module docs for why the two need separate
+/// `CamelDataCache` instances).
 ///
 /// # Safety
 ///
 /// `store` must point at a live `CamelStore`, which is a `CamelService`.
-unsafe fn account_pending_append_cache(store: *mut CamelStore) -> Option<PendingAppendCache> {
+unsafe fn account_pending_append_cache(
+    store: *mut CamelStore,
+    owner: Option<&Id>,
+) -> Option<PendingAppendCache> {
     // SAFETY: the contract above.
-    PendingAppendCache::open(&unsafe { account_cache_dir(store) }?)
+    PendingAppendCache::open(&unsafe { account_cache_dir(store, owner) }?)
 }
 
 /// The account cache directory Camel gives the *service*: the session cache
 /// directory with the account uid below it. Evolution's "empty cache" clears
 /// this directory, and Camel removes it when the user deletes the account.
 /// Data cached in a different directory stays after the account is deleted.
+///
+/// `owner` is the mailbox's owning account, when another account shares it
+/// with the one `store` otherwise addresses. A mailbox id, and so a message
+/// id, is unique only within its own account (RFC 8621 section 2), so two
+/// accounts cache different messages under the same key. `owner` moves such
+/// a mailbox's cache to a subdirectory of its own, keyed by the account id;
+/// `None` keeps the directory this function returned before `owner` existed,
+/// so an ordinary, non-shared folder's cache keeps its prior path. An
+/// `owner` this crate's own [`crate::cache::valid_key`] refuses gives no
+/// cache at all, rather than writing the owner id into a path unchecked.
 ///
 /// Returned owned, not borrowed: the string Camel gives back belongs to the
 /// service, not to this call, and [`account_cache`] and
@@ -720,7 +737,7 @@ unsafe fn account_pending_append_cache(store: *mut CamelStore) -> Option<Pending
 /// # Safety
 ///
 /// `store` must point at a live `CamelStore`, which is a `CamelService`.
-unsafe fn account_cache_dir(store: *mut CamelStore) -> Option<String> {
+unsafe fn account_cache_dir(store: *mut CamelStore, owner: Option<&Id>) -> Option<String> {
     // SAFETY: the contract above. The string belongs to the service, and this
     // code only reads it, into a copy this function owns.
     let directory = unsafe {
@@ -733,7 +750,14 @@ unsafe fn account_cache_dir(store: *mut CamelStore) -> Option<String> {
     // A filesystem path is bytes and is not always UTF-8. A lossy read can
     // point the cache at a different directory, so a non-UTF-8 path gives no
     // cache.
-    directory.to_str().ok().map(str::to_owned)
+    let directory = directory.to_str().ok()?;
+    match owner {
+        None => Some(directory.to_owned()),
+        Some(owner) if crate::cache::valid_key(owner.as_str()) => {
+            Some(format!("{directory}/shared-{owner}"))
+        }
+        Some(_) => None,
+    }
 }
 
 /// How Camel must treat this folder.
