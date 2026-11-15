@@ -1107,7 +1107,12 @@ fn a_transport_failure_traces_the_kept_filing() {
         "a transport failure must be reported, not swallowed"
     );
     assert!(
-        has(&logs, Level::TRACE, "message", "kept filing pending after a transport failure"),
+        has(
+            &logs,
+            Level::TRACE,
+            "message",
+            "kept filing pending after a transport failure"
+        ),
         "expected a kept-pending trace event, got {logs:?}"
     );
     assert!(
