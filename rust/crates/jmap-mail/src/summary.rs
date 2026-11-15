@@ -758,6 +758,13 @@ pub unsafe fn apply_delta(
 /// folder look like a change here, and that controls whether the folder emits
 /// `changed`.
 ///
+/// A row that waits for its own filing or its own upload stays, the rule
+/// [`remove_absent`] applies to a listing and for the same reason: the server
+/// does not have that change yet, so it calls the message absent from this
+/// mailbox on every delta until the change lands. The row is the only record
+/// of the change, so a removal here loses the move, the copy or the message
+/// of the user with no notice.
+///
 /// # Safety
 ///
 /// `summary` must be live and locked.
@@ -766,6 +773,13 @@ unsafe fn remove_row(summary: *mut CamelFolderSummary, uid: &str, changes: &mut 
     // SAFETY: the uid outlives both calls, and neither takes ownership of it.
     unsafe {
         if camel_folder_summary_check_uid(summary, key.as_ptr()) == GFALSE {
+            return;
+        }
+        // SAFETY: a live summary and a uid it holds a row for. `Owned`
+        // releases the row's reference at the end of the block.
+        if let Some(info) = Owned::from_raw(camel_folder_summary_get(summary, key.as_ptr()))
+            && (pending_append(info.as_ptr()).is_some() || pending_filing(info.as_ptr()).is_some())
+        {
             return;
         }
         camel_folder_summary_remove_uid(summary, key.as_ptr());
