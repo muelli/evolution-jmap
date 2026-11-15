@@ -427,18 +427,15 @@ mod tests {
 
         reap_in_background(child);
 
+        // A child is a zombie for the short moment between its own exit and
+        // the `wait` call of the reaper thread, so a single Z reading proves
+        // nothing. What the reaper must do is release the process-table slot:
+        // poll until /proc loses the entry.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-                return; // reaped: the process table slot is gone
-            };
-            assert!(
-                !stat.contains(") Z "),
-                "the child was left a zombie: {stat}"
-            );
+        while let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             assert!(
                 std::time::Instant::now() < deadline,
-                "the child was never reaped"
+                "the child was never reaped: {stat}"
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
