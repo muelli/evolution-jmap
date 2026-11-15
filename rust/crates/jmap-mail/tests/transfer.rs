@@ -525,6 +525,21 @@ impl Fixture {
             .connect(MailSync::new(client, self.server.account_id()));
     }
 
+    /// Through Camel's own wrapper, the way the refresh timer and a push
+    /// notification both reach a folder.
+    fn refresh(&self, folder: *mut CamelFolder) {
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: a live folder of ours, and an out-parameter that is
+        // writable and currently NULL.
+        unsafe {
+            assert_ne!(
+                camel_folder_refresh_info_sync(folder, ptr::null_mut(), &mut error),
+                GFALSE,
+                "the folder would not refresh"
+            );
+        }
+    }
+
     /// Through Camel's own wrapper, the way Evolution's generic reconnect
     /// flush calls it on every open folder.
     fn synchronize(&self, folder: *mut CamelFolder) -> Synchronised {
@@ -1598,6 +1613,62 @@ fn a_copy_out_of_a_queued_move_lands_in_both_mailboxes() {
     assert!(
         !mailboxes.contains_key(&fixture.inbox_id),
         "the move must still take the message out of the inbox, got {mailboxes:?}"
+    );
+}
+
+/// A delta must not take away the row that a queued filing lives on. The
+/// server does not have that filing yet, so every delta until it lands says
+/// the mailbox does not hold the message. The row is the only record of the
+/// filing, so a removal here loses the move or the copy of the user, with no
+/// notice at all.
+///
+/// `apply_listing` already keeps such a row. `apply_delta` did not, and the
+/// delta path is the one a push or a refresh timer takes, so it can arrive
+/// between the moment the row is queued and the walk that sends it. That
+/// made `a_copy_out_of_a_queued_move_lands_in_both_mailboxes` above fail
+/// about one run in three: the move landed, which moved the state of the
+/// server, and the next delta then took the queued copy away.
+#[test]
+fn a_delta_keeps_the_row_a_queued_filing_lives_on() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    // The archive needs a state of its own, or the refresh below lists the
+    // mailbox instead of asking for a delta.
+    fixture.refresh(fixture.archive);
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+    fixture
+        .transfer_straight(projects, fixture.archive, &[fixture.uid()], false)
+        .expect_ok();
+
+    fixture.reconnect();
+    // The move lands first. The server then holds the message in Projects
+    // alone, so the delta below tells the archive that the message is not
+    // in it.
+    fixture.synchronize(fixture.inbox).expect_ok();
+    fixture.refresh(fixture.archive);
+
+    assert!(
+        subject_in(fixture.archive, fixture.uid()).is_some(),
+        "the delta took away the row that the queued copy lives on"
+    );
+    assert_eq!(
+        filing_of(fixture.archive, fixture.uid()),
+        Some(Filing::copied_into(fixture.archive_id.clone())),
+        "the delta took the queued copy off the row it lives on"
+    );
+
+    fixture.synchronize(fixture.archive).expect_ok();
+    let mailboxes = fixture.mailboxes_on_server(fixture.uid());
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    assert!(
+        mailboxes.contains_key(&fixture.archive_id),
+        "the copy never reached the server, got {mailboxes:?}"
     );
 }
 
