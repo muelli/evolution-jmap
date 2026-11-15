@@ -311,7 +311,29 @@ fn fuzz_ical_roundtrip_extended_helpers_never_panic() {
         let _ = jmap_ical::names_time_zone(text);
         let _ = jmap_ical::free_busy_type(text);
 
+        let date = jmap_proto::state::UtcDate::new(*text);
+        let period = jmap_proto::principals::BusyPeriod::new(date.clone(), date.clone(), *text);
+        let _ = jmap_ical::busy_periods_to_vfreebusy(text, &date, &date, &[period]);
+
+        let true_val = serde_json::Value::Bool(true);
+        let false_val = serde_json::Value::Bool(false);
+        let str_val = serde_json::Value::String(text.to_string());
+        let _ = jmap_ical::maps_keyword(text, &true_val);
+        let _ = jmap_ical::maps_keyword(text, &false_val);
+        let _ = jmap_ical::maps_keyword(text, &str_val);
+
         if let Ok(event1) = ical_to_event(text) {
+            let _ = jmap_ical::scheduling_ical(&event1, "REQUEST", None);
+            let _ = jmap_ical::scheduling_ical(&event1, "REPLY", None);
+            let _ = jmap_ical::scheduling_ical(&event1, "CANCEL", None);
+            let _ = jmap_ical::scheduling_ical(&event1, text, None);
+            if let Some(ref overrides) = event1.recurrence_overrides {
+                for recurrence_id in overrides.keys() {
+                    let _ = jmap_ical::scheduling_ical(&event1, "REQUEST", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event1, "REPLY", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event1, "CANCEL", Some(recurrence_id));
+                }
+            }
             let _ = jmap_ical::maps_alerts(&event1);
             let _ = jmap_ical::maps_time_zone(&event1);
 
