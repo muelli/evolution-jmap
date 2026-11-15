@@ -354,6 +354,14 @@ fn hostile_bytes_do_not_panic_expanded_proto_parsers() {
         {
             let _ = serde_json::to_vec(&cal_pref);
         }
+        if let Ok(cp) = serde_json::from_slice::<jmap_proto::calendars::CalendarPreferences>(input)
+        {
+            let _ = serde_json::to_vec(&cp);
+        }
+        if let Ok(dt) = serde_json::from_slice::<jmap_proto::metadata::DataTypeMetadataInfo>(input)
+        {
+            let _ = serde_json::to_vec(&dt);
+        }
         if let Ok(pr) =
             serde_json::from_slice::<jmap_proto::principals::PrincipalsCapability>(input)
         {
@@ -572,21 +580,141 @@ fn session_all_capabilities_and_builders_smoke() {
         serde_json::from_slice(&fn_json).expect("FileNodeCapability deserializes");
     assert_eq!(fn_deser.max_size_file_node_name, Some(255));
 
+    let dt_info = jmap_proto::metadata::DataTypeMetadataInfo::new()
+        .with_namespaces(["/shared"])
+        .with_namespace("/private")
+        .supports_vendor_namespaces(true)
+        .supports_private(true)
+        .with_max_depth(8)
+        .with_extra(BTreeMap::from([(
+            "customMeta".into(),
+            serde_json::json!(1),
+        )]));
+    assert_eq!(dt_info.namespaces.len(), 2);
+    assert_eq!(dt_info.max_depth, Some(8));
+    assert!(dt_info.supports_vendor_namespaces);
+    assert!(dt_info.supports_private);
+    let dt_json = serde_json::to_vec(&dt_info).expect("DataTypeMetadataInfo serializes");
+    let dt_deser: jmap_proto::metadata::DataTypeMetadataInfo =
+        serde_json::from_slice(&dt_json).expect("DataTypeMetadataInfo deserializes");
+    assert_eq!(dt_deser.namespaces.len(), 2);
+    assert_eq!(dt_deser.max_depth, Some(8));
+
     let meta_cap = jmap_proto::metadata::MetadataCapability::new()
-        .with_data_type(
-            "Mailbox",
-            jmap_proto::metadata::DataTypeMetadataInfo::new()
-                .with_namespaces(["/shared", "/private"])
-                .supports_vendor_namespaces(true)
-                .supports_private(true)
-                .with_max_depth(8),
-        )
+        .with_data_type("Mailbox", dt_info.clone())
         .with_extra(BTreeMap::new());
     assert_eq!(meta_cap.data_types.len(), 1);
     let meta_json = serde_json::to_vec(&meta_cap).expect("MetadataCapability serializes");
     let meta_deser: jmap_proto::metadata::MetadataCapability =
         serde_json::from_slice(&meta_json).expect("MetadataCapability deserializes");
     assert!(meta_deser.data_types.contains_key("Mailbox"));
+
+    let mut cal_pref = jmap_proto::calendars::CalendarPreferences::new()
+        .with_id(jmap_proto::id::Id::from("singleton"))
+        .with_time_zone("Europe/Berlin")
+        .with_first_day_of_week("monday");
+    cal_pref.extra = BTreeMap::from([("extraPref".into(), serde_json::json!(true))]);
+    assert_eq!(
+        cal_pref.id.as_ref().map(|id| id.as_str()),
+        Some("singleton")
+    );
+    assert_eq!(cal_pref.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(cal_pref.first_day_of_week.as_deref(), Some("monday"));
+    let cal_pref_json = serde_json::to_vec(&cal_pref).expect("CalendarPreferences serializes");
+    let cal_pref_deser: jmap_proto::calendars::CalendarPreferences =
+        serde_json::from_slice(&cal_pref_json).expect("CalendarPreferences deserializes");
+    assert_eq!(cal_pref_deser.time_zone.as_deref(), Some("Europe/Berlin"));
+
+    let cal_pref_cap = jmap_proto::calendars::CalendarPreferencesCapability::new()
+        .with_extra(serde_json::json!({"vendorPrefCap": true}));
+    assert!(cal_pref_cap.extra.contains_key("vendorPrefCap"));
+    let cal_pref_cap_json =
+        serde_json::to_vec(&cal_pref_cap).expect("CalendarPreferencesCapability serializes");
+    let cal_pref_cap_deser: jmap_proto::calendars::CalendarPreferencesCapability =
+        serde_json::from_slice(&cal_pref_cap_json)
+            .expect("CalendarPreferencesCapability deserializes");
+    assert!(cal_pref_cap_deser.extra.contains_key("vendorPrefCap"));
+
+    let vac_cap =
+        jmap_proto::mail::VacationResponseCapability::new().with_extra(BTreeMap::from([(
+            "vacationNotice".into(),
+            serde_json::json!(true),
+        )]));
+    assert!(vac_cap.extra.contains_key("vacationNotice"));
+    let vac_json = serde_json::to_vec(&vac_cap).expect("VacationResponseCapability serializes");
+    let vac_deser: jmap_proto::mail::VacationResponseCapability =
+        serde_json::from_slice(&vac_json).expect("VacationResponseCapability deserializes");
+    assert!(vac_deser.extra.contains_key("vacationNotice"));
+
+    let mdn_cap =
+        jmap_proto::mail::MDNCapability::new().with_extra(serde_json::json!({"mdnSupport": true}));
+    assert!(mdn_cap.extra.contains_key("mdnSupport"));
+    let mdn_json = serde_json::to_vec(&mdn_cap).expect("MDNCapability serializes");
+    let mdn_deser: jmap_proto::mail::MDNCapability =
+        serde_json::from_slice(&mdn_json).expect("MDNCapability deserializes");
+    assert!(mdn_deser.extra.contains_key("mdnSupport"));
+
+    let pr_owner_cap = jmap_proto::principals::PrincipalsOwnerCapability::new("acc-1", "p123")
+        .with_account_id_for_principal("acc-1")
+        .with_principal_id("p123")
+        .with_extra(BTreeMap::from([(
+            "ownerNote".into(),
+            serde_json::json!("test"),
+        )]));
+    assert_eq!(pr_owner_cap.account_id_for_principal.as_str(), "acc-1");
+    assert_eq!(pr_owner_cap.principal_id.as_str(), "p123");
+    let pr_owner_json =
+        serde_json::to_vec(&pr_owner_cap).expect("PrincipalsOwnerCapability serializes");
+    let pr_owner_deser: jmap_proto::principals::PrincipalsOwnerCapability =
+        serde_json::from_slice(&pr_owner_json).expect("PrincipalsOwnerCapability deserializes");
+    assert_eq!(pr_owner_deser.principal_id.as_str(), "p123");
+
+    let pr_avail_cap = jmap_proto::principals::PrincipalAvailabilityCapability::new()
+        .with_max_availability_duration("P30D")
+        .with_extra(BTreeMap::new());
+    assert_eq!(
+        pr_avail_cap.max_availability_duration.as_deref(),
+        Some("P30D")
+    );
+    let pr_avail_json =
+        serde_json::to_vec(&pr_avail_cap).expect("PrincipalAvailabilityCapability serializes");
+    let pr_avail_deser: jmap_proto::principals::PrincipalAvailabilityCapability =
+        serde_json::from_slice(&pr_avail_json)
+            .expect("PrincipalAvailabilityCapability deserializes");
+    assert_eq!(
+        pr_avail_deser.max_availability_duration.as_deref(),
+        Some("P30D")
+    );
+
+    let quota_cap = jmap_proto::quota::QuotaCapability::new().with_extra(BTreeMap::from([(
+        "warnPercent".into(),
+        serde_json::json!(90),
+    )]));
+    assert!(quota_cap.extra.contains_key("warnPercent"));
+    let quota_json = serde_json::to_vec(&quota_cap).expect("QuotaCapability serializes");
+    let quota_deser: jmap_proto::quota::QuotaCapability =
+        serde_json::from_slice(&quota_json).expect("QuotaCapability deserializes");
+    assert!(quota_deser.extra.contains_key("warnPercent"));
+
+    let smime_cap = jmap_proto::mail::SmimeVerifyCapability::new()
+        .with_extra(serde_json::json!({"smimeSupport": true}));
+    assert!(smime_cap.extra.contains_key("smimeSupport"));
+    let smime_json = serde_json::to_vec(&smime_cap).expect("SmimeVerifyCapability serializes");
+    let smime_deser: jmap_proto::mail::SmimeVerifyCapability =
+        serde_json::from_slice(&smime_json).expect("SmimeVerifyCapability deserializes");
+    assert!(smime_deser.extra.contains_key("smimeSupport"));
+
+    let mail_share_cap =
+        jmap_proto::mail::MailShareCapability::new().with_extra(BTreeMap::from([(
+            "sharingAllowed".into(),
+            serde_json::json!(true),
+        )]));
+    assert!(mail_share_cap.extra.contains_key("sharingAllowed"));
+    let mail_share_json =
+        serde_json::to_vec(&mail_share_cap).expect("MailShareCapability serializes");
+    let mail_share_deser: jmap_proto::mail::MailShareCapability =
+        serde_json::from_slice(&mail_share_json).expect("MailShareCapability deserializes");
+    assert!(mail_share_deser.extra.contains_key("sharingAllowed"));
 
     let vapid_cap = jmap_proto::push::WebPushVapidCapability::new("BEl62iUYgUivxIkv")
         .with_application_server_key("BEl62iUYgUivxIkvKey2")
@@ -619,6 +747,7 @@ fn session_all_capabilities_and_builders_smoke() {
             CAPABILITY_PRINCIPALS,
             serde_json::to_value(&pr_cap).unwrap(),
         )
+        .with_capability(CAPABILITY_QUOTA, serde_json::to_value(&quota_cap).unwrap())
         .with_extra(BTreeMap::from([(
             "customAcc".into(),
             serde_json::json!("val"),
@@ -628,6 +757,7 @@ fn session_all_capabilities_and_builders_smoke() {
     assert!(account.has_capability(CAPABILITY_CORE));
     assert!(account.has_capability(CAPABILITY_MAIL));
     assert!(account.has_capability(CAPABILITY_SUBMISSION));
+    assert!(account.has_capability(CAPABILITY_QUOTA));
     assert_eq!(account.max_delayed_send(), Some(86400));
     assert!(account.submission_capability().is_some());
 
@@ -645,6 +775,11 @@ fn session_all_capabilities_and_builders_smoke() {
         serde_json::to_value(&sub_cap).unwrap(),
     )
     .with_capability(
+        CAPABILITY_VACATION_RESPONSE,
+        serde_json::to_value(&vac_cap).unwrap(),
+    )
+    .with_capability(CAPABILITY_MDN, serde_json::to_value(&mdn_cap).unwrap())
+    .with_capability(
         CAPABILITY_CONTACTS,
         serde_json::to_value(&contacts_cap).unwrap(),
     )
@@ -653,18 +788,39 @@ fn session_all_capabilities_and_builders_smoke() {
         serde_json::to_value(&cal_cap).unwrap(),
     )
     .with_capability(
+        CAPABILITY_CALENDAR_PREFERENCES,
+        serde_json::to_value(&cal_pref_cap).unwrap(),
+    )
+    .with_capability(
         CAPABILITY_PRINCIPALS,
         serde_json::to_value(&pr_cap).unwrap(),
     )
+    .with_capability(
+        CAPABILITY_PRINCIPALS_OWNER,
+        serde_json::to_value(&pr_owner_cap).unwrap(),
+    )
+    .with_capability(
+        CAPABILITY_PRINCIPALS_AVAILABILITY,
+        serde_json::to_value(&pr_avail_cap).unwrap(),
+    )
     .with_capability(CAPABILITY_WEBSOCKET, serde_json::to_value(&ws_cap).unwrap())
+    .with_capability(CAPABILITY_QUOTA, serde_json::to_value(&quota_cap).unwrap())
     .with_capability(CAPABILITY_REFPLUS, serde_json::to_value(&rp_cap).unwrap())
     .with_capability(CAPABILITY_BLOB, serde_json::to_value(&blob_cap).unwrap())
     .with_capability(CAPABILITY_TASKS, serde_json::to_value(&tasks_cap).unwrap())
     .with_capability(CAPABILITY_SIEVE, serde_json::to_value(&sieve_cap).unwrap())
+    .with_capability(
+        CAPABILITY_SMIME_VERIFY,
+        serde_json::to_value(&smime_cap).unwrap(),
+    )
     .with_capability(CAPABILITY_FILENODE, serde_json::to_value(&fn_cap).unwrap())
     .with_capability(
         CAPABILITY_METADATA,
         serde_json::to_value(&meta_cap).unwrap(),
+    )
+    .with_capability(
+        CAPABILITY_MAIL_SHARE,
+        serde_json::to_value(&mail_share_cap).unwrap(),
     )
     .with_capability(
         CAPABILITY_WEBPUSH_VAPID,
@@ -696,16 +852,24 @@ fn session_all_capabilities_and_builders_smoke() {
     assert!(session.core_capability().is_some());
     assert!(session.mail_capability().is_some());
     assert!(session.submission_capability().is_some());
+    assert!(session.vacation_response_capability().is_some());
+    assert!(session.mdn_capability().is_some());
     assert!(session.contacts_capability().is_some());
     assert!(session.calendars_capability().is_some());
+    assert!(session.calendar_preferences_capability().is_some());
     assert!(session.principals_capability().is_some());
+    assert!(session.principals_owner_capability().is_some());
+    assert!(session.principals_availability_capability().is_some());
     assert!(session.websocket_capability().is_some());
+    assert!(session.quota_capability().is_some());
     assert!(session.blob_capability().is_some());
     assert!(session.tasks_capability().is_some());
     assert!(session.sieve_capability().is_some());
+    assert!(session.smime_verify_capability().is_some());
     assert!(session.filenode_capability().is_some());
     assert!(session.refplus_capability().is_some());
     assert!(session.metadata_capability().is_some());
+    assert!(session.mail_share_capability().is_some());
     assert!(session.webpush_vapid_capability().is_some());
 
     let session_json = serde_json::to_vec(&session).expect("Session serializes");
