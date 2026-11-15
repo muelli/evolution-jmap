@@ -1222,6 +1222,7 @@ mod tests {
     /// skips without one.
     #[test]
     fn the_rule_dialog_lets_enter_confirm_it() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -1262,6 +1263,7 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn the_rule_dialog_has_a_hig_content_margin() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -1292,6 +1294,7 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn the_rule_dialog_status_label_wraps() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -1339,6 +1342,7 @@ mod tests {
     /// rest of this dialog uses. Needs a display; skips without one.
     #[test]
     fn the_condition_and_action_rows_use_the_dialogs_spacing() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -1380,6 +1384,7 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn the_condition_and_action_rows_scroll_instead_of_growing_the_dialog() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -1447,6 +1452,7 @@ mod tests {
     /// one.
     #[test]
     fn the_condition_and_action_row_widgets_have_accessible_names() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");

@@ -1610,6 +1610,7 @@ mod tests {
         /// Needs a display; skips without one.
         #[test]
         fn destroying_the_composer_during_the_custom_time_dialog_stops_the_action() {
+            let _gtk_test_guard = crate::gtk_test_lock::lock();
             if !display() {
                 eprintln!("skipped: no display for GTK");
                 return;
@@ -1654,6 +1655,7 @@ mod tests {
         /// Needs a display; skips without one.
         #[test]
         fn the_custom_time_dialog_lets_enter_confirm_it() {
+            let _gtk_test_guard = crate::gtk_test_lock::lock();
             if !display() {
                 eprintln!("skipped: no display for GTK");
                 return;
@@ -1691,6 +1693,7 @@ mod tests {
         /// a display; skips without one.
         #[test]
         fn the_custom_time_dialog_has_a_hig_content_margin() {
+            let _gtk_test_guard = crate::gtk_test_lock::lock();
             if !display() {
                 eprintln!("skipped: no display for GTK");
                 return;
@@ -1716,6 +1719,7 @@ mod tests {
         /// accessible name instead. Needs a display; skips without one.
         #[test]
         fn the_custom_time_field_has_an_accessible_name() {
+            let _gtk_test_guard = crate::gtk_test_lock::lock();
             if !display() {
                 eprintln!("skipped: no display for GTK");
                 return;
@@ -1742,6 +1746,7 @@ mod tests {
         /// a display; skips without one.
         #[test]
         fn destroying_the_composer_during_a_refusal_keeps_the_dialog_until_its_destroy() {
+            let _gtk_test_guard = crate::gtk_test_lock::lock();
             if !display() {
                 eprintln!("skipped: no display for GTK");
                 return;
@@ -1767,6 +1772,7 @@ mod tests {
         /// a display; skips without one.
         #[test]
         fn the_refusal_dialog_lets_enter_confirm_it() {
+            let _gtk_test_guard = crate::gtk_test_lock::lock();
             if !display() {
                 eprintln!("skipped: no display for GTK");
                 return;

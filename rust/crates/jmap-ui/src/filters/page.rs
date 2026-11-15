@@ -3807,6 +3807,7 @@ mod tests {
     /// clicking OK. Needs a display; skips without one.
     #[test]
     fn the_name_dialog_lets_enter_confirm_it() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -3846,6 +3847,7 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn the_script_view_gets_the_sieve_language() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -3873,6 +3875,7 @@ mod tests {
     /// skips without one.
     #[test]
     fn the_script_view_lets_tab_move_focus_instead_of_indenting() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -3966,6 +3969,7 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn completion_opens_navigates_and_accepts_a_candidate() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4081,6 +4085,7 @@ mod tests {
     /// fires, with no Ctrl+Space needed. Needs a display; skips without one.
     #[test]
     fn typing_two_characters_of_a_match_opens_completion_after_the_debounce() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4130,6 +4135,7 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn typing_one_character_does_not_auto_open_completion() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4174,6 +4180,7 @@ mod tests {
     /// without one.
     #[test]
     fn completion_open_close_and_accept_trace_their_state() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4223,6 +4230,7 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn the_name_dialog_has_a_hig_content_margin() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4321,6 +4329,7 @@ mod tests {
     /// without one.
     #[test]
     fn destroying_the_page_during_the_name_dialog_keeps_it_until_the_action_ends() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4362,6 +4371,7 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn a_name_column_does_not_grow_with_its_content() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4419,6 +4429,7 @@ mod tests {
             ) -> *mut GList;
         }
 
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4465,6 +4476,7 @@ mod tests {
     /// one.
     #[test]
     fn the_script_and_rule_lists_have_accessible_names() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4508,6 +4520,7 @@ mod tests {
     /// would otherwise produce. Needs a display; skips without one.
     #[test]
     fn offline_shows_an_offline_message_not_a_generic_load_failure() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4562,6 +4575,7 @@ mod tests {
     /// of the plain offline message. Needs a display; skips without one.
     #[test]
     fn a_cold_start_cache_hit_shows_the_cached_script_read_only() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4620,6 +4634,7 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4730,6 +4745,7 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4826,6 +4842,7 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -4925,6 +4942,7 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -5044,6 +5062,7 @@ mod tests {
     /// [`NO_SCRIPT_SELECTED`]. Needs a display; skips without one.
     #[test]
     fn external_edit_with_no_selection_refuses() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -5080,6 +5099,7 @@ mod tests {
     /// skips without one.
     #[test]
     fn external_edit_with_no_configured_command_shows_a_status_note() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -5128,6 +5148,7 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -5252,6 +5273,7 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -5337,6 +5359,7 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -5429,6 +5452,7 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -5587,6 +5611,7 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn a_page_with_no_link_ignores_a_shell_online_change() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
