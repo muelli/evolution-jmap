@@ -674,7 +674,14 @@ impl Client {
 
         let mut seen = std::collections::HashSet::new();
         for resp in resp_calls {
-            if !seen.insert(resp.call_id.as_str()) {
+            // Cyrus quirk (CYRUS-RFC-FINDINGS.md Finding 22): for EmailSubmission/set with
+            // onSuccessUpdateEmail or onSuccessDestroyEmail, Cyrus emits an extraneous Email/set
+            // response with the same call_id as EmailSubmission/set.
+            let is_cyrus_submission_subreq = resp.name == "Email/set"
+                && req_calls
+                    .iter()
+                    .any(|req| req.call_id == resp.call_id && req.name == "EmailSubmission/set");
+            if !is_cyrus_submission_subreq && !seen.insert(resp.call_id.as_str()) {
                 return Err(Error::Protocol(format!(
                     "duplicate method response call id {}",
                     resp.call_id
@@ -1045,8 +1052,8 @@ impl Client {
             .unwrap_or_else(PoisonError::into_inner)
         {
             let is_same_origin = crate::url::same_origin(&self.session_url, url);
-            let is_secure = crate::url::on_tls(url) || crate::url::is_loopback(url);
-            if is_same_origin && is_secure {
+            let may_carry = crate::url::may_carry_credentials(&self.session_url, url);
+            if is_same_origin && may_carry {
                 headers.push(("Authorization".to_owned(), authorization.clone()));
             }
         }
@@ -2044,5 +2051,79 @@ mod tests {
         assert_eq!(requests_count.load(Ordering::SeqCst), 1);
         assert!(resp_empty.list.is_empty());
         assert_eq!(resp_empty.state, JmapState::new("state_active"));
+    }
+
+    #[test]
+    fn plain_http_configured_origin_receives_authorization_header() {
+        let origin = "http://[2001:db8::1]:8080";
+        let observed_auth = Arc::new(Mutex::new(Vec::new()));
+        let observed_clone = Arc::clone(&observed_auth);
+
+        let transport = MockFnTransport(move |req: crate::transport::HttpRequest<'_>| {
+            let auth = req
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .map(|(_, value)| value.clone());
+            observed_clone
+                .lock()
+                .unwrap()
+                .push((req.url.to_string(), auth));
+
+            let body = serde_json::to_vec(&serde_json::json!({
+                "username": "user@example.test",
+                "apiUrl": "http://[2001:db8::1]:8080/jmap/",
+                "downloadUrl": "http://[2001:db8::1]:8080/jmap/download/{accountId}/{blobId}/{name}?accept={type}",
+                "uploadUrl": "http://[2001:db8::1]:8080/jmap/upload/{accountId}/",
+                "eventSourceUrl": "http://[2001:db8::1]:8080/jmap/eventsource",
+                "state": "0",
+                "accounts": {
+                    "acc1": {
+                        "name": "user@example.test",
+                        "isPersonal": true,
+                        "isReadOnly": false,
+                        "accountCapabilities": {
+                            "urn:ietf:params:jmap:core": {}
+                        }
+                    }
+                },
+                "primaryAccounts": {
+                    "urn:ietf:params:jmap:core": "acc1"
+                },
+                "capabilities": {
+                    "urn:ietf:params:jmap:core": {
+                        "maxSizeUpload": 50000000,
+                        "maxConcurrentUpload": 4,
+                        "maxSizeRequest": 10000000,
+                        "maxConcurrentRequests": 4,
+                        "maxCallsInRequest": 16,
+                        "maxObjectsInGet": 500,
+                        "maxObjectsInSet": 500,
+                        "collationAlgorithms": ["i;ascii-casemap"]
+                    }
+                }
+            }))
+            .unwrap();
+
+            Ok(crate::transport::HttpResponse {
+                status: 200,
+                content_type: Some("application/json".into()),
+                body,
+                final_url: req.url.to_string(),
+            })
+        });
+
+        let client = Client::builder()
+            .transport(transport)
+            .connect(origin, Credentials::basic("user@example.test", "secret"))
+            .expect("plain-http configured origin should connect");
+        assert!(!client.is_anonymous());
+
+        let calls = observed_auth.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0].1.is_some(),
+            "Authorization header must be sent to the configured plain-http origin"
+        );
     }
 }

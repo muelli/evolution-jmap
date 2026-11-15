@@ -795,6 +795,7 @@ pub(crate) unsafe fn replay_filing(
             // no way back onto it.
             // SAFETY: `info` is still the live row.
             unsafe { camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE) };
+            tracing::trace!(uid = text, "kept filing pending after a transport failure");
             Replay {
                 remove: false,
                 failure: Some(other),

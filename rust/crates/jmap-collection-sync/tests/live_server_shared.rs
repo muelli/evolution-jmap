@@ -32,6 +32,38 @@ use jmap_test_support::{
 };
 use serde_json::json;
 
+fn resolve_recipient_principal_id(
+    owner: &jmap_client::Client,
+    owner_account_id: &jmap_proto::Id,
+    recipient: &jmap_client::Client,
+    recipient_address: &str,
+) -> jmap_proto::Id {
+    owner
+        .principal_query(
+            owner_account_id,
+            PrincipalQueryFilter::email(recipient_address),
+        )
+        .ok()
+        .and_then(|ids| ids.into_iter().next())
+        .or_else(|| {
+            // Cyrus default-domain accounts have `email == ""` (CYRUS-RFC-FINDINGS.md Finding 3)
+            // and `Principal/query` may be disabled by server policy or omit unshared accounts.
+            // Resolve the recipient's principal ID from the recipient's own session capability
+            // (`currentUserPrincipalId` in RFC 9670 Section 2).
+            eprintln!(
+                "Principal/query by email did not resolve recipient; falling back to recipient's own currentUserPrincipalId (CYRUS-RFC-FINDINGS.md Finding 3)"
+            );
+            let recipient_account_id = recipient.primary_account(CAPABILITY_PRINCIPALS).ok()?;
+            recipient
+                .current_user_principal_id(&recipient_account_id)
+                .ok()
+                .flatten()
+        })
+        .expect(
+            "the owner cannot resolve the recipient's principal id by email or currentUserPrincipalId",
+        )
+}
+
 /// Shares a writable book and a read-only calendar, then withdraws both grants.
 ///
 /// On Stalwart, new shares have `isSubscribed: false`, but both are children.
@@ -68,15 +100,12 @@ fn a_shared_collection_is_a_child_of_the_recipients_collection_until_unshared() 
         .primary_account(CAPABILITY_CALENDARS)
         .expect("the write-test account needs the calendars capability");
 
-    let recipient_principal_id = owner
-        .principal_query(
-            &owner_contacts_account,
-            PrincipalQueryFilter::email(&recipient_address),
-        )
-        .expect("Principal/query failed against the real server")
-        .into_iter()
-        .next()
-        .expect("the owner cannot resolve the recipient's principal id by email");
+    let recipient_principal_id = resolve_recipient_principal_id(
+        &owner,
+        &owner_contacts_account,
+        &recipient,
+        &recipient_address,
+    );
 
     let suffix = unique_suffix();
 
@@ -278,15 +307,12 @@ fn a_shared_collection_is_deleted_in_the_owners_account_only_with_may_delete() {
     let owner_calendars_account = owner
         .primary_account(CAPABILITY_CALENDARS)
         .expect("the write-test account needs the calendars capability");
-    let recipient_principal_id = owner
-        .principal_query(
-            &owner_contacts_account,
-            PrincipalQueryFilter::email(&recipient_address),
-        )
-        .expect("Principal/query failed against the real server")
-        .into_iter()
-        .next()
-        .expect("the owner cannot resolve the recipient's principal id by email");
+    let recipient_principal_id = resolve_recipient_principal_id(
+        &owner,
+        &owner_contacts_account,
+        &recipient,
+        &recipient_address,
+    );
 
     let suffix = unique_suffix();
     let book_id = owner

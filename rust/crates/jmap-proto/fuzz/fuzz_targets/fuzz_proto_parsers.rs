@@ -243,11 +243,128 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(blob_lk_resp) = serde_json::from_slice::<jmap_proto::blob::BlobLookupResponse>(data) {
         let _ = serde_json::to_vec(&blob_lk_resp);
     }
+    if let Ok(req) = serde_json::from_slice::<jmap_proto::request::Request>(data) {
+        let _ = serde_json::to_vec(&req);
+    }
+    if let Ok(inv) = serde_json::from_slice::<jmap_proto::request::Invocation>(data) {
+        let _ = serde_json::to_vec(&inv);
+    }
+    if let Ok(rref) = serde_json::from_slice::<jmap_proto::request::ResultReference>(data) {
+        let _ = serde_json::to_vec(&rref);
+    }
+    if let Ok(err) = serde_json::from_slice::<jmap_proto::error::RequestError>(data) {
+        let _ = serde_json::to_vec(&err);
+    }
+    if let Ok(err) = serde_json::from_slice::<jmap_proto::error::MethodError>(data) {
+        let _ = serde_json::to_vec(&err);
+    }
+    if let Ok(err) = serde_json::from_slice::<jmap_proto::error::SetError>(data) {
+        let _ = serde_json::to_vec(&err);
+    }
+    if let Ok(greq) = serde_json::from_slice::<jmap_proto::methods::GetRequest>(data) {
+        let _ = serde_json::to_vec(&greq);
+    }
+    if let Ok(gresp) =
+        serde_json::from_slice::<jmap_proto::methods::GetResponse<serde_json::Value>>(data)
+    {
+        let _ = serde_json::to_vec(&gresp);
+    }
+    if let Ok(sreq) =
+        serde_json::from_slice::<jmap_proto::methods::SetRequest<serde_json::Value>>(data)
+    {
+        let _ = serde_json::to_vec(&sreq);
+    }
+    if let Ok(sresp) =
+        serde_json::from_slice::<jmap_proto::methods::SetResponse<serde_json::Value>>(data)
+    {
+        let _ = serde_json::to_vec(&sresp);
+    }
+    if let Ok(qreq) =
+        serde_json::from_slice::<jmap_proto::methods::QueryRequest<serde_json::Value>>(data)
+    {
+        let _ = serde_json::to_vec(&qreq);
+    }
+    if let Ok(qresp) = serde_json::from_slice::<jmap_proto::methods::QueryResponse>(data) {
+        let _ = serde_json::to_vec(&qresp);
+    }
+    if let Ok(creq) = serde_json::from_slice::<jmap_proto::methods::ChangesRequest>(data) {
+        let _ = serde_json::to_vec(&creq);
+    }
+    if let Ok(cresp) = serde_json::from_slice::<jmap_proto::methods::ChangesResponse>(data) {
+        let _ = serde_json::to_vec(&cresp);
+    }
+    if let Ok(qcreq) =
+        serde_json::from_slice::<jmap_proto::methods::QueryChangesRequest<serde_json::Value>>(data)
+    {
+        let _ = serde_json::to_vec(&qcreq);
+    }
+    if let Ok(qcresp) = serde_json::from_slice::<jmap_proto::methods::QueryChangesResponse>(data) {
+        let _ = serde_json::to_vec(&qcresp);
+    }
+    if let Ok(item) = serde_json::from_slice::<jmap_proto::methods::AddedItem>(data) {
+        let _ = serde_json::to_vec(&item);
+    }
+    if let Ok(comp) = serde_json::from_slice::<jmap_proto::methods::Comparator>(data) {
+        let _ = serde_json::to_vec(&comp);
+    }
+    if let Ok(cpreq) =
+        serde_json::from_slice::<jmap_proto::methods::CopyRequest<serde_json::Value>>(data)
+    {
+        let _ = serde_json::to_vec(&cpreq);
+    }
+    if let Ok(cpresp) =
+        serde_json::from_slice::<jmap_proto::methods::CopyResponse<serde_json::Value>>(data)
+    {
+        let _ = serde_json::to_vec(&cpresp);
+    }
+    if let Ok(bcreq) = serde_json::from_slice::<jmap_proto::methods::BlobCopyRequest>(data) {
+        let _ = serde_json::to_vec(&bcreq);
+    }
+    if let Ok(bcresp) = serde_json::from_slice::<jmap_proto::methods::BlobCopyResponse>(data) {
+        let _ = serde_json::to_vec(&bcresp);
+    }
+    if let Ok(cf) = serde_json::from_slice::<jmap_proto::contacts::ContactCardQueryFilter>(data) {
+        let _ = serde_json::to_vec(&cf);
+    }
+    if let Ok(pf) = serde_json::from_slice::<jmap_proto::principals::PrincipalQueryFilter>(data) {
+        let _ = serde_json::to_vec(&pf);
+    }
+    if let Ok(snf) =
+        serde_json::from_slice::<jmap_proto::principals::ShareNotificationQueryFilter>(data)
+    {
+        let _ = serde_json::to_vec(&snf);
+    }
+    if let Ok(cef) = serde_json::from_slice::<jmap_proto::calendars::CalendarEventQueryFilter>(data)
+    {
+        let _ = serde_json::to_vec(&cef);
+    }
+    if let Ok(mc) = serde_json::from_slice::<jmap_proto::metadata::MetadataCapability>(data) {
+        let _ = serde_json::to_vec(&mc);
+    }
+    if let Ok(dtm) = serde_json::from_slice::<jmap_proto::metadata::DataTypeMetadataInfo>(data) {
+        let _ = serde_json::to_vec(&dtm);
+    }
+    if let Ok(mfc) = serde_json::from_slice::<jmap_proto::metadata::MetadataFilterCondition>(data) {
+        let _ = serde_json::to_vec(&mfc);
+    }
+    if let Ok(mtf) = serde_json::from_slice::<jmap_proto::metadata::MetadataTextFilter>(data) {
+        let _ = serde_json::to_vec(&mtf);
+    }
+    if let Ok(st) = serde_json::from_slice::<jmap_proto::state::State>(data) {
+        let _ = serde_json::to_vec(&st);
+    }
+    if let Ok(ud) = serde_json::from_slice::<jmap_proto::state::UtcDate>(data) {
+        let _ = serde_json::to_vec(&ud);
+    }
+    if let Ok(id) = serde_json::from_slice::<jmap_proto::id::Id>(data) {
+        let _ = serde_json::to_vec(&id);
+    }
     if let Ok(s) = std::str::from_utf8(data) {
         let _ = jmap_proto::text::caret_decoded(s);
         let _ = jmap_proto::text::caret_encoded(s);
         let _ = jmap_proto::text::split_uri(s);
         let _ = jmap_proto::text::fold_overlong_lines(s.to_string());
         let _ = jmap_proto::text::is_valid_scheme(s);
+        let _ = jmap_proto::id::split_shared_identity(s);
     }
 });

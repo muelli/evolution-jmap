@@ -311,7 +311,29 @@ fn fuzz_ical_roundtrip_extended_helpers_never_panic() {
         let _ = jmap_ical::names_time_zone(text);
         let _ = jmap_ical::free_busy_type(text);
 
+        let date = jmap_proto::state::UtcDate::new(*text);
+        let period = jmap_proto::principals::BusyPeriod::new(date.clone(), date.clone(), *text);
+        let _ = jmap_ical::busy_periods_to_vfreebusy(text, &date, &date, &[period]);
+
+        let true_val = serde_json::Value::Bool(true);
+        let false_val = serde_json::Value::Bool(false);
+        let str_val = serde_json::Value::String(text.to_string());
+        let _ = jmap_ical::maps_keyword(text, &true_val);
+        let _ = jmap_ical::maps_keyword(text, &false_val);
+        let _ = jmap_ical::maps_keyword(text, &str_val);
+
         if let Ok(event1) = ical_to_event(text) {
+            let _ = jmap_ical::scheduling_ical(&event1, "REQUEST", None);
+            let _ = jmap_ical::scheduling_ical(&event1, "REPLY", None);
+            let _ = jmap_ical::scheduling_ical(&event1, "CANCEL", None);
+            let _ = jmap_ical::scheduling_ical(&event1, text, None);
+            if let Some(ref overrides) = event1.recurrence_overrides {
+                for recurrence_id in overrides.keys() {
+                    let _ = jmap_ical::scheduling_ical(&event1, "REQUEST", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event1, "REPLY", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event1, "CANCEL", Some(recurrence_id));
+                }
+            }
             let _ = jmap_ical::maps_alerts(&event1);
             let _ = jmap_ical::maps_time_zone(&event1);
 
@@ -423,4 +445,32 @@ fn fuzz_ical_import_extended_helpers_never_panic() {
             let _ = event_to_ical(&pruned);
         }
     }
+}
+
+#[test]
+fn attendee_cn_tabs_reaches_fixed_point_stability() {
+    let bytes: &[u8] = &[
+        66, 69, 71, 73, 78, 58, 86, 67, 65, 76, 69, 78, 68, 65, 82, 10, 66, 69, 71, 73, 78, 58, 86,
+        69, 86, 69, 78, 84, 10, 85, 73, 68, 58, 54, 49, 46, 101, 120, 97, 109, 112, 108, 101, 10,
+        65, 84, 84, 69, 78, 68, 69, 69, 59, 67, 85, 84, 89, 80, 69, 61, 73, 69, 80, 84, 69, 68, 59,
+        67, 78, 61, 34, 84, 114, 105, 108, 0, 0, 0, 10, 32, 65, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+        9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+        9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 115, 116, 114, 97, 34, 58, 109, 88,
+        45, 77, 79, 90, 45, 71, 69, 78, 69, 82, 65, 84, 73, 79, 78, 58, 53, 10, 69, 78, 68, 58, 86,
+        69, 86, 69, 78, 84, 10, 69, 78, 68, 58, 86, 67, 65, 76, 69, 78, 68, 65, 82, 10,
+    ];
+    let text = std::str::from_utf8(bytes).unwrap();
+    let event1 = jmap_ical::ical_to_event(text).unwrap();
+    let ical2 = jmap_ical::event_to_ical(&event1);
+    let event2 = jmap_ical::ical_to_event(&ical2).unwrap();
+    let ical3 = jmap_ical::event_to_ical(&event2);
+    let event3 = jmap_ical::ical_to_event(&ical3).unwrap();
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
 }

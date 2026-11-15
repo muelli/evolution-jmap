@@ -1318,3 +1318,187 @@ fn domain_requests_responses_and_groups_smoke() {
         let _ = serde_json::from_slice::<BlobLookupResponse>(input);
     }
 }
+
+#[test]
+fn fuzz_proto_parsers_extended_types_smoke() {
+    use jmap_proto::calendars::CalendarEventQueryFilter;
+    use jmap_proto::contacts::ContactCardQueryFilter;
+    use jmap_proto::id::{Id, split_shared_identity};
+    use jmap_proto::metadata::{
+        DataTypeMetadataInfo, MetadataCapability, MetadataFilterCondition, MetadataTextFilter,
+    };
+    use jmap_proto::methods::{
+        AddedItem, BlobCopyRequest, BlobCopyResponse, ChangesRequest, ChangesResponse, Comparator,
+        CopyRequest, CopyResponse, GetRequest, GetResponse, QueryChangesRequest,
+        QueryChangesResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+    };
+    use jmap_proto::principals::{PrincipalQueryFilter, ShareNotificationQueryFilter};
+    use jmap_proto::state::{State, UtcDate};
+
+    let hostile_inputs: &[&[u8]] = &[
+        b"",
+        b"{",
+        b"[",
+        b"}",
+        b"]",
+        b"null",
+        b"true",
+        b"12345",
+        b"\"unterminated",
+        b"{\"accountId\": null}",
+        b"{\"notAField\": 42}",
+        b"{\"callId\": [1, 2, 3]}",
+    ];
+
+    for input in hostile_inputs {
+        let _ = serde_json::from_slice::<GetRequest>(input);
+        let _ = serde_json::from_slice::<GetResponse<serde_json::Value>>(input);
+        let _ = serde_json::from_slice::<SetRequest<serde_json::Value>>(input);
+        let _ = serde_json::from_slice::<SetResponse<serde_json::Value>>(input);
+        let _ = serde_json::from_slice::<QueryRequest<serde_json::Value>>(input);
+        let _ = serde_json::from_slice::<QueryResponse>(input);
+        let _ = serde_json::from_slice::<ChangesRequest>(input);
+        let _ = serde_json::from_slice::<ChangesResponse>(input);
+        let _ = serde_json::from_slice::<QueryChangesRequest<serde_json::Value>>(input);
+        let _ = serde_json::from_slice::<QueryChangesResponse>(input);
+        let _ = serde_json::from_slice::<AddedItem>(input);
+        let _ = serde_json::from_slice::<Comparator>(input);
+        let _ = serde_json::from_slice::<CopyRequest<serde_json::Value>>(input);
+        let _ = serde_json::from_slice::<CopyResponse<serde_json::Value>>(input);
+        let _ = serde_json::from_slice::<BlobCopyRequest>(input);
+        let _ = serde_json::from_slice::<BlobCopyResponse>(input);
+        let _ = serde_json::from_slice::<ContactCardQueryFilter>(input);
+        let _ = serde_json::from_slice::<PrincipalQueryFilter>(input);
+        let _ = serde_json::from_slice::<ShareNotificationQueryFilter>(input);
+        let _ = serde_json::from_slice::<CalendarEventQueryFilter>(input);
+        let _ = serde_json::from_slice::<MetadataCapability>(input);
+        let _ = serde_json::from_slice::<DataTypeMetadataInfo>(input);
+        let _ = serde_json::from_slice::<MetadataFilterCondition>(input);
+        let _ = serde_json::from_slice::<MetadataTextFilter>(input);
+        let _ = serde_json::from_slice::<State>(input);
+        let _ = serde_json::from_slice::<UtcDate>(input);
+        let _ = serde_json::from_slice::<Id>(input);
+        if let Ok(s) = std::str::from_utf8(input) {
+            let _ = split_shared_identity(s);
+        }
+    }
+
+    let valid_samples: &[&[u8]] = &[
+        br#"{"accountId":"a1","ids":["id1"],"properties":["name"]}"#,
+        br#"{"accountId":"a1","state":"s1","list":[{"id":"id1"}],"notFound":[]}"#,
+        br#"{"accountId":"a1","ifInState":"s1","create":{"c1":{"name":"n1"}}}"#,
+        br#"{"accountId":"a1","oldState":"s1","newState":"s2","created":{"c1":{"id":"id1"}}}"#,
+        br#"{"accountId":"a1","filter":{"name":"test"},"sort":[{"property":"name"}]}"#,
+        br#"{"accountId":"a1","queryState":"qs1","canCalculateChanges":true,"position":0,"total":1,"ids":["id1"]}"#,
+        br#"{"property":"name","isAscending":true,"collation":"i;ascii-casemap"}"#,
+        br#"{"fromAccountId":"a1","ifFromInState":"s1","accountId":"a2","create":{"c1":{"id":"id1"}}}"#,
+        br#"{"fromAccountId":"a1","accountId":"a2","oldState":"s1","newState":"s2","created":{"c1":{"id":"id1"}}}"#,
+        br#"{"fromAccountId":"a1","accountId":"a2","create":{"b1":"blob1"}}"#,
+        br#"{"fromAccountId":"a1","accountId":"a2","created":{"b1":{"id":"blob2"}}}"#,
+        br#"{"inAddressBook":"ab1","hasMember":"card1","nameSurname":"Doe"}"#,
+        br#"{"accountIds":["a1"],"name":"Alice","timeZone":"UTC"}"#,
+        br#"{"after":"2026-01-01T00:00:00Z","objectAccountId":"a1"}"#,
+        br#"{"inCalendar":"c1","after":"2026-01-01T00:00:00Z","participationStatus":"accepted"}"#,
+        br#"{"dataTypes":{"Email":{"maxSize":100}}}"#,
+        br#"{"maxSize":100}"#,
+        br#"{"metadataExists":"/labels/work"}"#,
+        br#"{"path":"/labels/work","text":"urgent"}"#,
+        br#""custom-state-token-123""#,
+        br#""2026-11-15T00:00:00Z""#,
+        br#""standard-id-456""#,
+    ];
+
+    for sample in valid_samples {
+        if let Ok(greq) = serde_json::from_slice::<GetRequest>(sample) {
+            let enc = serde_json::to_vec(&greq).expect("GetRequest serializes");
+            assert!(serde_json::from_slice::<GetRequest>(&enc).is_ok());
+        }
+        if let Ok(gresp) = serde_json::from_slice::<GetResponse<serde_json::Value>>(sample) {
+            let enc = serde_json::to_vec(&gresp).expect("GetResponse serializes");
+            assert!(serde_json::from_slice::<GetResponse<serde_json::Value>>(&enc).is_ok());
+        }
+        if let Ok(sreq) = serde_json::from_slice::<SetRequest<serde_json::Value>>(sample) {
+            let enc = serde_json::to_vec(&sreq).expect("SetRequest serializes");
+            assert!(serde_json::from_slice::<SetRequest<serde_json::Value>>(&enc).is_ok());
+        }
+        if let Ok(sresp) = serde_json::from_slice::<SetResponse<serde_json::Value>>(sample) {
+            let enc = serde_json::to_vec(&sresp).expect("SetResponse serializes");
+            assert!(serde_json::from_slice::<SetResponse<serde_json::Value>>(&enc).is_ok());
+        }
+        if let Ok(qreq) = serde_json::from_slice::<QueryRequest<serde_json::Value>>(sample) {
+            let enc = serde_json::to_vec(&qreq).expect("QueryRequest serializes");
+            assert!(serde_json::from_slice::<QueryRequest<serde_json::Value>>(&enc).is_ok());
+        }
+        if let Ok(qresp) = serde_json::from_slice::<QueryResponse>(sample) {
+            let enc = serde_json::to_vec(&qresp).expect("QueryResponse serializes");
+            assert!(serde_json::from_slice::<QueryResponse>(&enc).is_ok());
+        }
+        if let Ok(comp) = serde_json::from_slice::<Comparator>(sample) {
+            let enc = serde_json::to_vec(&comp).expect("Comparator serializes");
+            assert!(serde_json::from_slice::<Comparator>(&enc).is_ok());
+        }
+        if let Ok(cpreq) = serde_json::from_slice::<CopyRequest<serde_json::Value>>(sample) {
+            let enc = serde_json::to_vec(&cpreq).expect("CopyRequest serializes");
+            assert!(serde_json::from_slice::<CopyRequest<serde_json::Value>>(&enc).is_ok());
+        }
+        if let Ok(cpresp) = serde_json::from_slice::<CopyResponse<serde_json::Value>>(sample) {
+            let enc = serde_json::to_vec(&cpresp).expect("CopyResponse serializes");
+            assert!(serde_json::from_slice::<CopyResponse<serde_json::Value>>(&enc).is_ok());
+        }
+        if let Ok(bcreq) = serde_json::from_slice::<BlobCopyRequest>(sample) {
+            let enc = serde_json::to_vec(&bcreq).expect("BlobCopyRequest serializes");
+            assert!(serde_json::from_slice::<BlobCopyRequest>(&enc).is_ok());
+        }
+        if let Ok(bcresp) = serde_json::from_slice::<BlobCopyResponse>(sample) {
+            let enc = serde_json::to_vec(&bcresp).expect("BlobCopyResponse serializes");
+            assert!(serde_json::from_slice::<BlobCopyResponse>(&enc).is_ok());
+        }
+        if let Ok(cf) = serde_json::from_slice::<ContactCardQueryFilter>(sample) {
+            let enc = serde_json::to_vec(&cf).expect("ContactCardQueryFilter serializes");
+            assert!(serde_json::from_slice::<ContactCardQueryFilter>(&enc).is_ok());
+        }
+        if let Ok(pf) = serde_json::from_slice::<PrincipalQueryFilter>(sample) {
+            let enc = serde_json::to_vec(&pf).expect("PrincipalQueryFilter serializes");
+            assert!(serde_json::from_slice::<PrincipalQueryFilter>(&enc).is_ok());
+        }
+        if let Ok(snf) = serde_json::from_slice::<ShareNotificationQueryFilter>(sample) {
+            let enc = serde_json::to_vec(&snf).expect("ShareNotificationQueryFilter serializes");
+            assert!(serde_json::from_slice::<ShareNotificationQueryFilter>(&enc).is_ok());
+        }
+        if let Ok(cef) = serde_json::from_slice::<CalendarEventQueryFilter>(sample) {
+            let enc = serde_json::to_vec(&cef).expect("CalendarEventQueryFilter serializes");
+            assert!(serde_json::from_slice::<CalendarEventQueryFilter>(&enc).is_ok());
+        }
+        if let Ok(mc) = serde_json::from_slice::<MetadataCapability>(sample) {
+            let enc = serde_json::to_vec(&mc).expect("MetadataCapability serializes");
+            assert!(serde_json::from_slice::<MetadataCapability>(&enc).is_ok());
+        }
+        if let Ok(dtm) = serde_json::from_slice::<DataTypeMetadataInfo>(sample) {
+            let enc = serde_json::to_vec(&dtm).expect("DataTypeMetadataInfo serializes");
+            assert!(serde_json::from_slice::<DataTypeMetadataInfo>(&enc).is_ok());
+        }
+        if let Ok(mfc) = serde_json::from_slice::<MetadataFilterCondition>(sample) {
+            let enc = serde_json::to_vec(&mfc).expect("MetadataFilterCondition serializes");
+            assert!(serde_json::from_slice::<MetadataFilterCondition>(&enc).is_ok());
+        }
+        if let Ok(mtf) = serde_json::from_slice::<MetadataTextFilter>(sample) {
+            let enc = serde_json::to_vec(&mtf).expect("MetadataTextFilter serializes");
+            assert!(serde_json::from_slice::<MetadataTextFilter>(&enc).is_ok());
+        }
+        if let Ok(st) = serde_json::from_slice::<State>(sample) {
+            let enc = serde_json::to_vec(&st).expect("State serializes");
+            assert!(serde_json::from_slice::<State>(&enc).is_ok());
+        }
+        if let Ok(ud) = serde_json::from_slice::<UtcDate>(sample) {
+            let enc = serde_json::to_vec(&ud).expect("UtcDate serializes");
+            assert!(serde_json::from_slice::<UtcDate>(&enc).is_ok());
+        }
+        if let Ok(id) = serde_json::from_slice::<Id>(sample) {
+            let enc = serde_json::to_vec(&id).expect("Id serializes");
+            assert!(serde_json::from_slice::<Id>(&enc).is_ok());
+        }
+    }
+
+    assert_eq!(split_shared_identity("acc1/col1"), Some(("acc1", "col1")));
+    assert_eq!(split_shared_identity("plain_id"), None);
+}

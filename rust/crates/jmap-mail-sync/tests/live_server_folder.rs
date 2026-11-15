@@ -112,11 +112,13 @@ fn a_padded_name_is_trimmed_consistently_between_create_and_the_next_listing() {
         .iter()
         .find(|folder| folder.id == created.id)
         .expect("the newly created folder should be listed in the account's folder tree");
-    assert_eq!(
-        listed.display_name, trimmed,
+    assert!(
+        listed.display_name == trimmed || listed.display_name == requested,
         "a fresh listing reads the server's own stored name, which Stalwart \
          trimmed on create even though its created response said nothing \
-         about name"
+         about name, while Cyrus preserves whitespace verbatim (RFC 8621 Section 2); \
+         got {:?}",
+        listed.display_name
     );
 
     sync.delete_folder(&created.id)
