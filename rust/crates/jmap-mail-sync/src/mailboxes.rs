@@ -64,12 +64,43 @@ pub struct Filing {
     into: Id,
     /// The mailbox it is filed out of, for a move.
     out_of: Option<Id>,
+    /// The mailbox a copy came from, kept only so a later move out of
+    /// `into` can rechain the row that holds the first filing
+    /// (`transfer::queue_filing`). `None` for a move: `out_of` already
+    /// names that mailbox. `patch` ignores this field; the server never
+    /// removes a copy's source.
+    ///
+    /// Set this only when the row named here carries this exact `Filing`:
+    /// a rechain rewrites that row on trust, with no check of what it
+    /// already holds. A filing queued beside another row's own waiting
+    /// filing (`transfer::queue_filing`'s "copy beside a waiting filing"
+    /// case) must not carry that other row's mailbox here, because that
+    /// row keeps its own filing, not this one.
+    copy_source: Option<Id>,
 }
 
 impl Filing {
     /// The message gains `into` and keeps every mailbox it is already in.
+    /// No source is on record, so a later move out of `into` cannot find
+    /// the row the message copied from; prefer [`Filing::copied_from`]
+    /// when the source is known.
     pub fn copied_into(into: Id) -> Self {
-        Self { into, out_of: None }
+        Self {
+            into,
+            out_of: None,
+            copy_source: None,
+        }
+    }
+
+    /// Like [`Filing::copied_into`], but remembers `source`, so
+    /// `transfer::rechain` can find and rewrite that row if a later move
+    /// takes the message out of `into` before this copy lands.
+    pub fn copied_from(source: Id, into: Id) -> Self {
+        Self {
+            into,
+            out_of: None,
+            copy_source: Some(source),
+        }
     }
 
     /// The message gains `into` and loses `out_of`, in one change.
@@ -79,13 +110,18 @@ impl Filing {
         Self {
             into,
             out_of: Some(out_of),
+            copy_source: None,
         }
     }
 
-    /// Whether this filing does not move the message. The provider does not
-    /// send an empty filing.
+    /// Whether this filing does not change the message's mailboxes. The
+    /// provider does not send an empty filing.
+    ///
+    /// True for a move back into its own source, and also for a copy whose
+    /// known source is the mailbox it is filed into: the message is already
+    /// there, so there is nothing to ask the server for.
     pub fn is_empty(&self) -> bool {
-        self.out_of.as_ref() == Some(&self.into)
+        self.out_of.as_ref() == Some(&self.into) || self.copy_source.as_ref() == Some(&self.into)
     }
 
     /// The mailbox this filing adds the message to.
@@ -101,6 +137,12 @@ impl Filing {
     /// `None` for a copy.
     pub fn out_of_mailbox(&self) -> Option<&Id> {
         self.out_of.as_ref()
+    }
+
+    /// The mailbox a copy came from, if [`Filing::copied_from`] set one.
+    /// `None` for a move: use [`Filing::out_of_mailbox`] instead.
+    pub fn copy_source(&self) -> Option<&Id> {
+        self.copy_source.as_ref()
     }
 
     /// The filing as the `PatchObject` an `Email/set` update takes.
