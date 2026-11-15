@@ -76,6 +76,50 @@ Use `ci/gui-scenario-fedora.sh --host SCENARIO...` in a job that already runs
 in that image. The artifacts go to `build-gui-scenario-fedora/gui-scenario`,
 or to `GUI_SCENARIO_ARTIFACTS` if you set it.
 
+### Against a real server
+
+`--live` runs a scenario against a real JMAP server instead of `jmap-mockd`.
+`ci/gui-scenario/live_proxy.py` relays the local mock address to the real
+server. The account and the scenario code use the same loopback address in
+both modes.
+
+```console
+$ GUI_SCENARIO_JMAP_URL=https://jmap.example.org \
+  GUI_SCENARIO_USER=agent-1@example.org \
+  GUI_SCENARIO_PASSWORD=its-password \
+  ci/gui-scenario/run.sh --live work-offline
+```
+
+Set three variables in your own shell. Do not put them in a file of this
+repository, and do not print them to a log:
+
+| Variable | Meaning |
+|---|---|
+| `GUI_SCENARIO_JMAP_URL` | The real server's own reachable address |
+| `GUI_SCENARIO_USER` | The address of a seeded test account |
+| `GUI_SCENARIO_PASSWORD` | The password of that account |
+
+Some scenarios also read `GUI_SCENARIO_STATE_FILE`: the path of a seed file
+that holds the ids and names of the test data a server-side seeding step
+wrote. Set it only when a scenario's own notes ask for it.
+
+A `--live` run joins no private network of its own. It needs your own route
+to the server. Run only one `--live` scenario at a time.
+
+Use a test account made for this purpose, never a real user's account. The
+test account and its mail, contacts and calendars change with every run.
+
+Three scenarios run this way today: `live-smoke` (checks the path itself,
+with no mock equivalent), `work-offline` and `delegates`. Other scenarios
+still run only against `jmap-mockd`.
+
+`delegates` looks up principals on the server. Turn its directory service on
+before the run and off after, even if the run fails: the server may serve
+other users too.
+
+Use the same command on an automated test runner or on a desktop machine
+with a real Evolution session.
+
 ## The output
 
 Each scenario writes to `build/gui-scenario/<scenario>/`:
