@@ -1082,6 +1082,40 @@ fn a_transport_failure_restores_the_filing_mark() {
     }
 }
 
+/// `replay_filing` traces a transport failure too, the same way it traces a
+/// landed, dropped or rolled-back filing (item 182(b): a scenario this ROADMAP
+/// item asks for reads this line while the real server is down, since it
+/// cannot otherwise observe a queued filing through JMAP at that point).
+#[test]
+fn a_transport_failure_traces_the_kept_filing() {
+    let fixture = Fixture::start();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    let doomed = MockServer::builder().start();
+    let client = Client::connect(doomed.origin(), Credentials::none()).expect("connected");
+    fixture
+        .account
+        .connect(MailSync::new(client, fixture.server.account_id()));
+    drop(doomed);
+
+    let (synced, logs) = capture(|| fixture.synchronize(fixture.inbox));
+    assert!(
+        !synced.ok,
+        "a transport failure must be reported, not swallowed"
+    );
+    assert!(
+        has(&logs, Level::TRACE, "message", "kept filing pending after a transport failure"),
+        "expected a kept-pending trace event, got {logs:?}"
+    );
+    assert!(
+        has(&logs, Level::TRACE, "uid", fixture.uid().as_str()),
+        "expected the queued uid as a field, got {logs:?}"
+    );
+}
+
 /// A queued copy behaves the same way as a queued move, except that it never
 /// removes the row: a copy leaves every mailbox the message was already in.
 #[test]
