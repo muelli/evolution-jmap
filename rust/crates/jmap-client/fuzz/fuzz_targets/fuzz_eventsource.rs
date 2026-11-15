@@ -10,7 +10,7 @@ use jmap_client::eventsource::{
     parse_chunked_stream, parse_response_head, parse_stream,
 };
 use jmap_client::transport::CancelFlag;
-use jmap_client::url::{origin, origin_of, split_http_scheme};
+use jmap_client::url::{origin, origin_of, same_origin, split_http_scheme};
 
 fuzz_target!(|data: &[u8]| {
     let cancel = CancelFlag::new();
@@ -65,19 +65,59 @@ fuzz_target!(|data: &[u8]| {
     let _ = format!("{timeouts:?}");
     let _ = timeouts == timeouts;
 
+    let custom_timeouts = EventSourceTimeouts {
+        connect: std::time::Duration::from_millis(data.len() as u64),
+        read_head: std::time::Duration::from_secs(1),
+        stream_read: std::time::Duration::from_secs(2),
+    };
+    let _ = format!("{custom_timeouts:?}");
+    let _ = timeouts == custom_timeouts;
+
+    let empty_headers = SharedHeaders::new(vec![]);
+    let _ = format!("{empty_headers:?}");
+    empty_headers.set(vec![]);
+
     if let Ok(s) = std::str::from_utf8(data) {
         let _ = expand_url(s, &[], false, 0);
         let _ = expand_url(s, &["Email", "Mailbox"], false, 30);
         let _ = expand_url(s, &[s], true, 0);
         let _ = expand_url(s, &[s, "ContactCard", "CalendarEvent"], true, 300);
         let _ = expand_url(s, &[ALL_TYPES], false, u32::MAX);
+        let _ = expand_url(s, &["*"], true, 60);
+        let _ = expand_url(s, &[s, "custom/type", "a,b"], false, 15);
 
         let _ = origin(s);
         let _ = origin_of(s);
         let _ = split_http_scheme(s);
+        let _ = same_origin(s, s);
+        let _ = same_origin(s, "https://example.com");
+        let _ = same_origin("https://example.com", s);
+        let _ = same_origin(s, "http://example.com:80");
+        let _ = same_origin(s, "https://example.com:443");
 
         let headers = SharedHeaders::new(vec![("X-Fuzz".to_string(), s.to_string())]);
         let _ = format!("{headers:?}");
         headers.set(vec![(s.to_string(), "val".to_string())]);
+
+        let multi_headers = SharedHeaders::new(vec![
+            ("Header-1".to_string(), s.to_string()),
+            ("Header-2".to_string(), "val".to_string()),
+        ]);
+        let _ = format!("{multi_headers:?}");
+        multi_headers.set(vec![(s.to_string(), s.to_string())]);
+
+        let reconnected = EventSourceItem::Reconnected {
+            last_event_id: Some(s.to_string()),
+            reconnect_count: data.len() as u64,
+        };
+        let _ = format!("{reconnected:?}");
+        let cloned_recon = reconnected.clone();
+        let _ = reconnected == cloned_recon;
+
+        let reconnected_none = EventSourceItem::Reconnected {
+            last_event_id: None,
+            reconnect_count: 0,
+        };
+        let _ = reconnected == reconnected_none;
     }
 });
