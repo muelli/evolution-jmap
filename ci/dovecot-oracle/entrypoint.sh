@@ -10,10 +10,10 @@
 #
 # Auth accepts any password, including an empty one, for this user
 # (`static`/`nopassword=y`), rather than checking DOVECOT_ORACLE_PASSWORD.
-# ci/gui-scenario has no secret service running ("there is no keyring",
-# scenario.py's own `dismiss_first_run_dialogs`), so Evolution's mail
-# authentication dialog submits an empty password there; this throwaway
-# fixture must accept that to be usable from that harness at all.
+# The account of ci/gui-scenario has no stored password, so Evolution's
+# mail authentication dialog submits an empty one there
+# (scenario.py's own `dismiss_first_run_dialogs`); this throwaway fixture
+# must accept that to be usable from that harness at all.
 # DOVECOT_ORACLE_PASSWORD stays only so a caller can still name one, for
 # clarity in logs and scripts that reuse this image elsewhere.
 

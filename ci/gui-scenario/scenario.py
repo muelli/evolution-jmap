@@ -93,21 +93,29 @@ def write_source(uid, text):
 
 
 def write_standalone_mail_account(
-    name="JMAP scenario mail", key="scenario", identity=("Alice", "alice@example.com"), port=None
+    name="JMAP scenario mail",
+    key="scenario",
+    identity=("Alice", "alice@example.com"),
+    port=None,
+    user=None,
 ):
     """Write a standalone mail account, its identity and its transport.
 
-    The account uses the mock without credentials. `key` makes the source
+    The account uses the mock without credentials, unless `user` is set.
+    `key` makes the source
     uids unique, so that a scenario can write more than one account.
     `identity` is the (name, address) of the sender. `port` lets a scenario
     route the account through a proxy in front of the mock instead of
-    connecting to it directly; it defaults to the mock's own port. Return
+    connecting to it directly; it defaults to the mock's own port. `user`
+    gives the account a user name, so that Evolution asks for a password
+    and sends Basic authentication; the mock then needs `--basic`. Return
     the display name.
     """
+    credential = f"User={user}\n" if user else ""
     connection = f"""[Authentication]
 Host=127.0.0.1
 Port={port if port is not None else MOCK_PORT}
-
+{credential}
 [Security]
 Method=none
 """
@@ -168,8 +176,7 @@ def write_standalone_imap_account(
     default (`camel_imapx_password_authtype`'s own `authproto`, `""`) is a
     plain IMAP `LOGIN`, matching the oracle's `static`/`nopassword=y` passdb,
     which accepts any password, including the empty one
-    `dismiss_first_run_dialogs` submits (there is no keyring here to cache
-    one). Return the display name.
+    `dismiss_first_run_dialogs` submits. Return the display name.
     """
     if not IMAP_HOST or not IMAP_PORT:
         raise ScenarioFailure(
@@ -958,11 +965,49 @@ def confirm(button, label=None):
     click_button(dialog, button)
 
 
+def authentication_request():
+    """Return Evolution's showing "Mail authentication request" dialog, or None."""
+    app = evolution()
+    if app is None:
+        return None
+    return find(app, "dialog", "Mail authentication request")
+
+
+def authenticate(password, remember=True, label=None):
+    """Answer the "Mail authentication request" dialog with `password`.
+
+    Evolution asks for a password when the account has a user name and no
+    password is known yet. With `remember`, the dialog stores the password
+    in the session secret store, so a later process of the same profile
+    connects without a question. ci/gui-scenario/run.sh starts that store.
+    A password field reports no text over AT-SPI, so this types the keys
+    and does not read the field back.
+    """
+    dialog = wait_for(authentication_request, 'the "Mail authentication request" dialog')
+    if label is not None:
+        screenshot(label)
+    field = find(dialog, "password text")
+    if field is None:
+        raise ScenarioFailure("the authentication dialog has no password field")
+    field.queryComponent().grabFocus()
+    pyatspi.Registry.generateKeyboardEvent(0, password, pyatspi.KEY_STRING)
+    checkbox = find(dialog, "check box")
+    if checkbox is not None:
+        checked = checkbox.getState().contains(pyatspi.STATE_CHECKED)
+        if checked != remember:
+            do_action(checkbox)
+    say(f"typed the password, remember={remember}")
+    click_button(dialog, "OK")
+    wait_for(lambda: authentication_request() is None, "the authentication dialog to close")
+
+
 def dismiss_first_run_dialogs():
     """Click away the dialogs of a new profile, when they show.
 
-    The mail authentication request: clear "remember password" (there is no
-    keyring) and click OK with empty fields. See docs/gui-smoke-test.md.
+    The mail authentication request: clear "remember password" and click OK
+    with empty fields. An account with no user name needs no password, so
+    this answer connects it. Use `authenticate` for an account that does
+    need one. See docs/gui-smoke-test.md.
     """
     app = evolution()
     if app is None:

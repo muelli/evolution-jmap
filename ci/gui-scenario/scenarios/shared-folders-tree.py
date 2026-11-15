@@ -18,8 +18,7 @@ folder tree instead of the unit tests' own `FolderTree` fixtures.
 Not covered here, both live-only: a nested folder under a shared
 owner (the roadmap item's own "Q4 under Team Shared" example; the mock
 seeds no nested mailbox) and a share appearing or vanishing while
-Evolution runs (`share-new`/`unshare`, item 182(a)'s `--live` mode,
-blocked headless on gnome-keyring's unlock prompt as of 2026-11-14).
+Evolution runs (`share-new`/`unshare`, which needs a live server).
 
 Also not covered: that the unshared "Private" mailbox never reaches
 the client at all. The mock's share filtering

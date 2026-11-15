@@ -127,6 +127,9 @@ MOCK_PORT="${GUI_SCENARIO_PORT:-8090}"
 WORK="$(mktemp -d)"
 
 PIDS=()
+# The runtime directory of the scenario that runs now. Only the keyring
+# daemon needs it: see reap_keyring.
+KEYRING_RUNTIME=""
 cleanup() {
 	local pid
 	for pid in "${PIDS[@]}"; do
@@ -134,6 +137,25 @@ cleanup() {
 	done
 	wait 2>/dev/null
 	PIDS=()
+	reap_keyring
+}
+
+# Stop the keyring daemon of this scenario.
+#
+# `--daemonize` detaches it, so it is not in PIDS and it stays alive after the
+# session bus stops. Find it by the XDG_RUNTIME_DIR of the scenario, which is
+# a new temporary directory that no other process has. jmap-functional's own
+# session (rust/crates/jmap-functional/src/lib.rs) does the same.
+reap_keyring() {
+	local pid environment
+	[ -n "$KEYRING_RUNTIME" ] || return 0
+	for pid in $(pgrep -x gnome-keyring-daemon 2>/dev/null); do
+		environment="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null)"
+		if printf '%s\n' "$environment" | grep -qxF "XDG_RUNTIME_DIR=$KEYRING_RUNTIME"; then
+			kill "$pid" 2>/dev/null
+		fi
+	done
+	KEYRING_RUNTIME=""
 }
 trap 'cleanup; rm -rf "$WORK"' EXIT
 
@@ -225,6 +247,25 @@ run_scenario() {
 		# activation environment needs DISPLAY. A window manager gives the
 		# windows a position and the keyboard focus.
 		"${session_env[@]}" dbus-update-activation-environment DISPLAY EVOLUTION_JMAP_LOG
+
+		# A scenario account with a user name needs a secret store: EDS and
+		# Evolution keep a password in `org.freedesktop.secrets`, not in the
+		# account file. D-Bus activates gnome-keyring-daemon for that name,
+		# but the daemon then shows a GTK unlock prompt, which fails on this
+		# display. So unlock a new login keyring with the empty password
+		# first, as jmap-functional's session does.
+		KEYRING_RUNTIME="$run_dir/runtime"
+		if ! "${session_env[@]}" sh -c \
+			"printf '\n' | gnome-keyring-daemon --daemonize --unlock --components=secrets" \
+			>"$run_dir/keyring.log" 2>&1; then
+			{
+				echo "gui-scenario: gnome-keyring-daemon --unlock failed."
+				echo "gui-scenario: is gnome-keyring installed? EDS asks it for every password."
+				cat "$run_dir/keyring.log"
+			} >>"$out/transcript.txt"
+			verdict=1
+		fi
+
 		"${session_env[@]}" gsettings set org.gnome.desktop.interface toolkit-accessibility true
 		# A maximized window shows the full folder tree and message list on the
 		# screenshots.
