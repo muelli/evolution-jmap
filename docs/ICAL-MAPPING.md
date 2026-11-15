@@ -337,7 +337,9 @@ Lossy: the mapping does not map `title`, `cid` and the `FILENAME` parameter
   case-insensitively) merges into that participant.
 - Each `ATTENDEE` becomes a participant with `calendarAddress` (never the
   reserved `sendTo`), `name`, `kind`, `participationStatus` and `expectReply`.
-  The mapping sets each of them only if it is readable.
+  The mapping sets each of them only if it is readable. Whitespace in `CN`
+  is trimmed and consecutive spaces or tabs collapse to match calcard's unfolding
+  tokenizer rules.
 - Roles:
   - `REQ-PARTICIPANT`, no `ROLE`, or an unknown `ROLE` gives
     `{"attendee": true}`.

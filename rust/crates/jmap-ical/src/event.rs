@@ -2842,7 +2842,10 @@ pub fn read_participants(vevent: &ICalendarComponent) -> Option<BTreeMap<String,
     }
     let named = |line: &ICalendarEntry, participant: &mut Map<String, Value>| {
         if let Some(name) = entry_param(line, "CN").filter(|name| !name.is_empty()) {
-            participant.entry("name").or_insert(Value::String(name));
+            let name = normalize_keyword(&name);
+            if !name.is_empty() {
+                participant.entry("name").or_insert(Value::String(name));
+            }
         }
     };
 
