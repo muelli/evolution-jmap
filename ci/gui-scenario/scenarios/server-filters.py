@@ -76,6 +76,12 @@ COMPLETION_ACCEPTED_LOG = (
 
 LEGACY_NAME = "legacy"
 LEGACY_TEXT = "keep;\n"
+
+# The page saves a valid script text as soon as it validates, so the text
+# step 4a types stays on the server after Cancel. Each step after 4a finds
+# this text in the view, not LEGACY_TEXT.
+EDITED_TEXT = "keep;"
+
 MANAGED_NAME = "evolution-jmap"
 RULE_NAME = "Invoices"
 INVOICES_FOLDER = "Invoices"
@@ -146,6 +152,14 @@ def create_script(server, name, text):
 
 def sieve_scripts(server):
     return server.call("SieveScript/get", {"ids": None}, extra_using=(SIEVE_CAPABILITY,))["list"]
+
+
+def script_text(server, name):
+    """Return the text the server holds for the script `name`, or None."""
+    script = {item["name"]: item for item in sieve_scripts(server)}.get(name)
+    if script is None:
+        return None
+    return download_sieve(server, script["blobId"])
 
 
 def folder_paths(server):
@@ -458,11 +472,16 @@ def run():
     say(f"page: a local syntax error underlines the line, tooltip {tooltip!r}")
     screenshot("local-syntax-error")
 
-    set_text(source_view, "keep;")
+    set_text(source_view, EDITED_TEXT)
     wait_for(lambda: not has_error_underline(source_view), "the underline clears once fixed")
     wait_for(lambda: source_view.description == "", "the tooltip clears once fixed")
     say("page: fixing the line clears the underline and the tooltip, still with no Check click")
     close_with_cancel(editor)
+    wait_for(
+        lambda: script_text(server, LEGACY_NAME) == EDITED_TEXT,
+        f"the server to hold {EDITED_TEXT!r}",
+    )
+    say("server: a valid text edit lands at once, and Cancel does not take it back")
 
     # 5. With the vacation responder on, its script shows as protected.
     server.call(
@@ -506,7 +525,7 @@ def run():
     loaded(editor)
     select_script(editor, LEGACY_NAME)
     source_view = wait_for(
-        lambda: text_field(editor, LEGACY_TEXT), f"the text view showing {LEGACY_TEXT!r}"
+        lambda: text_field(editor, EDITED_TEXT), f"the text view showing {EDITED_TEXT!r}"
     )
     set_text(source_view, LONG_INVALID_TEXT)
     check = wait_for(lambda: find(editor, "push button", "Check", showing=True), "Check button")
@@ -536,7 +555,7 @@ def run():
     loaded(editor)
     select_script(editor, LEGACY_NAME)
     source_view = wait_for(
-        lambda: text_field(editor, LEGACY_TEXT), f"the text view showing {LEGACY_TEXT!r}"
+        lambda: text_field(editor, EDITED_TEXT), f"the text view showing {EDITED_TEXT!r}"
     )
     set_text(source_view, COMPLETION_PREFIX)
     expect_log(COMPLETION_OPENED_LOG, f"the completion popup opened for {COMPLETION_PREFIX!r}")
