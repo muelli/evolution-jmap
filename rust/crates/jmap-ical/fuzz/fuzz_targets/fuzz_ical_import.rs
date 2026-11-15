@@ -13,11 +13,21 @@ fuzz_target!(|data: &[u8]| {
         let _ = jmap_ical::resolve_canonical_time_zone(text);
         let _ = jmap_ical::names_time_zone(text);
         let _ = jmap_ical::free_busy_type(text);
+        let _ = jmap_ical::freebusy::mailto(text);
 
         // Exercise availability to VFREEBUSY conversion with arbitrary attendee and dates.
         let date = jmap_proto::state::UtcDate::new(text);
+        let _ = jmap_ical::freebusy::instant(&date);
         let period = jmap_proto::principals::BusyPeriod::new(date.clone(), date.clone(), text);
         let _ = jmap_ical::busy_periods_to_vfreebusy(text, &date, &date, &[period]);
+
+        // Exercise keyword mapping with arbitrary tags and values.
+        let true_val = serde_json::Value::Bool(true);
+        let false_val = serde_json::Value::Bool(false);
+        let str_val = serde_json::Value::String(text.to_string());
+        let _ = jmap_ical::maps_keyword(text, &true_val);
+        let _ = jmap_ical::maps_keyword(text, &false_val);
+        let _ = jmap_ical::maps_keyword(text, &str_val);
 
         if let Ok(event) = jmap_ical::ical_to_event(text) {
             let ical2 = jmap_ical::event_to_ical(&event);
@@ -39,6 +49,12 @@ fuzz_target!(|data: &[u8]| {
             // Exercise property mapping queries.
             let _ = jmap_ical::maps_alerts(&event);
             let _ = jmap_ical::maps_time_zone(&event);
+
+            if let Some(ref keywords) = event.keywords {
+                for (key, val) in keywords {
+                    let _ = jmap_ical::maps_keyword(key, val);
+                }
+            }
 
             if let Some(ref tzid) = event.time_zone {
                 let _ = jmap_ical::unique_tzid_to_iana(tzid);

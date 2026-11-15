@@ -387,10 +387,19 @@ fn fuzz_ical_import_extended_helpers_never_panic() {
         let _ = jmap_ical::resolve_canonical_time_zone(text);
         let _ = jmap_ical::names_time_zone(text);
         let _ = jmap_ical::free_busy_type(text);
+        let _ = jmap_ical::freebusy::mailto(text);
 
         let date = jmap_proto::state::UtcDate::new(*text);
+        let _ = jmap_ical::freebusy::instant(&date);
         let period = jmap_proto::principals::BusyPeriod::new(date.clone(), date.clone(), *text);
         let _ = jmap_ical::busy_periods_to_vfreebusy(text, &date, &date, &[period]);
+
+        let true_val = serde_json::Value::Bool(true);
+        let false_val = serde_json::Value::Bool(false);
+        let str_val = serde_json::Value::String(text.to_string());
+        let _ = jmap_ical::maps_keyword(text, &true_val);
+        let _ = jmap_ical::maps_keyword(text, &false_val);
+        let _ = jmap_ical::maps_keyword(text, &str_val);
 
         if let Ok(event) = ical_to_event(text) {
             let ical2 = event_to_ical(&event);
@@ -410,6 +419,12 @@ fn fuzz_ical_import_extended_helpers_never_panic() {
 
             let _ = jmap_ical::maps_alerts(&event);
             let _ = jmap_ical::maps_time_zone(&event);
+
+            if let Some(ref keywords) = event.keywords {
+                for (key, val) in keywords {
+                    let _ = jmap_ical::maps_keyword(key, val);
+                }
+            }
 
             if let Some(ref tzid) = event.time_zone {
                 let _ = jmap_ical::unique_tzid_to_iana(tzid);
