@@ -93,17 +93,20 @@ def write_source(uid, text):
 
 
 def write_standalone_mail_account(
-    name="JMAP scenario mail", key="scenario", identity=("Alice", "alice@example.com")
+    name="JMAP scenario mail", key="scenario", identity=("Alice", "alice@example.com"), port=None
 ):
     """Write a standalone mail account, its identity and its transport.
 
     The account uses the mock without credentials. `key` makes the source
     uids unique, so that a scenario can write more than one account.
-    `identity` is the (name, address) of the sender. Return the display name.
+    `identity` is the (name, address) of the sender. `port` lets a scenario
+    route the account through a proxy in front of the mock instead of
+    connecting to it directly; it defaults to the mock's own port. Return
+    the display name.
     """
     connection = f"""[Authentication]
 Host=127.0.0.1
-Port={MOCK_PORT}
+Port={port if port is not None else MOCK_PORT}
 
 [Security]
 Method=none
