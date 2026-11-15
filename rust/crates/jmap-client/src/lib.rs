@@ -103,6 +103,8 @@ pub mod sieve;
 mod snooze;
 pub mod transport;
 pub mod url;
+#[cfg(feature = "websocket")]
+pub mod websocket;
 
 pub use changes::ChangeSet;
 pub use client::{Client, ClientBuilder, Credentials, rebase_urls_from_env};

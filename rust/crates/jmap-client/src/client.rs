@@ -1171,6 +1171,31 @@ impl Client {
             ),
         )
     }
+
+    /// Return the session URL used to connect to the server.
+    pub fn session_url(&self) -> &str {
+        &self.session_url
+    }
+
+    /// Return the configured URL rebase origin, if any.
+    pub fn rebase_origin(&self) -> Option<&str> {
+        self.rebase_origin.as_deref()
+    }
+
+    /// Establish an RFC 8887 WebSocket connection using default timeouts.
+    #[cfg(feature = "websocket")]
+    pub fn connect_websocket(&self) -> Result<crate::websocket::WebSocketConnection, Error> {
+        crate::websocket::WebSocketConnection::connect(self)
+    }
+
+    /// Establish an RFC 8887 WebSocket connection with explicit timeouts.
+    #[cfg(feature = "websocket")]
+    pub fn connect_websocket_with_timeouts(
+        &self,
+        timeouts: crate::websocket::WebSocketTimeouts,
+    ) -> Result<crate::websocket::WebSocketConnection, Error> {
+        crate::websocket::WebSocketConnection::connect_with_timeouts(self, timeouts)
+    }
 }
 
 /// Extract the `Retry-After` duration from a problem error when present.
