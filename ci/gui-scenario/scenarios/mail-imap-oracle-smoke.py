@@ -38,8 +38,8 @@ def run():
     # `select_folder` dismisses the mail authentication request itself (it
     # waits through `dismiss_first_run_dialogs`, repeated: "a store that
     # connects again asks for the password again"). The oracle's
-    # `static`/`nopassword=y` passdb accepts the empty password that submits,
-    # since there is no keyring here to cache a real one.
+    # `static`/`nopassword=y` passdb accepts the empty password that
+    # submits, so this account needs no stored password.
     select_folder(ACCOUNT, "Inbox")
     try:
         select_message(SUBJECT)

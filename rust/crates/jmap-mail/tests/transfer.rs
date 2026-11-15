@@ -1681,6 +1681,161 @@ fn a_rechained_filing_reaches_the_summary_database() {
     );
 }
 
+/// A copy into a folder, then a move out of that same folder before the copy
+/// lands, must still land the message in the copy's source and in the move's
+/// destination, and nowhere else.
+///
+/// `queue_filing` found no `out_of_mailbox` on the waiting copy, so it fell
+/// through and overwrote the row with a plain move, instead of rechaining
+/// onto the row that holds the copy. The row the message copied out of kept
+/// its own, now stale, copy filing. Depending on which folder's walk reached
+/// the server last, the message could end up in all three mailboxes:
+/// `AUDIT-FFI-20261115.md`'s F3.
+#[test]
+fn a_copy_then_a_move_out_of_it_keeps_the_source_and_lands_once() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], false)
+        .expect_ok();
+    fixture
+        .transfer_straight(projects, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    let waypoint = listed(projects);
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    assert_eq!(
+        waypoint,
+        Vec::<String>::new(),
+        "the folder the message only passed through keeps no row, got {waypoint:?}"
+    );
+
+    fixture.reconnect();
+    // Archive's walk before Inbox's: on the pre-fix code, this is the walk
+    // order that lets the stale copy Inbox's own row still carries land
+    // last and put the message back in the waypoint. The fix must hold in
+    // either order; this is the one that catches a regression.
+    fixture.synchronize(fixture.archive).expect_ok();
+    fixture.synchronize(fixture.inbox).expect_ok();
+
+    let mailboxes = fixture.mailboxes_on_server(fixture.uid());
+    assert!(
+        mailboxes.contains_key(&fixture.inbox_id),
+        "the copy's source must keep the message, got {mailboxes:?}"
+    );
+    assert!(
+        mailboxes.contains_key(&fixture.archive_id),
+        "the move must land the message where it went, got {mailboxes:?}"
+    );
+    assert!(
+        !mailboxes.contains_key(&fixture.projects_id),
+        "the waypoint must not keep a copy of the message, got {mailboxes:?}"
+    );
+}
+
+/// The row that holds the original copy must reach the summary database with
+/// the joined filing, the same guarantee
+/// [`a_rechained_filing_reaches_the_summary_database`] already gives a move
+/// chain.
+#[test]
+fn a_rechained_copy_reaches_the_summary_database() {
+    let fixture = Fixture::restartable();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], false)
+        .expect_ok();
+    save_summary(fixture.inbox);
+    fixture
+        .transfer_straight(projects, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+    save_summary(fixture.inbox);
+
+    let directory = fixture.account.directory();
+    let uid = fixture.uid().clone();
+    let joined = Filing::copied_from(fixture.inbox_id.clone(), fixture.archive_id.clone());
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    drop(fixture);
+
+    // A new store at the same directory, offline, as a restarted process
+    // with no network has.
+    let restarted = Account::open_at(directory);
+    restarted.set_online(false);
+    let inbox = open(&restarted, "Inbox");
+    let filing = filing_of(inbox, &uid);
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(inbox.cast()) };
+    assert_eq!(
+        filing,
+        Some(joined),
+        "a restart must find the joined copy, not the move it replaced"
+    );
+}
+
+/// A copy queued beside a row that is itself still waiting for an earlier
+/// move must not let a later move out of the copy's destination rechain
+/// onto that other row: the other row does not carry the copy, only its own
+/// move, and a rechain that ignores this overwrites the move with the copy
+/// chain's own filing, corrupting it.
+///
+/// `queue_filing`'s "copy beside a waiting filing" branch returned the new
+/// filing with a `copy_source` naming the row it was copied from, as if
+/// that row held the copy. It does not: only the new destination row does.
+/// A later move out of that destination then rechained onto the wrong row.
+#[test]
+fn a_copy_beside_a_waiting_move_does_not_let_a_later_move_corrupt_that_move() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    assert!(fixture.account.jmap().drop_connection());
+
+    // Projects's row now waits for the queued Inbox -> Projects move.
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+    // A copy out of that waiting row: "copy beside a waiting filing".
+    fixture
+        .transfer_straight(projects, fixture.archive, &[fixture.uid()], false)
+        .expect_ok();
+    // A move back out of the copy's destination, before it lands.
+    fixture
+        .transfer_straight(fixture.archive, fixture.inbox, &[fixture.uid()], true)
+        .expect_ok();
+
+    let still_waiting = filing_of(projects, fixture.uid());
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    assert_eq!(
+        still_waiting,
+        Some(Filing::moved(
+            fixture.inbox_id.clone(),
+            fixture.projects_id.clone()
+        )),
+        "the original queued move must survive the copy and move that followed it, got {still_waiting:?}"
+    );
+
+    fixture.reconnect();
+    fixture.synchronize(fixture.archive).expect_ok();
+    fixture.synchronize(fixture.inbox).expect_ok();
+
+    let mailboxes = fixture.mailboxes_on_server(fixture.uid());
+    assert!(
+        mailboxes.contains_key(&fixture.projects_id),
+        "the original move must still land, got {mailboxes:?}"
+    );
+    assert!(
+        !mailboxes.contains_key(&fixture.archive_id),
+        "the detour through the copy's destination must leave no trace, got {mailboxes:?}"
+    );
+}
+
 /// ROADMAP item 182(c): the offline mail queue traces its own uid so a GUI
 /// scenario can assert "queued", "replayed" and "dropped" without reading
 /// server state.

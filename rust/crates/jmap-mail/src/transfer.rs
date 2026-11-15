@@ -268,7 +268,7 @@ unsafe extern "C" fn transfer_messages_to_sync(
             let moving = delete_originals != GFALSE;
             let filing = match moving {
                 true => Filing::moved(out_of.clone(), into.clone()),
-                false => Filing::copied_into(into.clone()),
+                false => Filing::copied_from(out_of.clone(), into.clone()),
             };
             // A move into the current mailbox has no patch, so it must not
             // remove the rows. Camel's wrapper catches the same `CamelFolder`
@@ -388,8 +388,8 @@ enum Filed {
     /// destination row gets.
     Queued(Filing),
     /// There is no connection, and this row was itself waiting for an
-    /// earlier queued move: the folder is one the message only passes
-    /// through. [`rechain`] has made the two moves one filing, which the
+    /// earlier queued filing: the folder is one the message only passes
+    /// through. [`rechain`] has joined the two filings into one, which the
     /// destination row gets. The caller removes this row.
     Rechained(Filing),
     /// The uid is not valid text, or the row is already gone (a concurrent
@@ -440,12 +440,14 @@ unsafe fn file_message(
 /// If the row vanished since the caller listed it (a concurrent refresh),
 /// there is nothing to mark, and the caller treats the uid as [`Filed::NoOp`].
 ///
-/// A row that already waits for an earlier queued move takes the other path
-/// ([`rechain`]), which joins the two moves instead of queueing a second
-/// request beside the first. Only a second *move* joins. A copy out of the
-/// same row asks for something the first filing does not give, so the row
-/// keeps the filing it waits for and only the new destination row carries
-/// the copy.
+/// A row that already waits for an earlier queued filing takes the other path
+/// ([`rechain`]), which joins the two filings instead of queueing a second
+/// request beside the first. A copy beside a waiting filing does not join:
+/// the row keeps the filing it waits for, and only the new destination row
+/// carries the copy. A move out of a row that waits for a move, or out of a
+/// row that waits for a copy with a known source, does join: the row the
+/// first filing started on (named by [`Filing::out_of_mailbox`] for a move,
+/// [`Filing::copy_source`] for a copy) gets the combined filing instead.
 ///
 /// # Safety
 ///
@@ -470,17 +472,31 @@ unsafe fn queue_filing(
         // The message is not in this mailbox on the server yet. A copy out
         // of it still only adds the new mailbox, so the two requests are
         // independent and their order does not change the result. This row
-        // keeps the filing that brings the message here.
+        // keeps the filing that brings the message here, unchanged: *this*
+        // row's own mailbox is not a safe `copy_source` for the new row,
+        // because this row does not hold the new copy and will not be
+        // rewritten to match it. Drop any source the caller gave the new
+        // filing, so a later move out of the new row falls through and
+        // overwrites it instead of rechaining onto this one.
         if filing.out_of_mailbox().is_none() {
             tracing::trace!(
                 uid = uid.to_string_lossy().as_ref(),
                 "queued a copy beside a waiting filing"
             );
-            return Filed::Queued(filing.clone());
+            return Filed::Queued(Filing::copied_into(filing.into_mailbox().clone()));
         }
         if let Some(origin) = waiting.out_of_mailbox() {
+            let joined = Filing::moved(origin.clone(), filing.into_mailbox().clone());
             // SAFETY: the contract above.
-            return unsafe { rechain(folder, uid, origin, filing.into_mailbox()) };
+            return unsafe { rechain(folder, uid, origin, joined) };
+        }
+        // The waiting filing is a copy with a known source: a move out of
+        // it now must take the message out of its *source*, not out of
+        // this row's own mailbox, which the message never stayed in.
+        if let Some(source) = waiting.copy_source() {
+            let joined = Filing::copied_from(source.clone(), filing.into_mailbox().clone());
+            // SAFETY: the contract above.
+            return unsafe { rechain(folder, uid, source, joined) };
         }
     }
     // SAFETY: `info` is a live row for as long as this function holds it.
@@ -501,16 +517,19 @@ unsafe fn queue_filing(
     Filed::Queued(filing.clone())
 }
 
-/// Joins a second queued move to the first one, and gives back the one
+/// Joins a second queued filing to the first one, and gives back the one
 /// filing that both folders then carry.
 ///
-/// `origin` is the mailbox the first move takes the message out of, and
-/// `into` the mailbox the user chose this time. The joined filing moves the
-/// message straight from `origin` to `into`, so no request names the mailbox
-/// of `folder`, which the message only passes through. The caller removes
-/// the row of `folder` and clones the row into the new destination.
+/// `origin` names the row the first filing started on: the mailbox a queued
+/// move takes the message out of, or the mailbox a queued copy came from.
+/// `joined` is the combined filing, built by the caller: a move chain joins
+/// into another move, straight from `origin`; a copy that a later move
+/// takes out of its destination before it lands joins into a copy, straight
+/// from `origin`. Either way no request names the mailbox of `folder`,
+/// which the message only passes through. The caller removes the row of
+/// `folder` and clones the row into the new destination.
 ///
-/// The row that holds the first move (the row in the folder of `origin`)
+/// The row that holds the first filing (the row in the folder of `origin`)
 /// must change with it. A request that still files the message into the
 /// mailbox the user has left would put it back there: nothing orders the
 /// walk of one folder against the walk of another, so that request can reach
@@ -529,13 +548,12 @@ unsafe fn queue_filing(
 ///
 /// If the folder of `origin` cannot be opened (the account has no listing,
 /// or the folder is gone), the joined filing is still correct for the two
-/// folders this call has. The row of `origin` then keeps the first move.
+/// folders this call has. The row of `origin` then keeps the first filing.
 ///
 /// # Safety
 ///
 /// `folder` must point at a live `JmapFolder`.
-unsafe fn rechain(folder: *mut CamelFolder, uid: &CStr, origin: &Id, into: &Id) -> Filed {
-    let joined = Filing::moved(origin.clone(), into.clone());
+unsafe fn rechain(folder: *mut CamelFolder, uid: &CStr, origin: &Id, joined: Filing) -> Filed {
     // SAFETY: the contract above.
     unsafe { rewrite_origin_row(folder, uid, origin, &joined) };
     tracing::trace!(
@@ -545,8 +563,8 @@ unsafe fn rechain(folder: *mut CamelFolder, uid: &CStr, origin: &Id, into: &Id) 
     Filed::Rechained(joined)
 }
 
-/// Writes `joined` on the row that holds the first move, in the folder that
-/// shows `origin`. An empty `joined` clears that row's filing instead.
+/// Writes `joined` on the row that holds the first filing, in the folder
+/// that shows `origin`. An empty `joined` clears that row's filing instead.
 ///
 /// # Safety
 ///

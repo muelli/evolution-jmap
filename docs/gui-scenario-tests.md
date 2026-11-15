@@ -36,8 +36,14 @@ about 1 GB. Later runs use the image again.
 
 The script installs the five package components of `build/` into a new
 container for each run. Then it starts these items for each scenario:
-`jmap-mockd`, `Xvfb`, `openbox`, a private D-Bus session and Evolution with
-`EVOLUTION_JMAP_LOG=trace`.
+`jmap-mockd`, `Xvfb`, `openbox`, a private D-Bus session, a secret store and
+Evolution with `EVOLUTION_JMAP_LOG=trace`.
+
+The secret store is a `gnome-keyring-daemon` with a new login keyring, which
+the script unlocks with the empty password. Evolution and EDS keep every
+account password in that store, not in the account file. Without it, D-Bus
+starts the keyring daemon on the first password lookup, and the daemon then
+shows an unlock window that fails on this display.
 
 Use `run.sh --host` only in a throwaway machine or container. It needs the
 components installed as root.
@@ -288,6 +294,21 @@ connect again when it opens a folder.
 
 The log must show no error of evolution-jmap.
 
+### `mail-password-auth`
+
+One mail account with a user name, against a mock that needs a password
+(`--basic`). The scenario does these steps and checks:
+
+1. Answer the dialog **Mail authentication request** with the password, with
+   **Remember password** on. The folder tree and the message list then show
+   the Inbox message of the mock.
+2. Quit Evolution and start it again in the same profile. The new process
+   must call the server without a new question. The password comes from the
+   secret store.
+
+Each other scenario uses an account with no user name, which needs no
+password.
+
 ## Write a scenario
 
 A scenario is a Python file in `ci/gui-scenario/scenarios/`. It calls
@@ -321,6 +342,9 @@ Obey these rules:
 - Use `select_folder()` to select a folder. The AT-SPI action "activate"
   opens the folder but does not select the row. Evolution then disables the
   folder commands, for example **Expunge**.
+- Give `user` to `write_standalone_mail_account()` for an account that needs
+  a password, and start the mock with `--basic`. Answer the password dialog
+  with `authenticate()`. An account with no user name needs neither.
 - Use `select_source()` to select a calendar or an address book. It moves
   the cursor of the source selector, as `select_folder()` does.
 - The registry and the factories log to `dbus.log`. Give `log="dbus.log"` to

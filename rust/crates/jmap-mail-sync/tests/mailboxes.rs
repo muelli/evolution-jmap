@@ -62,6 +62,18 @@ fn a_copy_names_only_the_mailbox_it_is_filed_into() {
 }
 
 #[test]
+fn a_copy_with_a_known_source_still_patches_only_the_destination() {
+    // `copy_source` is bookkeeping for a later rechain
+    // (`transfer::queue_filing`), not part of the `Email/set` patch: the
+    // server never removes a copy's source.
+    let filing = Filing::copied_from(Id::new("M1"), Id::new("M2"));
+
+    assert_eq!(filing.copy_source(), Some(&Id::new("M1")));
+    assert_eq!(filing.out_of_mailbox(), None);
+    assert_eq!(filing.patch(), json!({"mailboxIds/M2": true}));
+}
+
+#[test]
 fn a_move_takes_the_message_out_and_files_it_in_one_patch() {
     // One patch, not two requests: RFC 8621 §4.6 puts an Email in one or more
     // Mailboxes. If the removal is first, the server refuses it, because no
@@ -80,6 +92,16 @@ fn a_move_into_the_mailbox_the_message_is_already_in_says_nothing() {
     // A patch cannot show this filing: one pointer must be `true` and `null`.
     // No change is necessary, so the client sends nothing.
     let filing = Filing::moved(Id::new("M1"), Id::new("M1"));
+
+    assert!(filing.is_empty());
+    assert_eq!(filing.patch(), json!({}));
+}
+
+#[test]
+fn a_copy_whose_known_source_is_the_mailbox_it_is_filed_into_says_nothing() {
+    // The message is already where the copy would put it: there is nothing
+    // to ask the server for, the same as a move back into its own source.
+    let filing = Filing::copied_from(Id::new("M1"), Id::new("M1"));
 
     assert!(filing.is_empty());
     assert_eq!(filing.patch(), json!({}));

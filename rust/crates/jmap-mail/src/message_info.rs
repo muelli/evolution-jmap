@@ -103,6 +103,17 @@
 //! would read the new row's uid as a server id and send it a bogus
 //! `Email/set`. The reconnect walk that actually uploads a pending append is
 //! a later claim's own mechanism, not this one.
+//!
+//! ## The source of a filing's own copy
+//!
+//! An eighth column, after the pending-append column, so a row an older
+//! version wrote still loads: the cursor finds no data for it and
+//! `read_pending_copy_source` answers `None`, the same safe default
+//! `read_pending_append` already relies on. `transfer::rechain` needs the
+//! mailbox a queued copy came from to rewrite that row once a later move
+//! takes the message out of the copy's destination before the copy lands.
+//! [`Filing::patch`](jmap_mail_sync::Filing::patch) ignores this column:
+//! the server never removes a copy's source.
 
 use std::borrow::Cow;
 use std::ffi::CStr;
@@ -608,14 +619,20 @@ unsafe extern "C" fn save(
             }
         }
 
-        // SAFETY: `info` is a row of this type, so the field is there. `bdata`
-        // is the same live GString that has the keywords and the thread id.
-        // A presence flag, the destination mailbox id, then a second
-        // presence flag and the source mailbox id, present only for a move
-        // (`Filing::out_of_mailbox`). [`read_pending_filing`] reads this
-        // back in the same order.
+        // SAFETY: `info` is a row of this type, so the field is there. One
+        // read of the slot: a second, separate read here could race a
+        // concurrent `set_pending_filing` and pair this filing's own column
+        // with a later filing's copy-source column.
+        let filing = unsafe { pending_filing(info.cast_mut()) };
+
+        // SAFETY: `info` is a row of this type, so the field is there.
+        // `bdata` is the same live GString that has the keywords and the
+        // thread id. A presence flag, the destination mailbox id, then a
+        // second presence flag and the source mailbox id, present only for
+        // a move (`Filing::out_of_mailbox`). [`read_pending_filing`] reads
+        // this back in the same order.
         unsafe {
-            match pending_filing(info.cast_mut()) {
+            match &filing {
                 Some(filing) => {
                     camel_util_bdata_put_number(bdata, 1);
                     camel_util_bdata_put_string(
@@ -647,6 +664,21 @@ unsafe extern "C" fn save(
                         bdata,
                         c_string(append.mailbox().as_str()).as_ptr(),
                     );
+                }
+                None => camel_util_bdata_put_number(bdata, 0),
+            }
+        }
+
+        // SAFETY: `info` is a row of this type, so the field is there.
+        // `bdata` is the same live GString that has the four columns above.
+        // A presence flag and the source mailbox id, present only for a
+        // pending filing that is a copy with a known source.
+        // [`read_pending_copy_source`] reads this back in the same order.
+        unsafe {
+            match filing.and_then(|filing| filing.copy_source().cloned()) {
+                Some(source) => {
+                    camel_util_bdata_put_number(bdata, 1);
+                    camel_util_bdata_put_string(bdata, c_string(source.as_str()).as_ptr());
                 }
                 None => camel_util_bdata_put_number(bdata, 0),
             }
@@ -723,8 +755,6 @@ unsafe extern "C" fn load(
         // keywords and thread-id columns. `save` wrote the pending-filing
         // column at that position.
         let filing = unsafe { read_pending_filing(cursor) };
-        // SAFETY: `info` is a row of this type, because of the guard above.
-        unsafe { set_pending_filing(info, filing) };
 
         // SAFETY: after the reads above, the cursor is immediately after the
         // keywords, thread-id and pending-filing columns. `save` wrote the
@@ -732,6 +762,19 @@ unsafe extern "C" fn load(
         let append = unsafe { read_pending_append(cursor) };
         // SAFETY: `info` is a row of this type, because of the guard above.
         unsafe { set_pending_append(info, append) };
+
+        // SAFETY: after the reads above, the cursor is immediately after the
+        // keywords, thread-id, pending-filing and pending-append columns.
+        // `save` wrote the pending-copy-source column at that position.
+        let copy_source = unsafe { read_pending_copy_source(cursor) };
+        let filing = match (filing, copy_source) {
+            (Some(filing), Some(source)) if filing.out_of_mailbox().is_none() => {
+                Some(Filing::copied_from(source, filing.into_mailbox().clone()))
+            }
+            (filing, _) => filing,
+        };
+        // SAFETY: `info` is a row of this type, because of the guard above.
+        unsafe { set_pending_filing(info, filing) };
         GTRUE
     })
 }
@@ -808,6 +851,34 @@ unsafe fn read_pending_append(cursor: *mut *mut gchar) -> Option<PendingAppend> 
         let mailbox = Id::new(CStr::from_ptr(raw).to_string_lossy().into_owned());
         g_free(raw.cast());
         Some(PendingAppend::into_mailbox(mailbox))
+    }
+}
+
+/// Reads the pending-copy-source column that [`save`] writes after the
+/// pending-append column: a presence flag, then the source mailbox id.
+///
+/// If the record is truncated or older than this column, the presence flag
+/// defaults to 0, so this returns `None`: the same safe degradation
+/// [`read_pending_append`] already relies on.
+///
+/// # Safety
+///
+/// `cursor` must be the cursor [`load`] receives, already advanced past the
+/// keyword, thread-id, pending-filing and pending-append columns.
+unsafe fn read_pending_copy_source(cursor: *mut *mut gchar) -> Option<Id> {
+    // SAFETY: the contract above. `get_string` moves the cursor and returns a
+    // `g_malloc`ed string, or NULL when no data remains.
+    unsafe {
+        if camel_util_bdata_get_number(cursor, 0) == 0 {
+            return None;
+        }
+        let raw = camel_util_bdata_get_string(cursor, ptr::null());
+        if raw.is_null() {
+            return None;
+        }
+        let source = Id::new(CStr::from_ptr(raw).to_string_lossy().into_owned());
+        g_free(raw.cast());
+        Some(source)
     }
 }
 
@@ -1616,6 +1687,45 @@ mod pending_filing_tests {
         let restored = unsafe { new_message_info(ptr::null_mut(), &row("Em0103")) };
         assert!(!info.is_null() && !restored.is_null());
         let filing = Filing::copied_into(Id::new("Archive"));
+
+        // SAFETY: as the move test above.
+        unsafe {
+            set_pending_filing(info, Some(filing.clone()));
+
+            let mut record: CamelSummaryMessageRecord = std::mem::zeroed();
+            let bdata = g_string_new(ptr::null());
+            assert_ne!(
+                camel_message_info_save(info, ptr::addr_of_mut!(record), bdata),
+                GFALSE,
+                "the row would not save"
+            );
+
+            record.bdata = (*bdata).str;
+            let mut cursor = record.bdata;
+            assert_ne!(
+                camel_message_info_load(restored, ptr::addr_of!(record), ptr::addr_of_mut!(cursor)),
+                GFALSE,
+                "the row would not load"
+            );
+
+            assert_eq!(pending_filing(restored), Some(filing));
+            free_saved_strings(&mut record);
+            g_string_free(bdata, GTRUE);
+            g_object_unref(restored.cast());
+            g_object_unref(info.cast());
+        }
+    }
+
+    /// A copy's own source mailbox, the column `crate::transfer::rechain`
+    /// needs to rewrite that row once a later move takes the message out of
+    /// the copy's destination before the copy lands, survives the same trip.
+    #[test]
+    fn a_pending_copy_with_a_known_source_survives_a_trip_through_the_summary_database() {
+        // SAFETY: NULL is a valid summary; `new_message_info` tolerates it.
+        let info = unsafe { new_message_info(ptr::null_mut(), &row("Em0105")) };
+        let restored = unsafe { new_message_info(ptr::null_mut(), &row("Em0105")) };
+        assert!(!info.is_null() && !restored.is_null());
+        let filing = Filing::copied_from(Id::new("Inbox"), Id::new("Archive"));
 
         // SAFETY: as the move test above.
         unsafe {
