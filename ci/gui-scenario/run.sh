@@ -242,14 +242,17 @@ run_scenario() {
 			"${session_env[@]}" gsettings set \
 				org.gnome.evolution.calendar editor-show-categories true
 		fi
-		if [ "$name" = "mail-flags-server-push" ]; then
+		if [ "$name" = "mail-flags-server-push" ] || [ "$name" = "offline-replay-transport-error" ]; then
 			# Evolution marks the message the list cursor rests on as read
 			# after a timeout (1.5s by default, mark-seen), on its own, with
-			# no explicit user action. This scenario asserts on a
+			# no explicit user action. mail-flags-server-push asserts on a
 			# server-driven read/unread change alone, so that timer would
-			# race its own assertions; turn it off for this scenario only.
-			# Other scenarios check read/unread through an explicit
-			# Message/Mark As action and rely on mark-seen staying on.
+			# race its own assertions; offline-replay-transport-error's
+			# fault proxy breaks the first Email/set call it sees, and an
+			# unrelated mark-seen keyword sync must not be the one that
+			# consumes it. Turn it off for these scenarios only. Other
+			# scenarios check read/unread through an explicit Message/Mark
+			# As action and rely on mark-seen staying on.
 			"${session_env[@]}" gsettings set org.gnome.evolution.mail mark-seen false
 		fi
 		if [ "$name" = "mail-vcard-photo-fetch-remote-content" ]; then
