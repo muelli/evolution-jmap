@@ -10,12 +10,14 @@ restart_evolution, which starts a new Evolution process in the same
 profile.
 """
 
+import base64
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 ARTIFACTS = os.environ.get("GUI_SCENARIO_ARTIFACTS", ".")
@@ -27,6 +29,14 @@ SOURCES = os.environ.get("GUI_SCENARIO_SOURCES", ".")
 # when no oracle is running; a scenario that needs it fails fast instead.
 IMAP_HOST = os.environ.get("GUI_SCENARIO_IMAP_HOST", "")
 IMAP_PORT = os.environ.get("GUI_SCENARIO_IMAP_PORT", "")
+# A seeded account's address and password, and the --state file
+# harness/stalwart/seed-manual-test.py wrote it to, forwarded in by
+# ci/gui-scenario/run.sh --live. Empty outside --live; a live scenario
+# fails fast instead (see live_state() and write_standalone_mail_account's
+# own `user`).
+LIVE_USER = os.environ.get("GUI_SCENARIO_USER", "")
+LIVE_PASSWORD = os.environ.get("GUI_SCENARIO_PASSWORD", "")
+LIVE_STATE_FILE = os.environ.get("GUI_SCENARIO_STATE_FILE", "")
 DEFAULT_TIMEOUT = 60
 POLL_SECONDS = 0.5
 # The X keysym of the Menu key.
@@ -82,6 +92,22 @@ def screenshot(label):
     subprocess.run(["import", "-window", "root", path], check=False)
     say(f"screenshot {os.path.basename(path)}")
     return path
+
+
+# The --live state file.
+
+
+def live_state():
+    """Return the parsed JSON of GUI_SCENARIO_STATE_FILE.
+
+    Set by ci/gui-scenario/run.sh --live to the --state file
+    harness/stalwart/seed-manual-test.py wrote: a live scenario reads the
+    ids and names it seeded from here, instead of a fixture it wrote itself.
+    """
+    if not LIVE_STATE_FILE:
+        raise ScenarioFailure("no GUI_SCENARIO_STATE_FILE: this scenario needs --live")
+    with open(LIVE_STATE_FILE, encoding="utf-8") as state:
+        return json.load(state)
 
 
 # Source files.
@@ -321,19 +347,45 @@ Method=none
 
 
 class Jmap:
-    """A minimal JMAP client for server-state checks. It sends no credentials.
+    """A minimal JMAP client for server-state checks.
 
-    The calls go to `account_id`, by default the primary mail account.
+    The calls go to `account_id`, by default the primary mail account. With
+    no `user`, it sends no credentials, as every mock scenario needs.
+
+    `rebase`, for a --live scenario: keep only the path of each endpoint the
+    server names (`apiUrl` and so on) and substitute this object's own
+    origin, the loopback address of live_proxy.py's relay. Without it, a
+    server that advertises an address this process cannot reach (its own
+    configured public hostname, unrelated to the address `url` names) would
+    have every call after the first try to dial that address directly.
     """
 
-    def __init__(self, url=JMAP_URL, account_id=None):
+    def __init__(self, url=JMAP_URL, account_id=None, user=None, password=None, rebase=False):
         self.url = url
+        self.user = user
+        self.password = password
+        self.rebase = rebase
         session = wait_for(self._session, f"JMAP session at {url}", timeout=30)
-        self.api_url = session["apiUrl"]
+        self.api_url = self._rebased(session["apiUrl"])
         self.account_id = account_id or session["primaryAccounts"][MAIL_CAPABILITY]
 
+    def _auth_header(self):
+        if not self.user:
+            return {}
+        token = base64.b64encode(f"{self.user}:{self.password}".encode()).decode()
+        return {"Authorization": f"Basic {token}"}
+
+    def _rebased(self, url):
+        if not self.rebase:
+            return url
+        origin = urllib.parse.urlsplit(self.url)
+        return urllib.parse.urlunsplit(
+            urllib.parse.urlsplit(url)._replace(scheme=origin.scheme, netloc=origin.netloc)
+        )
+
     def _session(self):
-        with urllib.request.urlopen(f"{self.url}/.well-known/jmap", timeout=5) as response:
+        request = urllib.request.Request(f"{self.url}/.well-known/jmap", headers=self._auth_header())
+        with urllib.request.urlopen(request, timeout=5) as response:
             return json.load(response)
 
     def call(self, method, arguments, extra_using=()):
@@ -356,7 +408,9 @@ class Jmap:
             }
         ).encode()
         request = urllib.request.Request(
-            self.api_url, data=body, headers={"Content-Type": "application/json"}
+            self.api_url,
+            data=body,
+            headers={"Content-Type": "application/json", **self._auth_header()},
         )
         with urllib.request.urlopen(request, timeout=10) as response:
             name, result, _ = json.load(response)["methodResponses"][0]
@@ -981,7 +1035,11 @@ def authenticate(password, remember=True, label=None):
     in the session secret store, so a later process of the same profile
     connects without a question. ci/gui-scenario/run.sh starts that store.
     A password field reports no text over AT-SPI, so this types the keys
-    and does not read the field back.
+    and does not read the field back: a longer, random one (a seeded
+    --live account's own password, unlike every mock scenario's short
+    literal one) can otherwise lose a character to synthetic key events
+    arriving faster than GTK processes them, so this sends it in small
+    chunks with a short pause between them, giving the main loop time.
     """
     dialog = wait_for(authentication_request, 'the "Mail authentication request" dialog')
     if label is not None:
@@ -990,7 +1048,12 @@ def authenticate(password, remember=True, label=None):
     if field is None:
         raise ScenarioFailure("the authentication dialog has no password field")
     field.queryComponent().grabFocus()
-    pyatspi.Registry.generateKeyboardEvent(0, password, pyatspi.KEY_STRING)
+    chunk_size = 4
+    for start in range(0, len(password), chunk_size):
+        pyatspi.Registry.generateKeyboardEvent(
+            0, password[start : start + chunk_size], pyatspi.KEY_STRING
+        )
+        time.sleep(0.05)
     checkbox = find(dialog, "check box")
     if checkbox is not None:
         checked = checkbox.getState().contains(pyatspi.STATE_CHECKED)
