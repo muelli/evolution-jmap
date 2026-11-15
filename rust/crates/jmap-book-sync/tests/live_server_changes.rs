@@ -27,10 +27,45 @@
 //! domain. It skips when `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset.
 
 use jmap_book_sync::BookSync;
+use jmap_client::Client;
 use jmap_proto::contacts::AddressBook;
 use jmap_proto::session::CAPABILITY_CONTACTS;
 use jmap_test_support::{connect_for_write, connect_recipient, unique_suffix};
 use serde_json::json;
+
+fn connect_for_write_or_fail() -> Option<Client> {
+    match connect_for_write() {
+        Some(client) => Some(client),
+        None => {
+            if let Ok(origin) = std::env::var("JMAP_LIVE_SERVER_URL") {
+                panic!(
+                    "JMAP_LIVE_SERVER_URL is set ({origin}), but write account could not be connected"
+                );
+            }
+            eprintln!(
+                "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test"
+            );
+            None
+        }
+    }
+}
+
+fn connect_recipient_or_fail() -> Option<Client> {
+    match connect_recipient() {
+        Some(client) => Some(client),
+        None => {
+            if let Ok(origin) = std::env::var("JMAP_LIVE_SERVER_URL") {
+                panic!(
+                    "JMAP_LIVE_SERVER_URL is set ({origin}), but recipient account could not be connected"
+                );
+            }
+            eprintln!(
+                "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the write-path test"
+            );
+            None
+        }
+    }
+}
 
 /// Creates, edits and removes a contact. After each step, confirms that
 /// `get_changes` from the state before that step reports it. Mirrors the
@@ -40,8 +75,7 @@ use serde_json::json;
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn get_changes_reports_a_create_an_edit_and_a_removal_against_the_real_server() {
-    let Some(client) = connect_for_write() else {
-        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+    let Some(client) = connect_for_write_or_fail() else {
         return;
     };
     let account_id = client
@@ -146,14 +180,10 @@ fn get_changes_reports_a_create_an_edit_and_a_removal_against_the_real_server() 
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
-    let Some(owner) = connect_for_write() else {
-        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+    let Some(owner) = connect_for_write_or_fail() else {
         return;
     };
-    let Some(other) = connect_recipient() else {
-        eprintln!(
-            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the write-path test"
-        );
+    let Some(other) = connect_recipient_or_fail() else {
         return;
     };
 
@@ -231,8 +261,7 @@ fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_card_moved_to_another_address_book_is_reported_as_removed_against_the_real_server() {
-    let Some(client) = connect_for_write() else {
-        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+    let Some(client) = connect_for_write_or_fail() else {
         return;
     };
     let account_id = client

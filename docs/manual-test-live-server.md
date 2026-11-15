@@ -40,8 +40,10 @@ Two suites fail against this container for reasons outside this project:
 - The wrong-password rejection tests in `jmap-backend-core`, `jmap-mail`'s
   `live_server_authenticate.rs`, and `jmap-mail`'s `live_server_connect.rs`.
   The container's `fakesaslauthd` accepts any password for a provisioned
-  account, so a deliberately wrong password never gets rejected here. A
-  failure in these tests against the oracle is expected, not a regression.
+  account, so a deliberately wrong password never gets rejected here.
+  `./ci/cyrus-oracle.sh env` exports `JMAP_LIVE_SERVER_ACCEPTS_ANY_PASSWORD=1`
+  so these tests skip their rejection assertion with an explanatory notice
+  instead of failing.
 - `jmap-config`'s OAuth 2.0 discovery test skips here instead of running: the
   container publishes no RFC 8414 metadata document at all.
 - `jmap-cal-sync`'s free/busy test skips here instead of running: the
@@ -80,6 +82,17 @@ $ export JMAP_LIVE_SERVER_REBASE_URLS=1
 
 The client then keeps the path of each URL. It uses the scheme and authority
 of `JMAP_LIVE_SERVER_URL`. In all other cases, do not set the variable.
+
+If a live test server accepts any password for provisioned accounts (such as
+a local test container using `fakesaslauthd`), declare that explicitly:
+
+```console
+$ export JMAP_LIVE_SERVER_ACCEPTS_ANY_PASSWORD=1
+```
+
+Without this variable, the rejection assertion in the wrong-password tests is
+mandatory: a server that accepts a wrong password fails the test. When set to
+`1`, the assertion is skipped with an informational notice.
 
 ## 3. (optional) Enable the write-path tests
 
