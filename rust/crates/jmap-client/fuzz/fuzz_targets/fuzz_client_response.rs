@@ -193,6 +193,160 @@ fuzz_target!(|data: &[u8]| {
             false,
         );
         let _ = client.snoozed_mailbox(&account_id);
+        let _ = client.current_user_principal(&account_id);
+        let _ = client.current_user_principal_id(&account_id);
+        let _ = client.principal_query(
+            &account_id,
+            jmap_proto::principals::PrincipalQueryFilter::default(),
+        );
+        let _ = client.principal_set(&jmap_proto::methods::SetRequest::<
+            jmap_proto::principals::Principal,
+        >::new(account_id.clone()));
+        let _ = client.principal_query_changes(&jmap_proto::methods::QueryChangesRequest::new(
+            account_id.clone(),
+            jmap_proto::State::new("0"),
+        ));
+        let _ = client.share_notification_set(&jmap_proto::methods::SetRequest::<
+            jmap_proto::principals::ShareNotification,
+        >::new(account_id.clone()));
+        let _ = client.mailbox_update(
+            &account_id,
+            &Id::new("m1"),
+            serde_json::json!({"name": "renamed"}),
+        );
+        let _ = client.mailbox_set(
+            &jmap_proto::methods::SetRequest::<jmap_proto::mail::Mailbox>::new(account_id.clone()),
+        );
+        let _ = client.vacation_response_get_with_state(&account_id);
+        let _ =
+            client.vacation_response_update(&account_id, serde_json::json!({"isEnabled": true}));
+        let _ = client.vacation_response_set(&jmap_proto::methods::SetRequest::<
+            jmap_proto::mail::VacationResponse,
+        >::new(account_id.clone()));
+        let _ = client.email_state(&account_id);
+        let _ = client.email_query(
+            &account_id,
+            jmap_proto::mail::EmailQueryFilter::default(),
+            None,
+            None,
+            0,
+        );
+        let _ = client.email_query_every_id(
+            &account_id,
+            jmap_proto::mail::EmailQueryFilter::default(),
+            None,
+        );
+        let _ = client.email_query_then_get(
+            &account_id,
+            jmap_proto::mail::EmailQueryFilter::default(),
+            None,
+            None,
+        );
+        let _ = client.email_set(
+            &jmap_proto::methods::SetRequest::<jmap_proto::mail::Email>::new(account_id.clone()),
+        );
+        let _ = client.email_update(
+            &account_id,
+            &Id::new("e1"),
+            serde_json::json!({"keywords": {"$seen": true}}),
+        );
+        let _ = client.email_destroy(&account_id, &Id::new("e1"));
+        let _ = client.email_import(
+            &account_id,
+            &jmap_proto::mail::EmailImport::new(Id::new("b1"), Id::new("m1")),
+        );
+        let _ = client.email_parse(&jmap_proto::mail::EmailParseRequest::new(
+            account_id.clone(),
+            [Id::new("b1")],
+        ));
+        let _ = client.email_submission_get(&account_id, [Id::new("sub1")]);
+        let _ = client.email_submission_query(
+            &account_id,
+            jmap_proto::mail::EmailSubmissionQueryFilter::new(),
+        );
+        let _ = client.cancel_email_submission(&account_id, &Id::new("sub1"));
+        let _ = client.sieve_script_create(
+            &account_id,
+            &jmap_proto::sieve::SieveScript::new("script_name", Id::new("b1")),
+        );
+        let _ = client.sieve_script_activate(&account_id, &Id::new("s1"));
+        let _ = client.sieve_script_deactivate(&account_id);
+        let _ = client.sieve_script_destroy(&account_id, &Id::new("s1"));
+        let _ = client.calendar_update(
+            &account_id,
+            &Id::new("c1"),
+            serde_json::json!({"name": "renamed"}),
+        );
+        let _ = client.calendar_set(&jmap_proto::methods::SetRequest::<
+            jmap_proto::calendars::Calendar,
+        >::new(account_id.clone()));
+        let _ = client.calendar_event_state(&account_id);
+        let _ = client.event_update(
+            &account_id,
+            &Id::new("ev1"),
+            serde_json::json!({"title": "updated"}),
+        );
+        let _ = client.event_set(&jmap_proto::calendars::CalendarEventSetRequest::new(
+            jmap_proto::methods::SetRequest::new(account_id.clone()),
+        ));
+        let _ = client.event_query(
+            &account_id,
+            jmap_proto::calendars::CalendarEventQueryFilter::default(),
+        );
+        let _ = client.event_query_every_id(
+            &account_id,
+            jmap_proto::calendars::CalendarEventQueryFilter::default(),
+        );
+        let _ = client.participant_identity_create(
+            &account_id,
+            &jmap_proto::calendars::ParticipantIdentity::new("pi"),
+        );
+        let _ = client.participant_identity_update(
+            &account_id,
+            &Id::new("pi1"),
+            serde_json::json!({"name": "pi"}),
+        );
+        let _ = client.participant_identity_destroy(&account_id, &Id::new("pi1"));
+        let _ = client.participant_identity_set_default(&account_id, &Id::new("pi1"));
+        let _ = client.contact_update(
+            &account_id,
+            &Id::new("card1"),
+            serde_json::json!({"notes": "note"}),
+        );
+        let _ = client.contact_set(&jmap_proto::methods::SetRequest::<
+            jmap_proto::contacts::ContactCard,
+        >::new(account_id.clone()));
+        let _ = client.contact_state(&account_id);
+        let _ =
+            client.address_book_create(&account_id, &jmap_proto::contacts::AddressBook::new("ab"));
+        let _ = client.address_book_destroy(&account_id, &Id::new("ab1"));
+        let _ = client.address_book_update(
+            &account_id,
+            &Id::new("ab1"),
+            serde_json::json!({"name": "ab_renamed"}),
+        );
+        let _ = client.address_book_set(&jmap_proto::methods::SetRequest::<
+            jmap_proto::contacts::AddressBook,
+        >::new(account_id.clone()));
+        let _ = client.contact_query(
+            &account_id,
+            jmap_proto::contacts::ContactCardQueryFilter::default(),
+        );
+        let _ = client.contact_query_every_id(
+            &account_id,
+            jmap_proto::contacts::ContactCardQueryFilter::default(),
+        );
+        let _ = client.all_changes(&account_id, "Mailbox", &jmap_proto::State::new("0"));
+        let _ = client.all_changes(&account_id, "Email", &jmap_proto::State::new("0"));
+        let _ = client.blob_upload(&jmap_proto::blob::BlobUploadRequest::new(
+            account_id.clone(),
+        ));
+        let _ = client.snooze_email(
+            &account_id,
+            &Id::new("e1"),
+            &Id::new("m_snooze"),
+            &jmap_proto::mail::SnoozeDetails::new(jmap_proto::UtcDate::new("2026-12-01T00:00:00Z")),
+        );
         let _ = client.is_session_stale();
         let _ = client.last_session_state();
     }
