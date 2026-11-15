@@ -35,11 +35,46 @@
 //! `JMAP_LIVE_SERVER_RECIPIENT_USER` is unset.
 
 use jmap_book_sync::{BookSync, SyncError};
+use jmap_client::Client;
 use jmap_proto::contacts::AddressBook;
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::session::{CAPABILITY_CONTACTS, CAPABILITY_PRINCIPALS};
 use jmap_test_support::{connect_owner, connect_recipient_with_user, unique_suffix};
 use serde_json::json;
+
+fn connect_owner_or_fail() -> Option<(Client, String)> {
+    match connect_owner() {
+        Some(owner) => Some(owner),
+        None => {
+            if let Ok(origin) = std::env::var("JMAP_LIVE_SERVER_URL") {
+                panic!(
+                    "JMAP_LIVE_SERVER_URL is set ({origin}), but write account could not be connected"
+                );
+            }
+            eprintln!(
+                "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the shared book test"
+            );
+            None
+        }
+    }
+}
+
+fn connect_recipient_with_user_or_fail() -> Option<(Client, String)> {
+    match connect_recipient_with_user() {
+        Some(recipient) => Some(recipient),
+        None => {
+            if let Ok(origin) = std::env::var("JMAP_LIVE_SERVER_URL") {
+                panic!(
+                    "JMAP_LIVE_SERVER_URL is set ({origin}), but recipient account could not be connected"
+                );
+            }
+            eprintln!(
+                "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the shared book test"
+            );
+            None
+        }
+    }
+}
 
 /// A missing grant shows in one of two ways. The server refuses the whole
 /// method (no query or get rights, RFC 8620 §3.6.2). Or the method runs, but
@@ -108,14 +143,10 @@ fn vcard(name: &str) -> String {
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn a_shared_address_books_contacts_are_readable_then_writable_as_the_grant_widens() {
-    let Some((owner, _owner_address)) = connect_owner() else {
-        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the shared book test");
+    let Some((owner, _owner_address)) = connect_owner_or_fail() else {
         return;
     };
-    let Some((recipient, recipient_address)) = connect_recipient_with_user() else {
-        eprintln!(
-            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the shared book test"
-        );
+    let Some((recipient, recipient_address)) = connect_recipient_with_user_or_fail() else {
         return;
     };
     if !recipient
