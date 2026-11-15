@@ -3,9 +3,11 @@
 """Shared helpers of the GUI scenarios.
 
 ci/gui-scenario/run.sh calls each scenario two times: "setup" before
-Evolution starts, "run" after. The helpers here start no process. They find
-and operate AT-SPI nodes with timeouts, query the server through JMAP, write
-the source files, read the Evolution log and take screenshots.
+Evolution starts, "run" after. The helpers here find and operate AT-SPI
+nodes with timeouts, query the server through JMAP, write the source
+files, read the Evolution log and take screenshots. The one exception is
+restart_evolution, which starts a new Evolution process in the same
+profile.
 """
 
 import json
@@ -901,6 +903,24 @@ def _activate_menu_item(path, window_prefix):
     """The child process of menu_item."""
     root = window(window_prefix) if window_prefix else evolution()
     do_action(_menu_entry(root, path))
+
+
+def restart_evolution(component="mail", timeout=DEFAULT_TIMEOUT):
+    """Quit Evolution through File/Quit and start it again.
+
+    The only helper here that starts a process. The new process gets this
+    one's own inherited environment, so it lands in the same profile, D-Bus
+    session and display as the one that just quit, with its account and
+    cached data intact. Appends to the existing "evolution.log" so
+    expect_log/expect_no_errors keep seeing the whole run. Waits for the
+    application to leave, then to reappear in the AT-SPI tree.
+    """
+    menu_item("File/Quit")
+    wait_for(lambda: evolution() is None, "Evolution quit", timeout)
+    with open(os.path.join(ARTIFACTS, "evolution.log"), "a", encoding="utf-8") as log:
+        subprocess.Popen(["evolution", "-c", component, "--force-online"], stdout=log, stderr=log)
+    wait_for(lambda: evolution() is not None, "Evolution restarted", timeout)
+    say("evolution: restarted")
 
 
 def click_button(root, name, timeout=DEFAULT_TIMEOUT):
