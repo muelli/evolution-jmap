@@ -1222,71 +1222,73 @@ mod tests {
     /// skips without one.
     #[test]
     fn the_rule_dialog_lets_enter_confirm_it() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain toplevel window stands in for the live page;
-        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
-        // via `parent_on`. Both widgets are destroyed before returning.
-        unsafe {
-            let window = gtk_window_new(0);
-            let draft = RuleDraft::new();
-            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain toplevel window stands in for the live page;
+            // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+            // via `parent_on`. Both widgets are destroyed before returning.
+            unsafe {
+                let window = gtk_window_new(0);
+                let draft = RuleDraft::new();
+                let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
 
-            assert!(
-                !gtk_window_get_default_widget(dialog.cast()).is_null(),
-                "the dialog has no default response: Enter would do nothing"
-            );
-            let cell = state(dialog.cast()).unwrap();
-            let name = cell.borrow().name;
-            let mut activates_default: gboolean = GFALSE;
-            g_object_get(
-                name.cast(),
-                c"activates-default".as_ptr(),
-                &mut activates_default as *mut gboolean,
-                ptr::null::<c_char>(),
-            );
-            assert_ne!(
-                activates_default, GFALSE,
-                "the name entry does not activate the default: Enter would do nothing"
-            );
+                assert!(
+                    !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                    "the dialog has no default response: Enter would do nothing"
+                );
+                let cell = state(dialog.cast()).unwrap();
+                let name = cell.borrow().name;
+                let mut activates_default: gboolean = GFALSE;
+                g_object_get(
+                    name.cast(),
+                    c"activates-default".as_ptr(),
+                    &mut activates_default as *mut gboolean,
+                    ptr::null::<c_char>(),
+                );
+                assert_ne!(
+                    activates_default, GFALSE,
+                    "the name entry does not activate the default: Enter would do nothing"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// GNOME HIG: 12px between a dialog's content and its edges. Needs a
     /// display; skips without one.
     #[test]
     fn the_rule_dialog_has_a_hig_content_margin() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain toplevel window stands in for the live page;
-        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
-        // via `parent_on`. Both widgets are destroyed before returning.
-        unsafe {
-            let window = gtk_window_new(0);
-            let draft = RuleDraft::new();
-            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain toplevel window stands in for the live page;
+            // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+            // via `parent_on`. Both widgets are destroyed before returning.
+            unsafe {
+                let window = gtk_window_new(0);
+                let draft = RuleDraft::new();
+                let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
 
-            let content_area = gtk_dialog_get_content_area(dialog.cast());
-            assert_eq!(
-                gtk_container_get_border_width(content_area.cast()),
-                12,
-                "the content area has no HIG margin: content touches the dialog's edges"
-            );
+                let content_area = gtk_dialog_get_content_area(dialog.cast());
+                assert_eq!(
+                    gtk_container_get_border_width(content_area.cast()),
+                    12,
+                    "the content area has no HIG margin: content touches the dialog's edges"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// Layout (item 174 (a)): a long status reason (longer still in German)
@@ -1294,87 +1296,89 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn the_rule_dialog_status_label_wraps() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain toplevel window stands in for the live page;
-        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
-        // via `parent_on`. Both widgets are destroyed before returning.
-        unsafe {
-            let window = gtk_window_new(0);
-            let draft = RuleDraft::new();
-            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain toplevel window stands in for the live page;
+            // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+            // via `parent_on`. Both widgets are destroyed before returning.
+            unsafe {
+                let window = gtk_window_new(0);
+                let draft = RuleDraft::new();
+                let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
 
-            let status = state(dialog.cast()).unwrap().borrow().status;
-            let mut wrap: gboolean = GFALSE;
-            g_object_get(
-                status.cast(),
-                c"wrap".as_ptr(),
-                &mut wrap as *mut gboolean,
-                ptr::null::<c_char>(),
-            );
-            assert_ne!(
-                wrap, GFALSE,
-                "the status label does not wrap: a long reason would widen the dialog"
-            );
-            let mut wrap_mode: c_int = -1;
-            g_object_get(
-                status.cast(),
-                c"wrap-mode".as_ptr(),
-                &mut wrap_mode as *mut c_int,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                wrap_mode,
-                widget::PANGO_WRAP_WORD_CHAR,
-                "the status label does not break an overlong word"
-            );
+                let status = state(dialog.cast()).unwrap().borrow().status;
+                let mut wrap: gboolean = GFALSE;
+                g_object_get(
+                    status.cast(),
+                    c"wrap".as_ptr(),
+                    &mut wrap as *mut gboolean,
+                    ptr::null::<c_char>(),
+                );
+                assert_ne!(
+                    wrap, GFALSE,
+                    "the status label does not wrap: a long reason would widen the dialog"
+                );
+                let mut wrap_mode: c_int = -1;
+                g_object_get(
+                    status.cast(),
+                    c"wrap-mode".as_ptr(),
+                    &mut wrap_mode as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    wrap_mode,
+                    widget::PANGO_WRAP_WORD_CHAR,
+                    "the status label does not break an overlong word"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// GNOME HIG: 6px between related rows in a box, the same spacing the
     /// rest of this dialog uses. Needs a display; skips without one.
     #[test]
     fn the_condition_and_action_rows_use_the_dialogs_spacing() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain toplevel window stands in for the live page;
-        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
-        // via `parent_on`. Both widgets are destroyed before returning.
-        unsafe {
-            let window = gtk_window_new(0);
-            let draft = RuleDraft::new();
-            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain toplevel window stands in for the live page;
+            // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+            // via `parent_on`. Both widgets are destroyed before returning.
+            unsafe {
+                let window = gtk_window_new(0);
+                let draft = RuleDraft::new();
+                let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
 
-            let cell = state(dialog.cast()).unwrap();
-            let (conditions, actions) = {
-                let state = cell.borrow();
-                (state.conditions, state.actions)
-            };
-            assert_eq!(
-                gtk_box_get_spacing(conditions.cast()),
-                6,
-                "the conditions row box uses a different spacing than the rest of the dialog"
-            );
-            assert_eq!(
-                gtk_box_get_spacing(actions.cast()),
-                6,
-                "the actions row box uses a different spacing than the rest of the dialog"
-            );
+                let cell = state(dialog.cast()).unwrap();
+                let (conditions, actions) = {
+                    let state = cell.borrow();
+                    (state.conditions, state.actions)
+                };
+                assert_eq!(
+                    gtk_box_get_spacing(conditions.cast()),
+                    6,
+                    "the conditions row box uses a different spacing than the rest of the dialog"
+                );
+                assert_eq!(
+                    gtk_box_get_spacing(actions.cast()),
+                    6,
+                    "the actions row box uses a different spacing than the rest of the dialog"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// Layout (item 174 (a)): nothing bounds how many conditions or actions
@@ -1384,66 +1388,67 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn the_condition_and_action_rows_scroll_instead_of_growing_the_dialog() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain toplevel window stands in for the live page;
-        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
-        // via `parent_on`. Both widgets are destroyed before returning.
-        unsafe {
-            let window = gtk_window_new(0);
-            let draft = RuleDraft::new();
-            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
-
-            let conditions = state(dialog.cast()).unwrap().borrow().conditions;
-            // GTK3 wraps a non-`GtkScrollable` child (a plain `GtkBox`) in a
-            // `GtkViewport` of its own, so the scroller is two parents up,
-            // not one.
-            let mut ancestor = gtk_widget_get_parent(conditions);
-            while !ancestor.is_null()
-                && g_type_check_instance_is_a(
-                    ancestor.cast::<GTypeInstance>(),
-                    gtk_scrolled_window_get_type(),
-                ) == GFALSE
-            {
-                ancestor = gtk_widget_get_parent(ancestor);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-            assert!(
-                !ancestor.is_null(),
-                "the condition and action rows have no GtkScrolledWindow ancestor: \
+            // SAFETY: a plain toplevel window stands in for the live page;
+            // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+            // via `parent_on`. Both widgets are destroyed before returning.
+            unsafe {
+                let window = gtk_window_new(0);
+                let draft = RuleDraft::new();
+                let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+
+                let conditions = state(dialog.cast()).unwrap().borrow().conditions;
+                // GTK3 wraps a non-`GtkScrollable` child (a plain `GtkBox`) in a
+                // `GtkViewport` of its own, so the scroller is two parents up,
+                // not one.
+                let mut ancestor = gtk_widget_get_parent(conditions);
+                while !ancestor.is_null()
+                    && g_type_check_instance_is_a(
+                        ancestor.cast::<GTypeInstance>(),
+                        gtk_scrolled_window_get_type(),
+                    ) == GFALSE
+                {
+                    ancestor = gtk_widget_get_parent(ancestor);
+                }
+                assert!(
+                    !ancestor.is_null(),
+                    "the condition and action rows have no GtkScrolledWindow ancestor: \
                  the dialog would grow without bound instead of scrolling"
-            );
+                );
 
-            let mut hscrollbar_policy: c_int = -1;
-            g_object_get(
-                ancestor.cast(),
-                c"hscrollbar-policy".as_ptr(),
-                &mut hscrollbar_policy as *mut c_int,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                hscrollbar_policy, GTK_POLICY_NEVER,
-                "the rows scroller can still scroll sideways"
-            );
+                let mut hscrollbar_policy: c_int = -1;
+                g_object_get(
+                    ancestor.cast(),
+                    c"hscrollbar-policy".as_ptr(),
+                    &mut hscrollbar_policy as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    hscrollbar_policy, GTK_POLICY_NEVER,
+                    "the rows scroller can still scroll sideways"
+                );
 
-            let mut height_request: c_int = -1;
-            g_object_get(
-                ancestor.cast(),
-                c"height-request".as_ptr(),
-                &mut height_request as *mut c_int,
-                ptr::null::<c_char>(),
-            );
-            assert!(
-                height_request > 0,
-                "the rows scroller has no fixed height: it would grow without bound"
-            );
+                let mut height_request: c_int = -1;
+                g_object_get(
+                    ancestor.cast(),
+                    c"height-request".as_ptr(),
+                    &mut height_request as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert!(
+                    height_request > 0,
+                    "the rows scroller has no fixed height: it would grow without bound"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// Accessibility (item 174 (d)): each condition and action row has no
@@ -1452,73 +1457,74 @@ mod tests {
     /// one.
     #[test]
     fn the_condition_and_action_row_widgets_have_accessible_names() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain toplevel window stands in for the live page;
-        // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
-        // via `parent_on`. Both widgets are destroyed before returning.
-        unsafe {
-            let window = gtk_window_new(0);
-            let draft = RuleDraft::new();
-            let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
-            append_condition(dialog.cast(), None);
-            append_action(dialog.cast(), None);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain toplevel window stands in for the live page;
+            // `build_rule_dialog` only passes it to `gtk_widget_get_toplevel`
+            // via `parent_on`. Both widgets are destroyed before returning.
+            unsafe {
+                let window = gtk_window_new(0);
+                let draft = RuleDraft::new();
+                let dialog = build_rule_dialog(window.cast(), c"Test", &draft, &[], &[]);
+                append_condition(dialog.cast(), None);
+                append_action(dialog.cast(), None);
 
-            let cell = state(dialog.cast()).unwrap();
-            let (field, header, op, value) = {
-                let ui = cell.borrow();
-                let row = ui.condition_rows.last().unwrap();
-                (row.field, row.header, row.op, row.value)
-            };
-            assert_eq!(
-                widget::get_accessible_name(field.cast()),
-                translate(CONDITION_FIELD_NAME),
-                "the condition field combo keeps no name a screen reader can announce"
-            );
-            assert_eq!(
-                widget::get_accessible_name(header.cast()),
-                translate(HEADER_NAME_HINT),
-                "the header-name entry keeps no name a screen reader can announce"
-            );
-            assert_eq!(
-                widget::get_accessible_name(op.cast()),
-                translate(CONDITION_OP_NAME),
-                "the condition operator combo keeps no name a screen reader can announce"
-            );
-            assert_eq!(
-                widget::get_accessible_name(value.cast()),
-                translate(CONDITION_VALUE_NAME),
-                "the condition value entry keeps no name a screen reader can announce"
-            );
+                let cell = state(dialog.cast()).unwrap();
+                let (field, header, op, value) = {
+                    let ui = cell.borrow();
+                    let row = ui.condition_rows.last().unwrap();
+                    (row.field, row.header, row.op, row.value)
+                };
+                assert_eq!(
+                    widget::get_accessible_name(field.cast()),
+                    translate(CONDITION_FIELD_NAME),
+                    "the condition field combo keeps no name a screen reader can announce"
+                );
+                assert_eq!(
+                    widget::get_accessible_name(header.cast()),
+                    translate(HEADER_NAME_HINT),
+                    "the header-name entry keeps no name a screen reader can announce"
+                );
+                assert_eq!(
+                    widget::get_accessible_name(op.cast()),
+                    translate(CONDITION_OP_NAME),
+                    "the condition operator combo keeps no name a screen reader can announce"
+                );
+                assert_eq!(
+                    widget::get_accessible_name(value.cast()),
+                    translate(CONDITION_VALUE_NAME),
+                    "the condition value entry keeps no name a screen reader can announce"
+                );
 
-            let (action, folder, address) = {
-                let ui = cell.borrow();
-                let row = ui.action_rows.last().unwrap();
-                (row.action, row.folder, row.address)
-            };
-            assert_eq!(
-                widget::get_accessible_name(action.cast()),
-                translate(ACTION_TYPE_NAME),
-                "the action type combo keeps no name a screen reader can announce"
-            );
-            assert_eq!(
-                widget::get_accessible_name(folder.cast()),
-                translate(DESTINATION_FOLDER_NAME),
-                "the destination folder combo keeps no name a screen reader can announce"
-            );
-            assert_eq!(
-                widget::get_accessible_name(address.cast()),
-                translate(REDIRECT_ADDRESS_NAME),
-                "the redirect address entry keeps no name a screen reader can announce"
-            );
+                let (action, folder, address) = {
+                    let ui = cell.borrow();
+                    let row = ui.action_rows.last().unwrap();
+                    (row.action, row.folder, row.address)
+                };
+                assert_eq!(
+                    widget::get_accessible_name(action.cast()),
+                    translate(ACTION_TYPE_NAME),
+                    "the action type combo keeps no name a screen reader can announce"
+                );
+                assert_eq!(
+                    widget::get_accessible_name(folder.cast()),
+                    translate(DESTINATION_FOLDER_NAME),
+                    "the destination folder combo keeps no name a screen reader can announce"
+                );
+                assert_eq!(
+                    widget::get_accessible_name(address.cast()),
+                    translate(REDIRECT_ADDRESS_NAME),
+                    "the redirect address entry keeps no name a screen reader can announce"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// GNOME HIG: button labels use Header capitalization, every word
