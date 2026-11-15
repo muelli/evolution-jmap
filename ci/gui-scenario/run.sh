@@ -227,7 +227,18 @@ def walk(acc, depth=0):
     if acc is None or depth > 25:
         return
     try:
-        print("  " * depth + f"{acc.getRoleName()}: {acc.name!r}")
+        line = f"{acc.getRoleName()}: {acc.name!r}"
+        try:
+            text = acc.queryText()
+            line += f" text={text.getText(0, text.characterCount)!r}"
+        except NotImplementedError:
+            pass
+        states = sorted(
+            pyatspi.STATE_VALUE_TO_NAME.get(int(state), str(state))
+            for state in acc.getState().getStates()
+        )
+        line += f" states={states}"
+        print("  " * depth + line)
     except Exception as error:
         print("  " * depth + f"<error {error}>")
         return
