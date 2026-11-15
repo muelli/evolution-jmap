@@ -109,13 +109,22 @@ fn authenticate_reports_a_real_wrong_password_as_rejected_and_holds_no_connectio
         ),
     );
 
+    let accepts_any_password =
+        env::var("JMAP_LIVE_SERVER_ACCEPTS_ANY_PASSWORD").is_ok_and(|val| val == "1");
+
     let error = match outcome {
-        Ok(()) => {
+        Ok(()) if accepts_any_password => {
             eprintln!(
-                "server accepted a wrong password for user {:?}; oracle does not check passwords (e.g. fakesaslauthd), skipping rejection assertion",
+                "server accepted a wrong password for user {:?}; JMAP_LIVE_SERVER_ACCEPTS_ANY_PASSWORD=1 is set, skipping rejection assertion",
                 config.user
             );
             return;
+        }
+        Ok(()) => {
+            panic!(
+                "a wrong password was accepted by the server for user {:?}; if this server intentionally accepts any password, set JMAP_LIVE_SERVER_ACCEPTS_ANY_PASSWORD=1",
+                config.user
+            );
         }
         Err(err) => err,
     };
