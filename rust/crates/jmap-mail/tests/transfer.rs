@@ -98,19 +98,22 @@ use eds_sys::{
     CamelFolderClass, CamelMessageInfo, CamelStoreClass, camel_folder_error_quark,
     camel_folder_expunge_sync, camel_folder_get_folder_summary, camel_folder_info_free,
     camel_folder_lock, camel_folder_refresh_info_sync, camel_folder_summary_get,
-    camel_folder_synchronize_sync, camel_folder_transfer_messages_to_sync, camel_folder_unlock,
-    camel_message_info_get_flags, camel_message_info_get_subject, camel_message_info_set_flags,
-    camel_mime_message_new, camel_store_get_folder_sync,
+    camel_folder_summary_save, camel_folder_synchronize_sync,
+    camel_folder_transfer_messages_to_sync, camel_folder_unlock, camel_message_info_get_flags,
+    camel_message_info_get_subject, camel_message_info_set_flags, camel_mime_message_new,
+    camel_store_get_folder_sync,
 };
 use eds_sys::{CamelDataWrapper, camel_data_wrapper_construct_from_data_sync};
 use glib_sys::{
-    GError, GFALSE, GPtrArray, GTRUE, g_free, g_ptr_array_free, gboolean, gchar, gssize,
+    GError, GFALSE, GPtrArray, GTRUE, g_clear_error, g_free, g_ptr_array_free, gboolean, gchar,
+    gssize,
 };
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
+use jmap_mail::message_info::pending_filing;
 use jmap_mail::store::store_type;
-use jmap_mail_sync::MailSync;
+use jmap_mail_sync::{Filing, MailSync};
 use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
@@ -146,6 +149,7 @@ struct Fixture {
     archive: *mut CamelFolder,
     inbox_id: Id,
     archive_id: Id,
+    projects_id: Id,
     uids: Vec<Id>,
 }
 
@@ -168,20 +172,32 @@ impl Fixture {
         Self::seeded_with(messages, MockServer::builder())
     }
 
+    /// [`Self::start`], with an account whose directory outlives it, for a
+    /// test that opens a second store at the same directory the way a
+    /// restarted process does.
+    fn restartable() -> Self {
+        Self::seeded_on(1, MockServer::builder(), Account::open().keep_directory())
+    }
+
     /// [`Self::seeded`], with a caller-built server instead of the default
     /// one, for a test against a hostile or edge-case server.
     fn seeded_with(messages: usize, builder: MockServerBuilder) -> Self {
+        Self::seeded_on(messages, builder, Account::open())
+    }
+
+    /// [`Self::seeded_with`], on an account the caller built.
+    fn seeded_on(messages: usize, builder: MockServerBuilder, account: Account) -> Self {
         let server = builder.start();
         let account_id = server.account_id();
-        let (inbox_id, archive_id, uids) = {
+        let (inbox_id, archive_id, projects_id, uids) = {
             let state = server.state();
             let mut state = state.lock().unwrap();
             let account = state.account_mut(&account_id).unwrap();
             let inbox_id = account.seed_mailbox("Inbox", Some(role::INBOX));
             let archive_id = account.seed_mailbox("Archive", None);
-            // A third folder, for the tests that move a message twice while
-            // offline. It stays closed until such a test opens it.
-            account.seed_mailbox("Projects", None);
+            // A third folder, for the tests that transfer a message twice
+            // while offline. It stays closed until such a test opens it.
+            let projects_id = account.seed_mailbox("Projects", None);
             let uids = MESSAGES[..messages]
                 .iter()
                 .map(|(name, address, subject, body, received_at)| {
@@ -194,10 +210,9 @@ impl Fixture {
                     ))
                 })
                 .collect();
-            (inbox_id, archive_id, uids)
+            (inbox_id, archive_id, projects_id, uids)
         };
 
-        let account = Account::open();
         let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
         account.connect(MailSync::new(client, account_id));
 
@@ -224,6 +239,7 @@ impl Fixture {
             archive,
             inbox_id,
             archive_id,
+            projects_id,
             uids,
         }
     }
@@ -575,6 +591,38 @@ fn listed(folder: *mut CamelFolder) -> Vec<String> {
         let uids = uid_list(array);
         folder_free_uids(folder, array);
         uids
+    }
+}
+
+/// Writes the folder's summary to its database, the way the save timer of
+/// the folder does.
+fn save_summary(folder: *mut CamelFolder) {
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: a live folder of ours, thus a live summary, and an error
+    // out-parameter that is writable and currently NULL.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(folder);
+        assert!(!summary.is_null(), "the folder has no summary");
+        let ok = camel_folder_summary_save(summary, &mut error);
+        g_clear_error(&mut error);
+        assert_ne!(ok, GFALSE, "the summary would not save");
+    }
+}
+
+/// The filing the folder's row for `uid` still waits to send.
+fn filing_of(folder: *mut CamelFolder, uid: &Id) -> Option<Filing> {
+    let key = CString::new(uid.as_str()).expect("a uid with no NUL");
+    // SAFETY: a live folder of ours, and a key that outlives both calls.
+    // `camel_folder_summary_get` gives a reference that this function
+    // releases before it returns.
+    unsafe {
+        let summary = camel_folder_get_folder_summary(folder);
+        assert!(!summary.is_null(), "the folder has no summary");
+        let info = camel_folder_summary_get(summary, key.as_ptr());
+        assert!(!info.is_null(), "the folder has no row for this uid");
+        let filing = pending_filing(info);
+        g_object_unref(info.cast());
+        filing
     }
 }
 
@@ -1507,6 +1555,129 @@ fn a_queued_move_back_to_the_source_cancels_itself() {
         mailboxes,
         vec![fixture.inbox_id.clone()],
         "a move that came back must leave the message where it started"
+    );
+}
+
+/// A copy out of a folder that the message is only queued into stays a
+/// copy. The queued move must still land, and the message must end in both
+/// mailboxes.
+///
+/// `queue_filing` joined the two filings whenever the waiting one was a
+/// move, whatever the new one asked for. The copy became a move, so the
+/// message left the folder the user had just copied it out of.
+#[test]
+fn a_copy_out_of_a_queued_move_lands_in_both_mailboxes() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+    fixture
+        .transfer_straight(projects, fixture.archive, &[fixture.uid()], false)
+        .expect_ok();
+
+    fixture.reconnect();
+    fixture.synchronize(fixture.inbox).expect_ok();
+    fixture.synchronize(projects).expect_ok();
+    fixture.synchronize(fixture.archive).expect_ok();
+
+    let mailboxes = fixture.mailboxes_on_server(fixture.uid());
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    assert!(
+        mailboxes.contains_key(&fixture.projects_id),
+        "the copy must leave the message where the move put it, got {mailboxes:?}"
+    );
+    assert!(
+        mailboxes.contains_key(&fixture.archive_id),
+        "the copy must also file the message where it went, got {mailboxes:?}"
+    );
+    assert!(
+        !mailboxes.contains_key(&fixture.inbox_id),
+        "the move must still take the message out of the inbox, got {mailboxes:?}"
+    );
+}
+
+/// The folder a message is copied out of keeps its row, even when that row
+/// itself waits for a queued move. A copy takes no row away.
+#[test]
+fn a_copy_out_of_a_queued_move_keeps_the_row_it_came_from() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+    fixture
+        .transfer_straight(projects, fixture.archive, &[fixture.uid()], false)
+        .expect_ok();
+
+    let copied_from = listed(projects);
+    let landed = listed(fixture.archive);
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    assert_eq!(
+        copied_from,
+        vec![fixture.uid().to_string()],
+        "a copy must keep the row it came from, got {copied_from:?}"
+    );
+    assert_eq!(
+        landed,
+        vec![fixture.uid().to_string()],
+        "the copy must show the message in the folder it went to"
+    );
+}
+
+/// The row that holds the first of two queued moves must reach the summary
+/// database with the joined filing. The second move rewrites that row in a
+/// folder of its own, and the user can quit before the filing is sent.
+///
+/// `rewrite_origin_row` changed no Camel-visible bit of that row, because
+/// the first move had already set the only one it writes. Nothing marked
+/// the row for a save. The database kept the first move alone, so a
+/// restarted process filed the message into the folder it only passes
+/// through as well as into the folder the user chose.
+#[test]
+fn a_rechained_filing_reaches_the_summary_database() {
+    let fixture = Fixture::restartable();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    assert!(fixture.account.jmap().drop_connection());
+
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+    // The save that the folder makes on its own, between the two moves.
+    save_summary(fixture.inbox);
+    fixture
+        .transfer_straight(projects, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+    save_summary(fixture.inbox);
+
+    let directory = fixture.account.directory();
+    let uid = fixture.uid().clone();
+    let joined = Filing::moved(fixture.inbox_id.clone(), fixture.archive_id.clone());
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    drop(fixture);
+
+    // A new store at the same directory, offline, as a restarted process
+    // with no network has.
+    let restarted = Account::open_at(directory);
+    restarted.set_online(false);
+    let inbox = open(&restarted, "Inbox");
+    let filing = filing_of(inbox, &uid);
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(inbox.cast()) };
+    assert_eq!(
+        filing,
+        Some(joined),
+        "a restart must find the joined filing, not the move it replaced"
     );
 }
 
