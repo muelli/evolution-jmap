@@ -344,7 +344,7 @@ fn exercise_session_connect_with_body(body: &[u8]) {
     let transport = MockSessionTransport {
         session_body: body.to_vec(),
     };
-    if let Ok(mut client) = Client::builder()
+    if let Ok(client) = Client::builder()
         .transport(transport)
         .connect("https://mail.example.internal", Credentials::none())
     {

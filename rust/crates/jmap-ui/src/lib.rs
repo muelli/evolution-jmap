@@ -34,6 +34,8 @@ pub mod delegation;
 pub mod dispatch;
 pub mod external_photo;
 pub mod filters;
+#[cfg(test)]
+pub(crate) mod gtk_test_lock;
 pub mod hold;
 pub mod link;
 pub mod module;

@@ -963,6 +963,7 @@ mod tests {
         /// it. Needs a display; skips without one.
         #[test]
         fn the_refusal_dialog_lets_enter_confirm_it() {
+            let _gtk_test_guard = crate::gtk_test_lock::lock();
             // SAFETY: no arguments. GTK stays on this thread for the whole test.
             if unsafe { gtk_init_check(std::ptr::null_mut(), std::ptr::null_mut()) } == GFALSE {
                 eprintln!("skipped: no display for GTK");

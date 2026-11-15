@@ -258,6 +258,7 @@ mod tests {
     /// one. Needs a display; skips without one.
     #[test]
     fn setting_an_accessible_role_is_visible_on_read_back() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");
@@ -288,6 +289,7 @@ mod tests {
     /// `labelled-by` relation. Needs a display; skips without one.
     #[test]
     fn setting_an_accessible_name_is_visible_on_read_back() {
+        let _gtk_test_guard = crate::gtk_test_lock::lock();
         // SAFETY: no arguments. GTK stays on this thread for the whole test.
         if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
             eprintln!("skipped: no display for GTK");

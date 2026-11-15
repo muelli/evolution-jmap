@@ -240,16 +240,18 @@ impl ClientBuilder {
 
         let origin = origin.trim_end_matches('/').to_string();
         let session_url = format!("{origin}/.well-known/jmap");
-        let mut client = Client {
+        let client = Client {
             transport,
             authorization: RwLock::new(credentials.authorization_header()),
             cancel: self.cancel,
             session_url,
-            session: None,
+            session: RwLock::new(None),
+            current_session: RwLock::new(None),
+            refresh_lock: std::sync::Mutex::new(()),
             next_call_id: AtomicU64::new(0),
             last_session_state: std::sync::Mutex::new(None),
             rebase_origin: self.rebase_urls_to_origin.then_some(origin),
-            rebase_note: None,
+            rebase_note: RwLock::new(None),
             max_rate_limit_retries: self.max_rate_limit_retries,
             max_retry_after: self.max_retry_after,
             id_budget: self.id_budget,
@@ -283,12 +285,14 @@ pub struct Client {
     authorization: RwLock<Option<String>>,
     cancel: Option<CancelFlag>,
     session_url: String,
-    session: Option<Session>,
+    session: RwLock<Option<std::sync::Arc<Session>>>,
+    current_session: RwLock<Option<&'static Session>>,
+    refresh_lock: std::sync::Mutex<()>,
     next_call_id: AtomicU64,
     last_session_state: std::sync::Mutex<Option<jmap_proto::State>>,
     rebase_origin: Option<String>,
     // Records download URL origin rewrites.
-    rebase_note: Option<String>,
+    rebase_note: RwLock<Option<&'static str>>,
     pub(crate) max_rate_limit_retries: u32,
     pub(crate) max_retry_after: Duration,
     id_budget: IdBudget,
@@ -329,15 +333,30 @@ impl Client {
             .connect(origin, credentials)
     }
 
-    /// The session object fetched at connect time.
+    /// The session object, updated when refreshed (RFC 8620 §2).
     pub fn session(&self) -> &Session {
-        self.session
-            .as_ref()
+        self.current_session
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
             .expect("session is fetched during connect")
     }
 
+    /// Return an owned snapshot of the current session object.
+    pub fn session_snapshot(&self) -> std::sync::Arc<Session> {
+        self.session
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .expect("session is fetched during connect")
+            .clone()
+    }
+
     /// Refresh the session resource (RFC 8620 §2).
-    pub fn refresh_session(&mut self) -> Result<(), Error> {
+    pub fn refresh_session(&self) -> Result<(), Error> {
+        let _guard = self
+            .refresh_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let response = self.execute_idempotent_within(
             HttpMethod::Get,
             &self.session_url.clone(),
@@ -361,7 +380,7 @@ impl Client {
             session.download_url = crate::url::rebase_origin(&session.download_url, origin);
             session.upload_url = crate::url::rebase_origin(&session.upload_url, origin);
             session.event_source_url = crate::url::rebase_origin(&session.event_source_url, origin);
-            self.rebase_note = if crate::url::same_origin(&advertised_download_origin, origin) {
+            let note = if crate::url::same_origin(&advertised_download_origin, origin) {
                 None
             } else {
                 let note = format!(
@@ -369,8 +388,13 @@ impl Client {
                      {advertised_download_origin} to {origin}"
                 );
                 eprintln!("{note}");
-                Some(note)
+                let leaked: &'static str = Box::leak(note.into_boxed_str());
+                Some(leaked)
             };
+            *self
+                .rebase_note
+                .write()
+                .unwrap_or_else(PoisonError::into_inner) = note;
         }
         for (name, endpoint) in [
             ("apiUrl", &session.api_url),
@@ -392,7 +416,13 @@ impl Client {
             .set_limit(session.max_concurrent_requests());
         self.upload_limiter
             .set_limit(session.max_concurrent_upload());
-        self.session = Some(session);
+        let arc = std::sync::Arc::new(session);
+        let leaked: &'static Session = Box::leak(Box::new((*arc).clone()));
+        *self.session.write().unwrap_or_else(PoisonError::into_inner) = Some(arc);
+        *self
+            .current_session
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(leaked);
         Ok(())
     }
 
@@ -406,7 +436,8 @@ impl Client {
             .last_session_state
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        match (&*last_state, &self.session) {
+        let session = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        match (&*last_state, session.as_ref()) {
             (Some(last), Some(session)) => last != &session.state,
             _ => false,
         }
@@ -422,7 +453,10 @@ impl Client {
 
     /// Return the notification message when URL rebasing modified the origin.
     pub fn rebase_note(&self) -> Option<&str> {
-        self.rebase_note.as_deref()
+        *self
+            .rebase_note
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Update client credentials for subsequent requests.
@@ -563,7 +597,6 @@ impl Client {
     /// Rejects requests that exceed `maxSizeRequest` with [`Error::RequestTooLarge`].
     /// Automatically retries idempotent calls on HTTP 429 and limit errors.
     pub fn api_call(&self, request: &Request) -> Result<Response, Error> {
-        let api_url = self.session().api_url.clone();
         let body = serde_json::to_vec(request)?;
         if let Some(limit) = self.session().max_size_request()
             && body.len() as u64 > limit
@@ -585,7 +618,8 @@ impl Client {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.execute(HttpMethod::Post, &api_url, Some(&body)) {
+            let current_api_url = self.session().api_url.clone();
+            match self.execute(HttpMethod::Post, &current_api_url, Some(&body)) {
                 Ok(response) => {
                     tracing::trace!(body = %String::from_utf8_lossy(&response.body), "JMAP response body");
                     let parsed: Response = serde_json::from_slice(&response.body)?;

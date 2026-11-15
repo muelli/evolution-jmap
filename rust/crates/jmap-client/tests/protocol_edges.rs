@@ -80,7 +80,7 @@ fn backreference_to_failed_call_errors() {
 #[test]
 fn session_state_change_marks_session_stale_until_refreshed() {
     let server = MockServer::builder().start();
-    let mut client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
     assert_eq!(client.session().state.as_str(), "1");
     assert_eq!(
