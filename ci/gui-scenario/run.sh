@@ -6,7 +6,7 @@
 # jmap-mockd, driven through AT-SPI. A scenario asserts on the server state
 # and on the log, not on pixels. See docs/gui-scenario-tests.md.
 #
-# Usage: ci/gui-scenario/run.sh [--host] SCENARIO...
+# Usage: ci/gui-scenario/run.sh [--host] [--live] SCENARIO...
 # SCENARIO is a file name in ci/gui-scenario/scenarios/, without ".py".
 #
 # Without --host, the script runs in a rootless podman container with the
@@ -16,6 +16,19 @@
 # $GUI_SCENARIO_MOCKD selects a different jmap-mockd binary.
 # With --host, the script runs on this machine. Use --host only in a
 # throwaway machine or container: it needs the components installed as root.
+#
+# With --live, a scenario runs against a real JMAP server instead of
+# jmap-mockd: ci/gui-scenario/live_proxy.py relays 127.0.0.1:$GUI_SCENARIO_PORT
+# to it, so the account and scenario.Jmap keep using the same loopback
+# address either way. Needs three env vars set by the caller, never written
+# to this repo and never logged: GUI_SCENARIO_JMAP_URL (the server's own
+# reachable address), GUI_SCENARIO_USER and GUI_SCENARIO_PASSWORD (a seeded
+# account, e.g. harness/stalwart/seed-manual-test.py's own --state and
+# --domain). GUI_SCENARIO_STATE_FILE, if set, names that --state file for a
+# scenario to read ids and names from (see scenario.py's live_state()). A
+# --live run joins no podman network of its own: it needs the host's own
+# route to the server (the dovecot-oracle bridge in the mock path has none),
+# so one scenario runs at a time this way.
 #
 # A scenario that compares against plain IMAP (item 175) needs
 # ci/dovecot-oracle.sh running first: `./ci/dovecot-oracle.sh start`. This
@@ -43,20 +56,29 @@ COMPONENTS=(book-backend cal-backend camel-provider collection-backend config-mo
 DOVECOT_ORACLE_NETWORK="${DOVECOT_ORACLE_NETWORK:-evolution-jmap-gui-scenario}"
 
 usage() {
-	echo "usage: ci/gui-scenario/run.sh [--host] SCENARIO..." >&2
+	echo "usage: ci/gui-scenario/run.sh [--host] [--live] SCENARIO..." >&2
 	echo "scenarios: $(cd "$SCENARIOS" && find . -name '*.py' -printf '%f ' | sed 's/\.py//g')" >&2
 	exit 2
 }
 
 host=0
-if [ "${1-}" = "--host" ]; then
-	host=1
+live=0
+while [ "${1-}" = "--host" ] || [ "${1-}" = "--live" ]; do
+	case "$1" in
+	--host) host=1 ;;
+	--live) live=1 ;;
+	esac
 	shift
-fi
+done
 [ "$#" -gt 0 ] || usage
 for scenario in "$@"; do
 	[ -f "$SCENARIOS/$scenario.py" ] || usage
 done
+if [ "$live" -eq 1 ]; then
+	: "${GUI_SCENARIO_JMAP_URL:?gui-scenario: --live needs GUI_SCENARIO_JMAP_URL, the real server's reachable address}"
+	: "${GUI_SCENARIO_USER:?gui-scenario: --live needs GUI_SCENARIO_USER, a seeded account's address}"
+	: "${GUI_SCENARIO_PASSWORD:?gui-scenario: --live needs GUI_SCENARIO_PASSWORD}"
+fi
 
 if [ "$host" -eq 0 ]; then
 	mock="${GUI_SCENARIO_MOCKD:-$BUILD/cargo-target/release/jmap-mockd}"
@@ -74,8 +96,16 @@ if [ "$host" -eq 0 ]; then
 		DESTDIR="$stage" cmake --install "$BUILD" --component "$component" >/dev/null || exit 2
 	done
 	mkdir -p "$ARTIFACTS"
-	if ! podman network exists "$DOVECOT_ORACLE_NETWORK" 2>/dev/null; then
-		podman network create "$DOVECOT_ORACLE_NETWORK" >/dev/null || exit 2
+	if [ "$live" -eq 1 ]; then
+		# The real server is rarely on the dovecot-oracle bridge's subnet
+		# (it is IPv6-only here, and that bridge has no IPv6 of its own);
+		# host networking gives the container the runner's own route.
+		network_args=(--network host)
+	else
+		if ! podman network exists "$DOVECOT_ORACLE_NETWORK" 2>/dev/null; then
+			podman network create "$DOVECOT_ORACLE_NETWORK" >/dev/null || exit 2
+		fi
+		network_args=(--network "$DOVECOT_ORACLE_NETWORK")
 	fi
 	# A scenario against the IMAP oracle needs delivery done from here, on
 	# the host: the inner container below has no podman of its own to reach
@@ -97,14 +127,33 @@ if [ "$host" -eq 0 ]; then
 				"$ROOT/ci/gui-scenario/fixtures/$fixture" || exit 2
 		fi
 	done
+	live_env_args=()
+	live_mount_args=()
+	extra_flags=()
+	if [ "$live" -eq 1 ]; then
+		# Bare -e: podman reads the value from this shell's own
+		# environment. Never given a literal value here, so it never
+		# appears in this script, in its argv or in any log it writes.
+		live_env_args=(-e GUI_SCENARIO_JMAP_URL -e GUI_SCENARIO_USER \
+			-e GUI_SCENARIO_PASSWORD -e GUI_SCENARIO_STATE_FILE)
+		extra_flags=(--live)
+		# The state file is outside $ROOT (it holds a seeded account's
+		# password, so it belongs next to the other harness secrets, not
+		# in this tree), so the $ROOT bind mount below does not carry it
+		# in on its own.
+		if [ -n "${GUI_SCENARIO_STATE_FILE:-}" ]; then
+			live_mount_args=(-v "$GUI_SCENARIO_STATE_FILE:$GUI_SCENARIO_STATE_FILE:ro")
+		fi
+	fi
 	# The container runs as root, so that it can install the stage. The trap
 	# gives the artifacts back to the user of the host.
 	podman run --rm --userns=keep-id -u 0 \
-		--network "$DOVECOT_ORACLE_NETWORK" \
+		"${network_args[@]}" \
 		-v "$ROOT:$ROOT:Z" \
 		-v "$stage:/stage:Z" \
 		-v "$mock:/usr/local/bin/jmap-mockd:ro" \
 		-v "$ARTIFACTS:$ARTIFACTS:Z" \
+		"${live_mount_args[@]}" \
 		-w "$ROOT" \
 		-e HOST_UID="$(id -u)" \
 		-e HOST_GID="$(id -g)" \
@@ -112,12 +161,13 @@ if [ "$host" -eq 0 ]; then
 		-e JMAP_MOCKD=/usr/local/bin/jmap-mockd \
 		-e JMAP_LIVE_SERVER_IMAP_CONTAINER_HOST \
 		-e JMAP_LIVE_SERVER_IMAP_CONTAINER_PORT \
+		"${live_env_args[@]}" \
 		"$IMAGE" \
 		bash -c '
 			trap '\''chown -R "$HOST_UID:$HOST_GID" "$GUI_SCENARIO_ARTIFACTS"'\'' EXIT
 			cp -a /stage/. /
 			ci/gui-scenario/run.sh --host "$@"
-		' run.sh "$@"
+		' run.sh "${extra_flags[@]}" "$@"
 	exit $?
 fi
 
@@ -125,6 +175,16 @@ MOCK_BIN="${JMAP_MOCKD:-$BUILD/cargo-target/release/jmap-mockd}"
 DISPLAY_NUM="${GUI_SCENARIO_DISPLAY:-:96}"
 MOCK_PORT="${GUI_SCENARIO_PORT:-8090}"
 WORK="$(mktemp -d)"
+
+LIVE_HOST=""
+LIVE_PORT=""
+if [ "$live" -eq 1 ]; then
+	read -r LIVE_HOST LIVE_PORT < <(python3 -c '
+import sys, urllib.parse
+u = urllib.parse.urlsplit(sys.argv[1])
+print(u.hostname, u.port or (443 if u.scheme == "https" else 80))
+' "$GUI_SCENARIO_JMAP_URL")
+fi
 
 PIDS=()
 # The runtime directory of the scenario that runs now. Only the keyring
@@ -210,15 +270,25 @@ run_scenario() {
 		GUI_SCENARIO_JMAP_URL="http://127.0.0.1:$MOCK_PORT"
 		GUI_SCENARIO_IMAP_HOST="${JMAP_LIVE_SERVER_IMAP_CONTAINER_HOST:-}"
 		GUI_SCENARIO_IMAP_PORT="${JMAP_LIVE_SERVER_IMAP_CONTAINER_PORT:-}"
+		GUI_SCENARIO_USER="${GUI_SCENARIO_USER:-}"
+		GUI_SCENARIO_PASSWORD="${GUI_SCENARIO_PASSWORD:-}"
+		GUI_SCENARIO_STATE_FILE="${GUI_SCENARIO_STATE_FILE:-}"
+		JMAP_LIVE_SERVER_REBASE_URLS="$live"
 	)
 
 	# The scenario names the Evolution component to start and the arguments of
-	# the mock.
+	# the mock. In --live mode there is no mock to configure, and the config
+	# step's own extra lines (jmap-mockd's own arguments) are unused.
 	local config component
 	mapfile -t config < <("${session_env[@]}" python3 "$SCENARIOS/$name.py" config)
 	component="${config[0]:-mail}"
 
-	"$MOCK_BIN" --port "$MOCK_PORT" "${config[@]:1}" >"$out/mock.log" 2>&1 &
+	if [ "$live" -eq 1 ]; then
+		python3 "$ROOT/ci/gui-scenario/live_proxy.py" "$MOCK_PORT" "$LIVE_HOST" "$LIVE_PORT" \
+			>"$out/mock.log" 2>&1 &
+	else
+		"$MOCK_BIN" --port "$MOCK_PORT" "${config[@]:1}" >"$out/mock.log" 2>&1 &
+	fi
 	PIDS+=($!)
 	Xvfb "$DISPLAY_NUM" -screen 0 1280x1024x24 >"$run_dir/xvfb.log" 2>&1 &
 	PIDS+=($!)
@@ -246,7 +316,8 @@ run_scenario() {
 		# at-spi2-registryd synthesizes input on the display, so the
 		# activation environment needs DISPLAY. A window manager gives the
 		# windows a position and the keyboard focus.
-		"${session_env[@]}" dbus-update-activation-environment DISPLAY EVOLUTION_JMAP_LOG
+		"${session_env[@]}" dbus-update-activation-environment DISPLAY EVOLUTION_JMAP_LOG \
+			JMAP_LIVE_SERVER_REBASE_URLS
 
 		# A scenario account with a user name needs a secret store: EDS and
 		# Evolution keep a password in `org.freedesktop.secrets`, not in the
