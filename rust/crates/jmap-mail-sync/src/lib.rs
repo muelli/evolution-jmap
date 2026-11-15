@@ -476,13 +476,25 @@ impl MailSync {
     /// no fallback: a message built again from its body parts has different
     /// bytes, and its signature fails.
     pub fn message_source(&self, uid: &Id) -> Result<Vec<u8>, SyncError> {
+        self.message_source_as(&self.account_id, uid)
+    }
+
+    /// [`Self::message_source`], against `account` instead of this sync's own
+    /// account.
+    ///
+    /// `Email/get` and the blob download are calls under one `accountId`, and
+    /// `uid` can name a message of a shared account merged into this
+    /// account's folder tree ([`crate::FolderTree::merge_shared`]). The
+    /// caller resolves `account` from the folder the message was opened from
+    /// ([`crate::FolderTree::owning_account`], or the folder's own kept
+    /// owner) and passes it here instead of assuming `self.account_id`, the
+    /// same way [`Self::messages_as`] already does: a message id, like a
+    /// mailbox id, is unique only within its own account (RFC 8621 section
+    /// 2).
+    pub fn message_source_as(&self, account: &Id, uid: &Id) -> Result<Vec<u8>, SyncError> {
         let email = self
             .client
-            .email_get(
-                &self.account_id,
-                std::slice::from_ref(uid),
-                Some(SOURCE_PROPERTIES),
-            )?
+            .email_get(account, std::slice::from_ref(uid), Some(SOURCE_PROPERTIES))?
             .into_iter()
             // An answer for a different message does not contain the bytes of
             // this message. Treat it as a missing message.
@@ -502,7 +514,7 @@ impl MailSync {
         // id to URL-safe characters.
         Ok(self
             .client
-            .download_blob(&self.account_id, &blob_id, uid.as_str(), ceiling)?)
+            .download_blob(account, &blob_id, uid.as_str(), ceiling)?)
     }
 
     /// Writes the keyword change of one message to the server. This is the

@@ -639,7 +639,9 @@ fn a_connected_store_hands_over_the_bytes_of_a_message() {
     let store = JmapStore::detached();
     store.store_connection(sync_against(&server));
 
-    let source = store.message_source(&uid).expect("the message was fetched");
+    let source = store
+        .message_source(&uid, None)
+        .expect("the message was fetched");
     let source = String::from_utf8(source).expect("a text message");
     assert!(source.contains("Subject: Lunch?"), "{source}");
 }
@@ -652,7 +654,7 @@ fn a_connected_store_hands_over_the_bytes_of_a_message() {
 fn a_disconnected_store_has_no_message_to_hand_over() {
     let store = JmapStore::detached();
 
-    match store.message_source(&Id::new("E1")) {
+    match store.message_source(&Id::new("E1"), None) {
         Err(StoreError::Disconnected) => {}
         Err(other) => panic!("expected the store to report being disconnected, got {other}"),
         Ok(_) => panic!("a store with no connection fetched a message"),

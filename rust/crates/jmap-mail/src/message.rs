@@ -115,8 +115,9 @@ unsafe extern "C" fn get_message_sync(
             let Some(store) = parent_store(folder) else {
                 return fail(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
+            let owner = JmapFolder::borrow(folder).and_then(JmapFolder::owner);
 
-            let source = match store.message_source(&uid) {
+            let source = match store.message_source(&uid, owner) {
                 Ok(source) => source,
                 Err(failure) => return fail(error, &failure, StoreError::to_gerror),
             };
