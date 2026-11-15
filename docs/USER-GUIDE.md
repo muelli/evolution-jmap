@@ -128,9 +128,9 @@ Most users only need the rules list below it. It manages one script named `evolu
 
 Turn on `Edit as text` to write the script by hand instead of using the rules list. If a script was changed outside Evolution and no longer matches the rules list, the page shows it as text until it matches again.
 
-Use `Check` to test a script on the server before you save it.
+Use `Check` to test a script on the server. `Check` never saves the script.
 
-Changes take effect only when you click `OK` in the account editor.
+`Activate`, `Deactivate`, `Rename`, `Add` and `Remove` take effect at once. You do not need to click `OK` in the account editor for these. `Activate` first checks the script and refuses a broken one. A script's text saves on its own soon after you stop typing, once it parses. `OK` still saves anything not yet sent; `Cancel` cannot undo a change already sent.
 
 ### Scheduled send
 
@@ -156,6 +156,24 @@ Snooze needs the Cyrus snooze capability. Stalwart and Fastmail do not offer it.
 A contact can keep its photo on a web server instead of in the contact. The address book preview then shows the text `Externally hosted image` and the full address of the image. The preview does not download the image.
 
 This keeps the owner of that web server from learning when you look at the contact.
+
+## Stars, labels and categories
+
+Use the star to flag a message. Use a label to put a message in a category, such as Work or Personal. Evolution offers five built-in labels: Important, Work, Personal, To Do, and Later. You can also add a label with your own name.
+
+Events and contacts have categories instead of labels. Add, rename or clear a category in the event editor or the contact editor.
+
+The server stores a star, a label and a category as a keyword on the message, event or contact. A keyword name is not case sensitive: `Work` and `work` are the same keyword.
+
+### What other mail clients show
+
+Other JMAP and IMAP clients write some keywords under their own names. Evolution keeps every keyword it does not recognize, so nothing is lost when you change one flag or label on a message:
+
+- Thunderbird writes a label as `$label1` to `$label5`. Evolution shows each as a label with that literal name, not as one of its own five.
+- Apple Mail writes a colored flag as `$flagged` plus one of `$mailflagbit0` to `$mailflagbit2`. Evolution shows the star and keeps the color bits as labels.
+- Fastmail writes a pinned message as `$pinned`. Evolution keeps it as a label.
+- Fastmail can also show a label as a folder. A message with such a label then appears in more than one folder. Evolution does not change this when you flag or label the message differently.
+- Roundcube writes junk status as `junk` and `nonjunk` tags next to `$junk` and `$notjunk`. Evolution keeps all four.
 
 ## Working offline
 
