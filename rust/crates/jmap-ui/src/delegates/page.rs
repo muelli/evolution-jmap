@@ -1313,16 +1313,17 @@ unsafe extern "C" fn on_picker_selection_changed(_selection: *mut GObject, dialo
     });
 }
 
-/// Asks for a new delegate's principal id and the two access levels to
-/// grant it, in a modal dialog. `None` means the user cancelled, or left
-/// the principal field empty.
+/// Asks for a new delegate's principal (an id, or an address `on_add`
+/// resolves to one) and the two access levels to grant it, in a modal
+/// dialog. `None` means the user cancelled, or left the principal field
+/// empty.
 ///
 /// # Safety
 ///
 /// `page` must be the live page, on the main thread.
 unsafe fn ask_for_grant(
     page: *mut GObject,
-) -> Option<(Id, CalendarDelegationLevel, AddressBookDelegationLevel)> {
+) -> Option<(String, CalendarDelegationLevel, AddressBookDelegationLevel)> {
     // SAFETY: the page is live, per the contract. The dialog owns its
     // children, and this function destroys the dialog.
     unsafe {
@@ -1343,7 +1344,7 @@ unsafe fn ask_for_grant(
                 let book_level =
                     level_at(&BOOK_LEVELS, gtk_combo_box_get_active(book_combo.cast()))
                         .unwrap_or(AddressBookDelegationLevel::None);
-                (Id::new(principal), calendar_level, book_level)
+                (principal, calendar_level, book_level)
             });
         gtk_widget_destroy(dialog);
         result
@@ -1371,7 +1372,7 @@ unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
         };
         // SAFETY: the page is live, and this runs on the main thread, per
         // the signal handler contract.
-        let Some((principal_id, calendar_level, book_level)) =
+        let Some((principal_text, calendar_level, book_level)) =
             (unsafe { ask_for_grant(page.cast()) })
         else {
             return;
@@ -1387,7 +1388,10 @@ unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
             gtk_widget_set_sensitive(add, GFALSE);
         }
         tracing::trace!(action = "grant", "delegates: action started");
-        let work = move || io::grant(&link, &principal_id, calendar_level, book_level);
+        let work = move || {
+            let principal_id = io::resolve_principal(&link, &principal_text)?;
+            io::grant(&link, &principal_id, calendar_level, book_level)
+        };
         let finish = |page: *mut GObject, outcome: Result<Loaded, String>| {
             // SAFETY: `with_strong` gives the live page.
             unsafe { apply_write_outcome(page, outcome, GRANT_FAILED, "grant") };

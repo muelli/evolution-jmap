@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use jmap_backend_core::i18n::translate;
 use jmap_client::Client;
 use jmap_proto::Id;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_PRINCIPALS};
@@ -167,6 +168,52 @@ pub fn search(link: &AccountLink, text: &str) -> Result<PrincipalSearch, String>
     .map_err(|error| link::describe(&error))
 }
 
+/// Resolves what the Add dialog's principal field holds to a principal id
+/// (item 185(b)). The field used to take only a principal id; typing an
+/// address into it failed the write with the server's "Invalid account id".
+/// Anything with no `@` is already an id, the manual-entry fallback item 164
+/// shipped with; anything with one is looked up by [`search`] and resolved
+/// to the one principal whose email matches it exactly.
+pub fn resolve_principal(link: &AccountLink, text: &str) -> Result<Id, String> {
+    if !text.contains('@') {
+        return Ok(Id::new(text));
+    }
+    match search(link, text)? {
+        PrincipalSearch::QueryRefused => Err(translate(
+            c"this server cannot look up an address; use Find to search for the principal",
+        )),
+        PrincipalSearch::Found(principals) => pick_by_email(principals, text),
+    }
+}
+
+/// Picks the one principal of `principals` whose email matches `email`
+/// exactly, case-insensitively. Fails clearly on zero or on more than one
+/// match, rather than guessing.
+fn pick_by_email(
+    principals: Vec<jmap_proto::principals::Principal>,
+    email: &str,
+) -> Result<Id, String> {
+    let mut matches = principals.into_iter().filter(|principal| {
+        principal
+            .email
+            .as_deref()
+            .is_some_and(|e| e.eq_ignore_ascii_case(email))
+    });
+    let Some(first) = matches.next() else {
+        return Err(translate(
+            c"no principal has this address; use Find to search by name",
+        ));
+    };
+    if matches.next().is_some() {
+        return Err(translate(
+            c"more than one principal has this address; use Find to pick one",
+        ));
+    }
+    first
+        .id
+        .ok_or_else(|| translate(c"the server did not send an id for this principal"))
+}
+
 #[cfg(test)]
 mod tests {
     use jmap_client::{Client, Credentials};
@@ -174,7 +221,7 @@ mod tests {
     use jmap_proto::Id;
     use jmap_proto::principals::Principal;
 
-    use super::{grant, load, revoke, search};
+    use super::{grant, load, resolve_principal, revoke, search};
     use crate::delegation::{
         AddressBookDelegationLevel, CalendarDelegationLevel, PrincipalSearch,
         commit_address_book_delegation, commit_calendar_delegation,
@@ -416,5 +463,79 @@ mod tests {
         let found = search(&link_to(&server), "anything").unwrap();
 
         assert_eq!(found, PrincipalSearch::QueryRefused);
+    }
+
+    #[test]
+    fn resolve_principal_leaves_a_plain_id_unchanged() {
+        let server = MockServer::builder().start();
+
+        let resolved = resolve_principal(&link_to(&server), "P-bob").unwrap();
+
+        assert_eq!(resolved, Id::new("P-bob"));
+    }
+
+    #[test]
+    fn resolve_principal_looks_up_a_single_matching_address() {
+        let server = MockServer::builder().start();
+        let bob = {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            state
+                .account_mut(&server.account_id())
+                .unwrap()
+                .seed_principal(Principal::new("Bob Jones").with_email("bob@example.com"))
+        };
+
+        let resolved = resolve_principal(&link_to(&server), "bob@example.com").unwrap();
+
+        assert_eq!(resolved, bob);
+    }
+
+    #[test]
+    fn pick_by_email_matches_case_insensitively() {
+        let bob = Id::new("P-bob");
+        let principals = vec![
+            Principal::new("Bob Jones")
+                .with_email("bob@example.com")
+                .with_id(bob.clone()),
+        ];
+
+        let resolved = super::pick_by_email(principals, "Bob@Example.com").unwrap();
+
+        assert_eq!(resolved, bob);
+    }
+
+    #[test]
+    fn resolve_principal_fails_with_no_match() {
+        let server = MockServer::builder().start();
+
+        let error = resolve_principal(&link_to(&server), "nobody@example.com").unwrap_err();
+
+        assert!(error.contains("no principal"), "{error}");
+    }
+
+    #[test]
+    fn resolve_principal_fails_with_more_than_one_match() {
+        let server = MockServer::builder().start();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            let account = state.account_mut(&server.account_id()).unwrap();
+            account.seed_principal(Principal::new("Bob Jones").with_email("bob@example.com"));
+            account.seed_principal(Principal::new("Bob Smith").with_email("bob@example.com"));
+        }
+
+        let error = resolve_principal(&link_to(&server), "bob@example.com").unwrap_err();
+
+        assert!(error.contains("more than one"), "{error}");
+    }
+
+    #[test]
+    fn resolve_principal_fails_clearly_when_the_server_refuses_the_query() {
+        let server = MockServer::builder().disable_principal_query().start();
+
+        let error = resolve_principal(&link_to(&server), "bob@example.com").unwrap_err();
+
+        assert!(error.contains("Find"), "{error}");
     }
 }

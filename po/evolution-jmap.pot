@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-14 02:57+0000\n"
+"POT-Creation-Date: 2026-11-15 19:19+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -344,50 +344,50 @@ msgstr ""
 #. TRANSLATORS: shown when the server did not recognise this
 #. connection as authenticated at all, rather than rejecting a
 #. specific password.
-#: rust/crates/jmap-mail/src/connect.rs:250
+#: rust/crates/jmap-mail/src/connect.rs:251
 msgid "the server did not accept the account's credentials"
 msgstr ""
 
 #. TRANSLATORS: shown when Camel asks a JMAP store to do
 #. something that needs a connection it does not currently have.
-#: rust/crates/jmap-mail/src/connect.rs:257
+#: rust/crates/jmap-mail/src/connect.rs:258
 msgid "not connected to the JMAP server"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the folder path Camel asked for.
-#: rust/crates/jmap-mail/src/connect.rs:261
+#: rust/crates/jmap-mail/src/connect.rs:262
 #, c-format
 msgid "no such folder: %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is a JMAP mailbox role such as "inbox" or
 #. "trash", not translated: it is a protocol keyword, not prose.
-#: rust/crates/jmap-mail/src/connect.rs:267
+#: rust/crates/jmap-mail/src/connect.rs:268
 #, c-format
 msgid "no mailbox of this account has the %1$s role"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the message id Camel asked for.
-#: rust/crates/jmap-mail/src/connect.rs:272
+#: rust/crates/jmap-mail/src/connect.rs:273
 #, c-format
 msgid "no such message: %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the folder's display name.
-#: rust/crates/jmap-mail/src/connect.rs:277
+#: rust/crates/jmap-mail/src/connect.rs:278
 #, c-format
 msgid "you do not have permission to add messages to %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the email address the message was to be
 #. sent from.
-#: rust/crates/jmap-mail/src/connect.rs:283
+#: rust/crates/jmap-mail/src/connect.rs:284
 #: rust/crates/jmap-ui/src/send_later/submit.rs:72
 #, c-format
 msgid "this account cannot send mail as %1$s"
 msgstr ""
 
-#: rust/crates/jmap-mail/src/connect.rs:287
+#: rust/crates/jmap-mail/src/connect.rs:288
 msgid "this account has no Drafts or Sent folder to send a message from"
 msgstr ""
 
@@ -440,6 +440,23 @@ msgstr ""
 
 #: rust/crates/jmap-mail/src/sasl.rs:169
 msgid "Uses an OAuth 2.0 access token to connect to the JMAP server."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/delegates/io.rs:183
+msgid ""
+"this server cannot look up an address; use Find to search for the principal"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/delegates/io.rs:204
+msgid "no principal has this address; use Find to search by name"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/delegates/io.rs:209
+msgid "more than one principal has this address; use Find to pick one"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/delegates/io.rs:214
+msgid "the server did not send an id for this principal"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:109
@@ -536,8 +553,8 @@ msgid "_Pick"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:137
-#: rust/crates/jmap-ui/src/filters/page.rs:579
-#: rust/crates/jmap-ui/src/filters/page.rs:677
+#: rust/crates/jmap-ui/src/filters/page.rs:581
+#: rust/crates/jmap-ui/src/filters/page.rs:679
 msgid "Name"
 msgstr ""
 
@@ -592,9 +609,9 @@ msgstr ""
 msgid "Editor"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/delegates/page.rs:839
-#: rust/crates/jmap-ui/src/delegates/page.rs:966
-#: rust/crates/jmap-ui/src/filters/page.rs:3132
+#: rust/crates/jmap-ui/src/delegates/page.rs:841
+#: rust/crates/jmap-ui/src/delegates/page.rs:968
+#: rust/crates/jmap-ui/src/filters/page.rs:3151
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:455
 #: rust/crates/jmap-ui/src/send_later/extension.rs:906
 msgid "_Cancel"
@@ -881,47 +898,47 @@ msgstr ""
 msgid "C_heck"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:501
+#: rust/crates/jmap-ui/src/filters/page.rs:503
 msgid "Server Filters"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:580
+#: rust/crates/jmap-ui/src/filters/page.rs:582
 msgid "Active"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:594
+#: rust/crates/jmap-ui/src/filters/page.rs:596
 msgid "Re_move"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:615
+#: rust/crates/jmap-ui/src/filters/page.rs:617
 msgid "_Script:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:676
+#: rust/crates/jmap-ui/src/filters/page.rs:678
 msgid "Enabled"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:690
+#: rust/crates/jmap-ui/src/filters/page.rs:692
 msgid "Rem_ove"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:691
+#: rust/crates/jmap-ui/src/filters/page.rs:693
 msgid "Move _Up"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:692
+#: rust/crates/jmap-ui/src/filters/page.rs:694
 msgid "Move Do_wn"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:693
+#: rust/crates/jmap-ui/src/filters/page.rs:695
 msgid "E_nable"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:694
+#: rust/crates/jmap-ui/src/filters/page.rs:696
 msgid "Disa_ble"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:3135
+#: rust/crates/jmap-ui/src/filters/page.rs:3154
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:458
 msgid "_OK"
 msgstr ""
