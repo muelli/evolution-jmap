@@ -334,7 +334,7 @@ fn session_refresh_updates_concurrency_limits() {
         }
     }
 
-    let mut client = Client::builder()
+    let client = Client::builder()
         .transport(SharedTransport(Arc::clone(&transport)))
         .connect("https://mail.example.internal", Credentials::none())
         .expect("connect succeeds");

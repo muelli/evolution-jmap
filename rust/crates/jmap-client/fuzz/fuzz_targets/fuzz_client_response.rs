@@ -50,7 +50,7 @@ fuzz_target!(|data: &[u8]| {
     let session_transport = FuzzSessionTransport {
         session_body: data.to_vec(),
     };
-    if let Ok(mut session_client) = Client::builder()
+    if let Ok(session_client) = Client::builder()
         .transport(session_transport)
         .connect("https://mail.example.internal", Credentials::none())
     {

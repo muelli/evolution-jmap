@@ -369,7 +369,7 @@ fn client_session_caching_and_refresh() {
         })
     });
 
-    let mut client = Client::builder()
+    let client = Client::builder()
         .transport(transport)
         .connect("http://127.0.0.1:8080", Credentials::none())
         .unwrap();
