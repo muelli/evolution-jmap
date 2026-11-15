@@ -243,15 +243,20 @@ Address={address}
     return name
 
 
-def write_collection_mail_account(name="JMAP scenario mail", identity=("Alice", "alice@example.com")):
+def write_collection_mail_account(
+    name="JMAP scenario mail", identity=("Alice", "alice@example.com"), user=None
+):
     """Write a mail account in a collection, as the account assistant makes it.
 
     The collection holds the server and the address. The mail account, the
     identity and the transport are its children, without a server of their
     own. The identity
     has the account name: the account editor names the account after it.
-    Return the display name.
+    `user` gives the account a user name, so that Evolution asks for a
+    password and sends Basic authentication, the same as
+    `write_standalone_mail_account`'s own `user`. Return the display name.
     """
+    credential = f"User={user}\n" if user else ""
     write_source(
         "collection-mail",
         f"""[Data Source]
@@ -268,7 +273,7 @@ MailEnabled=true
 [Authentication]
 Host=127.0.0.1
 Port={MOCK_PORT}
-
+{credential}
 [Security]
 Method=none
 """,

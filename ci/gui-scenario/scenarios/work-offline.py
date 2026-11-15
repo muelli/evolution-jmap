@@ -24,13 +24,19 @@ jmap-functional's `going_back_online_flushes_a_flag_changed_while_offline`
 proves the same shape at the Camel layer without a GUI).
 
 The mock seeds the message with no keywords; the inbox starts unstarred.
+With `--live` (item 182(b)), the account is the seeded live user's own, and
+the checked message is one of `harness/stalwart/seed-manual-test.py`'s own
+seeded, unflagged Inbox messages instead.
 """
 
 import time
 
 from scenario import (
+    LIVE_PASSWORD,
+    LIVE_USER,
     Jmap,
     ScenarioFailure,
+    authenticate,
     expect_log,
     expect_no_errors,
     log_count,
@@ -47,6 +53,9 @@ from scenario import (
 
 ACCOUNT = "JMAP scenario mail"
 SUBJECT = "Welcome to jmap-mockd"
+# One of harness/stalwart/seed-manual-test.py's own seeded Inbox subjects
+# with no keywords, so a `--live` run starts unstarred the same as the mock.
+LIVE_SUBJECT = "Lunch on Friday?"
 KEYWORDS_LOG = 'jmap_mail_sync: setting message keywords .*uid="{}"'
 # Long enough that a write sent right away would have landed (every other
 # scenario's keyword assertions settle well under this via wait_for's
@@ -55,16 +64,24 @@ SETTLE_SECONDS = 5
 
 
 def setup():
-    write_standalone_mail_account(ACCOUNT)
+    if LIVE_USER:
+        write_standalone_mail_account(ACCOUNT, user=LIVE_USER)
+    else:
+        write_standalone_mail_account(ACCOUNT)
     say("setup: account sources written")
 
 
 def run():
-    server = Jmap()
-    message_id = server.emails()[SUBJECT]["id"]
+    subject = LIVE_SUBJECT if LIVE_USER else SUBJECT
+    if LIVE_USER:
+        authenticate(LIVE_PASSWORD, remember=True, label="authentication-request")
+        server = Jmap(user=LIVE_USER, password=LIVE_PASSWORD, rebase=True)
+    else:
+        server = Jmap()
+    message_id = server.emails()[subject]["id"]
 
     select_folder(ACCOUNT, "Inbox")
-    select_message(SUBJECT)
+    select_message(subject)
     screenshot("01-online")
     say(f"online: folder tree and message list show {ACCOUNT!r}")
 
@@ -72,24 +89,24 @@ def run():
     say("menu: File > Work Offline")
 
     select_folder(ACCOUNT, "Inbox")
-    select_message(SUBJECT)
+    select_message(subject)
     screenshot("02-offline")
     say("offline: folder tree and message list still show the account")
 
     menu_item("Message/Mark As/Important")
     say("menu: Message > Mark As > Important, while offline")
     time.sleep(SETTLE_SECONDS)
-    if "$flagged" in server.keywords_of(SUBJECT) or log_count(KEYWORDS_LOG.format(message_id)):
-        raise ScenarioFailure(f"{SUBJECT!r} was flagged on the server while offline")
-    say(f"server: {SUBJECT!r} not flagged yet, no keyword write sent while offline")
+    if "$flagged" in server.keywords_of(subject) or log_count(KEYWORDS_LOG.format(message_id)):
+        raise ScenarioFailure(f"{subject!r} was flagged on the server while offline")
+    say(f"server: {subject!r} not flagged yet, no keyword write sent while offline")
     screenshot("03-queued-offline")
 
     menu_item("File/Work Online")
     say("menu: File > Work Online")
-    wait_for(lambda: "$flagged" in server.keywords_of(SUBJECT), f"{SUBJECT!r} flagged")
+    wait_for(lambda: "$flagged" in server.keywords_of(subject), f"{subject!r} flagged")
     say("server: $flagged set after reconnecting")
     expect_log(KEYWORDS_LOG.format(message_id), "the keyword write flushed on reconnect")
-    wait_for(lambda: message_is_flagged(SUBJECT), f"{SUBJECT!r} shows the star icon")
+    wait_for(lambda: message_is_flagged(subject), f"{subject!r} shows the star icon")
     say("row: star icon shown")
     screenshot("04-flushed-online")
 
