@@ -1144,6 +1144,26 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT=$<TARGET_FILE:functional-mail-live-client>;JMAP_FUNCTIONAL_TRANSPORT_LIVE_CLIENT=$<TARGET_FILE:functional-transport-live-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
+	# ROADMAP item 181's live verification: does a move queued while offline
+	# survive a restart and land on a real server. Its own registration,
+	# separate from functional-mail-live-stalwart, because it runs the
+	# `offline-move-restart-prime`/`-second` pair of functional-mail-live-client
+	# twice against one scratch session, not the five single-phase runs the
+	# other registration shares one account and one mutex for. See
+	# rust/crates/jmap-functional/tests/live-stalwart-mail-offline.rs.
+	add_test(
+		NAME functional-mail-offline-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-mail-offline
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-mail-offline-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT=$<TARGET_FILE:functional-mail-live-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+	)
+
 	# The mail twin of functional-book-scale-live-stalwart and
 	# functional-cal-scale-live-stalwart. It seeds a real-sized inbox directly
 	# over JMAP, then measures the first open by the Camel provider through the
