@@ -2414,6 +2414,15 @@ unsafe fn activate_now(page: gpointer) {
             (Some(link), Ok(Some(plan))) => (link, plan),
         };
 
+        let script = cell
+            .borrow()
+            .form
+            .entries()
+            .get(row)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_default();
+        tracing::trace!(script, "filters: script activate started");
+
         // SAFETY: the widgets are live, and no borrow is held.
         unsafe {
             set_script_controls_sensitive(cell, false);
@@ -2442,6 +2451,7 @@ unsafe fn activate_now(page: gpointer) {
                             ui.form.select(found);
                         }
                     }
+                    tracing::trace!(script, "filters: script activated");
                     // SAFETY: as above.
                     unsafe {
                         set_status(cell, "");
@@ -2449,6 +2459,7 @@ unsafe fn activate_now(page: gpointer) {
                     }
                 }
                 Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    tracing::trace!(script, reason, "filters: script activate reload failed");
                     let text = translate_with(ACTIVATE_RELOAD_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -2458,6 +2469,7 @@ unsafe fn activate_now(page: gpointer) {
                 }
                 Err(reason) => {
                     cell.borrow_mut().form.restore_active(previous_active);
+                    tracing::trace!(script, reason, "filters: script activate failed");
                     let text = translate_with(ACTIVATE_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -2556,6 +2568,15 @@ unsafe fn deactivate_now(page: gpointer) {
             (Some(link), Ok(Some(plan))) => (link, plan),
         };
 
+        let script = cell
+            .borrow()
+            .form
+            .entries()
+            .get(row)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_default();
+        tracing::trace!(script, "filters: script deactivate started");
+
         // SAFETY: the widgets are live, and no borrow is held.
         unsafe {
             set_script_controls_sensitive(cell, false);
@@ -2584,6 +2605,7 @@ unsafe fn deactivate_now(page: gpointer) {
                             ui.form.select(found);
                         }
                     }
+                    tracing::trace!(script, "filters: script deactivated");
                     // SAFETY: as above.
                     unsafe {
                         set_status(cell, "");
@@ -2591,6 +2613,7 @@ unsafe fn deactivate_now(page: gpointer) {
                     }
                 }
                 Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    tracing::trace!(script, reason, "filters: script deactivate reload failed");
                     let text = translate_with(DEACTIVATE_RELOAD_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -2600,6 +2623,7 @@ unsafe fn deactivate_now(page: gpointer) {
                 }
                 Err(reason) => {
                     cell.borrow_mut().form.restore_active(previous_active);
+                    tracing::trace!(script, reason, "filters: script deactivate failed");
                     let text = translate_with(DEACTIVATE_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -2692,6 +2716,8 @@ unsafe fn rename_now(page: gpointer) {
             (Some(link), Ok(Some(plan))) => (link, plan),
         };
 
+        tracing::trace!(script = name, "filters: script rename started");
+
         // SAFETY: the widgets are live, and no borrow is held.
         unsafe {
             set_script_controls_sensitive(cell, false);
@@ -2712,6 +2738,7 @@ unsafe fn rename_now(page: gpointer) {
                         let found = ui.form.entries().iter().position(|e| e.name == name);
                         ui.form.select(found);
                     }
+                    tracing::trace!(script = name, "filters: script renamed");
                     // SAFETY: as above.
                     unsafe {
                         set_status(cell, "");
@@ -2719,6 +2746,11 @@ unsafe fn rename_now(page: gpointer) {
                     }
                 }
                 Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    tracing::trace!(
+                        script = name,
+                        reason,
+                        "filters: script rename reload failed"
+                    );
                     let text = translate_with(RENAME_RELOAD_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -2728,6 +2760,7 @@ unsafe fn rename_now(page: gpointer) {
                 }
                 Err(reason) => {
                     cell.borrow_mut().form.restore_name(row, previous_name);
+                    tracing::trace!(script = name, reason, "filters: script rename failed");
                     let text = translate_with(RENAME_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -2821,6 +2854,8 @@ unsafe fn add_now(page: gpointer) {
             (Some(link), Ok(Some(plan))) => (link, plan),
         };
 
+        tracing::trace!(script = name, "filters: script add started");
+
         // SAFETY: the widgets are live, and no borrow is held.
         unsafe {
             set_script_controls_sensitive(cell, false);
@@ -2841,6 +2876,7 @@ unsafe fn add_now(page: gpointer) {
                         let found = ui.form.entries().iter().position(|e| e.name == name);
                         ui.form.select(found);
                     }
+                    tracing::trace!(script = name, "filters: script added");
                     // SAFETY: as above.
                     unsafe {
                         set_status(cell, "");
@@ -2848,6 +2884,7 @@ unsafe fn add_now(page: gpointer) {
                     }
                 }
                 Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    tracing::trace!(script = name, reason, "filters: script add reload failed");
                     let text = translate_with(ADD_RELOAD_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -2857,6 +2894,7 @@ unsafe fn add_now(page: gpointer) {
                 }
                 Err(reason) => {
                     cell.borrow_mut().form.restore_added(row);
+                    tracing::trace!(script = name, reason, "filters: script add failed");
                     let text = translate_with(ADD_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -2927,6 +2965,9 @@ unsafe fn remove_now(page: gpointer) {
             (Some(link), Ok(Some(plan))) => (link, plan),
         };
 
+        let script = removed.name.clone();
+        tracing::trace!(script, "filters: script remove started");
+
         // SAFETY: the widgets are live, and no borrow is held.
         unsafe {
             set_script_controls_sensitive(cell, false);
@@ -2945,6 +2986,7 @@ unsafe fn remove_now(page: gpointer) {
                         let mut ui = cell.borrow_mut();
                         ui.form = FiltersForm::from_loaded(loaded);
                     }
+                    tracing::trace!(script, "filters: script removed");
                     // SAFETY: as above.
                     unsafe {
                         set_status(cell, "");
@@ -2952,6 +2994,7 @@ unsafe fn remove_now(page: gpointer) {
                     }
                 }
                 Ok(ActivateOutcome::WrittenReloadFailed(reason)) => {
+                    tracing::trace!(script, reason, "filters: script remove reload failed");
                     let text = translate_with(REMOVE_RELOAD_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -2961,6 +3004,7 @@ unsafe fn remove_now(page: gpointer) {
                 }
                 Err(reason) => {
                     cell.borrow_mut().form.restore_removed(row, removed);
+                    tracing::trace!(script, reason, "filters: script remove failed");
                     let text = translate_with(REMOVE_FAILED, &[&reason]);
                     // SAFETY: as above.
                     unsafe {
@@ -4933,6 +4977,131 @@ mod tests {
         });
     }
 
+    /// Item 182(c): Activate and Deactivate trace the script name and the
+    /// outcome of their write, since nothing on screen tells an AT-SPI
+    /// client the write started or succeeded until the status label clears.
+    /// Needs a display; skips without one.
+    #[test]
+    fn activate_now_and_deactivate_now_trace_the_script_name() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
+
+            // One inactive script: Activate needs a target, Deactivate then
+            // reuses it once it is active.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "evolution-jmap".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the script failed: {reason}")
+                }
+            };
+
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens here: the load above already ran.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
+
+                let (view, add) = {
+                    let ui = state(page).unwrap().borrow();
+                    (ui.view, ui.add)
+                };
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                let (_, activate_trace) = capture(|| {
+                    activate_now(page.cast());
+                    pump_until(|| get_sensitive(add), Duration::from_secs(5));
+                });
+                assert!(
+                    has(&activate_trace, Level::TRACE, "script", "evolution-jmap"),
+                    "expected activate to trace the script name, got {activate_trace:?}"
+                );
+                assert!(
+                    has(
+                        &activate_trace,
+                        Level::TRACE,
+                        "message",
+                        "filters: script activate started"
+                    ),
+                    "expected an activate-started trace line, got {activate_trace:?}"
+                );
+                assert!(
+                    has(
+                        &activate_trace,
+                        Level::TRACE,
+                        "message",
+                        "filters: script activated"
+                    ),
+                    "expected an activate-succeeded trace line, got {activate_trace:?}"
+                );
+
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                let (_, deactivate_trace) = capture(|| {
+                    deactivate_now(page.cast());
+                    pump_until(|| get_sensitive(add), Duration::from_secs(5));
+                });
+                assert!(
+                    has(&deactivate_trace, Level::TRACE, "script", "evolution-jmap"),
+                    "expected deactivate to trace the script name, got {deactivate_trace:?}"
+                );
+                assert!(
+                    has(
+                        &deactivate_trace,
+                        Level::TRACE,
+                        "message",
+                        "filters: script deactivate started"
+                    ),
+                    "expected a deactivate-started trace line, got {deactivate_trace:?}"
+                );
+                assert!(
+                    has(
+                        &deactivate_trace,
+                        Level::TRACE,
+                        "message",
+                        "filters: script deactivated"
+                    ),
+                    "expected a deactivate-succeeded trace line, got {deactivate_trace:?}"
+                );
+
+                gtk_widget_destroy(page.cast());
+            }
+        });
+    }
+
     /// Item 180(a)'s Rename mirrors Activate/Deactivate once the name
     /// dialog answers: it writes at once instead of waiting for the account
     /// editor's OK, with every script-list control insensitive and a
@@ -5643,6 +5812,155 @@ mod tests {
                     text,
                     translate(REMOVING),
                     "the status label does not show progress while Remove's write is in flight"
+                );
+
+                gtk_widget_destroy(page.cast());
+            }
+        });
+    }
+
+    /// Item 182(c): Add, Rename and Remove each trace the script name and
+    /// the outcome of their write, the same gap Activate and Deactivate had.
+    /// Needs a display; skips without one.
+    #[test]
+    fn add_now_rename_now_and_remove_now_trace_the_script_name() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
+
+            // Loads with no script at all, the way `adding_asks_for_a_name_
+            // then_disables_the_controls_before_the_worker_answers` does.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: Vec::new(),
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the empty account failed: {reason}")
+                }
+            };
+
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens here: the load above already ran.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
+
+                let add = { state(page).unwrap().borrow().add };
+
+                // Runs inside the dialog's own nested main loop, the way
+                // `adding_asks_for_a_name_then_disables_the_controls_before_
+                // the_worker_answers` answers Add's dialog: keeps the
+                // suggested name, `MANAGED_SCRIPT_NAME`.
+                let (_, add_trace) = capture(|| {
+                    g_idle_add(Some(answer_ok), ptr::null_mut());
+                    add_now(page.cast());
+                    pump_until(|| get_sensitive(add), Duration::from_secs(5));
+                });
+                assert!(
+                    has(&add_trace, Level::TRACE, "script", MANAGED_SCRIPT_NAME),
+                    "expected add to trace the script name, got {add_trace:?}"
+                );
+                assert!(
+                    has(
+                        &add_trace,
+                        Level::TRACE,
+                        "message",
+                        "filters: script add started"
+                    ),
+                    "expected an add-started trace line, got {add_trace:?}"
+                );
+                assert!(
+                    has(&add_trace, Level::TRACE, "message", "filters: script added"),
+                    "expected an add-succeeded trace line, got {add_trace:?}"
+                );
+
+                let view = { state(page).unwrap().borrow().view };
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                // `answer_rename` types "Renamed" over whatever name is
+                // suggested, the same dialog Add just answered with `answer_ok`.
+                let (_, rename_trace) = capture(|| {
+                    g_idle_add(Some(answer_rename), ptr::null_mut());
+                    rename_now(page.cast());
+                    pump_until(|| get_sensitive(add), Duration::from_secs(5));
+                });
+                assert!(
+                    has(&rename_trace, Level::TRACE, "script", "Renamed"),
+                    "expected rename to trace the new script name, got {rename_trace:?}"
+                );
+                assert!(
+                    has(
+                        &rename_trace,
+                        Level::TRACE,
+                        "message",
+                        "filters: script rename started"
+                    ),
+                    "expected a rename-started trace line, got {rename_trace:?}"
+                );
+                assert!(
+                    has(
+                        &rename_trace,
+                        Level::TRACE,
+                        "message",
+                        "filters: script renamed"
+                    ),
+                    "expected a rename-succeeded trace line, got {rename_trace:?}"
+                );
+
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                let (_, remove_trace) = capture(|| {
+                    remove_now(page.cast());
+                    pump_until(|| get_sensitive(add), Duration::from_secs(5));
+                });
+                assert!(
+                    has(&remove_trace, Level::TRACE, "script", "Renamed"),
+                    "expected remove to trace the script name, got {remove_trace:?}"
+                );
+                assert!(
+                    has(
+                        &remove_trace,
+                        Level::TRACE,
+                        "message",
+                        "filters: script remove started"
+                    ),
+                    "expected a remove-started trace line, got {remove_trace:?}"
+                );
+                assert!(
+                    has(
+                        &remove_trace,
+                        Level::TRACE,
+                        "message",
+                        "filters: script removed"
+                    ),
+                    "expected a remove-succeeded trace line, got {remove_trace:?}"
                 );
 
                 gtk_widget_destroy(page.cast());
