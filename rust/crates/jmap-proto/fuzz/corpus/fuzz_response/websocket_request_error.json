@@ -1,0 +1,7 @@
+{
+  "@type": "RequestError",
+  "id": "req-1",
+  "type": "urn:ietf:params:jmap:error:unknownCapability",
+  "status": 400,
+  "detail": "Requested capability is not supported"
+}

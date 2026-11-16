@@ -15,6 +15,10 @@ use jmap_proto::methods::{
 };
 use jmap_proto::request::{Invocation, Request, ResultReference};
 use jmap_proto::response::Response;
+use jmap_proto::websocket::{
+    WebSocketPushDisable, WebSocketPushEnable, WebSocketRequest, WebSocketRequestError,
+    WebSocketResponse,
+};
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(response) = serde_json::from_slice::<Response>(data) {
@@ -450,6 +454,82 @@ fuzz_target!(|data: &[u8]| {
         let _ = serde_json::to_vec(&built);
         if let Ok(encoded) = serde_json::to_vec(&bcopy_resp) {
             let _ = serde_json::from_slice::<BlobCopyResponse>(&encoded);
+        }
+    }
+
+    if let Ok(ws_req) = serde_json::from_slice::<WebSocketRequest>(data) {
+        let mut built = WebSocketRequest::new(ws_req.using.clone());
+        if let Some(id) = &ws_req.id {
+            built = built.with_id(id.clone());
+        }
+        for inv in &ws_req.method_calls {
+            built = built.with_invocation(inv.clone());
+        }
+        if let Some(created_ids) = &ws_req.created_ids {
+            built = built.with_created_ids(created_ids.clone());
+        }
+        let _ = serde_json::to_vec(&built);
+        if let Ok(encoded) = serde_json::to_vec(&ws_req) {
+            let _ = serde_json::from_slice::<WebSocketRequest>(&encoded);
+        }
+    }
+
+    if let Ok(ws_resp) = serde_json::from_slice::<WebSocketResponse>(data) {
+        let mut built = WebSocketResponse::new();
+        if let Some(id) = &ws_resp.id {
+            built = built.with_id(id.clone());
+        }
+        for inv in &ws_resp.method_responses {
+            built = built.with_method_response(inv.clone());
+        }
+        if let Some(created_ids) = &ws_resp.created_ids {
+            built = built.with_created_ids(created_ids.clone());
+        }
+        if let Some(session_state) = &ws_resp.session_state {
+            built = built.with_session_state(session_state.clone());
+        }
+        let _ = ws_resp.responses_for("");
+        let _ = ws_resp.responses_for("c1");
+        let _ = ws_resp.responses_for("c2");
+        let _ = serde_json::to_vec(&built);
+        if let Ok(encoded) = serde_json::to_vec(&ws_resp) {
+            let _ = serde_json::from_slice::<WebSocketResponse>(&encoded);
+        }
+    }
+
+    if let Ok(ws_err) = serde_json::from_slice::<WebSocketRequestError>(data) {
+        let mut built = WebSocketRequestError::new(ws_err.error_type.clone());
+        if let Some(id) = &ws_err.id {
+            built = built.with_id(id.clone());
+        }
+        if let Some(status) = ws_err.status {
+            built = built.with_status(status);
+        }
+        if let Some(detail) = &ws_err.detail {
+            built = built.with_detail(detail.clone());
+        }
+        let _ = serde_json::to_vec(&built);
+        if let Ok(encoded) = serde_json::to_vec(&ws_err) {
+            let _ = serde_json::from_slice::<WebSocketRequestError>(&encoded);
+        }
+    }
+
+    if let Ok(enable) = serde_json::from_slice::<WebSocketPushEnable>(data) {
+        let mut built = WebSocketPushEnable::new();
+        if let Some(types) = &enable.data_types {
+            built = built.with_data_types(types.clone());
+        }
+        let _ = serde_json::to_vec(&built);
+        if let Ok(encoded) = serde_json::to_vec(&enable) {
+            let _ = serde_json::from_slice::<WebSocketPushEnable>(&encoded);
+        }
+    }
+
+    if let Ok(disable) = serde_json::from_slice::<WebSocketPushDisable>(data) {
+        let built = WebSocketPushDisable::new();
+        let _ = serde_json::to_vec(&built);
+        if let Ok(encoded) = serde_json::to_vec(&disable) {
+            let _ = serde_json::from_slice::<WebSocketPushDisable>(&encoded);
         }
     }
 });

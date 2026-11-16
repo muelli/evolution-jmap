@@ -1,0 +1,8 @@
+{
+  "@type": "Response",
+  "id": "req-1",
+  "sessionState": "s-12345",
+  "methodResponses": [
+    ["Core/echo", {}, "c1"]
+  ]
+}
