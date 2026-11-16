@@ -215,6 +215,11 @@ const SAVE_TEXT_RELOAD_FAILED: &CStr = N_(c"Saved. The list could not be refresh
 // view below, which has "_Script:".
 const SCRIPT_LIST_NAME: &CStr = N_(c"Filter scripts");
 const RULE_LIST_NAME: &CStr = N_(c"Rules of the selected script");
+// Item 174(d): the completion popup is its own top-level window, a
+// sibling of the account editor, not a child of it. A screen reader
+// needs a name and a list role to announce it; GTK gives a plain
+// `GTK_WINDOW_POPUP` neither.
+const COMPLETION_LIST_NAME: &CStr = N_(c"Sieve completion suggestions");
 
 /// The columns of the rules list: whether the rule runs, and its name.
 const RULE_COLUMN_ENABLED: c_int = 0;
@@ -717,6 +722,8 @@ unsafe fn build_widgets(page: *mut GObject) {
         // and writes the popup's own state.
         let completion_window = gtk_window_new(GTK_WINDOW_POPUP);
         gtk_window_set_accept_focus(completion_window.cast(), GFALSE);
+        widget::set_accessible_role(completion_window.cast(), evo_sys::ATK_ROLE_LIST);
+        widget::set_accessible_name(completion_window.cast(), &translate(COMPLETION_LIST_NAME));
         let completion_list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         gtk_container_add(completion_window.cast(), completion_list);
         g_signal_connect_data(
@@ -1832,6 +1839,7 @@ unsafe fn fill_completion_list(cell: &RefCell<UiState>) {
             gtk_label_set_xalign(label.cast(), 0.0);
             let text = cstring_lossy(&format!("{marker}{}", candidate.text));
             gtk_label_set_text(label.cast(), text.as_ptr());
+            widget::set_accessible_role(label.cast(), evo_sys::ATK_ROLE_LIST_ITEM);
             gtk_box_pack_start(list.cast(), label, GFALSE, GFALSE, 0);
         }
         gtk_widget_show_all(list);
@@ -4157,6 +4165,71 @@ mod tests {
                     "accept did not replace the partial word with the selected candidate"
                 );
 
+                gtk_widget_destroy(window);
+            }
+        });
+    }
+
+    /// Accessibility (item 174 (d)): the completion popup is its own
+    /// top-level AT-SPI window, a sibling of the account editor rather
+    /// than a child of it (confirmed live, 2026-11-16: a dump of the
+    /// `evolution` application's own AT-SPI tree showed it next to the
+    /// "Mail" frame and the "Account Editor" dialog). A screen reader
+    /// walking from the editor never reaches it, so it needs a name and a
+    /// list role of its own, and each row needs a list-item role. Needs a
+    /// display; skips without one.
+    #[test]
+    fn the_completion_popup_and_its_rows_have_accessible_roles_and_a_name() {
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: as `completion_opens_navigates_and_accepts_a_candidate`.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
+
+                let cell = state(page.cast()).expect("a freshly built page has state");
+                let buffer = cell.borrow().buffer;
+                let text = cstring_lossy("e");
+                let mut start = GtkTextIter::default();
+                gtk_text_buffer_get_start_iter(buffer, &mut start);
+                gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                gtk_text_buffer_place_cursor(buffer, &end);
+
+                open_completion(cell);
+                let (completion_window, completion_list) = {
+                    let ui = cell.borrow();
+                    (ui.completion_window, ui.completion_list)
+                };
+                assert_eq!(
+                    widget::get_accessible_role(completion_window.cast()),
+                    evo_sys::ATK_ROLE_LIST,
+                    "the completion popup keeps no role a screen reader can announce"
+                );
+                assert_eq!(
+                    widget::get_accessible_name(completion_window.cast()),
+                    translate(COMPLETION_LIST_NAME),
+                    "the completion popup keeps no name a screen reader can announce"
+                );
+                let rows = gtk_container_get_children(completion_list.cast());
+                assert!(!rows.is_null(), "the open popup has no row");
+                let row = (*rows).data.cast::<GObject>();
+                assert_eq!(
+                    widget::get_accessible_role(row),
+                    evo_sys::ATK_ROLE_LIST_ITEM,
+                    "a completion row keeps no role a screen reader can announce"
+                );
+                g_list_free(rows);
+
+                close_completion(cell);
                 gtk_widget_destroy(window);
             }
         });
