@@ -14,7 +14,7 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.llvm21
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
-  prepend-pkg-config-path: /app/lib/pkgconfig:/app/share/pkgconfig
+  prepend-pkg-config-path: /app/evolution/extensions/evolution-jmap/lib/pkgconfig:/app/lib/pkgconfig:/app/share/pkgconfig
   env:
     CARGO_HOME: /run/build/evolution-jmap/cargo-home
     CARGO_TARGET_DIR: /run/build/evolution-jmap/target
@@ -22,6 +22,33 @@ build-options:
     LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
     RUST_BACKTRACE: "1"
 modules:
+  # The Sieve script editor links GtkSourceView 4, the GTK3-ABI release. The
+  # org.gnome.Evolution runtime does not have it, so this manifest builds it
+  # from source into the extension's own prefix.
+  #
+  # The prefix below is the extension's mount point. /app belongs to the
+  # runtime and is read-only during an extension build, so the default
+  # prefix of flatpak-builder (/app) does not work here. The runtime's
+  # metadata has add-ld-path=lib for this extension point, which puts the
+  # directory below on the loader path at run time.
+  - name: gtksourceview4
+    buildsystem: meson
+    build-options:
+      prefix: /app/evolution/extensions/evolution-jmap
+      libdir: /app/evolution/extensions/evolution-jmap/lib
+    config-opts:
+      - -Dgir=false
+      - -Dvapi=false
+      - -Dgtk_doc=false
+      - -Dglade_catalog=false
+      - -Dinstall_tests=false
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: archive
+        url: https://download.gnome.org/sources/gtksourceview/4.8/gtksourceview-4.8.4.tar.xz
+        sha256: 7ec9d18fb283d1f84a3a3eff3b7a72b09a10c9c006597b3fbabbb5958420a87d
   - name: evolution-jmap
     buildsystem: simple
     build-commands:
