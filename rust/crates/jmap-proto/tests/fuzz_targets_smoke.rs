@@ -1811,3 +1811,186 @@ fn fuzz_changes_push_and_error_frames_smoke() {
     let sc_parsed: StateChange = serde_json::from_slice(&sc_bytes).expect("parse state change");
     assert_eq!(sc_parsed.changed.len(), 1);
 }
+
+#[test]
+fn fuzz_proto_parsers_domain_filters_and_capabilities_smoke() {
+    use jmap_proto::blob::{
+        BlobCapability, BlobInfo, BlobLookupMatch, DataSource, UploadBlob, UploadBlobResult,
+    };
+    use jmap_proto::calendars::{
+        AbsoluteTrigger, Alert, CalendarEventNotificationQueryFilter,
+        CalendarPreferencesCapability, CalendarRights, CalendarsCapability, EventRelation,
+        FreeBusyBlock, Link, Location, NDay, OffsetTrigger, Participant, ParticipantProblem,
+        ParticipantReply, RecurrenceRule, SendCalendarEvent, SendCalendarEventResult,
+        VirtualLocation,
+    };
+    use jmap_proto::contacts::{AddressBookRights, Name, NameComponent, Nickname};
+    use jmap_proto::filenode::{FileNodeCapability, FileNodeQueryFilter, FileNodeRights};
+    use jmap_proto::mail::{
+        DeliveryStatus, EmailAddress, EmailAddressGroup, EmailBodyPart, EmailBodyValue,
+        EmailHeader, EmailImport, EmailQueryFilter, EmailSubmissionQueryFilter, Envelope,
+        EnvelopeAddress, MDNCapability, MDNDisposition, MailCapability, MailShareCapability,
+        MailboxRights, SmimeVerifyCapability, SnoozeDetails, SubmissionCapability,
+        VacationResponseCapability,
+    };
+    use jmap_proto::principals::{
+        BusyPeriod, PrincipalAvailabilityCapability, PrincipalsCapability,
+        PrincipalsOwnerCapability,
+    };
+    use jmap_proto::quota::{QuotaCapability, QuotaQueryFilter};
+    use jmap_proto::session::{Account, CoreCapability, RefPlusCapability, WebSocketCapability};
+    use jmap_proto::sieve::{SieveCapability, SieveScriptQueryFilter};
+    use jmap_proto::tasks::{TaskListRights, TaskQueryFilter, TasksCapability};
+
+    let hostile_inputs: &[&[u8]] = &[
+        b"",
+        b"{",
+        b"[",
+        b"}",
+        b"]",
+        b"null",
+        b"true",
+        b"12345",
+        b"\"unterminated",
+        b"{\"notAField\": 42}",
+    ];
+
+    for input in hostile_inputs {
+        let _ = serde_json::from_slice::<EmailQueryFilter>(input);
+        let _ = serde_json::from_slice::<EmailSubmissionQueryFilter>(input);
+        let _ = serde_json::from_slice::<MailCapability>(input);
+        let _ = serde_json::from_slice::<SubmissionCapability>(input);
+        let _ = serde_json::from_slice::<MDNCapability>(input);
+        let _ = serde_json::from_slice::<VacationResponseCapability>(input);
+        let _ = serde_json::from_slice::<MailShareCapability>(input);
+        let _ = serde_json::from_slice::<SmimeVerifyCapability>(input);
+        let _ = serde_json::from_slice::<MailboxRights>(input);
+        let _ = serde_json::from_slice::<EmailHeader>(input);
+        let _ = serde_json::from_slice::<EmailAddress>(input);
+        let _ = serde_json::from_slice::<EmailAddressGroup>(input);
+        let _ = serde_json::from_slice::<EmailBodyPart>(input);
+        let _ = serde_json::from_slice::<EmailBodyValue>(input);
+        let _ = serde_json::from_slice::<DeliveryStatus>(input);
+        let _ = serde_json::from_slice::<Envelope>(input);
+        let _ = serde_json::from_slice::<EnvelopeAddress>(input);
+        let _ = serde_json::from_slice::<SnoozeDetails>(input);
+        let _ = serde_json::from_slice::<EmailImport>(input);
+        let _ = serde_json::from_slice::<MDNDisposition>(input);
+        let _ = serde_json::from_slice::<AddressBookRights>(input);
+        let _ = serde_json::from_slice::<Name>(input);
+        let _ = serde_json::from_slice::<NameComponent>(input);
+        let _ = serde_json::from_slice::<Nickname>(input);
+        let _ = serde_json::from_slice::<CalendarEventNotificationQueryFilter>(input);
+        let _ = serde_json::from_slice::<CalendarRights>(input);
+        let _ = serde_json::from_slice::<RecurrenceRule>(input);
+        let _ = serde_json::from_slice::<NDay>(input);
+        let _ = serde_json::from_slice::<Participant>(input);
+        let _ = serde_json::from_slice::<Location>(input);
+        let _ = serde_json::from_slice::<VirtualLocation>(input);
+        let _ = serde_json::from_slice::<Link>(input);
+        let _ = serde_json::from_slice::<Alert>(input);
+        let _ = serde_json::from_slice::<OffsetTrigger>(input);
+        let _ = serde_json::from_slice::<AbsoluteTrigger>(input);
+        let _ = serde_json::from_slice::<EventRelation>(input);
+        let _ = serde_json::from_slice::<FreeBusyBlock>(input);
+        let _ = serde_json::from_slice::<CalendarsCapability>(input);
+        let _ = serde_json::from_slice::<CalendarPreferencesCapability>(input);
+        let _ = serde_json::from_slice::<ParticipantProblem>(input);
+        let _ = serde_json::from_slice::<ParticipantReply>(input);
+        let _ = serde_json::from_slice::<SendCalendarEvent>(input);
+        let _ = serde_json::from_slice::<SendCalendarEventResult>(input);
+        let _ = serde_json::from_slice::<SieveScriptQueryFilter>(input);
+        let _ = serde_json::from_slice::<SieveCapability>(input);
+        let _ = serde_json::from_slice::<TaskQueryFilter>(input);
+        let _ = serde_json::from_slice::<TasksCapability>(input);
+        let _ = serde_json::from_slice::<TaskListRights>(input);
+        let _ = serde_json::from_slice::<PrincipalsCapability>(input);
+        let _ = serde_json::from_slice::<PrincipalsOwnerCapability>(input);
+        let _ = serde_json::from_slice::<PrincipalAvailabilityCapability>(input);
+        let _ = serde_json::from_slice::<BusyPeriod>(input);
+        let _ = serde_json::from_slice::<FileNodeQueryFilter>(input);
+        let _ = serde_json::from_slice::<FileNodeCapability>(input);
+        let _ = serde_json::from_slice::<FileNodeRights>(input);
+        let _ = serde_json::from_slice::<QuotaQueryFilter>(input);
+        let _ = serde_json::from_slice::<QuotaCapability>(input);
+        let _ = serde_json::from_slice::<BlobCapability>(input);
+        let _ = serde_json::from_slice::<BlobInfo>(input);
+        let _ = serde_json::from_slice::<UploadBlob>(input);
+        let _ = serde_json::from_slice::<UploadBlobResult>(input);
+        let _ = serde_json::from_slice::<DataSource>(input);
+        let _ = serde_json::from_slice::<BlobLookupMatch>(input);
+        let _ = serde_json::from_slice::<RefPlusCapability>(input);
+        let _ = serde_json::from_slice::<WebSocketCapability>(input);
+        let _ = serde_json::from_slice::<CoreCapability>(input);
+        let _ = serde_json::from_slice::<Account>(input);
+    }
+
+    let filter_sample = br#"{"inMailbox":"inbox","hasKeyword":"$seen","minSize":1024}"#;
+    let eqf: EmailQueryFilter =
+        serde_json::from_slice(filter_sample).expect("EmailQueryFilter parses");
+    assert_eq!(eqf.in_mailbox.as_ref().map(|id| id.as_str()), Some("inbox"));
+    let eqf_enc = serde_json::to_vec(&eqf).expect("EmailQueryFilter serializes");
+    assert!(serde_json::from_slice::<EmailQueryFilter>(&eqf_enc).is_ok());
+
+    let sub_filter_sample = br#"{"identityIds":["id1"],"undoStatus":"pending"}"#;
+    let esqf: EmailSubmissionQueryFilter =
+        serde_json::from_slice(sub_filter_sample).expect("EmailSubmissionQueryFilter parses");
+    assert_eq!(esqf.undo_status.as_deref(), Some("pending"));
+    let esqf_enc = serde_json::to_vec(&esqf).expect("EmailSubmissionQueryFilter serializes");
+    assert!(serde_json::from_slice::<EmailSubmissionQueryFilter>(&esqf_enc).is_ok());
+
+    let sieve_filter_sample = br#"{"name":"vacation","isActive":true}"#;
+    let sqf: SieveScriptQueryFilter =
+        serde_json::from_slice(sieve_filter_sample).expect("SieveScriptQueryFilter parses");
+    assert_eq!(sqf.name.as_deref(), Some("vacation"));
+    assert_eq!(sqf.is_active, Some(true));
+    let sqf_enc = serde_json::to_vec(&sqf).expect("SieveScriptQueryFilter serializes");
+    assert!(serde_json::from_slice::<SieveScriptQueryFilter>(&sqf_enc).is_ok());
+
+    let task_filter_sample = br#"{"taskListId":"tl1","completed":false}"#;
+    let tqf: TaskQueryFilter =
+        serde_json::from_slice(task_filter_sample).expect("TaskQueryFilter parses");
+    assert_eq!(tqf.task_list_id.as_ref().map(|id| id.as_str()), Some("tl1"));
+    let tqf_enc = serde_json::to_vec(&tqf).expect("TaskQueryFilter serializes");
+    assert!(serde_json::from_slice::<TaskQueryFilter>(&tqf_enc).is_ok());
+
+    let quota_filter_sample = br#"{"name":"storage","resourceTypes":["octets"]}"#;
+    let qqf: QuotaQueryFilter =
+        serde_json::from_slice(quota_filter_sample).expect("QuotaQueryFilter parses");
+    assert_eq!(qqf.name.as_deref(), Some("storage"));
+    let qqf_enc = serde_json::to_vec(&qqf).expect("QuotaQueryFilter serializes");
+    assert!(serde_json::from_slice::<QuotaQueryFilter>(&qqf_enc).is_ok());
+
+    let filenode_filter_sample = br#"{"inParent":"root","name":"doc.pdf"}"#;
+    let fnqf: FileNodeQueryFilter =
+        serde_json::from_slice(filenode_filter_sample).expect("FileNodeQueryFilter parses");
+    assert_eq!(fnqf.name.as_deref(), Some("doc.pdf"));
+    let fnqf_enc = serde_json::to_vec(&fnqf).expect("FileNodeQueryFilter serializes");
+    assert!(serde_json::from_slice::<FileNodeQueryFilter>(&fnqf_enc).is_ok());
+
+    let cal_notif_filter_sample = br#"{"after":"2026-01-01T00:00:00Z"}"#;
+    let cenqf: CalendarEventNotificationQueryFilter =
+        serde_json::from_slice(cal_notif_filter_sample)
+            .expect("CalendarEventNotificationQueryFilter parses");
+    assert_eq!(
+        cenqf.after.as_ref().map(|d| d.as_str()),
+        Some("2026-01-01T00:00:00Z")
+    );
+    let cenqf_enc =
+        serde_json::to_vec(&cenqf).expect("CalendarEventNotificationQueryFilter serializes");
+    assert!(serde_json::from_slice::<CalendarEventNotificationQueryFilter>(&cenqf_enc).is_ok());
+
+    let cap_sample = br#"{"maxSizeUpload":10485760,"maxConcurrentUpload":4}"#;
+    let core_cap: CoreCapability =
+        serde_json::from_slice(cap_sample).expect("CoreCapability parses");
+    assert_eq!(core_cap.max_size_upload, 10485760);
+    let core_enc = serde_json::to_vec(&core_cap).expect("CoreCapability serializes");
+    assert!(serde_json::from_slice::<CoreCapability>(&core_enc).is_ok());
+
+    let ws_cap_sample = br#"{"url":"wss://jmap.example.com/ws","supportsPush":true}"#;
+    let ws_cap: WebSocketCapability =
+        serde_json::from_slice(ws_cap_sample).expect("WebSocketCapability parses");
+    assert!(ws_cap.supports_push);
+    let ws_enc = serde_json::to_vec(&ws_cap).expect("WebSocketCapability serializes");
+    assert!(serde_json::from_slice::<WebSocketCapability>(&ws_enc).is_ok());
+}
