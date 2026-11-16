@@ -657,6 +657,43 @@ fuzz_target!(|data: &[u8]| {
         }
     }
 
+    if let Ok(pe) = serde_json::from_slice::<jmap_proto::websocket::WebSocketPushEnable>(data) {
+        let mut built = jmap_proto::websocket::WebSocketPushEnable::new();
+        if let Some(ref dt) = pe.data_types {
+            built = built.with_data_types(dt.clone());
+        }
+        if let Ok(encoded) = serde_json::to_vec(&pe) {
+            let _ = serde_json::from_slice::<jmap_proto::websocket::WebSocketPushEnable>(&encoded);
+        }
+        if let Ok(encoded) = serde_json::to_vec(&built) {
+            let _ = serde_json::from_slice::<jmap_proto::websocket::WebSocketPushEnable>(&encoded);
+        }
+    }
+
+    if let Ok(pd) = serde_json::from_slice::<jmap_proto::websocket::WebSocketPushDisable>(data) {
+        let built = jmap_proto::websocket::WebSocketPushDisable::new();
+        if let Ok(encoded) = serde_json::to_vec(&pd) {
+            let _ = serde_json::from_slice::<jmap_proto::websocket::WebSocketPushDisable>(&encoded);
+        }
+        if let Ok(encoded) = serde_json::to_vec(&built) {
+            let _ = serde_json::from_slice::<jmap_proto::websocket::WebSocketPushDisable>(&encoded);
+        }
+    }
+
+    if let Ok(me) = serde_json::from_slice::<jmap_proto::error::MethodError>(data) {
+        let mut built =
+            jmap_proto::error::MethodError::new(me.error_type.clone()).with_extra(me.extra.clone());
+        if let Some(ref d) = me.description {
+            built = built.with_description(d.clone());
+        }
+        if let Ok(encoded) = serde_json::to_vec(&me) {
+            let _ = serde_json::from_slice::<jmap_proto::error::MethodError>(&encoded);
+        }
+        if let Ok(encoded) = serde_json::to_vec(&built) {
+            let _ = serde_json::from_slice::<jmap_proto::error::MethodError>(&encoded);
+        }
+    }
+
     if let Ok(item) = serde_json::from_slice::<jmap_proto::methods::AddedItem>(data) {
         let item_built = jmap_proto::methods::AddedItem::new(item.id.clone(), item.index);
         if let Ok(encoded) = serde_json::to_vec(&item) {

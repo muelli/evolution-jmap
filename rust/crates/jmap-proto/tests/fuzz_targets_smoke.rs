@@ -1751,3 +1751,63 @@ fn websocket_frames_and_builders_smoke() {
         serde_json::from_slice(&push_disable_bytes).expect("WebSocketPushDisable parses");
     assert_eq!(push_disable_parsed, push_disable);
 }
+
+#[test]
+fn fuzz_changes_push_and_error_frames_smoke() {
+    use jmap_proto::error::MethodError;
+    use jmap_proto::error::method::{CANNOT_CALCULATE_CHANGES, TOO_MANY_CHANGES};
+    use jmap_proto::push::StateChange;
+    use jmap_proto::websocket::{WebSocketPushDisable, WebSocketPushEnable};
+    use std::collections::BTreeMap;
+
+    let push_enable =
+        WebSocketPushEnable::new().with_data_types(["Email", "CalendarEvent", "ContactCard"]);
+    let pe_json = serde_json::to_vec(&push_enable).expect("serialize push enable");
+    let pe_parsed: WebSocketPushEnable =
+        serde_json::from_slice(&pe_json).expect("parse push enable");
+    assert_eq!(pe_parsed, push_enable);
+    assert_eq!(
+        pe_parsed.data_types.as_deref(),
+        Some(
+            &[
+                "Email".to_string(),
+                "CalendarEvent".to_string(),
+                "ContactCard".to_string()
+            ][..]
+        )
+    );
+
+    let push_disable = WebSocketPushDisable::new();
+    let pd_json = serde_json::to_vec(&push_disable).expect("serialize push disable");
+    let pd_parsed: WebSocketPushDisable =
+        serde_json::from_slice(&pd_json).expect("parse push disable");
+    assert_eq!(pd_parsed, push_disable);
+
+    let err_cannot =
+        MethodError::new(CANNOT_CALCULATE_CHANGES).with_description("State is too old");
+    let err_cannot_bytes =
+        serde_json::to_vec(&err_cannot).expect("serialize cannot calculate changes");
+    let err_cannot_parsed: MethodError =
+        serde_json::from_slice(&err_cannot_bytes).expect("parse cannot calculate changes");
+    assert_eq!(err_cannot_parsed.error_type, CANNOT_CALCULATE_CHANGES);
+    assert_eq!(
+        err_cannot_parsed.description.as_deref(),
+        Some("State is too old")
+    );
+
+    let err_too_many = MethodError::new(TOO_MANY_CHANGES);
+    let err_too_many_bytes = serde_json::to_vec(&err_too_many).expect("serialize too many changes");
+    let err_too_many_parsed: MethodError =
+        serde_json::from_slice(&err_too_many_bytes).expect("parse too many changes");
+    assert_eq!(err_too_many_parsed.error_type, TOO_MANY_CHANGES);
+
+    let mut changed = BTreeMap::new();
+    let mut acc1_types = BTreeMap::new();
+    acc1_types.insert("Mailbox".to_string(), "m-state-1".into());
+    acc1_types.insert("Email".to_string(), "e-state-1".into());
+    changed.insert("acc1".into(), acc1_types);
+    let sc = StateChange::new(changed);
+    let sc_bytes = serde_json::to_vec(&sc).expect("serialize state change");
+    let sc_parsed: StateChange = serde_json::from_slice(&sc_bytes).expect("parse state change");
+    assert_eq!(sc_parsed.changed.len(), 1);
+}
