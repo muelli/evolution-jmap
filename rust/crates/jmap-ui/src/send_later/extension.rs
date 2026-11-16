@@ -1441,7 +1441,7 @@ mod tests {
         let client =
             jmap_client::Client::connect(server.origin(), jmap_client::Credentials::none())
                 .unwrap();
-        let features = crate::session_cache::AccountFeatures::from_session(client.session())
+        let features = crate::session_cache::AccountFeatures::from_session(&client.session())
             .expect("a mail account");
         SendState {
             link: Some(Arc::new(AccountLink::without_refresh(client, features))),

@@ -54,6 +54,38 @@ fuzz_target!(|data: &[u8]| {
         .transport(session_transport)
         .connect("https://mail.example.internal", Credentials::none())
     {
+        let _ = session_client.session();
+        let _ = session_client.session_snapshot();
+        let _ = session_client.rebase_note();
+        let _ = session_client.rebase_origin();
+        let _ = session_client.session_url();
+        let _ = session_client.is_anonymous();
+        let _ = session_client.authorization_header();
+        let _ = session_client.id_budget();
+        let _ = session_client.next_call_id();
+        let _ = session_client.takes_calls_in_one_request(10);
+        let _ = session_client.primary_account("urn:ietf:params:jmap:mail");
+        let _ = session_client.is_session_stale();
+        let _ = session_client.last_session_state();
+        let _ = session_client.refresh_session();
+    }
+
+    let auth_transport = FuzzSessionTransport {
+        session_body: data.to_vec(),
+    };
+    if let Ok(session_client) = Client::builder()
+        .transport(auth_transport)
+        .rebase_urls_to_origin(true)
+        .connect_timeout(std::time::Duration::from_millis(50))
+        .read_timeout(std::time::Duration::from_millis(50))
+        .max_rate_limit_retries(1)
+        .max_retry_after(std::time::Duration::from_millis(100))
+        .id_budget(jmap_client::limits::IdBudget::per_sync())
+        .connect(
+            "https://mail.example.internal",
+            Credentials::basic("user", "pass"),
+        )
+    {
         let _ = session_client.is_session_stale();
         let _ = session_client.last_session_state();
         let _ = session_client.refresh_session();
@@ -347,6 +379,55 @@ fuzz_target!(|data: &[u8]| {
             &Id::new("m_snooze"),
             &jmap_proto::mail::SnoozeDetails::new(jmap_proto::UtcDate::new("2026-12-01T00:00:00Z")),
         );
+        let _ = client.session();
+        let _ = client.session_snapshot();
+        let _ = client.rebase_note();
+        let _ = client.rebase_origin();
+        let _ = client.session_url();
+        let _ = client.is_anonymous();
+        let _ = client.authorization_header();
+        let _ = client.id_budget();
+        let _ = client.next_call_id();
+        let _ = client.takes_calls_in_one_request(10);
+        let _ = client.primary_account("urn:ietf:params:jmap:mail");
+        let _ = client.primary_account("urn:ietf:params:jmap:contacts");
+        let _ = client.primary_account("urn:ietf:params:jmap:calendars");
+        let _ = client.primary_account("urn:ietf:params:jmap:principals");
+        let _ = client.calendar_get(&account_id, &[Id::new("cal1")]);
+        let _ = client.calendar_set_custom(&jmap_proto::calendars::CalendarSetRequest::new(
+            account_id.clone(),
+        ));
+        let _ = client.sieve_scripts_with_state(&account_id);
+        let _ = client.sieve_script_validate(&account_id, Id::new("b1"));
+        let _ = client.sieve_script_validate_content(&account_id, "require [\"fileinto\"];");
+        let _ = client.sieve_script_set(&jmap_proto::sieve::SieveScriptSetRequest::new(
+            jmap_proto::methods::SetRequest::new(account_id.clone()),
+        ));
+        let _ = client.sieve_script_query_request(&jmap_proto::methods::QueryRequest::new(
+            account_id.clone(),
+        ));
+        let _ = client.get_chunked::<jmap_proto::mail::Mailbox>(
+            &["urn:ietf:params:jmap:mail"],
+            "Mailbox",
+            &account_id,
+            &[Id::new("m1")],
+            None,
+            |m| m.id.as_ref(),
+        );
+        let _ = client.single_call(
+            &["urn:ietf:params:jmap:mail"],
+            "Mailbox/get",
+            &serde_json::json!({"accountId": "acc1", "ids": ["m1"]}),
+        );
+        let _ = Client::is_method_idempotent("Mailbox/get");
+        let _ = Client::is_method_idempotent("Email/set");
+        if let Ok(req) = jmap_proto::request::Request::new(["urn:ietf:params:jmap:core"]).call(
+            "Mailbox/get",
+            &serde_json::json!({"accountId": "acc1", "ids": ["m1"]}),
+            "c0",
+        ) {
+            let _ = Client::is_request_idempotent(&req);
+        }
         let _ = client.is_session_stale();
         let _ = client.last_session_state();
     }

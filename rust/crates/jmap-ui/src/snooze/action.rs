@@ -865,7 +865,7 @@ mod tests {
                 imported.id.unwrap().to_string()
             })
             .collect();
-        let features = AccountFeatures::from_session(client.session()).unwrap();
+        let features = AccountFeatures::from_session(&client.session()).unwrap();
         (AccountLink::without_refresh(client, features), uids)
     }
 

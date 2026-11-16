@@ -45,16 +45,14 @@ fn seeded(server: &MockServer) -> (Client, Id, Id) {
 fn the_session_names_the_snooze_extension() {
     let with = MockServer::builder().snooze_extension().start();
     let client = Client::connect(with.origin(), Credentials::none()).unwrap();
-    let account = client.session().accounts.get(&with.account_id()).unwrap();
+    let session = client.session();
+    let account = session.accounts.get(&with.account_id()).unwrap();
     assert!(account.has_capability(CAPABILITY_CYRUS_MAIL));
 
     let without = MockServer::builder().start();
     let client = Client::connect(without.origin(), Credentials::none()).unwrap();
-    let account = client
-        .session()
-        .accounts
-        .get(&without.account_id())
-        .unwrap();
+    let session = client.session();
+    let account = session.accounts.get(&without.account_id()).unwrap();
     assert!(!account.has_capability(CAPABILITY_CYRUS_MAIL));
 }
 

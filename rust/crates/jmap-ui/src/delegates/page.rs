@@ -1820,7 +1820,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = Arc::new(AccountLink::without_refresh(client, features));
             let loaded = Loaded {
                 delegates: vec![crate::delegation::Delegate {
@@ -1883,7 +1883,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = Arc::new(AccountLink::without_refresh(client, features));
             let loaded = Loaded {
                 delegates: vec![],
@@ -1930,7 +1930,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = Arc::new(AccountLink::without_refresh(client, features));
             let loaded = Loaded {
                 delegates: vec![crate::delegation::Delegate {
@@ -2064,7 +2064,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = Arc::new(AccountLink::without_refresh(client, features));
             let loaded = Loaded {
                 delegates: vec![],
@@ -2113,7 +2113,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = Arc::new(AccountLink::without_refresh(client, features));
             let loaded = Loaded {
                 delegates: vec![crate::delegation::Delegate {
@@ -2363,7 +2363,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = Arc::new(AccountLink::without_refresh(client, features));
 
             // SAFETY: as the tests above; no network call happens here.

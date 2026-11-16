@@ -358,8 +358,8 @@ fn finding_18_current_user_principal_resolves_past_account_id_mismatch() {
     let account_id = Id::new("d333333");
 
     // 1. Session advertises currentUserPrincipalId as "d333333" (account id):
-    let advertised = client
-        .session()
+    let session = client.session();
+    let advertised = session
         .accounts
         .get(&account_id)
         .and_then(|acct| {

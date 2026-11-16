@@ -292,7 +292,7 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
     let client = source::connect(&config.target, config.rebase_urls, credentials)
         .map_err(|error| error.to_string())?;
 
-    let features = AccountFeatures::from_session(client.session())
+    let features = AccountFeatures::from_session(&client.session())
         .ok_or_else(|| translate(c"the session document names no usable mail account"))?;
 
     // Only an OAuth 2.0 credential expires. For the other methods, a 401

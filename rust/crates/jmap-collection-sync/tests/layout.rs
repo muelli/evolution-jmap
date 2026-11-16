@@ -12,7 +12,7 @@ use jmap_proto::session::{CAPABILITY_CONTACTS, CAPABILITY_SUBMISSION};
 
 fn layout_of(server: &MockServer) -> CollectionLayout {
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-    CollectionLayout::from_session(client.session())
+    CollectionLayout::from_session(&client.session())
 }
 
 #[test]

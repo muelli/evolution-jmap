@@ -564,7 +564,7 @@ mod tests {
 
     fn link_to(server: &MockServer) -> AccountLink {
         let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features = AccountFeatures::from_session(client.session()).unwrap();
+        let features = AccountFeatures::from_session(&client.session()).unwrap();
         AccountLink::without_refresh(client, features)
     }
 

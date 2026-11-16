@@ -160,7 +160,7 @@ impl MailSync {
     /// and the store's refresh loop is its own, later claim.
     pub fn folder_tree_with_shared(&self) -> Result<(State, FolderTree), SyncError> {
         let (state, tree) = self.folder_tree()?;
-        let shared = shared_mail_accounts(self.client.session());
+        let shared = shared_mail_accounts(&self.client.session());
         if shared.is_empty() {
             return Ok((state, tree));
         }
@@ -205,7 +205,7 @@ impl MailSync {
         }
         match self.client.all_changes(&self.account_id, "Mailbox", since) {
             Ok(changes) if changes.is_empty() => {
-                if shared_mail_accounts(self.client.session()).is_empty() {
+                if shared_mail_accounts(&self.client.session()).is_empty() {
                     Ok(FolderUpdate::Unchanged(changes.new_state))
                 } else {
                     self.rebuild()

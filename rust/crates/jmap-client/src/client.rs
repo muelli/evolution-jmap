@@ -245,7 +245,6 @@ impl ClientBuilder {
             authorization: RwLock::new(credentials.authorization_header()),
             cancel: self.cancel,
             session_url,
-            connect_session: OnceLock::new(),
             session: RwLock::new(None),
             refresh_lock: std::sync::Mutex::new(()),
             next_call_id: AtomicU64::new(0),
@@ -285,7 +284,6 @@ pub struct Client {
     authorization: RwLock<Option<String>>,
     cancel: Option<CancelFlag>,
     session_url: String,
-    connect_session: OnceLock<Session>,
     session: RwLock<Option<std::sync::Arc<Session>>>,
     refresh_lock: std::sync::Mutex<()>,
     next_call_id: AtomicU64,
@@ -333,24 +331,21 @@ impl Client {
             .connect(origin, credentials)
     }
 
-    /// The session object fetched at connect time.
-    ///
-    /// For the dynamically updated session across refreshes in concurrent
-    /// sync loops (RFC 8620 §2), use [`Client::session_snapshot`].
-    pub fn session(&self) -> &Session {
-        self.connect_session
-            .get()
-            .expect("session is fetched during connect")
-    }
-
-    /// Return an owned snapshot of the current session object.
-    pub fn session_snapshot(&self) -> std::sync::Arc<Session> {
+    /// The session object, updated when refreshed (RFC 8620 §2).
+    pub fn session(&self) -> std::sync::Arc<Session> {
         self.session
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .expect("session is fetched during connect")
             .clone()
+    }
+
+    /// Return an owned snapshot of the current session object.
+    ///
+    /// An alias of [`Client::session`], kept for existing callers.
+    pub fn session_snapshot(&self) -> std::sync::Arc<Session> {
+        self.session()
     }
 
     /// Refresh the session resource (RFC 8620 §2).
@@ -414,7 +409,6 @@ impl Client {
             .set_limit(session.max_concurrent_requests());
         self.upload_limiter
             .set_limit(session.max_concurrent_upload());
-        let _ = self.connect_session.set(session.clone());
         let arc = std::sync::Arc::new(session);
         *self.session.write().unwrap_or_else(PoisonError::into_inner) = Some(arc);
         Ok(())

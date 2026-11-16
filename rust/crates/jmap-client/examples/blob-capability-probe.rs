@@ -46,7 +46,8 @@ fn main() {
     };
 
     // 1. Capability check on accountCapabilities
-    let account_obj = c.session().accounts.get(&account);
+    let session = c.session();
+    let account_obj = session.accounts.get(&account);
     let blob_cap = account_obj.and_then(|a| a.blob_capability());
     let has_blob_cap = blob_cap.is_some();
     let supported_types = blob_cap
