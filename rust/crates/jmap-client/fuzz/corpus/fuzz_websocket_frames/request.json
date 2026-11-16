@@ -1,0 +1,6 @@
+{
+  "@type": "Request",
+  "id": "req-custom",
+  "using": ["urn:ietf:params:jmap:core"],
+  "methodCalls": [["Core/echo", {}, "call-1"]]
+}
