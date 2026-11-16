@@ -63,7 +63,8 @@ fuzz_target!(|data: &[u8]| {
 
     let timeouts = EventSourceTimeouts::default();
     let _ = format!("{timeouts:?}");
-    let _ = timeouts == timeouts;
+    let cloned = timeouts;
+    let _ = timeouts == cloned;
 
     let custom_timeouts = EventSourceTimeouts {
         connect: std::time::Duration::from_millis(data.len() as u64),

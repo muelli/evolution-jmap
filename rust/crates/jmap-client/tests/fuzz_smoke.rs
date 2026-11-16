@@ -523,6 +523,10 @@ fn fuzz_websocket_frames_smoke() {
         DEFAULT_MAX_FRAME_SIZE, DEFAULT_MAX_MESSAGE_SIZE, InboundFrameAction, WebSocketLimits,
         WebSocketPushTimeouts, WebSocketTimeouts, parse_inbound_message, parse_inbound_text,
     };
+    use jmap_proto::websocket::{
+        WebSocketPushDisable, WebSocketPushEnable, WebSocketRequest, WebSocketRequestError,
+        WebSocketResponse,
+    };
     use tungstenite::Message;
     use tungstenite::protocol::CloseFrame;
     use tungstenite::protocol::frame::coding::CloseCode;
@@ -540,6 +544,9 @@ fn fuzz_websocket_frames_smoke() {
         br#"{"@type":"RequestError","requestId":"r3","type":"urn:ietf:params:jmap:error:notJSON","status":400,"detail":"bad json"}"#,
         br#"{"@type":"StateChange","changed":{"acc1":{"Email":"s1"}},"pushState":"p1"}"#,
         br#"{"@type":"StateChange","changed":{}}"#,
+        br#"{"@type":"WebSocketPushEnable","dataTypes":["Email","Mailbox"]}"#,
+        br#"{"@type":"WebSocketPushDisable"}"#,
+        br#"{"@type":"Request","id":"req-1","using":["urn:ietf:params:jmap:core"],"methodCalls":[["Core/echo",{},"call-1"]]}"#,
         b"\x00\x01\x02\x03\xff\xfe\xfd",
         &[0x7b; 1024],
         b"{\"@type\":\"Response\",\"requestId\":\"r1\"}\n{\"@type\":\"Unknown\"}\nbogus\n",
@@ -550,11 +557,59 @@ fn fuzz_websocket_frames_smoke() {
             let act = parse_inbound_text(s);
             let _ = format!("{act:?}");
             assert_eq!(act, act.clone());
+
+            let _ = serde_json::from_str::<WebSocketResponse>(s);
+            let _ = serde_json::from_str::<WebSocketRequestError>(s);
+            let _ = serde_json::from_str::<WebSocketRequest>(s);
+            let _ = serde_json::from_str::<WebSocketPushEnable>(s);
+            let _ = serde_json::from_str::<WebSocketPushDisable>(s);
         }
 
         let lossy = String::from_utf8_lossy(input);
         let act_lossy = parse_inbound_text(&lossy);
         let _ = format!("{act_lossy:?}");
+
+        match &act_lossy {
+            InboundFrameAction::Response { id, response } => {
+                let _ = id.as_deref();
+                let _ = response.id.as_deref();
+                let _ = response.session_state.as_ref();
+                let _ = response.created_ids.as_ref();
+                let _ = response.responses_for("c1").count();
+                for r in &response.method_responses {
+                    let _ = r.name.as_str();
+                    let _ = r.call_id.as_str();
+                }
+            }
+            InboundFrameAction::RequestError { id, error } => {
+                let _ = id.as_deref();
+                let _ = error.id.as_deref();
+                let _ = &error.error_type;
+                let _ = error.status;
+                let _ = error.detail.as_deref();
+            }
+            InboundFrameAction::StateChange {
+                state_change,
+                push_state,
+            } => {
+                let _ = push_state.as_deref();
+                let _ = state_change.changed.len();
+                for (acc, map) in &state_change.changed {
+                    let _ = acc.as_str();
+                    for (typ, st) in map {
+                        let _ = typ.as_str();
+                        let _ = st.as_str();
+                    }
+                }
+            }
+            InboundFrameAction::Close(reason) => {
+                let _ = reason.as_deref();
+            }
+            InboundFrameAction::Ping(p) | InboundFrameAction::Pong(p) => {
+                let _ = p.len();
+            }
+            InboundFrameAction::Ignored => {}
+        }
 
         let text_msg = Message::Text(lossy.into_owned().into());
         let _ = parse_inbound_message(&text_msg);
@@ -591,14 +646,22 @@ fn fuzz_websocket_frames_smoke() {
             max_frame_size: input.len() / 2,
         };
         let _ = format!("{custom_limits:?}");
-        assert_eq!(custom_limits, custom_limits);
+        let cloned_limits = custom_limits;
+        assert_eq!(custom_limits, cloned_limits);
+
+        let zero_limits = WebSocketLimits {
+            max_message_size: 0,
+            max_frame_size: 0,
+        };
+        let _ = format!("{zero_limits:?}");
 
         let timeouts = WebSocketTimeouts {
             connect: std::time::Duration::from_millis(input.len() as u64),
             request: std::time::Duration::from_millis(input.len() as u64 * 2),
         };
         let _ = format!("{timeouts:?}");
-        assert_eq!(timeouts, timeouts);
+        let cloned_timeouts = timeouts;
+        assert_eq!(timeouts, cloned_timeouts);
 
         let push_timeouts = WebSocketPushTimeouts {
             connect: std::time::Duration::from_millis(input.len() as u64),
@@ -608,6 +671,12 @@ fn fuzz_websocket_frames_smoke() {
             max_backoff: std::time::Duration::from_millis(1000),
         };
         let _ = format!("{push_timeouts:?}");
-        assert_eq!(push_timeouts, push_timeouts);
+        let cloned_push = push_timeouts;
+        assert_eq!(push_timeouts, cloned_push);
+
+        let default_push = WebSocketPushTimeouts::default();
+        let _ = format!("{default_push:?}");
+        let cloned_default = default_push;
+        assert_eq!(default_push, cloned_default);
     }
 }
