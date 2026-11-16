@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{PoisonError, RwLock};
+use std::sync::{OnceLock, PoisonError, RwLock};
 use std::time::Duration;
 
 use jmap_proto::Id;
@@ -245,13 +245,13 @@ impl ClientBuilder {
             authorization: RwLock::new(credentials.authorization_header()),
             cancel: self.cancel,
             session_url,
+            connect_session: OnceLock::new(),
             session: RwLock::new(None),
-            current_session: RwLock::new(None),
             refresh_lock: std::sync::Mutex::new(()),
             next_call_id: AtomicU64::new(0),
             last_session_state: std::sync::Mutex::new(None),
             rebase_origin: self.rebase_urls_to_origin.then_some(origin),
-            rebase_note: RwLock::new(None),
+            rebase_note: OnceLock::new(),
             max_rate_limit_retries: self.max_rate_limit_retries,
             max_retry_after: self.max_retry_after,
             id_budget: self.id_budget,
@@ -285,14 +285,14 @@ pub struct Client {
     authorization: RwLock<Option<String>>,
     cancel: Option<CancelFlag>,
     session_url: String,
+    connect_session: OnceLock<Session>,
     session: RwLock<Option<std::sync::Arc<Session>>>,
-    current_session: RwLock<Option<&'static Session>>,
     refresh_lock: std::sync::Mutex<()>,
     next_call_id: AtomicU64,
     last_session_state: std::sync::Mutex<Option<jmap_proto::State>>,
     rebase_origin: Option<String>,
     // Records download URL origin rewrites.
-    rebase_note: RwLock<Option<&'static str>>,
+    rebase_note: OnceLock<Option<String>>,
     pub(crate) max_rate_limit_retries: u32,
     pub(crate) max_retry_after: Duration,
     id_budget: IdBudget,
@@ -333,11 +333,13 @@ impl Client {
             .connect(origin, credentials)
     }
 
-    /// The session object, updated when refreshed (RFC 8620 §2).
+    /// The session object fetched at connect time.
+    ///
+    /// For the dynamically updated session across refreshes in concurrent
+    /// sync loops (RFC 8620 §2), use [`Client::session_snapshot`].
     pub fn session(&self) -> &Session {
-        self.current_session
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.connect_session
+            .get()
             .expect("session is fetched during connect")
     }
 
@@ -388,13 +390,9 @@ impl Client {
                      {advertised_download_origin} to {origin}"
                 );
                 eprintln!("{note}");
-                let leaked: &'static str = Box::leak(note.into_boxed_str());
-                Some(leaked)
+                Some(note)
             };
-            *self
-                .rebase_note
-                .write()
-                .unwrap_or_else(PoisonError::into_inner) = note;
+            let _ = self.rebase_note.set(note);
         }
         for (name, endpoint) in [
             ("apiUrl", &session.api_url),
@@ -416,13 +414,9 @@ impl Client {
             .set_limit(session.max_concurrent_requests());
         self.upload_limiter
             .set_limit(session.max_concurrent_upload());
+        let _ = self.connect_session.set(session.clone());
         let arc = std::sync::Arc::new(session);
-        let leaked: &'static Session = Box::leak(Box::new((*arc).clone()));
         *self.session.write().unwrap_or_else(PoisonError::into_inner) = Some(arc);
-        *self
-            .current_session
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = Some(leaked);
         Ok(())
     }
 
@@ -453,10 +447,7 @@ impl Client {
 
     /// Return the notification message when URL rebasing modified the origin.
     pub fn rebase_note(&self) -> Option<&str> {
-        *self
-            .rebase_note
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.rebase_note.get().and_then(|note| note.as_deref())
     }
 
     /// Update client credentials for subsequent requests.
@@ -484,13 +475,13 @@ impl Client {
     ///
     /// Returns true when the username and account list are empty (RFC 8620 §2 and §8.1).
     pub fn is_anonymous(&self) -> bool {
-        let session = self.session();
+        let session = self.session_snapshot();
         session.username.is_empty() && session.accounts.is_empty()
     }
 
     /// Return the primary account ID for a capability (RFC 8620 §2).
     pub fn primary_account(&self, capability: &str) -> Result<jmap_proto::Id, Error> {
-        self.session()
+        self.session_snapshot()
             .resolve_primary_account(capability)
             .cloned()
             .ok_or_else(|| Error::Protocol(format!("no primary account for {capability}")))
@@ -598,7 +589,8 @@ impl Client {
     /// Automatically retries idempotent calls on HTTP 429 and limit errors.
     pub fn api_call(&self, request: &Request) -> Result<Response, Error> {
         let body = serde_json::to_vec(request)?;
-        if let Some(limit) = self.session().max_size_request()
+        let session = self.session_snapshot();
+        if let Some(limit) = session.max_size_request()
             && body.len() as u64 > limit
         {
             return Err(Error::RequestTooLarge {
@@ -618,7 +610,7 @@ impl Client {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let current_api_url = self.session().api_url.clone();
+            let current_api_url = self.session_snapshot().api_url.clone();
             match self.execute(HttpMethod::Post, &current_api_url, Some(&body)) {
                 Ok(response) => {
                     tracing::trace!(body = %String::from_utf8_lossy(&response.body), "JMAP response body");
@@ -829,7 +821,7 @@ impl Client {
     ///
     /// Verifies compliance with `maxCallsInRequest` (RFC 8620 §2).
     pub fn takes_calls_in_one_request(&self, calls: u64) -> bool {
-        self.session()
+        self.session_snapshot()
             .max_calls_in_request()
             .is_none_or(|limit| calls <= limit)
     }
@@ -845,7 +837,7 @@ impl Client {
         T: Clone + serde::Serialize + serde::de::DeserializeOwned,
     {
         let limit = self
-            .session()
+            .session_snapshot()
             .max_objects_in_set()
             .and_then(|l| usize::try_from(l).ok());
 
@@ -923,9 +915,9 @@ impl Client {
         id_of: impl Fn(&Item) -> Option<&Id>,
     ) -> Result<GetResponse<Item>, Error> {
         let empty_req = make_req(&[]);
-        let limit = self.session().max_size_request();
-        let max_objects = self
-            .session()
+        let session = self.session_snapshot();
+        let limit = session.max_size_request();
+        let max_objects = session
             .max_objects_in_get()
             .and_then(|limit| usize::try_from(limit).ok())
             .filter(|&limit| limit > 0);
@@ -1150,7 +1142,8 @@ impl Client {
         types: &[&str],
         timeouts: crate::eventsource::EventSourceTimeouts,
     ) -> Result<crate::eventsource::EventSourceSubscription, Error> {
-        let template = self.session().event_source_url.trim();
+        let session = self.session_snapshot();
+        let template = session.event_source_url.trim();
         if template.is_empty() {
             return Err(Error::Protocol(
                 "session does not advertise an eventSourceUrl".into(),

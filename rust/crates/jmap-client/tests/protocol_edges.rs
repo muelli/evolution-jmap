@@ -110,7 +110,7 @@ fn session_state_change_marks_session_stale_until_refreshed() {
 
     // After refreshing the session per RFC 8620 Section 2, is_session_stale returns false.
     client.refresh_session().unwrap();
-    assert_eq!(client.session().state.as_str(), "2");
+    assert_eq!(client.session_snapshot().state.as_str(), "2");
     assert_eq!(
         client.last_session_state().as_ref().map(|s| s.as_str()),
         Some("2")

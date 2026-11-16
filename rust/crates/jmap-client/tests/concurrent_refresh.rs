@@ -35,7 +35,7 @@ fn refresh_session_callable_through_shared_reference() {
     // refresh_session must work through a shared &Client / Arc<Client> reference.
     client.refresh_session().expect("session refresh succeeds");
 
-    assert_eq!(client.session().state.as_str(), "2");
+    assert_eq!(client.session_snapshot().state.as_str(), "2");
     assert!(!client.is_session_stale());
 }
 
@@ -194,8 +194,8 @@ fn concurrent_requests_during_refresh_honour_api_url_without_deadlock() {
         .expect("refresh succeeds concurrently");
 
     // Session must be updated to state-2 and apiUrl to /api-v2.
-    assert_eq!(client.session().state.as_str(), "state-2");
-    assert!(client.session().api_url.ends_with("/api-v2"));
+    assert_eq!(client.session_snapshot().state.as_str(), "state-2");
+    assert!(client.session_snapshot().api_url.ends_with("/api-v2"));
     assert!(!client.is_session_stale());
 
     // Wait until at least one request hits /api-v2.
@@ -247,13 +247,13 @@ fn live_server_refresh_session_through_shared_reference() {
     let credentials = Credentials::basic(username, password);
 
     let client = Arc::new(Client::connect(&server_url, credentials).expect("connect succeeds"));
-    assert!(!client.session().state.as_str().is_empty());
+    assert!(!client.session_snapshot().state.as_str().is_empty());
     assert!(!client.is_session_stale());
 
     // Refresh through shared reference &Client / Arc<Client>.
     client
         .refresh_session()
         .expect("live session refresh succeeds through shared reference");
-    assert!(!client.session().state.as_str().is_empty());
+    assert!(!client.session_snapshot().state.as_str().is_empty());
     assert!(!client.is_session_stale());
 }

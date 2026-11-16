@@ -5871,10 +5871,10 @@ fn contact_card_parse_differential_oracle_fixtures_match_against_the_real_server
             local_card.name.is_some(),
             "name presence must match for {name}"
         );
-        if let (Some(server_name), Some(local_name)) = (&server_card.name, &local_card.name) {
-            if let (Some(s_full), Some(l_full)) = (&server_name.full, &local_name.full) {
-                assert_eq!(s_full, l_full, "full name must match for {name}");
-            }
+        if let (Some(server_name), Some(local_name)) = (&server_card.name, &local_card.name)
+            && let (Some(s_full), Some(l_full)) = (&server_name.full, &local_name.full)
+        {
+            assert_eq!(s_full, l_full, "full name must match for {name}");
         }
         assert_eq!(
             server_card.emails.is_some(),

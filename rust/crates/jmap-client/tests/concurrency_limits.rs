@@ -380,8 +380,8 @@ fn session_refresh_updates_concurrency_limits() {
     transport.set_session_json(updated_session);
 
     client.refresh_session().expect("refresh succeeds");
-    assert_eq!(client.session().max_concurrent_requests(), Some(4));
-    assert_eq!(client.session().max_concurrent_upload(), Some(4));
+    assert_eq!(client.session_snapshot().max_concurrent_requests(), Some(4));
+    assert_eq!(client.session_snapshot().max_concurrent_upload(), Some(4));
 
     transport.peak_requests.store(0, Ordering::SeqCst);
 

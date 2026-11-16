@@ -379,7 +379,10 @@ fn client_session_caching_and_refresh() {
 
     *session_version.lock().unwrap() = 2;
     client.refresh_session().expect("session refresh succeeds");
-    assert_eq!(client.session().api_url, "http://127.0.0.1:8080/api/v2");
+    assert_eq!(
+        client.session_snapshot().api_url,
+        "http://127.0.0.1:8080/api/v2"
+    );
 }
 
 #[test]
