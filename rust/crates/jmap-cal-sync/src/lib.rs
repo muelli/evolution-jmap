@@ -701,7 +701,13 @@ impl CalSync {
     /// If the state is too old for the server, this fails with a
     /// [`SyncError::is_cannot_calculate_changes`] error. The caller then lists
     /// the full calendar.
+    ///
+    /// Refreshes the session first if a prior call already marked it stale
+    /// (RFC 8620 §2.0, ROADMAP item 166 row C1-26).
     pub fn get_changes(&self, since: &State) -> Result<Changes, SyncError> {
+        if self.client.is_session_stale() {
+            self.client.refresh_session()?;
+        }
         self.classify(
             self.client
                 .all_changes(&self.account_id, "CalendarEvent", since)?,
