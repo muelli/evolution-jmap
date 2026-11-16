@@ -17,18 +17,20 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
+use jmap_proto::push::StateChange;
 use jmap_proto::request::Invocation;
 use jmap_proto::websocket::{WebSocketRequest, WebSocketRequestError, WebSocketResponse};
 
 use crate::concurrency::ConcurrencyLimiter;
+use crate::eventsource::SharedHeaders;
 use crate::transport::CancelFlag;
 use crate::{Client, Error};
 
@@ -494,6 +496,48 @@ impl WebSocketConnection {
         Ok(response.method_responses)
     }
 
+    /// Enable WebSocket push notifications on this connection (RFC 8887 Section 2.3.1).
+    pub fn enable_push(
+        &self,
+        data_types: Option<&[&str]>,
+        push_state: Option<&str>,
+    ) -> Result<(), Error> {
+        let mut enable = serde_json::json!({
+            "@type": "WebSocketPushEnable",
+        });
+        if let Some(types) = data_types {
+            enable["dataTypes"] = serde_json::json!(types);
+        }
+        if let Some(state) = push_state {
+            enable["pushState"] = serde_json::json!(state);
+        }
+        let json = serde_json::to_string(&enable).map_err(Error::Json)?;
+        let mut guard = self
+            .ws
+            .lock()
+            .map_err(|_| Error::Transport("websocket lock poisoned".into()))?;
+        guard
+            .send(tungstenite::Message::Text(json.into()))
+            .map_err(|e| Error::Transport(format!("failed to send push enable: {e}")))?;
+        Ok(())
+    }
+
+    /// Disable WebSocket push notifications on this connection (RFC 8887 Section 2.3.2).
+    pub fn disable_push(&self) -> Result<(), Error> {
+        let disable = serde_json::json!({
+            "@type": "WebSocketPushDisable",
+        });
+        let json = serde_json::to_string(&disable).map_err(Error::Json)?;
+        let mut guard = self
+            .ws
+            .lock()
+            .map_err(|_| Error::Transport("websocket lock poisoned".into()))?;
+        guard
+            .send(tungstenite::Message::Text(json.into()))
+            .map_err(|e| Error::Transport(format!("failed to send push disable: {e}")))?;
+        Ok(())
+    }
+
     /// Cleanly close the WebSocket connection (RFC 6455 Section 5.5.1).
     pub fn close(&self) -> Result<(), Error> {
         self.closed.store(true, Ordering::Relaxed);
@@ -608,4 +652,498 @@ fn rebase_websocket_url(url: &str, origin: &str) -> String {
     } else {
         rebased_http
     }
+}
+
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Timeouts and timing configuration for a [`WebSocketPushSubscription`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebSocketPushTimeouts {
+    /// Maximum duration allowed for the initial TCP connection and TLS/WS handshake.
+    pub connect: Duration,
+    /// Interval between keep-alive Ping control frames sent to the server.
+    pub ping_interval: Duration,
+    /// Maximum duration to await server activity after a Ping before considering the connection dead.
+    pub ping_timeout: Duration,
+    /// Initial reconnect backoff delay.
+    pub initial_backoff: Duration,
+    /// Maximum reconnect backoff delay.
+    pub max_backoff: Duration,
+}
+
+impl Default for WebSocketPushTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: DEFAULT_CONNECT_TIMEOUT,
+            ping_interval: Duration::from_secs(30),
+            ping_timeout: Duration::from_secs(10),
+            initial_backoff: Duration::from_millis(500),
+            max_backoff: Duration::from_secs(30),
+        }
+    }
+}
+
+/// An item received over a [`WebSocketPushSubscription`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebSocketPushItem {
+    /// A parsed state change event pushed by the server.
+    State(StateChange),
+    /// The connection dropped and was re-established.
+    Reconnected {
+        /// The last pushState seen before reconnection, if any.
+        push_state: Option<String>,
+        /// The total number of successful reconnections so far.
+        reconnect_count: u64,
+    },
+}
+
+/// Internal handles bundled together across reconnect attempts.
+struct PushConnectionContext {
+    socket: Arc<Mutex<Option<TcpStream>>>,
+    push_state_slot: Arc<Mutex<Option<String>>>,
+    reconnect_count: Arc<AtomicU64>,
+}
+
+/// A long-lived RFC 8887 WebSocket push subscription on a dedicated reader thread.
+pub struct WebSocketPushSubscription {
+    receiver: Receiver<WebSocketPushItem>,
+    cancel: CancelFlag,
+    socket: Arc<Mutex<Option<TcpStream>>>,
+    handle: Option<JoinHandle<()>>,
+    headers: SharedHeaders,
+    push_state: Arc<Mutex<Option<String>>>,
+    reconnect_count: Arc<AtomicU64>,
+}
+
+impl std::fmt::Debug for WebSocketPushSubscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebSocketPushSubscription")
+            .field("reconnect_count", &self.reconnect_count())
+            .field("push_state", &self.push_state())
+            .finish_non_exhaustive()
+    }
+}
+
+impl WebSocketPushSubscription {
+    /// Start listening for push notifications on the WebSocket endpoint advertised by `client`.
+    pub fn start(
+        client: &Client,
+        types: &[&str],
+        timeouts: WebSocketPushTimeouts,
+    ) -> Result<Self, Error> {
+        let session = client.session();
+        let capability = session
+            .capabilities
+            .get(jmap_proto::session::CAPABILITY_WEBSOCKET)
+            .ok_or_else(|| {
+                Error::Protocol("session does not advertise websocket capability".into())
+            })?;
+
+        let raw_url = capability
+            .get("url")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                Error::Protocol("websocket capability is missing a non-empty url".into())
+            })?;
+
+        let supports_push = capability
+            .get("supportsPush")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if !supports_push {
+            return Err(Error::Protocol(
+                "websocket capability does not advertise push support".into(),
+            ));
+        }
+
+        let url = if let Some(origin) = client.rebase_origin() {
+            rebase_websocket_url(raw_url, origin)
+        } else {
+            raw_url.to_owned()
+        };
+
+        let http_equivalent = to_http_equivalent_url(&url);
+        let may_carry = crate::url::may_carry_credentials(client.session_url(), &http_equivalent);
+
+        let mut headers = Vec::new();
+        if may_carry && let Some(auth) = client.authorization_header() {
+            headers.push(("Authorization".to_string(), auth));
+        }
+
+        let data_types = if types.is_empty() {
+            None
+        } else {
+            Some(types.iter().map(|s| (*s).to_string()).collect())
+        };
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let socket = Arc::new(Mutex::new(None));
+        let push_state = Arc::new(Mutex::new(None));
+        let reconnect_count = Arc::new(AtomicU64::new(0));
+        let cancel = CancelFlag::default();
+        let shared_headers = SharedHeaders::new(headers);
+
+        let ctx = PushConnectionContext {
+            socket: Arc::clone(&socket),
+            push_state_slot: Arc::clone(&push_state),
+            reconnect_count: Arc::clone(&reconnect_count),
+        };
+
+        let thread_cancel = cancel.clone();
+        let thread_headers = shared_headers.clone();
+        let handle = thread::spawn(move || {
+            run_push_loop(
+                url,
+                data_types,
+                thread_headers,
+                thread_cancel,
+                sender,
+                ctx,
+                timeouts,
+            );
+        });
+
+        Ok(Self {
+            receiver,
+            cancel,
+            socket,
+            handle: Some(handle),
+            headers: shared_headers,
+            push_state,
+            reconnect_count,
+        })
+    }
+
+    /// Block until a [`StateChange`] arrives or `timeout` elapses.
+    ///
+    /// If a reconnection occurs while waiting, this method continues waiting
+    /// for a [`StateChange`] until `timeout` expires.
+    pub fn recv_timeout(&self, timeout: Duration) -> Option<StateChange> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let remaining = deadline - now;
+            match self.receiver.recv_timeout(remaining).ok()? {
+                WebSocketPushItem::State(change) => return Some(change),
+                WebSocketPushItem::Reconnected { .. } => continue,
+            }
+        }
+    }
+
+    /// Block until a [`WebSocketPushItem`] arrives or `timeout` elapses.
+    pub fn recv_item_timeout(&self, timeout: Duration) -> Option<WebSocketPushItem> {
+        self.receiver.recv_timeout(timeout).ok()
+    }
+
+    /// Return the last pushState received from the server, if any.
+    pub fn push_state(&self) -> Option<String> {
+        self.push_state
+            .lock()
+            .expect("push state lock poisoned")
+            .clone()
+    }
+
+    /// Return the total number of successful reconnections so far.
+    pub fn reconnect_count(&self) -> u64 {
+        self.reconnect_count.load(Ordering::SeqCst)
+    }
+
+    /// Drop the active connection from the client side by shutting down
+    /// the socket, without cancelling the subscription.
+    pub fn drop_connection(&self) {
+        if let Some(stream) = self.socket.lock().expect("socket lock poisoned").as_ref() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    /// Replace headers sent on future reconnect attempts.
+    pub fn set_headers(&self, headers: Vec<(String, String)>) {
+        self.headers.set(headers);
+    }
+
+    /// Stop listening and join the background thread.
+    pub fn stop(&mut self) {
+        self.cancel.cancel();
+        if let Some(stream) = self.socket.lock().expect("socket lock poisoned").take() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for WebSocketPushSubscription {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+struct SimpleRng(u64);
+
+impl SimpleRng {
+    fn new() -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x853c49e6748fea9b);
+        Self(nanos ^ 0x9e3779b97f4a7c15)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+        self.0
+    }
+
+    fn next_ratio(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / ((1u64 << 53) as f64)
+    }
+}
+
+fn apply_jitter(base: Duration) -> Duration {
+    let mut rng = SimpleRng::new();
+    let factor = 0.5 + 0.5 * rng.next_ratio();
+    base.mul_f64(factor)
+}
+
+fn sleep_cancellable(duration: Duration, cancel: &CancelFlag) {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        if cancel.is_cancelled() {
+            return;
+        }
+        thread::sleep(CANCEL_POLL_INTERVAL.min(duration));
+    }
+}
+
+struct PushStreamConfig<'a> {
+    url: &'a str,
+    data_types: Option<&'a [String]>,
+    push_state: Option<&'a str>,
+    headers: &'a [(String, String)],
+    timeouts: WebSocketPushTimeouts,
+}
+
+fn run_push_loop(
+    url: String,
+    data_types: Option<Vec<String>>,
+    headers: SharedHeaders,
+    cancel: CancelFlag,
+    sender: Sender<WebSocketPushItem>,
+    ctx: PushConnectionContext,
+    timeouts: WebSocketPushTimeouts,
+) {
+    let mut backoff = timeouts.initial_backoff;
+    let mut connection_attempts: u64 = 0;
+    while !cancel.is_cancelled() {
+        let is_reconnect = connection_attempts > 0;
+        let push_state = ctx.push_state_slot.lock().unwrap().clone();
+        let headers_snapshot = headers.snapshot();
+        let config = PushStreamConfig {
+            url: &url,
+            data_types: data_types.as_deref(),
+            push_state: push_state.as_deref(),
+            headers: &headers_snapshot,
+            timeouts,
+        };
+        match connect_and_stream_push(config, &cancel, &sender, &ctx, is_reconnect) {
+            Ok(()) => backoff = timeouts.initial_backoff,
+            Err(error) => {
+                tracing::debug!(%error, url, "websocket push connection ended");
+            }
+        }
+        connection_attempts += 1;
+        *ctx.socket.lock().unwrap() = None;
+        if cancel.is_cancelled() {
+            break;
+        }
+        let jittered = apply_jitter(backoff);
+        sleep_cancellable(jittered, &cancel);
+        backoff = (backoff * 2).min(timeouts.max_backoff);
+    }
+}
+
+fn connect_and_stream_push(
+    config: PushStreamConfig<'_>,
+    cancel: &CancelFlag,
+    sender: &Sender<WebSocketPushItem>,
+    ctx: &PushConnectionContext,
+    is_reconnect: bool,
+) -> Result<(), Error> {
+    let parsed = parse_websocket_url(config.url)?;
+
+    let mut connected_stream = None;
+    let mut last_error = None;
+    for addr in parsed
+        .dial
+        .to_socket_addrs()
+        .map_err(|e| Error::Transport(format!("failed to resolve {}: {e}", parsed.dial)))?
+    {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        match TcpStream::connect_timeout(&addr, config.timeouts.connect) {
+            Ok(s) => {
+                connected_stream = Some(s);
+                break;
+            }
+            Err(e) => {
+                last_error = Some(e);
+            }
+        }
+    }
+
+    let tcp_stream = connected_stream.ok_or_else(|| {
+        let msg = last_error
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| format!("could not connect to {}", parsed.dial));
+        Error::Transport(msg)
+    })?;
+
+    let _ = tcp_stream.set_read_timeout(Some(config.timeouts.connect));
+    let _ = tcp_stream.set_write_timeout(Some(config.timeouts.connect));
+
+    *ctx.socket.lock().unwrap() = Some(
+        tcp_stream
+            .try_clone()
+            .map_err(|e| Error::Transport(e.to_string()))?,
+    );
+    if cancel.is_cancelled() {
+        return Ok(());
+    }
+
+    let ws_stream = if parsed.is_tls {
+        let server_name = ServerName::try_from(parsed.host.clone()).map_err(|e| {
+            Error::Transport(format!("invalid TLS server name {}: {e}", parsed.host))
+        })?;
+        let conn = ClientConnection::new(Arc::clone(tls_config()), server_name)
+            .map_err(|e| Error::Transport(format!("tls setup failed: {e}")))?;
+        WsStream::Tls(Box::new(StreamOwned::new(conn, tcp_stream)))
+    } else {
+        WsStream::Plain(tcp_stream)
+    };
+
+    let req_uri = tungstenite::http::Uri::try_from(config.url)
+        .map_err(|e| Error::Transport(format!("invalid websocket uri: {e}")))?;
+
+    let mut builder = tungstenite::ClientRequestBuilder::new(req_uri)
+        .with_sub_protocol(jmap_proto::websocket::SUBPROTOCOL);
+
+    let host_header =
+        if (parsed.is_tls && parsed.port == 443) || (!parsed.is_tls && parsed.port == 80) {
+            parsed.host.clone()
+        } else {
+            format!("{}:{}", parsed.host, parsed.port)
+        };
+    builder = builder.with_header("Host", host_header);
+
+    for (name, value) in config.headers {
+        builder = builder.with_header(name.as_str(), value.as_str());
+    }
+
+    let ws_config = tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(crate::limits::MAX_API_RESPONSE_BYTES as usize))
+        .max_frame_size(Some(4 * 1024 * 1024));
+
+    let (mut ws, _response) =
+        tungstenite::client::client_with_config(builder, ws_stream, Some(ws_config))
+            .map_err(|e| Error::Transport(format!("websocket handshake failed: {e}")))?;
+
+    let _ = ws
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_millis(20)));
+
+    if is_reconnect {
+        let count = ctx.reconnect_count.fetch_add(1, Ordering::SeqCst) + 1;
+        let last_state = ctx.push_state_slot.lock().unwrap().clone();
+        let _ = sender.send(WebSocketPushItem::Reconnected {
+            push_state: last_state,
+            reconnect_count: count,
+        });
+    }
+
+    // Send WebSocketPushEnable frame
+    let mut enable = serde_json::json!({
+        "@type": "WebSocketPushEnable",
+    });
+    if let Some(types) = config.data_types {
+        enable["dataTypes"] = serde_json::json!(types);
+    }
+    if let Some(state) = config.push_state {
+        enable["pushState"] = serde_json::json!(state);
+    }
+    let json_str = serde_json::to_string(&enable).map_err(Error::Json)?;
+    ws.send(tungstenite::Message::Text(json_str.into()))
+        .map_err(|e| Error::Transport(format!("failed to send push enable: {e}")))?;
+
+    let mut last_ping = Instant::now();
+    let mut ping_in_flight: Option<Instant> = None;
+
+    while !cancel.is_cancelled() {
+        let read_result = ws.read();
+        match read_result {
+            Ok(tungstenite::Message::Text(text)) => {
+                ping_in_flight = None;
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text)
+                    && val.get("@type").and_then(|v| v.as_str()) == Some("StateChange")
+                {
+                    if let Some(new_state) = val.get("pushState").and_then(|v| v.as_str())
+                        && !new_state.is_empty()
+                    {
+                        *ctx.push_state_slot.lock().unwrap() = Some(new_state.to_owned());
+                    }
+                    if let Ok(change) = serde_json::from_value::<jmap_proto::push::StateChange>(val)
+                        && sender.send(WebSocketPushItem::State(change)).is_err()
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+            Ok(tungstenite::Message::Pong(_)) => {
+                ping_in_flight = None;
+            }
+            Ok(tungstenite::Message::Ping(payload)) => {
+                let _ = ws.send(tungstenite::Message::Pong(payload));
+                let _ = ws.flush();
+            }
+            Ok(tungstenite::Message::Close(_)) => {
+                return Ok(());
+            }
+            Ok(tungstenite::Message::Binary(_) | tungstenite::Message::Frame(_)) => {}
+            Err(tungstenite::Error::Io(ref e))
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                let now = Instant::now();
+                if let Some(sent) = ping_in_flight {
+                    if now.duration_since(sent) > config.timeouts.ping_timeout {
+                        return Err(Error::Transport("ping timeout: dead connection".into()));
+                    }
+                } else if now.duration_since(last_ping) >= config.timeouts.ping_interval {
+                    if let Err(e) = ws.send(tungstenite::Message::Ping(vec![1, 2, 3, 4].into())) {
+                        return Err(Error::Transport(format!("failed to send ping: {e}")));
+                    }
+                    let _ = ws.flush();
+                    last_ping = now;
+                    ping_in_flight = Some(now);
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => {
+                return Err(Error::Transport(format!("websocket read error: {e}")));
+            }
+        }
+    }
+
+    let _ = ws.close(Some(tungstenite::protocol::CloseFrame {
+        code: tungstenite::protocol::frame::coding::CloseCode::Normal,
+        reason: "Normal closure".into(),
+    }));
+    let _ = ws.flush();
+    Ok(())
 }
