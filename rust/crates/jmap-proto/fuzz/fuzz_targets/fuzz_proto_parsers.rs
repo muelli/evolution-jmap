@@ -359,6 +359,227 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(id) = serde_json::from_slice::<jmap_proto::id::Id>(data) {
         let _ = serde_json::to_vec(&id);
     }
+    if let Ok(eqf) = serde_json::from_slice::<jmap_proto::mail::EmailQueryFilter>(data) {
+        let _ = serde_json::to_vec(&eqf);
+    }
+    if let Ok(esqf) =
+        serde_json::from_slice::<jmap_proto::mail::EmailSubmissionQueryFilter>(data)
+    {
+        let _ = serde_json::to_vec(&esqf);
+    }
+    if let Ok(mcap) = serde_json::from_slice::<jmap_proto::mail::MailCapability>(data) {
+        let _ = serde_json::to_vec(&mcap);
+    }
+    if let Ok(subcap) = serde_json::from_slice::<jmap_proto::mail::SubmissionCapability>(data) {
+        let _ = serde_json::to_vec(&subcap);
+    }
+    if let Ok(mdncap) = serde_json::from_slice::<jmap_proto::mail::MDNCapability>(data) {
+        let _ = serde_json::to_vec(&mdncap);
+    }
+    if let Ok(vac_cap) =
+        serde_json::from_slice::<jmap_proto::mail::VacationResponseCapability>(data)
+    {
+        let _ = serde_json::to_vec(&vac_cap);
+    }
+    if let Ok(mscap) = serde_json::from_slice::<jmap_proto::mail::MailShareCapability>(data) {
+        let _ = serde_json::to_vec(&mscap);
+    }
+    if let Ok(smimecap) =
+        serde_json::from_slice::<jmap_proto::mail::SmimeVerifyCapability>(data)
+    {
+        let _ = serde_json::to_vec(&smimecap);
+    }
+    if let Ok(mbr) = serde_json::from_slice::<jmap_proto::mail::MailboxRights>(data) {
+        let _ = serde_json::to_vec(&mbr);
+    }
+    if let Ok(eh) = serde_json::from_slice::<jmap_proto::mail::EmailHeader>(data) {
+        let _ = serde_json::to_vec(&eh);
+    }
+    if let Ok(ea) = serde_json::from_slice::<jmap_proto::mail::EmailAddress>(data) {
+        let _ = serde_json::to_vec(&ea);
+    }
+    if let Ok(eag) = serde_json::from_slice::<jmap_proto::mail::EmailAddressGroup>(data) {
+        let _ = serde_json::to_vec(&eag);
+    }
+    if let Ok(ebp) = serde_json::from_slice::<jmap_proto::mail::EmailBodyPart>(data) {
+        let _ = serde_json::to_vec(&ebp);
+    }
+    if let Ok(ebv) = serde_json::from_slice::<jmap_proto::mail::EmailBodyValue>(data) {
+        let _ = serde_json::to_vec(&ebv);
+    }
+    if let Ok(ds) = serde_json::from_slice::<jmap_proto::mail::DeliveryStatus>(data) {
+        let _ = serde_json::to_vec(&ds);
+    }
+    if let Ok(env) = serde_json::from_slice::<jmap_proto::mail::Envelope>(data) {
+        let _ = serde_json::to_vec(&env);
+    }
+    if let Ok(enva) = serde_json::from_slice::<jmap_proto::mail::EnvelopeAddress>(data) {
+        let _ = serde_json::to_vec(&enva);
+    }
+    if let Ok(sd) = serde_json::from_slice::<jmap_proto::mail::SnoozeDetails>(data) {
+        let _ = serde_json::to_vec(&sd);
+    }
+    if let Ok(eimp) = serde_json::from_slice::<jmap_proto::mail::EmailImport>(data) {
+        let _ = serde_json::to_vec(&eimp);
+    }
+    if let Ok(mdnd) = serde_json::from_slice::<jmap_proto::mail::MDNDisposition>(data) {
+        let _ = serde_json::to_vec(&mdnd);
+    }
+    if let Ok(abr) = serde_json::from_slice::<jmap_proto::contacts::AddressBookRights>(data) {
+        let _ = serde_json::to_vec(&abr);
+    }
+    if let Ok(name) = serde_json::from_slice::<jmap_proto::contacts::Name>(data) {
+        let _ = serde_json::to_vec(&name);
+    }
+    if let Ok(nc) = serde_json::from_slice::<jmap_proto::contacts::NameComponent>(data) {
+        let _ = serde_json::to_vec(&nc);
+    }
+    if let Ok(nn) = serde_json::from_slice::<jmap_proto::contacts::Nickname>(data) {
+        let _ = serde_json::to_vec(&nn);
+    }
+    if let Ok(cenqf) =
+        serde_json::from_slice::<jmap_proto::calendars::CalendarEventNotificationQueryFilter>(data)
+    {
+        let _ = serde_json::to_vec(&cenqf);
+    }
+    if let Ok(cr) = serde_json::from_slice::<jmap_proto::calendars::CalendarRights>(data) {
+        let _ = serde_json::to_vec(&cr);
+    }
+    if let Ok(rr) = serde_json::from_slice::<jmap_proto::calendars::RecurrenceRule>(data) {
+        let _ = serde_json::to_vec(&rr);
+    }
+    if let Ok(nday) = serde_json::from_slice::<jmap_proto::calendars::NDay>(data) {
+        let _ = serde_json::to_vec(&nday);
+    }
+    if let Ok(part) = serde_json::from_slice::<jmap_proto::calendars::Participant>(data) {
+        let _ = serde_json::to_vec(&part);
+    }
+    if let Ok(loc) = serde_json::from_slice::<jmap_proto::calendars::Location>(data) {
+        let _ = serde_json::to_vec(&loc);
+    }
+    if let Ok(vloc) = serde_json::from_slice::<jmap_proto::calendars::VirtualLocation>(data) {
+        let _ = serde_json::to_vec(&vloc);
+    }
+    if let Ok(lnk) = serde_json::from_slice::<jmap_proto::calendars::Link>(data) {
+        let _ = serde_json::to_vec(&lnk);
+    }
+    if let Ok(al) = serde_json::from_slice::<jmap_proto::calendars::Alert>(data) {
+        let _ = serde_json::to_vec(&al);
+    }
+    if let Ok(ot) = serde_json::from_slice::<jmap_proto::calendars::OffsetTrigger>(data) {
+        let _ = serde_json::to_vec(&ot);
+    }
+    if let Ok(at) = serde_json::from_slice::<jmap_proto::calendars::AbsoluteTrigger>(data) {
+        let _ = serde_json::to_vec(&at);
+    }
+    if let Ok(er) = serde_json::from_slice::<jmap_proto::calendars::EventRelation>(data) {
+        let _ = serde_json::to_vec(&er);
+    }
+    if let Ok(fbb) = serde_json::from_slice::<jmap_proto::calendars::FreeBusyBlock>(data) {
+        let _ = serde_json::to_vec(&fbb);
+    }
+    if let Ok(calcap) =
+        serde_json::from_slice::<jmap_proto::calendars::CalendarsCapability>(data)
+    {
+        let _ = serde_json::to_vec(&calcap);
+    }
+    if let Ok(cpcap) =
+        serde_json::from_slice::<jmap_proto::calendars::CalendarPreferencesCapability>(data)
+    {
+        let _ = serde_json::to_vec(&cpcap);
+    }
+    if let Ok(pp) = serde_json::from_slice::<jmap_proto::calendars::ParticipantProblem>(data) {
+        let _ = serde_json::to_vec(&pp);
+    }
+    if let Ok(prp) = serde_json::from_slice::<jmap_proto::calendars::ParticipantReply>(data) {
+        let _ = serde_json::to_vec(&prp);
+    }
+    if let Ok(sce) = serde_json::from_slice::<jmap_proto::calendars::SendCalendarEvent>(data) {
+        let _ = serde_json::to_vec(&sce);
+    }
+    if let Ok(scer) =
+        serde_json::from_slice::<jmap_proto::calendars::SendCalendarEventResult>(data)
+    {
+        let _ = serde_json::to_vec(&scer);
+    }
+    if let Ok(sqf) = serde_json::from_slice::<jmap_proto::sieve::SieveScriptQueryFilter>(data) {
+        let _ = serde_json::to_vec(&sqf);
+    }
+    if let Ok(scap) = serde_json::from_slice::<jmap_proto::sieve::SieveCapability>(data) {
+        let _ = serde_json::to_vec(&scap);
+    }
+    if let Ok(tqf) = serde_json::from_slice::<jmap_proto::tasks::TaskQueryFilter>(data) {
+        let _ = serde_json::to_vec(&tqf);
+    }
+    if let Ok(tcap) = serde_json::from_slice::<jmap_proto::tasks::TasksCapability>(data) {
+        let _ = serde_json::to_vec(&tcap);
+    }
+    if let Ok(tlr) = serde_json::from_slice::<jmap_proto::tasks::TaskListRights>(data) {
+        let _ = serde_json::to_vec(&tlr);
+    }
+    if let Ok(pcap) =
+        serde_json::from_slice::<jmap_proto::principals::PrincipalsCapability>(data)
+    {
+        let _ = serde_json::to_vec(&pcap);
+    }
+    if let Ok(poc) =
+        serde_json::from_slice::<jmap_proto::principals::PrincipalsOwnerCapability>(data)
+    {
+        let _ = serde_json::to_vec(&poc);
+    }
+    if let Ok(pac) =
+        serde_json::from_slice::<jmap_proto::principals::PrincipalAvailabilityCapability>(data)
+    {
+        let _ = serde_json::to_vec(&pac);
+    }
+    if let Ok(bp) = serde_json::from_slice::<jmap_proto::principals::BusyPeriod>(data) {
+        let _ = serde_json::to_vec(&bp);
+    }
+    if let Ok(fnqf) = serde_json::from_slice::<jmap_proto::filenode::FileNodeQueryFilter>(data) {
+        let _ = serde_json::to_vec(&fnqf);
+    }
+    if let Ok(fncap) = serde_json::from_slice::<jmap_proto::filenode::FileNodeCapability>(data) {
+        let _ = serde_json::to_vec(&fncap);
+    }
+    if let Ok(fnr) = serde_json::from_slice::<jmap_proto::filenode::FileNodeRights>(data) {
+        let _ = serde_json::to_vec(&fnr);
+    }
+    if let Ok(qqf) = serde_json::from_slice::<jmap_proto::quota::QuotaQueryFilter>(data) {
+        let _ = serde_json::to_vec(&qqf);
+    }
+    if let Ok(qcap) = serde_json::from_slice::<jmap_proto::quota::QuotaCapability>(data) {
+        let _ = serde_json::to_vec(&qcap);
+    }
+    if let Ok(bcap) = serde_json::from_slice::<jmap_proto::blob::BlobCapability>(data) {
+        let _ = serde_json::to_vec(&bcap);
+    }
+    if let Ok(bi) = serde_json::from_slice::<jmap_proto::blob::BlobInfo>(data) {
+        let _ = serde_json::to_vec(&bi);
+    }
+    if let Ok(ub) = serde_json::from_slice::<jmap_proto::blob::UploadBlob>(data) {
+        let _ = serde_json::to_vec(&ub);
+    }
+    if let Ok(ubr) = serde_json::from_slice::<jmap_proto::blob::UploadBlobResult>(data) {
+        let _ = serde_json::to_vec(&ubr);
+    }
+    if let Ok(ds) = serde_json::from_slice::<jmap_proto::blob::DataSource>(data) {
+        let _ = serde_json::to_vec(&ds);
+    }
+    if let Ok(blm) = serde_json::from_slice::<jmap_proto::blob::BlobLookupMatch>(data) {
+        let _ = serde_json::to_vec(&blm);
+    }
+    if let Ok(rpc) = serde_json::from_slice::<jmap_proto::session::RefPlusCapability>(data) {
+        let _ = serde_json::to_vec(&rpc);
+    }
+    if let Ok(wsc) = serde_json::from_slice::<jmap_proto::session::WebSocketCapability>(data) {
+        let _ = serde_json::to_vec(&wsc);
+    }
+    if let Ok(ccap) = serde_json::from_slice::<jmap_proto::session::CoreCapability>(data) {
+        let _ = serde_json::to_vec(&ccap);
+    }
+    if let Ok(acc) = serde_json::from_slice::<jmap_proto::session::Account>(data) {
+        let _ = serde_json::to_vec(&acc);
+    }
     if let Ok(s) = std::str::from_utf8(data) {
         let _ = jmap_proto::text::caret_decoded(s);
         let _ = jmap_proto::text::caret_encoded(s);
