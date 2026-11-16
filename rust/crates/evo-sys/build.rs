@@ -935,10 +935,14 @@ fn main() {
     // Colon-separated, like every other library path in the loader's world.
     println!("cargo:libdirs={}", link_paths.join(":"));
 
-    // The Server Filters page's text mode (item 171a). Unlike Evolution's
-    // own libraries, GtkSourceView installs into the system's normal
-    // library directories, so `probe`'s own default link metadata is
-    // enough: no RUNPATH bookkeeping like the loop above needs.
+    // The Server Filters page's text mode. GtkSourceView installs into a
+    // directory that the loader already searches, unlike Evolution's own
+    // libraries. The default link metadata of `probe` is therefore enough,
+    // and this probe needs no RUNPATH bookkeeping like the loop above.
+    // The Flatpak extension is no exception. It builds GtkSourceView into
+    // the extension's own `lib/`, and the Evolution runtime declares
+    // `add-ld-path=lib` for its extension point, so flatpak puts that
+    // directory in the loader cache.
     //
     // The package name has no ".0" suffix, unlike most GNOME `.pc` files
     // (confirmed by reading the installed `gtksourceview-4.pc` directly, not
