@@ -188,6 +188,8 @@ fn a_test_module_calls_its_load_and_unload_functions() {
         g_type_module_unuse(module);
     }
     assert_eq!(UNLOADS.load(Ordering::SeqCst), 1);
+    // SAFETY: `module` holds the one reference `g_object_new` returned.
+    unsafe { g_object_unref(module.cast()) };
 }
 
 /// Without `unload`, `test_module!` leaves the `unload` slot empty.
@@ -235,6 +237,8 @@ fn a_dynamic_type_is_registered_again_every_time_its_module_is_loaded() {
         );
         g_type_module_unuse(module);
     }
+    // SAFETY: `module` holds the one reference `g_object_new` returned.
+    unsafe { g_object_unref(module.cast()) };
 }
 
 // ---------------------------------------------------------------------------
