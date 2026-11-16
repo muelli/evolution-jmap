@@ -76,8 +76,9 @@ impl Client {
     /// Merges top-level session capability properties (such as `implementation`)
     /// with per-account capability limits and `sieveExtensions`.
     pub fn sieve_capability(&self, account: &Id) -> Option<SieveCapability> {
-        let session_val = self.session().capabilities.get(CAPABILITY_SIEVE)?;
-        let acct = self.session().accounts.get(account)?;
+        let session = self.session();
+        let session_val = session.capabilities.get(CAPABILITY_SIEVE)?;
+        let acct = session.accounts.get(account)?;
         let acct_val = acct.account_capabilities.get(CAPABILITY_SIEVE)?;
         let mut merged = session_val.as_object()?.clone();
         for (key, value) in acct_val.as_object()? {

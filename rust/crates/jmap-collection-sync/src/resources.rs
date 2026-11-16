@@ -137,7 +137,7 @@ impl Fanout {
     /// fail here is a `jmap_client` call. The GObject layer maps that type to
     /// Evolution's error codes.
     pub fn discover(client: &Client, parts: Parts) -> Result<Self, jmap_client::Error> {
-        let layout = CollectionLayout::from_session(client.session());
+        let layout = CollectionLayout::from_session(&client.session());
 
         let address_books = match layout.contacts.as_ref().filter(|_| parts.contacts) {
             Some(account) => resources(client.address_books(&account.id)?, Subscription::Honoured),
@@ -151,7 +151,7 @@ impl Fanout {
         // A failed listing of a shared account does not stop the populate. The
         // owner can withdraw the grant after the session fetch. The listing
         // stays `None`, so the existing children of the share stay.
-        let shared = CollectionLayout::shared_accounts(client.session())
+        let shared = CollectionLayout::shared_accounts(&client.session())
             .into_iter()
             .map(|service| {
                 let account = service.account;

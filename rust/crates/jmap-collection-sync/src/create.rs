@@ -108,7 +108,7 @@ impl std::error::Error for CreateFailure {}
 /// user who asks to create a collection wants to see it, so the create requests
 /// the subscription.
 pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child, CreateFailure> {
-    let layout = CollectionLayout::from_session(client.session());
+    let layout = CollectionLayout::from_session(&client.session());
     let kind = requested.kind;
     let account = layout.account_for(requested.kind).ok_or_else(|| {
         let error = CreateFailure::Unserved(requested.kind);

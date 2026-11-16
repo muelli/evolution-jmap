@@ -1061,7 +1061,7 @@ mod tests {
                     .is_enabled = true;
             }
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-            let features = AccountFeatures::from_session(client.session()).unwrap();
+            let features = AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
             let loaded = io::load(&link).unwrap();
             let form = VacationForm::from_response(&loaded.response);

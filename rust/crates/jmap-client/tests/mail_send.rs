@@ -248,7 +248,8 @@ fn the_session_names_the_accounts_delayed_send_limit() {
     let account_id = server.account_id();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
-    let account = client.session().accounts.get(&account_id).unwrap();
+    let session = client.session();
+    let account = session.accounts.get(&account_id).unwrap();
     assert_eq!(account.max_delayed_send(), Some(3600));
     assert!(
         account
@@ -266,7 +267,8 @@ fn a_server_with_no_delayed_send_support_says_so() {
     let account_id = server.account_id();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
 
-    let account = client.session().accounts.get(&account_id).unwrap();
+    let session = client.session();
+    let account = session.accounts.get(&account_id).unwrap();
     assert_eq!(account.max_delayed_send(), None);
     assert!(
         !account

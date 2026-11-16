@@ -200,11 +200,8 @@ fn account_blob_capability_is_accessible() {
     let client = Client::connect(server.origin(), Credentials::none()).expect("connect");
 
     let account_id = Id::from("c");
-    let account = client
-        .session()
-        .accounts
-        .get(&account_id)
-        .expect("account c exists");
+    let session = client.session();
+    let account = session.accounts.get(&account_id).expect("account c exists");
     let blob_cap = account.blob_capability().expect("has blob capability");
     assert_eq!(blob_cap.max_size_blob_set, Some(7499488));
     assert_eq!(blob_cap.max_data_sources, Some(16));

@@ -144,7 +144,7 @@ pub fn delete_collection(client: &Client, doomed: &Doomed) -> Result<(), DeleteF
     };
     let (account, collection) = match split_shared_identity(&identity) {
         Some((shared, collection)) => {
-            let account = CollectionLayout::shared_accounts(session)
+            let account = CollectionLayout::shared_accounts(&session)
                 .into_iter()
                 .find(|service| service.account.id.as_str() == shared && service.offers(kind))
                 .map(|service| service.account)
@@ -152,7 +152,7 @@ pub fn delete_collection(client: &Client, doomed: &Doomed) -> Result<(), DeleteF
             (account, Id::new(collection))
         }
         None => {
-            let layout = CollectionLayout::from_session(session);
+            let layout = CollectionLayout::from_session(&session);
             let account = layout
                 .account_for(kind)
                 .cloned()

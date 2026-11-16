@@ -40,6 +40,27 @@ fn refresh_session_callable_through_shared_reference() {
 }
 
 #[test]
+fn session_reflects_a_refresh_not_only_session_snapshot() {
+    let server = jmap_mock::MockServer::builder().start();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    assert_eq!(client.session().accounts.len(), 1);
+
+    {
+        let state_lock = server.state();
+        let mut state = state_lock.lock().unwrap();
+        state.session_state = 2;
+        state.add_account("A2", "second@example.com");
+    }
+
+    client.refresh_session().expect("session refresh succeeds");
+
+    // A caller that reads client.session() after a refresh must see the
+    // new account, the same as a caller reading session_snapshot().
+    assert_eq!(client.session().accounts.len(), 2);
+}
+
+#[test]
 fn concurrent_requests_during_refresh_honour_api_url_without_deadlock() {
     let server = tiny_http::Server::http("127.0.0.1:0").expect("bind test server");
     let origin = format!("http://{}", server.server_addr());

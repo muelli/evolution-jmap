@@ -130,7 +130,7 @@ pub unsafe fn start_for_with(
     types: &[&str],
     action: impl Fn(*mut GObject, &[String]) + Send + Sync + 'static,
 ) -> Option<PushRefresh> {
-    if is_cyrus_account(client.session(), account_id) {
+    if is_cyrus_account(&client.session(), account_id) {
         tracing::debug!(
             account_id = account_id.as_str(),
             "the account is on a Cyrus server; Cyrus holds its own lock for the whole \
@@ -139,7 +139,8 @@ pub unsafe fn start_for_with(
         );
         return None;
     }
-    let template = client.session().event_source_url.trim();
+    let session = client.session();
+    let template = session.event_source_url.trim();
     if template.is_empty() {
         tracing::debug!("the server advertises no eventSourceUrl; push is unavailable");
         return None;

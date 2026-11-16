@@ -4787,7 +4787,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // Seeds one active script, the same way
@@ -4898,7 +4898,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // Seeds one already-active script, the same way the io-level test
@@ -4995,7 +4995,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // One inactive script: Activate needs a target, Deactivate then
@@ -5121,7 +5121,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // Seeds one inactive script, the same way
@@ -5222,7 +5222,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // Seeds one inactive script under a name other than
@@ -5314,7 +5314,7 @@ mod tests {
             // server, not only the page's own form.
             let verify_client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let verify_features =
-                crate::session_cache::AccountFeatures::from_session(verify_client.session())
+                crate::session_cache::AccountFeatures::from_session(&verify_client.session())
                     .unwrap();
             let verify_link = AccountLink::without_refresh(verify_client, verify_features);
             let reloaded =
@@ -5353,7 +5353,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // One inactive script under a name other than `MANAGED_SCRIPT_NAME`
@@ -5531,7 +5531,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // Seeds one inactive script under a name other than
@@ -5657,7 +5657,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // Loads with no script at all: Add needs none, unlike Rename and
@@ -5744,7 +5744,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // Seeds one inactive script, the same way `renaming_asks_for_a_name_
@@ -5836,7 +5836,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // Loads with no script at all, the way `adding_asks_for_a_name_
@@ -5987,7 +5987,7 @@ mod tests {
             let server = MockServer::builder().start();
             let client = Client::connect(server.origin(), Credentials::none()).unwrap();
             let features =
-                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
             let link = AccountLink::without_refresh(client, features);
 
             // Seeds one editable, inactive script: the same create-only plan

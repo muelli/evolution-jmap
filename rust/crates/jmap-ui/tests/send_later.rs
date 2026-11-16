@@ -27,7 +27,7 @@ fn envelope() -> Envelope {
 /// A connected [`AccountLink`], built as the gate of the composer builds it.
 fn link_to(server: &MockServer) -> AccountLink {
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-    let features = AccountFeatures::from_session(client.session()).expect("a mail account");
+    let features = AccountFeatures::from_session(&client.session()).expect("a mail account");
     AccountLink::without_refresh(client, features)
 }
 

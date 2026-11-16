@@ -14,7 +14,7 @@ use jmap_ui::session_cache::AccountFeatures;
 fn a_401_on_a_link_with_no_token_to_refresh_is_not_sent_again() {
     let server = MockServer::builder().start();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-    let features = AccountFeatures::from_session(client.session()).expect("a mail account");
+    let features = AccountFeatures::from_session(&client.session()).expect("a mail account");
     let link = AccountLink::without_refresh(client, features);
 
     let attempts = Cell::new(0);
