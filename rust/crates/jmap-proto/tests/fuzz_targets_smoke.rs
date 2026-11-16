@@ -73,6 +73,30 @@ fn hostile_bytes_do_not_panic_session_or_response_or_changes() {
         if let Ok(err) = serde_json::from_slice::<SetError>(input) {
             let _ = serde_json::to_vec(&err);
         }
+        if let Ok(ws_req) = serde_json::from_slice::<jmap_proto::websocket::WebSocketRequest>(input)
+        {
+            let _ = serde_json::to_vec(&ws_req);
+        }
+        if let Ok(ws_resp) =
+            serde_json::from_slice::<jmap_proto::websocket::WebSocketResponse>(input)
+        {
+            let _ = serde_json::to_vec(&ws_resp);
+        }
+        if let Ok(ws_err) =
+            serde_json::from_slice::<jmap_proto::websocket::WebSocketRequestError>(input)
+        {
+            let _ = serde_json::to_vec(&ws_err);
+        }
+        if let Ok(enable) =
+            serde_json::from_slice::<jmap_proto::websocket::WebSocketPushEnable>(input)
+        {
+            let _ = serde_json::to_vec(&enable);
+        }
+        if let Ok(disable) =
+            serde_json::from_slice::<jmap_proto::websocket::WebSocketPushDisable>(input)
+        {
+            let _ = serde_json::to_vec(&disable);
+        }
     }
 }
 
@@ -1665,4 +1689,65 @@ fn fuzz_proto_parsers_extended_types_smoke() {
 
     assert_eq!(split_shared_identity("acc1/col1"), Some(("acc1", "col1")));
     assert_eq!(split_shared_identity("plain_id"), None);
+}
+
+#[test]
+fn websocket_frames_and_builders_smoke() {
+    use jmap_proto::websocket::{
+        WebSocketPushDisable, WebSocketPushEnable, WebSocketRequest, WebSocketRequestError,
+        WebSocketResponse,
+    };
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    let ws_req = WebSocketRequest::new(["urn:ietf:params:jmap:core"])
+        .with_id("req-1")
+        .call("Foo/get", &json!({"accountId": "acc1"}), "c1")
+        .expect("call succeeds")
+        .with_created_ids(BTreeMap::from([(
+            jmap_proto::id::Id::from("k"),
+            jmap_proto::id::Id::from("v"),
+        )]));
+    let ws_req_bytes = serde_json::to_vec(&ws_req).expect("WebSocketRequest serializes");
+    let ws_req_parsed: WebSocketRequest =
+        serde_json::from_slice(&ws_req_bytes).expect("WebSocketRequest parses");
+    assert_eq!(ws_req_parsed, ws_req);
+
+    let ws_resp = WebSocketResponse::new()
+        .with_id("req-1")
+        .with_session_state("s1")
+        .with_created_ids(BTreeMap::from([(
+            jmap_proto::id::Id::from("k"),
+            jmap_proto::id::Id::from("v"),
+        )]))
+        .with_method_response(Invocation::from_value("Foo/get", json!({"list": []}), "c1"));
+    let ws_resp_bytes = serde_json::to_vec(&ws_resp).expect("WebSocketResponse serializes");
+    let ws_resp_parsed: WebSocketResponse =
+        serde_json::from_slice(&ws_resp_bytes).expect("WebSocketResponse parses");
+    assert_eq!(ws_resp_parsed, ws_resp);
+    assert_eq!(ws_resp.responses_for("c1").count(), 1);
+    assert_eq!(ws_resp.responses_for("c2").count(), 0);
+
+    let ws_err = WebSocketRequestError::new("urn:ietf:params:jmap:error:unknownCapability")
+        .with_id("req-1")
+        .with_status(400)
+        .with_detail("unsupported capability");
+    let ws_err_bytes = serde_json::to_vec(&ws_err).expect("WebSocketRequestError serializes");
+    let ws_err_parsed: WebSocketRequestError =
+        serde_json::from_slice(&ws_err_bytes).expect("WebSocketRequestError parses");
+    assert_eq!(ws_err_parsed, ws_err);
+
+    let push_enable = WebSocketPushEnable::new().with_data_types(["Mailbox", "Email"]);
+    let push_enable_bytes =
+        serde_json::to_vec(&push_enable).expect("WebSocketPushEnable serializes");
+    let push_enable_parsed: WebSocketPushEnable =
+        serde_json::from_slice(&push_enable_bytes).expect("WebSocketPushEnable parses");
+    assert_eq!(push_enable_parsed, push_enable);
+
+    let push_disable = WebSocketPushDisable::new();
+    let push_disable_bytes =
+        serde_json::to_vec(&push_disable).expect("WebSocketPushDisable serializes");
+    let push_disable_parsed: WebSocketPushDisable =
+        serde_json::from_slice(&push_disable_bytes).expect("WebSocketPushDisable parses");
+    assert_eq!(push_disable_parsed, push_disable);
 }
