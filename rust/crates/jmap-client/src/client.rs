@@ -1197,6 +1197,16 @@ impl Client {
         crate::websocket::WebSocketConnection::connect_with_timeouts(self, timeouts)
     }
 
+    /// Establish an RFC 8887 WebSocket connection with explicit timeouts and frame size limits.
+    #[cfg(feature = "websocket")]
+    pub fn connect_websocket_with_limits(
+        &self,
+        timeouts: crate::websocket::WebSocketTimeouts,
+        limits: crate::websocket::WebSocketLimits,
+    ) -> Result<crate::websocket::WebSocketConnection, Error> {
+        crate::websocket::WebSocketConnection::connect_with_limits(self, timeouts, limits)
+    }
+
     /// Open a WebSocket push notification stream for the specified data types with default timeouts.
     ///
     /// An empty `types` slice enables push for all data types supported by the server.
@@ -1216,6 +1226,19 @@ impl Client {
         timeouts: crate::websocket::WebSocketPushTimeouts,
     ) -> Result<crate::websocket::WebSocketPushSubscription, Error> {
         crate::websocket::WebSocketPushSubscription::start(self, types, timeouts)
+    }
+
+    /// Open a WebSocket push notification stream for the specified data types with explicit timeouts and frame size limits.
+    #[cfg(feature = "websocket")]
+    pub fn websocket_push_with_limits(
+        &self,
+        types: &[&str],
+        timeouts: crate::websocket::WebSocketPushTimeouts,
+        limits: crate::websocket::WebSocketLimits,
+    ) -> Result<crate::websocket::WebSocketPushSubscription, Error> {
+        crate::websocket::WebSocketPushSubscription::start_with_limits(
+            self, types, timeouts, limits,
+        )
     }
 }
 

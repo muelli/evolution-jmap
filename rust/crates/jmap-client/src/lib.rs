@@ -108,8 +108,11 @@ pub mod websocket;
 #[cfg(feature = "websocket")]
 pub use websocket::{
     DEFAULT_CONNECT_TIMEOUT as DEFAULT_WS_CONNECT_TIMEOUT,
-    DEFAULT_REQUEST_TIMEOUT as DEFAULT_WS_REQUEST_TIMEOUT, WebSocketConnection, WebSocketPushItem,
-    WebSocketPushSubscription, WebSocketPushTimeouts, WebSocketTimeouts,
+    DEFAULT_MAX_FRAME_SIZE as DEFAULT_WS_MAX_FRAME_SIZE,
+    DEFAULT_MAX_MESSAGE_SIZE as DEFAULT_WS_MAX_MESSAGE_SIZE,
+    DEFAULT_REQUEST_TIMEOUT as DEFAULT_WS_REQUEST_TIMEOUT, InboundFrameAction, WebSocketConnection,
+    WebSocketLimits, WebSocketPushItem, WebSocketPushSubscription, WebSocketPushTimeouts,
+    WebSocketTimeouts, parse_inbound_message, parse_inbound_text,
 };
 
 pub use changes::ChangeSet;

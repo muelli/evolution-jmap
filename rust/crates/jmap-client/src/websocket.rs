@@ -12,6 +12,38 @@
 //! - Multiplexed `Request` and `Response`/`RequestError` correlation by `id`
 //! - `maxConcurrentRequests` bounding
 //! - Clean close handshake (RFC 6455 §5.5.1)
+//!
+//! ## Redirect and Proxy Behavior
+//!
+//! RFC 8887 Section 2.1 specifies that WebSocket connections are established
+//! to the endpoint advertised by the JMAP session document.
+//!
+//! * **Redirects**: During the initial HTTP upgrade handshake, if the server
+//!   responds with an HTTP 3xx redirect status code (e.g. 301, 302, 307, 308)
+//!   instead of `101 Switching Protocols`, `jmap-client` rejects the connection
+//!   with [`Error::Transport`] and does not automatically follow the redirect.
+//!   Auto-following redirects on WebSocket upgrades risks forwarding credentials
+//!   to unintended third-party hosts or downgrading secure `wss://` connections
+//!   to plain `ws://`. When an endpoint location changes, the JMAP server updates
+//!   `sessionState`, prompting the client to refetch the session document via
+//!   [`Client::refresh_session`] to obtain the canonical URL.
+//!
+//! * **Proxies**: Connections are established directly to the resolved socket
+//!   address of the target authority. Environment proxy variables (`HTTP_PROXY`,
+//!   `HTTPS_PROXY`, `ALL_PROXY`) are not automatically intercepted at the TCP
+//!   stream layer. Intermediate reverse proxies or ingress gateways must forward
+//!   standard WebSocket upgrade headers (`Upgrade: websocket`, `Connection: Upgrade`,
+//!   and `Sec-WebSocket-*`) and preserve the `jmap` subprotocol.
+//!
+//! ## Frame Size Limits and Buffer Bounding
+//!
+//! * Inbound frame size is bounded to [`DEFAULT_MAX_FRAME_SIZE`] (4 MiB) and
+//!   message size to [`DEFAULT_MAX_MESSAGE_SIZE`] (64 MiB), configurable via
+//!   [`WebSocketLimits`].
+//! * Oversized frames or messages trigger a capacity error in tungstenite,
+//!   closing the connection cleanly without unbounded memory allocations.
+//! * Unmatched or unexpected inbound frames (such as unknown `@type`, binary
+//!   frames, or responses to expired requests) are discarded without accumulation.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -40,6 +72,30 @@ pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default duration allowed for awaiting a method response.
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Maximum WebSocket message size (64 MiB), matching [`crate::limits::MAX_API_RESPONSE_BYTES`].
+pub const DEFAULT_MAX_MESSAGE_SIZE: usize = crate::limits::MAX_API_RESPONSE_BYTES as usize;
+
+/// Maximum WebSocket frame size (4 MiB) to prevent unbounded memory allocation on single large frames.
+pub const DEFAULT_MAX_FRAME_SIZE: usize = 4 * 1024 * 1024;
+
+/// Frame and message size limits configured for a WebSocket connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebSocketLimits {
+    /// Maximum allowed message size in bytes.
+    pub max_message_size: usize,
+    /// Maximum allowed frame size in bytes.
+    pub max_frame_size: usize,
+}
+
+impl Default for WebSocketLimits {
+    fn default() -> Self {
+        Self {
+            max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
+            max_frame_size: DEFAULT_MAX_FRAME_SIZE,
+        }
+    }
+}
+
 /// Timeouts configured for a [`WebSocketConnection`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WebSocketTimeouts {
@@ -55,6 +111,118 @@ impl Default for WebSocketTimeouts {
             connect: DEFAULT_CONNECT_TIMEOUT,
             request: DEFAULT_REQUEST_TIMEOUT,
         }
+    }
+}
+
+/// An action or parsed event resulting from processing an inbound WebSocket message.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InboundFrameAction {
+    /// A correlated Response frame for a request.
+    Response {
+        /// The request id matching the outbound Request.
+        id: Option<String>,
+        /// The deserialized WebSocket response.
+        response: WebSocketResponse,
+    },
+    /// A correlated RequestError frame for a request.
+    RequestError {
+        /// The request id matching the outbound Request.
+        id: Option<String>,
+        /// The deserialized WebSocket request error.
+        error: WebSocketRequestError,
+    },
+    /// A pushed StateChange notification.
+    StateChange {
+        /// The parsed StateChange notification.
+        state_change: StateChange,
+        /// The optional pushState token for delta resumption.
+        push_state: Option<String>,
+    },
+    /// A Close control frame received from the server.
+    Close(Option<String>),
+    /// A Ping control frame with payload.
+    Ping(Vec<u8>),
+    /// A Pong control frame with payload.
+    Pong(Vec<u8>),
+    /// An ignored frame (e.g. unknown @type, binary frame, unparsable JSON).
+    Ignored,
+}
+
+/// Parse an inbound WebSocket message into an [`InboundFrameAction`].
+pub fn parse_inbound_message(msg: &tungstenite::Message) -> InboundFrameAction {
+    match msg {
+        tungstenite::Message::Text(text) => parse_inbound_text(text),
+        tungstenite::Message::Binary(_) | tungstenite::Message::Frame(_) => {
+            InboundFrameAction::Ignored
+        }
+        tungstenite::Message::Ping(payload) => InboundFrameAction::Ping(payload.to_vec()),
+        tungstenite::Message::Pong(payload) => InboundFrameAction::Pong(payload.to_vec()),
+        tungstenite::Message::Close(frame) => {
+            InboundFrameAction::Close(frame.as_ref().map(|f| f.reason.to_string()))
+        }
+    }
+}
+
+/// Parse an inbound text payload into an [`InboundFrameAction`].
+pub fn parse_inbound_text(text: &str) -> InboundFrameAction {
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
+        return InboundFrameAction::Ignored;
+    };
+    match val.get("@type").and_then(|v| v.as_str()) {
+        Some("Response") => {
+            if let Ok(mut resp) = serde_json::from_value::<WebSocketResponse>(val) {
+                let req_id = resp.id.clone().or_else(|| {
+                    resp.extra
+                        .get("requestId")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned)
+                });
+                if resp.id.is_none() && req_id.is_some() {
+                    resp.id = req_id.clone();
+                }
+                InboundFrameAction::Response {
+                    id: req_id,
+                    response: resp,
+                }
+            } else {
+                InboundFrameAction::Ignored
+            }
+        }
+        Some("RequestError") => {
+            if let Ok(mut err) = serde_json::from_value::<WebSocketRequestError>(val) {
+                let req_id = err.id.clone().or_else(|| {
+                    err.extra
+                        .get("requestId")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned)
+                });
+                if err.id.is_none() && req_id.is_some() {
+                    err.id = req_id.clone();
+                }
+                InboundFrameAction::RequestError {
+                    id: req_id,
+                    error: err,
+                }
+            } else {
+                InboundFrameAction::Ignored
+            }
+        }
+        Some("StateChange") => {
+            let push_state = val
+                .get("pushState")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            if let Ok(state_change) = serde_json::from_value::<StateChange>(val) {
+                InboundFrameAction::StateChange {
+                    state_change,
+                    push_state,
+                }
+            } else {
+                InboundFrameAction::Ignored
+            }
+        }
+        _ => InboundFrameAction::Ignored,
     }
 }
 
@@ -142,13 +310,26 @@ impl std::fmt::Debug for WebSocketConnection {
 impl WebSocketConnection {
     /// Connect to the WebSocket endpoint advertised by `client`'s session with default timeouts.
     pub fn connect(client: &Client) -> Result<Self, Error> {
-        Self::connect_with_timeouts(client, WebSocketTimeouts::default())
+        Self::connect_with_limits(
+            client,
+            WebSocketTimeouts::default(),
+            WebSocketLimits::default(),
+        )
     }
 
     /// Connect to the WebSocket endpoint advertised by `client`'s session with explicit timeouts.
     pub fn connect_with_timeouts(
         client: &Client,
         timeouts: WebSocketTimeouts,
+    ) -> Result<Self, Error> {
+        Self::connect_with_limits(client, timeouts, WebSocketLimits::default())
+    }
+
+    /// Connect to the WebSocket endpoint advertised by `client`'s session with explicit timeouts and limits.
+    pub fn connect_with_limits(
+        client: &Client,
+        timeouts: WebSocketTimeouts,
+        limits: WebSocketLimits,
     ) -> Result<Self, Error> {
         let session = client.session();
         let capability = session
@@ -249,8 +430,8 @@ impl WebSocketConnection {
         }
 
         let ws_config = tungstenite::protocol::WebSocketConfig::default()
-            .max_message_size(Some(crate::limits::MAX_API_RESPONSE_BYTES as usize))
-            .max_frame_size(Some(4 * 1024 * 1024));
+            .max_message_size(Some(limits.max_message_size))
+            .max_frame_size(Some(limits.max_frame_size));
 
         let (ws, _response) =
             tungstenite::client::client_with_config(builder, ws_stream, Some(ws_config))
@@ -285,75 +466,43 @@ impl WebSocketConnection {
                 };
 
                 match read_result {
-                    Ok(tungstenite::Message::Text(text)) => {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
-                            match val.get("@type").and_then(|v| v.as_str()) {
-                                Some("Response") => {
-                                    if let Ok(mut resp) =
-                                        serde_json::from_value::<WebSocketResponse>(val)
-                                    {
-                                        let req_id = resp.id.clone().or_else(|| {
-                                            resp.extra
-                                                .get("requestId")
-                                                .and_then(|v| v.as_str())
-                                                .map(str::to_owned)
-                                        });
-                                        if resp.id.is_none() && req_id.is_some() {
-                                            resp.id = req_id.clone();
-                                        }
-                                        if let Some(id) = req_id
-                                            && let Some(sender) =
-                                                r_pending.lock().unwrap().remove(&id)
-                                        {
-                                            let _ = sender.send(PendingResponse::Success(resp));
-                                        }
-                                    }
-                                }
-                                Some("RequestError") => {
-                                    if let Ok(mut err) =
-                                        serde_json::from_value::<WebSocketRequestError>(val)
-                                    {
-                                        let req_id = err.id.clone().or_else(|| {
-                                            err.extra
-                                                .get("requestId")
-                                                .and_then(|v| v.as_str())
-                                                .map(str::to_owned)
-                                        });
-                                        if err.id.is_none() && req_id.is_some() {
-                                            err.id = req_id.clone();
-                                        }
-                                        if let Some(id) = req_id
-                                            && let Some(sender) =
-                                                r_pending.lock().unwrap().remove(&id)
-                                        {
-                                            let _ = sender.send(PendingResponse::RequestError(err));
-                                        }
-                                    }
-                                }
-                                Some("StateChange") => {
-                                    // Pushed state notifications handled in Step 3.
-                                }
-                                _ => {}
+                    Ok(msg) => match parse_inbound_message(&msg) {
+                        InboundFrameAction::Response { id, response } => {
+                            if let Some(id) = id
+                                && let Some(sender) = r_pending.lock().unwrap().remove(&id)
+                            {
+                                let _ = sender.send(PendingResponse::Success(response));
                             }
                         }
-                    }
-                    Ok(tungstenite::Message::Close(_)) => {
-                        r_closed.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                    Ok(
-                        tungstenite::Message::Ping(_)
-                        | tungstenite::Message::Pong(_)
-                        | tungstenite::Message::Binary(_),
-                    ) => {}
-                    Ok(tungstenite::Message::Frame(_)) => {}
+                        InboundFrameAction::RequestError { id, error } => {
+                            if let Some(id) = id
+                                && let Some(sender) = r_pending.lock().unwrap().remove(&id)
+                            {
+                                let _ = sender.send(PendingResponse::RequestError(error));
+                            }
+                        }
+                        InboundFrameAction::Close(_) => {
+                            r_closed.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                        InboundFrameAction::Ping(payload) => {
+                            if let Ok(mut guard) = r_ws.lock() {
+                                let _ = guard.send(tungstenite::Message::Pong(payload.into()));
+                                let _ = guard.flush();
+                            }
+                        }
+                        InboundFrameAction::Pong(_)
+                        | InboundFrameAction::StateChange { .. }
+                        | InboundFrameAction::Ignored => {}
+                    },
                     Err(tungstenite::Error::Io(ref e))
                         if e.kind() == std::io::ErrorKind::WouldBlock
                             || e.kind() == std::io::ErrorKind::TimedOut =>
                     {
                         thread::sleep(Duration::from_millis(5));
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        tracing::debug!(error = %e, "websocket connection terminated");
                         r_closed.store(true, Ordering::Relaxed);
                         break;
                     }
@@ -725,11 +874,21 @@ impl std::fmt::Debug for WebSocketPushSubscription {
 }
 
 impl WebSocketPushSubscription {
-    /// Start listening for push notifications on the WebSocket endpoint advertised by `client`.
+    /// Start listening for push notifications on the WebSocket endpoint advertised by `client` with default limits.
     pub fn start(
         client: &Client,
         types: &[&str],
         timeouts: WebSocketPushTimeouts,
+    ) -> Result<Self, Error> {
+        Self::start_with_limits(client, types, timeouts, WebSocketLimits::default())
+    }
+
+    /// Start listening for push notifications on the WebSocket endpoint advertised by `client` with explicit timeouts and limits.
+    pub fn start_with_limits(
+        client: &Client,
+        types: &[&str],
+        timeouts: WebSocketPushTimeouts,
+        limits: WebSocketLimits,
     ) -> Result<Self, Error> {
         let session = client.session();
         let capability = session
@@ -793,16 +952,18 @@ impl WebSocketPushSubscription {
 
         let thread_cancel = cancel.clone();
         let thread_headers = shared_headers.clone();
+        let loop_config = PushLoopConfig {
+            url,
+            data_types,
+            headers: thread_headers,
+            cancel: thread_cancel,
+            sender,
+            ctx,
+            timeouts,
+            limits,
+        };
         let handle = thread::spawn(move || {
-            run_push_loop(
-                url,
-                data_types,
-                thread_headers,
-                thread_cancel,
-                sender,
-                ctx,
-                timeouts,
-            );
+            run_push_loop(loop_config);
         });
 
         Ok(Self {
@@ -921,15 +1082,7 @@ fn sleep_cancellable(duration: Duration, cancel: &CancelFlag) {
     }
 }
 
-struct PushStreamConfig<'a> {
-    url: &'a str,
-    data_types: Option<&'a [String]>,
-    push_state: Option<&'a str>,
-    headers: &'a [(String, String)],
-    timeouts: WebSocketPushTimeouts,
-}
-
-fn run_push_loop(
+struct PushLoopConfig {
     url: String,
     data_types: Option<Vec<String>>,
     headers: SharedHeaders,
@@ -937,34 +1090,47 @@ fn run_push_loop(
     sender: Sender<WebSocketPushItem>,
     ctx: PushConnectionContext,
     timeouts: WebSocketPushTimeouts,
-) {
-    let mut backoff = timeouts.initial_backoff;
+    limits: WebSocketLimits,
+}
+
+struct PushStreamConfig<'a> {
+    url: &'a str,
+    data_types: Option<&'a [String]>,
+    push_state: Option<&'a str>,
+    headers: &'a [(String, String)],
+    timeouts: WebSocketPushTimeouts,
+    limits: WebSocketLimits,
+}
+
+fn run_push_loop(cfg: PushLoopConfig) {
+    let mut backoff = cfg.timeouts.initial_backoff;
     let mut connection_attempts: u64 = 0;
-    while !cancel.is_cancelled() {
+    while !cfg.cancel.is_cancelled() {
         let is_reconnect = connection_attempts > 0;
-        let push_state = ctx.push_state_slot.lock().unwrap().clone();
-        let headers_snapshot = headers.snapshot();
+        let push_state = cfg.ctx.push_state_slot.lock().unwrap().clone();
+        let headers_snapshot = cfg.headers.snapshot();
         let config = PushStreamConfig {
-            url: &url,
-            data_types: data_types.as_deref(),
+            url: &cfg.url,
+            data_types: cfg.data_types.as_deref(),
             push_state: push_state.as_deref(),
             headers: &headers_snapshot,
-            timeouts,
+            timeouts: cfg.timeouts,
+            limits: cfg.limits,
         };
-        match connect_and_stream_push(config, &cancel, &sender, &ctx, is_reconnect) {
-            Ok(()) => backoff = timeouts.initial_backoff,
+        match connect_and_stream_push(config, &cfg.cancel, &cfg.sender, &cfg.ctx, is_reconnect) {
+            Ok(()) => backoff = cfg.timeouts.initial_backoff,
             Err(error) => {
-                tracing::debug!(%error, url, "websocket push connection ended");
+                tracing::debug!(%error, url = cfg.url, "websocket push connection ended");
             }
         }
         connection_attempts += 1;
-        *ctx.socket.lock().unwrap() = None;
-        if cancel.is_cancelled() {
+        *cfg.ctx.socket.lock().unwrap() = None;
+        if cfg.cancel.is_cancelled() {
             break;
         }
         let jittered = apply_jitter(backoff);
-        sleep_cancellable(jittered, &cancel);
-        backoff = (backoff * 2).min(timeouts.max_backoff);
+        sleep_cancellable(jittered, &cfg.cancel);
+        backoff = (backoff * 2).min(cfg.timeouts.max_backoff);
     }
 }
 
@@ -1047,8 +1213,8 @@ fn connect_and_stream_push(
     }
 
     let ws_config = tungstenite::protocol::WebSocketConfig::default()
-        .max_message_size(Some(crate::limits::MAX_API_RESPONSE_BYTES as usize))
-        .max_frame_size(Some(4 * 1024 * 1024));
+        .max_message_size(Some(config.limits.max_message_size))
+        .max_frame_size(Some(config.limits.max_frame_size));
 
     let (mut ws, _response) =
         tungstenite::client::client_with_config(builder, ws_stream, Some(ws_config))
@@ -1087,34 +1253,33 @@ fn connect_and_stream_push(
     while !cancel.is_cancelled() {
         let read_result = ws.read();
         match read_result {
-            Ok(tungstenite::Message::Text(text)) => {
-                ping_in_flight = None;
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text)
-                    && val.get("@type").and_then(|v| v.as_str()) == Some("StateChange")
-                {
-                    if let Some(new_state) = val.get("pushState").and_then(|v| v.as_str())
-                        && !new_state.is_empty()
-                    {
-                        *ctx.push_state_slot.lock().unwrap() = Some(new_state.to_owned());
+            Ok(msg) => match parse_inbound_message(&msg) {
+                InboundFrameAction::StateChange {
+                    state_change,
+                    push_state,
+                } => {
+                    ping_in_flight = None;
+                    if let Some(new_state) = push_state {
+                        *ctx.push_state_slot.lock().unwrap() = Some(new_state);
                     }
-                    if let Ok(change) = serde_json::from_value::<jmap_proto::push::StateChange>(val)
-                        && sender.send(WebSocketPushItem::State(change)).is_err()
-                    {
+                    if sender.send(WebSocketPushItem::State(state_change)).is_err() {
                         return Ok(());
                     }
                 }
-            }
-            Ok(tungstenite::Message::Pong(_)) => {
-                ping_in_flight = None;
-            }
-            Ok(tungstenite::Message::Ping(payload)) => {
-                let _ = ws.send(tungstenite::Message::Pong(payload));
-                let _ = ws.flush();
-            }
-            Ok(tungstenite::Message::Close(_)) => {
-                return Ok(());
-            }
-            Ok(tungstenite::Message::Binary(_) | tungstenite::Message::Frame(_)) => {}
+                InboundFrameAction::Pong(_) => {
+                    ping_in_flight = None;
+                }
+                InboundFrameAction::Ping(payload) => {
+                    let _ = ws.send(tungstenite::Message::Pong(payload.into()));
+                    let _ = ws.flush();
+                }
+                InboundFrameAction::Close(_) => {
+                    return Ok(());
+                }
+                InboundFrameAction::Response { .. }
+                | InboundFrameAction::RequestError { .. }
+                | InboundFrameAction::Ignored => {}
+            },
             Err(tungstenite::Error::Io(ref e))
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>

@@ -1,0 +1,6 @@
+{
+  "@type": "Response",
+  "requestId": "req-1",
+  "methodResponses": [["Core/echo", {"hello": "world"}, "c1"]],
+  "sessionState": "state-0"
+}

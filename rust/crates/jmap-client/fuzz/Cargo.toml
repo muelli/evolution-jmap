@@ -13,10 +13,12 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"
+tungstenite = { version = "0.30", default-features = false }
 
 [dependencies.evolution-jmap-client]
 path = ".."
 default-features = false
+features = ["websocket"]
 
 [dependencies.evolution-jmap-proto]
 path = "../../jmap-proto"
@@ -36,6 +38,13 @@ bench = false
 [[bin]]
 name = "fuzz_eventsource"
 path = "fuzz_targets/fuzz_eventsource.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_websocket_frames"
+path = "fuzz_targets/fuzz_websocket_frames.rs"
 test = false
 doc = false
 bench = false
