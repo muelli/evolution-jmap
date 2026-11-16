@@ -105,6 +105,12 @@ pub mod transport;
 pub mod url;
 #[cfg(feature = "websocket")]
 pub mod websocket;
+#[cfg(feature = "websocket")]
+pub use websocket::{
+    DEFAULT_CONNECT_TIMEOUT as DEFAULT_WS_CONNECT_TIMEOUT,
+    DEFAULT_REQUEST_TIMEOUT as DEFAULT_WS_REQUEST_TIMEOUT, WebSocketConnection, WebSocketPushItem,
+    WebSocketPushSubscription, WebSocketPushTimeouts, WebSocketTimeouts,
+};
 
 pub use changes::ChangeSet;
 pub use client::{Client, ClientBuilder, Credentials, rebase_urls_from_env};

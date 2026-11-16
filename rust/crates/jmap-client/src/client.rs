@@ -1196,6 +1196,27 @@ impl Client {
     ) -> Result<crate::websocket::WebSocketConnection, Error> {
         crate::websocket::WebSocketConnection::connect_with_timeouts(self, timeouts)
     }
+
+    /// Open a WebSocket push notification stream for the specified data types with default timeouts.
+    ///
+    /// An empty `types` slice enables push for all data types supported by the server.
+    #[cfg(feature = "websocket")]
+    pub fn websocket_push(
+        &self,
+        types: &[&str],
+    ) -> Result<crate::websocket::WebSocketPushSubscription, Error> {
+        self.websocket_push_with_timeouts(types, crate::websocket::WebSocketPushTimeouts::default())
+    }
+
+    /// Open a WebSocket push notification stream for the specified data types with explicit timeouts.
+    #[cfg(feature = "websocket")]
+    pub fn websocket_push_with_timeouts(
+        &self,
+        types: &[&str],
+        timeouts: crate::websocket::WebSocketPushTimeouts,
+    ) -> Result<crate::websocket::WebSocketPushSubscription, Error> {
+        crate::websocket::WebSocketPushSubscription::start(self, types, timeouts)
+    }
 }
 
 /// Extract the `Retry-After` duration from a problem error when present.

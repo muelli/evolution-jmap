@@ -232,6 +232,97 @@ fn websocket_transport_round_trips_through_the_real_api() {
     assert!(ws.is_closed());
 }
 
+/// RFC 8887 WebSocket push notifications deliver StateChange from mutations made by a second client.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+#[cfg(feature = "websocket")]
+fn websocket_push_delivers_state_change_from_second_client_through_the_real_api() {
+    let Some(write_client) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the websocket push test"
+        );
+        return;
+    };
+
+    if is_cyrus_server(&write_client) {
+        eprintln!(
+            "Cyrus advertises urn:ietf:params:jmap:websocket with supportsPush: true \
+             but WebSocketPushEnable triggers assertion failure !open_mailboxes_exist() \
+             and aborts the connection (CYRUS-RFC-FINDINGS.md Finding 22); skipping"
+        );
+        return;
+    }
+
+    let account_id = write_client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    let mut sub = write_client
+        .websocket_push(&["Mailbox"])
+        .expect("websocket push subscription establishes");
+
+    // Give the subscription a moment to complete handshake and push enablement.
+    std::thread::sleep(Duration::from_millis(200));
+
+    // A second client creates a mailbox on the account.
+    let second_client = connect_for_write().expect("connect second write client");
+    let name = format!("agent-livewrite-wspush-{}", unique_suffix());
+    let mailbox = Mailbox::new(name);
+
+    let created = second_client
+        .mailbox_create(&account_id, &mailbox)
+        .expect("Mailbox/set create failed against the real server");
+    let mailbox_id = created.id.clone().expect("server named new mailbox");
+
+    // Await StateChange notification over the WebSocket push stream.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut saw_create = false;
+    while Instant::now() < deadline {
+        let Some(change) = sub.recv_timeout(Duration::from_secs(1)) else {
+            continue;
+        };
+        if change
+            .changed
+            .get(&account_id)
+            .is_some_and(|ts| ts.contains_key("Mailbox"))
+        {
+            saw_create = true;
+            break;
+        }
+    }
+    assert!(
+        saw_create,
+        "new StateChange naming Mailbox must arrive over the WebSocket push stream after create"
+    );
+
+    // Destroy the mailbox and await the deletion StateChange notification.
+    second_client
+        .mailbox_destroy(&account_id, &mailbox_id)
+        .expect("Mailbox/set destroy failed against the real server");
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut saw_destroy = false;
+    while Instant::now() < deadline {
+        let Some(change) = sub.recv_timeout(Duration::from_secs(1)) else {
+            continue;
+        };
+        if change
+            .changed
+            .get(&account_id)
+            .is_some_and(|ts| ts.contains_key("Mailbox"))
+        {
+            saw_destroy = true;
+            break;
+        }
+    }
+    assert!(
+        saw_destroy,
+        "new StateChange naming Mailbox must arrive over the WebSocket push stream after destroy"
+    );
+
+    sub.stop();
+}
+
 /// If the account has the mail capability, `Mailbox/get` answers with at
 /// least one mailbox: every real mailbox has an Inbox. An account with no
 /// mail capability at all (a contacts-or-calendars-only test account) is not

@@ -83,7 +83,7 @@ impl SharedHeaders {
         *self.0.lock().expect("shared headers lock poisoned") = headers;
     }
 
-    fn snapshot(&self) -> Vec<(String, String)> {
+    pub(crate) fn snapshot(&self) -> Vec<(String, String)> {
         self.0.lock().expect("shared headers lock poisoned").clone()
     }
 }
