@@ -515,3 +515,99 @@ fn hostile_eventsource_streams_never_panic() {
         }
     }
 }
+
+#[cfg(feature = "websocket")]
+#[test]
+fn fuzz_websocket_frames_smoke() {
+    use jmap_client::websocket::{
+        DEFAULT_MAX_FRAME_SIZE, DEFAULT_MAX_MESSAGE_SIZE, InboundFrameAction, WebSocketLimits,
+        WebSocketPushTimeouts, WebSocketTimeouts, parse_inbound_message, parse_inbound_text,
+    };
+    use tungstenite::Message;
+    use tungstenite::protocol::CloseFrame;
+    use tungstenite::protocol::frame::coding::CloseCode;
+
+    let inputs: &[&[u8]] = &[
+        b"",
+        b"not json",
+        b"{incomplete",
+        b"12345",
+        b"[]",
+        br#"{"hello":"world"}"#,
+        br#"{"@type":"UnknownType","foo":"bar"}"#,
+        br#"{"@type":"Response","requestId":"r1","methodResponses":[],"sessionState":"s1"}"#,
+        br#"{"@type":"Response","id":"r2","methodResponses":[["Core/echo",{},"c1"]],"sessionState":"s2"}"#,
+        br#"{"@type":"RequestError","requestId":"r3","type":"urn:ietf:params:jmap:error:notJSON","status":400,"detail":"bad json"}"#,
+        br#"{"@type":"StateChange","changed":{"acc1":{"Email":"s1"}},"pushState":"p1"}"#,
+        br#"{"@type":"StateChange","changed":{}}"#,
+        b"\x00\x01\x02\x03\xff\xfe\xfd",
+        &[0x7b; 1024],
+        b"{\"@type\":\"Response\",\"requestId\":\"r1\"}\n{\"@type\":\"Unknown\"}\nbogus\n",
+    ];
+
+    for input in inputs {
+        if let Ok(s) = std::str::from_utf8(input) {
+            let act = parse_inbound_text(s);
+            let _ = format!("{act:?}");
+            assert_eq!(act, act.clone());
+        }
+
+        let lossy = String::from_utf8_lossy(input);
+        let act_lossy = parse_inbound_text(&lossy);
+        let _ = format!("{act_lossy:?}");
+
+        let text_msg = Message::Text(lossy.into_owned().into());
+        let _ = parse_inbound_message(&text_msg);
+
+        let bin_msg = Message::Binary(input.to_vec().into());
+        assert_eq!(parse_inbound_message(&bin_msg), InboundFrameAction::Ignored);
+
+        let ping_msg = Message::Ping(input.to_vec().into());
+        let _ = parse_inbound_message(&ping_msg);
+
+        let pong_msg = Message::Pong(input.to_vec().into());
+        let _ = parse_inbound_message(&pong_msg);
+
+        let close_some = Message::Close(Some(CloseFrame {
+            code: CloseCode::Normal,
+            reason: String::from_utf8_lossy(&input[..input.len().min(125)])
+                .into_owned()
+                .into(),
+        }));
+        let _ = parse_inbound_message(&close_some);
+
+        let close_none = Message::Close(None);
+        assert_eq!(
+            parse_inbound_message(&close_none),
+            InboundFrameAction::Close(None)
+        );
+
+        let default_limits = WebSocketLimits::default();
+        assert_eq!(default_limits.max_message_size, DEFAULT_MAX_MESSAGE_SIZE);
+        assert_eq!(default_limits.max_frame_size, DEFAULT_MAX_FRAME_SIZE);
+
+        let custom_limits = WebSocketLimits {
+            max_message_size: input.len(),
+            max_frame_size: input.len() / 2,
+        };
+        let _ = format!("{custom_limits:?}");
+        assert_eq!(custom_limits, custom_limits);
+
+        let timeouts = WebSocketTimeouts {
+            connect: std::time::Duration::from_millis(input.len() as u64),
+            request: std::time::Duration::from_millis(input.len() as u64 * 2),
+        };
+        let _ = format!("{timeouts:?}");
+        assert_eq!(timeouts, timeouts);
+
+        let push_timeouts = WebSocketPushTimeouts {
+            connect: std::time::Duration::from_millis(input.len() as u64),
+            ping_interval: std::time::Duration::from_millis(500),
+            ping_timeout: std::time::Duration::from_millis(100),
+            initial_backoff: std::time::Duration::from_millis(50),
+            max_backoff: std::time::Duration::from_millis(1000),
+        };
+        let _ = format!("{push_timeouts:?}");
+        assert_eq!(push_timeouts, push_timeouts);
+    }
+}

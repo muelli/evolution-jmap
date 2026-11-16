@@ -1,0 +1,10 @@
+{
+  "@type": "StateChange",
+  "changed": {
+    "acc1": {
+      "Email": "s1",
+      "Mailbox": "s2"
+    }
+  },
+  "pushState": "p1"
+}
