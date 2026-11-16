@@ -386,17 +386,35 @@ impl UiState {
     }
 }
 
-impl Drop for UiState {
+/// What a page holds outside its own widget tree: the armed sources, the
+/// standalone popup window and the handlers on the shell singleton. Each of
+/// these outlives the children of the page, so each needs an explicit
+/// release. [`UiState::take_outside`] takes them, and [`Outside::release`]
+/// gives them back to GLib.
+struct Outside {
+    validate_timeout: c_uint,
+    completion_window: *mut GtkWidget,
+    shell: *mut GObject,
+    shell_online_handler: c_ulong,
+    shell_network_handler: c_ulong,
+    external_editor_session: Option<ExternalEditorSession>,
+}
+
+impl Outside {
     /// Cancels a pending debounce timeout, destroys the completion popup
-    /// and disconnects from the shell singleton. Without the first, closing
-    /// the account editor while a timeout is still pending would run it
-    /// against a page `g_object_set_data_full` is already in the middle of
-    /// freeing. Without the second, the popup would leak: it is a
-    /// standalone toplevel window, not a child this page's own container
-    /// destroys for it. Without the third, the shell (which outlives this
-    /// page) would call back into freed memory the next time it goes
-    /// online or offline (item 180(c)).
-    fn drop(&mut self) {
+    /// and disconnects from the shell singleton. Without the first, a
+    /// timeout that is still pending would run against widgets the destroy
+    /// of the page already freed. Without the second, the popup would leak:
+    /// it is a standalone toplevel window, not a child this page's own
+    /// container destroys for it. Without the third, the shell (which
+    /// outlives this page) would call back into freed memory the next time
+    /// it goes online or offline (item 180(c)).
+    ///
+    /// # Safety
+    ///
+    /// Call this with no borrow of the state of the page held: it destroys a
+    /// window and disconnects handlers, and those calls can run other code.
+    unsafe fn release(self) {
         if self.validate_timeout != 0 {
             // SAFETY: a source id this page itself added with `g_timeout_add`
             // and has not yet seen fire (it would have cleared the field).
@@ -426,7 +444,7 @@ impl Drop for UiState {
         // the temp file; the editor process itself, if still running, is
         // left alone rather than killed out from under the user, but still
         // needs reaping (see `reap_in_background`'s own doc).
-        if let Some(session) = self.external_editor_session.take() {
+        if let Some(session) = self.external_editor_session {
             if session.poll_timeout != 0 {
                 // SAFETY: as `validate_timeout` above.
                 unsafe { g_source_remove(session.poll_timeout) };
@@ -435,6 +453,57 @@ impl Drop for UiState {
             external_editor::reap_in_background(session.child);
         }
     }
+}
+
+impl UiState {
+    /// Takes everything the page holds outside its widget tree, and leaves
+    /// the state with nothing more to release. A second call gives back an
+    /// empty [`Outside`], so a destroy and the later finalize both work.
+    fn take_outside(&mut self) -> Outside {
+        Outside {
+            validate_timeout: std::mem::take(&mut self.validate_timeout),
+            completion_window: std::mem::replace(&mut self.completion_window, ptr::null_mut()),
+            shell: std::mem::replace(&mut self.shell, ptr::null_mut()),
+            shell_online_handler: std::mem::take(&mut self.shell_online_handler),
+            shell_network_handler: std::mem::take(&mut self.shell_network_handler),
+            external_editor_session: self.external_editor_session.take(),
+        }
+    }
+}
+
+impl Drop for UiState {
+    /// The last chance to release what [`Outside`] holds. A page that the
+    /// shell destroys releases it earlier, in [`on_page_destroy`]; a page
+    /// that is finalized with no destroy releases it here.
+    fn drop(&mut self) {
+        // SAFETY: nothing can borrow the state of a page that is being
+        // freed: `g_object_set_data_full` already took the qdata away.
+        unsafe { self.take_outside().release() };
+    }
+}
+
+/// Releases what the page holds outside its widget tree, as soon as the
+/// shell destroys the page.
+///
+/// The children of the page are gone after the destroy, but the qdata that
+/// points at them lives until the last reference to the page goes, which can
+/// be later. A timeout that fires in that window reads freed widgets.
+///
+/// # Safety
+///
+/// `page` is the data pointer `build_widgets` gave the connection, and the
+/// `destroy` signal of a live page is what calls this.
+unsafe extern "C" fn on_page_destroy(_widget: *mut GObject, page: gpointer) {
+    guard("JmapFiltersPage::destroy", (), || {
+        let page = page.cast::<GObject>();
+        // SAFETY: GTK emits `destroy` on a page that is still live.
+        let Some(cell) = (unsafe { state(page) }) else {
+            return;
+        };
+        let outside = cell.borrow_mut().take_outside();
+        // SAFETY: the borrow above ended, as `release` requires.
+        unsafe { outside.release() };
+    });
 }
 
 /// The qdata of the page, while the page is alive.
@@ -828,6 +897,18 @@ unsafe fn build_widgets(page: *mut GObject) {
                 shell_network_handler,
                 external_editor_session: None,
             }),
+        );
+
+        // The state above outlives the children of the page: it is qdata,
+        // and GObject frees qdata in finalize, not in dispose. Thus the
+        // destroy releases what points outside the widget tree.
+        g_signal_connect_data(
+            page.cast(),
+            c"destroy".as_ptr(),
+            gcallback(on_page_destroy as unsafe extern "C" fn(*mut GObject, gpointer)),
+            page.cast(),
+            None,
+            0,
         );
     }
 }
@@ -3807,38 +3888,39 @@ mod tests {
     /// clicking OK. Needs a display; skips without one.
     #[test]
     fn the_name_dialog_lets_enter_confirm_it() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain toplevel window stands in for the live page;
-        // `build_name_dialog` only passes it to `gtk_widget_get_toplevel`.
-        // Both widgets are destroyed before returning.
-        unsafe {
-            let window = gtk_window_new(0);
-            let (dialog, entry) = build_name_dialog(window.cast(), c"Test", "x");
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain toplevel window stands in for the live page;
+            // `build_name_dialog` only passes it to `gtk_widget_get_toplevel`.
+            // Both widgets are destroyed before returning.
+            unsafe {
+                let window = gtk_window_new(0);
+                let (dialog, entry) = build_name_dialog(window.cast(), c"Test", "x");
 
-            assert!(
-                !gtk_window_get_default_widget(dialog.cast()).is_null(),
-                "the dialog has no default response: Enter would do nothing"
-            );
-            let mut activates_default: gboolean = GFALSE;
-            g_object_get(
-                entry.cast(),
-                c"activates-default".as_ptr(),
-                &mut activates_default as *mut gboolean,
-                ptr::null::<c_char>(),
-            );
-            assert_ne!(
-                activates_default, GFALSE,
-                "the name entry does not activate the default: Enter would do nothing"
-            );
+                assert!(
+                    !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                    "the dialog has no default response: Enter would do nothing"
+                );
+                let mut activates_default: gboolean = GFALSE;
+                g_object_get(
+                    entry.cast(),
+                    c"activates-default".as_ptr(),
+                    &mut activates_default as *mut gboolean,
+                    ptr::null::<c_char>(),
+                );
+                assert_ne!(
+                    activates_default, GFALSE,
+                    "the name entry does not activate the default: Enter would do nothing"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// Item 171a: the text-mode editor is a GtkSourceView, and its buffer
@@ -3847,26 +3929,27 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn the_script_view_gets_the_sieve_language() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: `gtk_source_view_new` returns a live, unowned widget; its
-        // buffer is borrowed from it and outlives this call. Both are
-        // destroyed before returning.
-        unsafe {
-            let view = gtk_source_view_new();
-            let buffer = gtk_text_view_get_buffer(view.cast());
-            set_sieve_language(buffer.cast());
-            assert!(
-                !gtk_source_buffer_get_language(buffer.cast()).is_null(),
-                "the script view's buffer has no \"sieve\" language; is \
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: `gtk_source_view_new` returns a live, unowned widget; its
+            // buffer is borrowed from it and outlives this call. Both are
+            // destroyed before returning.
+            unsafe {
+                let view = gtk_source_view_new();
+                let buffer = gtk_text_view_get_buffer(view.cast());
+                set_sieve_language(buffer.cast());
+                assert!(
+                    !gtk_source_buffer_get_language(buffer.cast()).is_null(),
+                    "the script view's buffer has no \"sieve\" language; is \
                  sieve.lang installed in GtkSourceView's search path?"
-            );
-            gtk_widget_destroy(view);
-        }
+                );
+                gtk_widget_destroy(view);
+            }
+        });
     }
 
     /// Item 180(e): with no completion suggestion showing, Tab must move
@@ -3875,31 +3958,32 @@ mod tests {
     /// skips without one.
     #[test]
     fn the_script_view_lets_tab_move_focus_instead_of_indenting() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            let source_view = state(page).unwrap().borrow().source_view;
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                let source_view = state(page).unwrap().borrow().source_view;
 
-            assert_eq!(
-                gtk_text_view_get_accepts_tab(source_view.cast()),
-                GFALSE,
-                "Tab inserts a tab character instead of moving focus"
-            );
-            assert_eq!(
-                gtk_source_view_get_auto_indent(source_view.cast()),
-                GTRUE,
-                "auto-indent is off, so Tab was the only way to indent"
-            );
+                assert_eq!(
+                    gtk_text_view_get_accepts_tab(source_view.cast()),
+                    GFALSE,
+                    "Tab inserts a tab character instead of moving focus"
+                );
+                assert_eq!(
+                    gtk_source_view_get_auto_indent(source_view.cast()),
+                    GTRUE,
+                    "auto-indent is off, so Tab was the only way to indent"
+                );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// A fresh buffer holding `text`, cursor at its very end. `GtkTextBuffer`
@@ -3969,69 +4053,71 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn completion_opens_navigates_and_accepts_a_candidate() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; the window sinks the floating
-        // page and owns its only reference, as the account editor does.
-        // Both are destroyed before returning.
-        unsafe {
-            let window = gtk_window_new(0);
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            gtk_container_add(window.cast(), page.cast());
-            gtk_widget_show_all(window);
-
-            let cell = state(page.cast()).expect("a freshly built page has state");
-            let buffer = cell.borrow().buffer;
-            let text = cstring_lossy("e");
-            let mut start = GtkTextIter::default();
-            gtk_text_buffer_get_start_iter(buffer, &mut start);
-            gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
-            let mut end = GtkTextIter::default();
-            gtk_text_buffer_get_end_iter(buffer, &mut end);
-            gtk_text_buffer_place_cursor(buffer, &end);
-
-            open_completion(cell);
-            {
-                let ui = cell.borrow();
-                let texts: Vec<&str> = ui.completion_candidates.iter().map(|c| c.text).collect();
-                assert_eq!(
-                    texts,
-                    vec!["elsif", "else", "exists"],
-                    "\"e\" should match these three base candidates, in table order"
-                );
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; the window sinks the floating
+            // page and owns its only reference, as the account editor does.
+            // Both are destroyed before returning.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
 
-            move_completion_selection(cell, 1);
-            assert_eq!(
-                cell.borrow().completion_selected,
-                1,
-                "Down did not move the selection to the second candidate"
-            );
-            move_completion_selection(cell, -1);
-            assert_eq!(
-                cell.borrow().completion_selected,
-                0,
-                "Up did not move the selection back to the first candidate"
-            );
+                let cell = state(page.cast()).expect("a freshly built page has state");
+                let buffer = cell.borrow().buffer;
+                let text = cstring_lossy("e");
+                let mut start = GtkTextIter::default();
+                gtk_text_buffer_get_start_iter(buffer, &mut start);
+                gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                gtk_text_buffer_place_cursor(buffer, &end);
 
-            accept_completion(cell);
-            assert!(
-                cell.borrow().completion_candidates.is_empty(),
-                "accepting a candidate did not close the popup"
-            );
-            let result = get_text(buffer.cast());
-            assert_eq!(
-                result, "elsif",
-                "accept did not replace the partial word with the selected candidate"
-            );
+                open_completion(cell);
+                {
+                    let ui = cell.borrow();
+                    let texts: Vec<&str> =
+                        ui.completion_candidates.iter().map(|c| c.text).collect();
+                    assert_eq!(
+                        texts,
+                        vec!["elsif", "else", "exists"],
+                        "\"e\" should match these three base candidates, in table order"
+                    );
+                }
 
-            gtk_widget_destroy(window);
-        }
+                move_completion_selection(cell, 1);
+                assert_eq!(
+                    cell.borrow().completion_selected,
+                    1,
+                    "Down did not move the selection to the second candidate"
+                );
+                move_completion_selection(cell, -1);
+                assert_eq!(
+                    cell.borrow().completion_selected,
+                    0,
+                    "Up did not move the selection back to the first candidate"
+                );
+
+                accept_completion(cell);
+                assert!(
+                    cell.borrow().completion_candidates.is_empty(),
+                    "accepting a candidate did not close the popup"
+                );
+                let result = get_text(buffer.cast());
+                assert_eq!(
+                    result, "elsif",
+                    "accept did not replace the partial word with the selected candidate"
+                );
+
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// Item 180(e): while the popup is open, Right arrow accepts the
@@ -4085,49 +4171,50 @@ mod tests {
     /// fires, with no Ctrl+Space needed. Needs a display; skips without one.
     #[test]
     fn typing_two_characters_of_a_match_opens_completion_after_the_debounce() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; the window sinks the floating
-        // page and owns its only reference, as the account editor does.
-        unsafe {
-            let window = gtk_window_new(0);
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            gtk_container_add(window.cast(), page.cast());
-            gtk_widget_show_all(window);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; the window sinks the floating
+            // page and owns its only reference, as the account editor does.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
 
-            let cell = state(page.cast()).expect("a freshly built page has state");
-            let buffer = cell.borrow().buffer;
-            let text = cstring_lossy("el");
-            let mut start = GtkTextIter::default();
-            gtk_text_buffer_get_start_iter(buffer, &mut start);
-            gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
-            let mut end = GtkTextIter::default();
-            gtk_text_buffer_get_end_iter(buffer, &mut end);
-            gtk_text_buffer_place_cursor(buffer, &end);
+                let cell = state(page.cast()).expect("a freshly built page has state");
+                let buffer = cell.borrow().buffer;
+                let text = cstring_lossy("el");
+                let mut start = GtkTextIter::default();
+                gtk_text_buffer_get_start_iter(buffer, &mut start);
+                gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                gtk_text_buffer_place_cursor(buffer, &end);
 
-            pump_until(
-                || !cell.borrow().completion_candidates.is_empty(),
-                Duration::from_secs(5),
-            );
-            let texts: Vec<&str> = cell
-                .borrow()
-                .completion_candidates
-                .iter()
-                .map(|c| c.text)
-                .collect();
-            assert_eq!(
-                texts,
-                vec!["elsif", "else", "exists"],
-                "typing \"el\" should auto-open the same matches an explicit trigger would"
-            );
+                pump_until(
+                    || !cell.borrow().completion_candidates.is_empty(),
+                    Duration::from_secs(5),
+                );
+                let texts: Vec<&str> = cell
+                    .borrow()
+                    .completion_candidates
+                    .iter()
+                    .map(|c| c.text)
+                    .collect();
+                assert_eq!(
+                    texts,
+                    vec!["elsif", "else", "exists"],
+                    "typing \"el\" should auto-open the same matches an explicit trigger would"
+                );
 
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// Item 180(e): typing a single character never auto-opens the popup
@@ -4135,44 +4222,46 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn typing_one_character_does_not_auto_open_completion() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: as the test above.
-        unsafe {
-            let window = gtk_window_new(0);
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            gtk_container_add(window.cast(), page.cast());
-            gtk_widget_show_all(window);
-
-            let cell = state(page.cast()).expect("a freshly built page has state");
-            let buffer = cell.borrow().buffer;
-            let text = cstring_lossy("e");
-            let mut start = GtkTextIter::default();
-            gtk_text_buffer_get_start_iter(buffer, &mut start);
-            gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
-            let mut end = GtkTextIter::default();
-            gtk_text_buffer_get_end_iter(buffer, &mut end);
-            gtk_text_buffer_place_cursor(buffer, &end);
-
-            // Wait past the debounce with no predicate to reach: there is
-            // nothing to pump_until for here, so iterate a fixed stretch.
-            // SAFETY: the default context; this test owns the thread.
-            let deadline = Instant::now() + Duration::from_millis(VALIDATE_DEBOUNCE_MS as u64 * 3);
-            while Instant::now() < deadline {
-                g_main_context_iteration(ptr::null_mut(), GFALSE);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-            assert!(
-                cell.borrow().completion_candidates.is_empty(),
-                "a single typed character must not auto-open the popup"
-            );
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: as the test above.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
 
-            gtk_widget_destroy(window);
-        }
+                let cell = state(page.cast()).expect("a freshly built page has state");
+                let buffer = cell.borrow().buffer;
+                let text = cstring_lossy("e");
+                let mut start = GtkTextIter::default();
+                gtk_text_buffer_get_start_iter(buffer, &mut start);
+                gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                gtk_text_buffer_place_cursor(buffer, &end);
+
+                // Wait past the debounce with no predicate to reach: there is
+                // nothing to pump_until for here, so iterate a fixed stretch.
+                // SAFETY: the default context; this test owns the thread.
+                let deadline =
+                    Instant::now() + Duration::from_millis(VALIDATE_DEBOUNCE_MS as u64 * 3);
+                while Instant::now() < deadline {
+                    g_main_context_iteration(ptr::null_mut(), GFALSE);
+                }
+                assert!(
+                    cell.borrow().completion_candidates.is_empty(),
+                    "a single typed character must not auto-open the popup"
+                );
+
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// Item 182(c): the completion popup's open/close/accept states are
@@ -4180,79 +4269,81 @@ mod tests {
     /// without one.
     #[test]
     fn completion_open_close_and_accept_trace_their_state() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: as `completion_opens_navigates_and_accepts_a_candidate`.
-        unsafe {
-            let window = gtk_window_new(0);
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            gtk_container_add(window.cast(), page.cast());
-            gtk_widget_show_all(window);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: as `completion_opens_navigates_and_accepts_a_candidate`.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
 
-            let cell = state(page.cast()).expect("a freshly built page has state");
-            let buffer = cell.borrow().buffer;
-            let text = cstring_lossy("e");
-            let mut start = GtkTextIter::default();
-            gtk_text_buffer_get_start_iter(buffer, &mut start);
-            gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
-            let mut end = GtkTextIter::default();
-            gtk_text_buffer_get_end_iter(buffer, &mut end);
-            gtk_text_buffer_place_cursor(buffer, &end);
+                let cell = state(page.cast()).expect("a freshly built page has state");
+                let buffer = cell.borrow().buffer;
+                let text = cstring_lossy("e");
+                let mut start = GtkTextIter::default();
+                gtk_text_buffer_get_start_iter(buffer, &mut start);
+                gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                gtk_text_buffer_place_cursor(buffer, &end);
 
-            let (_, captured) = capture(|| {
-                open_completion(cell);
-                accept_completion(cell);
-            });
+                let (_, captured) = capture(|| {
+                    open_completion(cell);
+                    accept_completion(cell);
+                });
 
-            assert!(
-                has(&captured, Level::TRACE, "word", "e"),
-                "expected a traced word=\"e\" on open, got {captured:?}"
-            );
-            assert!(
-                has(&captured, Level::TRACE, "candidate_count", "3"),
-                "expected a traced candidate_count=3 on open, got {captured:?}"
-            );
-            assert!(
-                has(&captured, Level::TRACE, "accepted", "elsif"),
-                "expected a traced accepted=\"elsif\" on accept, got {captured:?}"
-            );
+                assert!(
+                    has(&captured, Level::TRACE, "word", "e"),
+                    "expected a traced word=\"e\" on open, got {captured:?}"
+                );
+                assert!(
+                    has(&captured, Level::TRACE, "candidate_count", "3"),
+                    "expected a traced candidate_count=3 on open, got {captured:?}"
+                );
+                assert!(
+                    has(&captured, Level::TRACE, "accepted", "elsif"),
+                    "expected a traced accepted=\"elsif\" on accept, got {captured:?}"
+                );
 
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// GNOME HIG: 12px between a dialog's content and its edges. Needs a
     /// display; skips without one.
     #[test]
     fn the_name_dialog_has_a_hig_content_margin() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain toplevel window stands in for the live page;
-        // `build_name_dialog` only passes it to `gtk_widget_get_toplevel`.
-        // Both widgets are destroyed before returning.
-        unsafe {
-            let window = gtk_window_new(0);
-            let (dialog, _entry) = build_name_dialog(window.cast(), c"Test", "x");
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain toplevel window stands in for the live page;
+            // `build_name_dialog` only passes it to `gtk_widget_get_toplevel`.
+            // Both widgets are destroyed before returning.
+            unsafe {
+                let window = gtk_window_new(0);
+                let (dialog, _entry) = build_name_dialog(window.cast(), c"Test", "x");
 
-            let content_area = gtk_dialog_get_content_area(dialog.cast());
-            assert_eq!(
-                gtk_container_get_border_width(content_area.cast()),
-                12,
-                "the content area has no HIG margin: content touches the dialog's edges"
-            );
+                let content_area = gtk_dialog_get_content_area(dialog.cast());
+                assert_eq!(
+                    gtk_container_get_border_width(content_area.cast()),
+                    12,
+                    "the content area has no HIG margin: content touches the dialog's edges"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(window);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(window);
+            }
+        });
     }
 
     /// A fresh [`UiState`], not tied to any real widget.
@@ -4329,38 +4420,43 @@ mod tests {
     /// without one.
     #[test]
     fn destroying_the_page_during_the_name_dialog_keeps_it_until_the_action_ends() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered. The window sinks the floating page
-        // and owns its only reference, as the account editor does.
-        unsafe {
-            let window = gtk_window_new(0);
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            // GObject frees qdata in finalize, not in dispose. A NULL value
-            // would remove the key, so the probe stores a dummy one.
-            g_object_set_data_full(page, c"probe".as_ptr(), page.cast(), Some(page_finalized));
-            gtk_container_add(window.cast(), page.cast());
-            gtk_widget_show_all(window);
-            // Both run inside the nested main loop of the dialog, in order.
-            g_idle_add(Some(close_window), window.cast());
-            g_idle_add(Some(answer_ok), ptr::null_mut());
-            add_now(page.cast());
-        }
-        note("action returned");
-        assert_eq!(
-            *EVENTS.lock().unwrap(),
-            [
-                "window destroyed",
-                "dialog answered",
-                "page finalized",
-                "action returned"
-            ]
-        );
+        crate::gtk_test_main::run(|| {
+            // Other tests answer their own dialogs through `answer_ok`, which
+            // notes into the same list. This test reads the whole list, so it
+            // starts from an empty one.
+            EVENTS.lock().unwrap().clear();
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered. The window sinks the floating page
+            // and owns its only reference, as the account editor does.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                // GObject frees qdata in finalize, not in dispose. A NULL value
+                // would remove the key, so the probe stores a dummy one.
+                g_object_set_data_full(page, c"probe".as_ptr(), page.cast(), Some(page_finalized));
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
+                // Both run inside the nested main loop of the dialog, in order.
+                g_idle_add(Some(close_window), window.cast());
+                g_idle_add(Some(answer_ok), ptr::null_mut());
+                add_now(page.cast());
+            }
+            note("action returned");
+            assert_eq!(
+                *EVENTS.lock().unwrap(),
+                [
+                    "window destroyed",
+                    "dialog answered",
+                    "page finalized",
+                    "action returned"
+                ]
+            );
+        });
     }
 
     /// Layout (item 174 (a)): a long script or rule name must not force the
@@ -4371,50 +4467,51 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn a_name_column_does_not_grow_with_its_content() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain list store and tree view, both destroyed (the
-        // store's one reference moves to the view) before returning.
-        unsafe {
-            let mut types = [G_TYPE_STRING];
-            let store = gtk_list_store_newv(1, types.as_mut_ptr());
-            let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
-            g_object_unref(store.cast());
-            add_text_column(view, c"Name", 0, true);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain list store and tree view, both destroyed (the
+            // store's one reference moves to the view) before returning.
+            unsafe {
+                let mut types = [G_TYPE_STRING];
+                let store = gtk_list_store_newv(1, types.as_mut_ptr());
+                let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
+                g_object_unref(store.cast());
+                add_text_column(view, c"Name", 0, true);
 
-            let column = gtk_tree_view_get_column(view.cast(), 0);
-            assert!(!column.is_null(), "the column was not appended");
+                let column = gtk_tree_view_get_column(view.cast(), 0);
+                assert!(!column.is_null(), "the column was not appended");
 
-            let mut sizing: c_int = -1;
-            g_object_get(
-                column.cast(),
-                c"sizing".as_ptr(),
-                &mut sizing as *mut c_int,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                sizing, GTK_TREE_VIEW_COLUMN_FIXED,
-                "the column grows with its content instead of staying a fixed width"
-            );
+                let mut sizing: c_int = -1;
+                g_object_get(
+                    column.cast(),
+                    c"sizing".as_ptr(),
+                    &mut sizing as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    sizing, GTK_TREE_VIEW_COLUMN_FIXED,
+                    "the column grows with its content instead of staying a fixed width"
+                );
 
-            let mut fixed_width: c_int = -1;
-            g_object_get(
-                column.cast(),
-                c"fixed-width".as_ptr(),
-                &mut fixed_width as *mut c_int,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                fixed_width, NAME_COLUMN_WIDTH,
-                "the column has no fixed width to cap its size request at"
-            );
+                let mut fixed_width: c_int = -1;
+                g_object_get(
+                    column.cast(),
+                    c"fixed-width".as_ptr(),
+                    &mut fixed_width as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    fixed_width, NAME_COLUMN_WIDTH,
+                    "the column has no fixed width to cap its size request at"
+                );
 
-            gtk_widget_destroy(view);
-        }
+                gtk_widget_destroy(view);
+            }
+        });
     }
 
     /// GNOME HIG (item 174 (c)): a name column fixed to [`NAME_COLUMN_WIDTH`]
@@ -4429,44 +4526,45 @@ mod tests {
             ) -> *mut GList;
         }
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain list store and tree view, both destroyed (the
-        // store's one reference moves to the view) before returning.
-        unsafe {
-            let mut types = [G_TYPE_STRING];
-            let store = gtk_list_store_newv(1, types.as_mut_ptr());
-            let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
-            g_object_unref(store.cast());
-            add_text_column(view, c"Name", 0, true);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain list store and tree view, both destroyed (the
+            // store's one reference moves to the view) before returning.
+            unsafe {
+                let mut types = [G_TYPE_STRING];
+                let store = gtk_list_store_newv(1, types.as_mut_ptr());
+                let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
+                g_object_unref(store.cast());
+                add_text_column(view, c"Name", 0, true);
 
-            let column = gtk_tree_view_get_column(view.cast(), 0);
-            assert!(!column.is_null(), "the column was not appended");
+                let column = gtk_tree_view_get_column(view.cast(), 0);
+                assert!(!column.is_null(), "the column was not appended");
 
-            let cells = gtk_cell_layout_get_cells(column);
-            assert!(!cells.is_null(), "the column has no cell renderer");
-            let renderer = (*cells).data;
-            g_list_free(cells);
+                let cells = gtk_cell_layout_get_cells(column);
+                assert!(!cells.is_null(), "the column has no cell renderer");
+                let renderer = (*cells).data;
+                g_list_free(cells);
 
-            let mut ellipsize: c_int = -1;
-            g_object_get(
-                renderer.cast(),
-                c"ellipsize".as_ptr(),
-                &mut ellipsize as *mut c_int,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                ellipsize,
-                widget::PANGO_ELLIPSIZE_END,
-                "the renderer does not mark a clipped name with an ellipsis"
-            );
+                let mut ellipsize: c_int = -1;
+                g_object_get(
+                    renderer.cast(),
+                    c"ellipsize".as_ptr(),
+                    &mut ellipsize as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    ellipsize,
+                    widget::PANGO_ELLIPSIZE_END,
+                    "the renderer does not mark a clipped name with an ellipsis"
+                );
 
-            gtk_widget_destroy(view);
-        }
+                gtk_widget_destroy(view);
+            }
+        });
     }
 
     /// Accessibility (item 174 (d)): the script list and the rules list have
@@ -4476,43 +4574,44 @@ mod tests {
     /// one.
     #[test]
     fn the_script_and_rule_lists_have_accessible_names() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: two plain tree views, both destroyed before returning.
-        unsafe {
-            let mut types = [G_TYPE_STRING];
-            let store = gtk_list_store_newv(1, types.as_mut_ptr());
-            let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
-            g_object_unref(store.cast());
-            widget::set_accessible_name(view.cast(), &translate(SCRIPT_LIST_NAME));
-            assert_eq!(
-                widget::get_accessible_name(view.cast()),
-                translate(SCRIPT_LIST_NAME),
-                "the script list keeps no name a screen reader can announce"
-            );
-            gtk_widget_destroy(view);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: two plain tree views, both destroyed before returning.
+            unsafe {
+                let mut types = [G_TYPE_STRING];
+                let store = gtk_list_store_newv(1, types.as_mut_ptr());
+                let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
+                g_object_unref(store.cast());
+                widget::set_accessible_name(view.cast(), &translate(SCRIPT_LIST_NAME));
+                assert_eq!(
+                    widget::get_accessible_name(view.cast()),
+                    translate(SCRIPT_LIST_NAME),
+                    "the script list keeps no name a screen reader can announce"
+                );
+                gtk_widget_destroy(view);
 
-            let mut rule_types = [G_TYPE_STRING];
-            let rules_store = gtk_list_store_newv(1, rule_types.as_mut_ptr());
-            let rules_view = gtk_tree_view_new_with_model(rules_store.cast::<GtkTreeModel>());
-            g_object_unref(rules_store.cast());
-            widget::set_accessible_name(rules_view.cast(), &translate(RULE_LIST_NAME));
-            assert_eq!(
-                widget::get_accessible_name(rules_view.cast()),
-                translate(RULE_LIST_NAME),
-                "the rules list keeps no name a screen reader can announce"
-            );
-            assert_ne!(
-                translate(SCRIPT_LIST_NAME),
-                translate(RULE_LIST_NAME),
-                "the two lists must not share one name"
-            );
-            gtk_widget_destroy(rules_view);
-        }
+                let mut rule_types = [G_TYPE_STRING];
+                let rules_store = gtk_list_store_newv(1, rule_types.as_mut_ptr());
+                let rules_view = gtk_tree_view_new_with_model(rules_store.cast::<GtkTreeModel>());
+                g_object_unref(rules_store.cast());
+                widget::set_accessible_name(rules_view.cast(), &translate(RULE_LIST_NAME));
+                assert_eq!(
+                    widget::get_accessible_name(rules_view.cast()),
+                    translate(RULE_LIST_NAME),
+                    "the rules list keeps no name a screen reader can announce"
+                );
+                assert_ne!(
+                    translate(SCRIPT_LIST_NAME),
+                    translate(RULE_LIST_NAME),
+                    "the two lists must not share one name"
+                );
+                gtk_widget_destroy(rules_view);
+            }
+        });
     }
 
     /// Offline (item 176): the page must say so at once instead of showing
@@ -4520,30 +4619,31 @@ mod tests {
     /// would otherwise produce. Needs a display; skips without one.
     #[test]
     fn offline_shows_an_offline_message_not_a_generic_load_failure() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens: `LoadOutcome::Offline` is applied directly.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens: `LoadOutcome::Offline` is applied directly.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Offline, None);
+                apply_outcome(page, LoadOutcome::Offline, None);
 
-            let status = state(page).unwrap().borrow().status;
-            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(OFFLINE),
-                "the status label does not say the account is offline"
-            );
+                let status = state(page).unwrap().borrow().status;
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(OFFLINE),
+                    "the status label does not say the account is offline"
+                );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// A private directory for one test's cache files, removed again when
@@ -4575,55 +4675,56 @@ mod tests {
     /// of the plain offline message. Needs a display; skips without one.
     #[test]
     fn a_cold_start_cache_hit_shows_the_cached_script_read_only() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let dir = TempDir::new("cold-start-hit");
-        cache::save(
-            &dir.0,
-            "account-1",
-            &[cache::CachedScript {
-                name: "evolution-jmap".to_owned(),
-                text: "keep;\n".to_owned(),
-                active: true,
-            }],
-        )
-        .unwrap();
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let dir = TempDir::new("cold-start-hit");
+            cache::save(
+                &dir.0,
+                "account-1",
+                &[cache::CachedScript {
+                    name: "evolution-jmap".to_owned(),
+                    text: "keep;\n".to_owned(),
+                    active: true,
+                }],
+            )
+            .unwrap();
 
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens: `LoadOutcome::Offline` is applied directly.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens: `LoadOutcome::Offline` is applied directly.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Offline, Some((&dir.0, "account-1")));
+                apply_outcome(page, LoadOutcome::Offline, Some((&dir.0, "account-1")));
 
-            let cell = state(page).unwrap();
-            assert_eq!(
-                cell.borrow().form.entries().len(),
-                1,
-                "the cached script must show in the list"
-            );
-            assert!(
-                cell.borrow().offline,
-                "a cache hit must lock the page like any other offline state"
-            );
+                let cell = state(page).unwrap();
+                assert_eq!(
+                    cell.borrow().form.entries().len(),
+                    1,
+                    "the cached script must show in the list"
+                );
+                assert!(
+                    cell.borrow().offline,
+                    "a cache hit must lock the page like any other offline state"
+                );
 
-            let status = cell.borrow().status;
-            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(text, translate(OFFLINE));
+                let status = cell.borrow().status;
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(text, translate(OFFLINE));
 
-            let source_view = cell.borrow().source_view;
-            assert!(
-                !get_editable(source_view),
-                "a cached script must not be editable offline"
-            );
+                let source_view = cell.borrow().source_view;
+                assert!(
+                    !get_editable(source_view),
+                    "a cached script must not be editable offline"
+                );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// Item 180(c)'s cold-start half: a successful online load saves what it
@@ -4634,67 +4735,68 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let dir = TempDir::new("save-on-load");
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = AccountLink::without_refresh(client, features);
-
-        // Seeds one active script, the same way
-        // `deactivating_disables_the_controls_before_the_worker_answers` does.
-        let loaded = match io::activate_now(
-            &link,
-            &SavePlan {
-                writes: vec![io::ScriptWrite::Create {
-                    key: "new".to_owned(),
-                    name: "evolution-jmap".to_owned(),
-                    text: "keep;\n".to_owned(),
-                }],
-                destroys: Vec::new(),
-                activation: io::ActivationChange::Activate(io::ActivationTarget::Created(
-                    "new".to_owned(),
-                )),
-                deactivate_first: false,
-                if_in_state: None,
-                baseline: io::Baseline::default(),
-            },
-        )
-        .unwrap()
-        {
-            ActivateOutcome::Reloaded(loaded) => loaded,
-            ActivateOutcome::WrittenReloadFailed(reason) => {
-                panic!("seeding the active script failed: {reason}")
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-        };
+            let dir = TempDir::new("save-on-load");
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
 
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens here: the load above already ran.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+            // Seeds one active script, the same way
+            // `deactivating_disables_the_controls_before_the_worker_answers` does.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "evolution-jmap".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Activate(io::ActivationTarget::Created(
+                        "new".to_owned(),
+                    )),
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the active script failed: {reason}")
+                }
+            };
 
-            apply_outcome(
-                page,
-                LoadOutcome::Loaded((Arc::new(link), loaded)),
-                Some((&dir.0, "account-1")),
-            );
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens here: the load above already ran.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            gtk_widget_destroy(page.cast());
-        }
+                apply_outcome(
+                    page,
+                    LoadOutcome::Loaded((Arc::new(link), loaded)),
+                    Some((&dir.0, "account-1")),
+                );
 
-        let cached =
-            cache::load(&dir.0, "account-1").expect("a successful load must write the cache");
-        assert_eq!(cached.len(), 1);
-        assert_eq!(cached[0].name, "evolution-jmap");
-        assert_eq!(cached[0].text, "keep;\n");
-        assert!(cached[0].active);
+                gtk_widget_destroy(page.cast());
+            }
+
+            let cached =
+                cache::load(&dir.0, "account-1").expect("a successful load must write the cache");
+            assert_eq!(cached.len(), 1);
+            assert_eq!(cached[0].name, "evolution-jmap");
+            assert_eq!(cached[0].text, "keep;\n");
+            assert!(cached[0].active);
+        });
     }
 
     /// `widget`'s `sensitive` property, the same way
@@ -4745,91 +4847,92 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = AccountLink::without_refresh(client, features);
-
-        // Seeds one already-active script, the same way the io-level test
-        // `activate_now_deactivates_and_reloads_in_one_call` does.
-        let loaded = match io::activate_now(
-            &link,
-            &SavePlan {
-                writes: vec![io::ScriptWrite::Create {
-                    key: "new".to_owned(),
-                    name: "evolution-jmap".to_owned(),
-                    text: "keep;\n".to_owned(),
-                }],
-                destroys: Vec::new(),
-                activation: io::ActivationChange::Activate(io::ActivationTarget::Created(
-                    "new".to_owned(),
-                )),
-                deactivate_first: false,
-                if_in_state: None,
-                baseline: io::Baseline::default(),
-            },
-        )
-        .unwrap()
-        {
-            ActivateOutcome::Reloaded(loaded) => loaded,
-            ActivateOutcome::WrittenReloadFailed(reason) => {
-                panic!("seeding the active script failed: {reason}")
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-        };
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
 
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens here: the load above already ran.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
-
-            let (view, status, add, rename, remove, activate, deactivate, check) = {
-                let ui = state(page).unwrap().borrow();
-                (
-                    ui.view,
-                    ui.status,
-                    ui.add,
-                    ui.rename,
-                    ui.remove,
-                    ui.activate,
-                    ui.deactivate,
-                    ui.check,
-                )
+            // Seeds one already-active script, the same way the io-level test
+            // `activate_now_deactivates_and_reloads_in_one_call` does.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "evolution-jmap".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Activate(io::ActivationTarget::Created(
+                        "new".to_owned(),
+                    )),
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the active script failed: {reason}")
+                }
             };
 
-            // Moving the list's cursor to row 0 also selects it (single
-            // selection mode), the same way `selecting_a_delegate_enables_
-            // revoke` (delegates/page.rs) selects a row with no real click.
-            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
-            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
-            gtk_tree_path_free(path);
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens here: the load above already ran.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            deactivate_now(page.cast());
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
-            for control in [add, rename, remove, activate, deactivate, check] {
-                assert!(
-                    !get_sensitive(control),
-                    "a control stayed usable while Deactivate's write was in flight"
+                let (view, status, add, rename, remove, activate, deactivate, check) = {
+                    let ui = state(page).unwrap().borrow();
+                    (
+                        ui.view,
+                        ui.status,
+                        ui.add,
+                        ui.rename,
+                        ui.remove,
+                        ui.activate,
+                        ui.deactivate,
+                        ui.check,
+                    )
+                };
+
+                // Moving the list's cursor to row 0 also selects it (single
+                // selection mode), the same way `selecting_a_delegate_enables_
+                // revoke` (delegates/page.rs) selects a row with no real click.
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                deactivate_now(page.cast());
+
+                for control in [add, rename, remove, activate, deactivate, check] {
+                    assert!(
+                        !get_sensitive(control),
+                        "a control stayed usable while Deactivate's write was in flight"
+                    );
+                }
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(DEACTIVATING),
+                    "the status label does not show progress while Deactivate's write is in flight"
                 );
-            }
-            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(DEACTIVATING),
-                "the status label does not show progress while Deactivate's write is in flight"
-            );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// Item 180(a)'s Rename mirrors Activate/Deactivate once the name
@@ -4842,92 +4945,93 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = AccountLink::without_refresh(client, features);
-
-        // Seeds one inactive script, the same way
-        // `deactivating_disables_the_controls_before_the_worker_answers`
-        // seeds an active one: a rename needs no active script.
-        let loaded = match io::activate_now(
-            &link,
-            &SavePlan {
-                writes: vec![io::ScriptWrite::Create {
-                    key: "new".to_owned(),
-                    name: "evolution-jmap".to_owned(),
-                    text: "keep;\n".to_owned(),
-                }],
-                destroys: Vec::new(),
-                activation: io::ActivationChange::Keep,
-                deactivate_first: false,
-                if_in_state: None,
-                baseline: io::Baseline::default(),
-            },
-        )
-        .unwrap()
-        {
-            ActivateOutcome::Reloaded(loaded) => loaded,
-            ActivateOutcome::WrittenReloadFailed(reason) => {
-                panic!("seeding the script failed: {reason}")
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-        };
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
 
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens here: the load above already ran.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
-
-            let (view, status, add, rename, remove, activate, deactivate, check) = {
-                let ui = state(page).unwrap().borrow();
-                (
-                    ui.view,
-                    ui.status,
-                    ui.add,
-                    ui.rename,
-                    ui.remove,
-                    ui.activate,
-                    ui.deactivate,
-                    ui.check,
-                )
+            // Seeds one inactive script, the same way
+            // `deactivating_disables_the_controls_before_the_worker_answers`
+            // seeds an active one: a rename needs no active script.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "evolution-jmap".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the script failed: {reason}")
+                }
             };
 
-            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
-            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
-            gtk_tree_path_free(path);
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens here: the load above already ran.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            // Runs inside the dialog's own nested main loop: types a new
-            // name, then answers OK, the way
-            // `destroying_the_page_during_the_name_dialog_keeps_it_until_
-            // the_action_ends` answers Add's dialog.
-            g_idle_add(Some(answer_rename), ptr::null_mut());
-            rename_now(page.cast());
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
-            for control in [add, rename, remove, activate, deactivate, check] {
-                assert!(
-                    !get_sensitive(control),
-                    "a control stayed usable while Rename's write was in flight"
+                let (view, status, add, rename, remove, activate, deactivate, check) = {
+                    let ui = state(page).unwrap().borrow();
+                    (
+                        ui.view,
+                        ui.status,
+                        ui.add,
+                        ui.rename,
+                        ui.remove,
+                        ui.activate,
+                        ui.deactivate,
+                        ui.check,
+                    )
+                };
+
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                // Runs inside the dialog's own nested main loop: types a new
+                // name, then answers OK, the way
+                // `destroying_the_page_during_the_name_dialog_keeps_it_until_
+                // the_action_ends` answers Add's dialog.
+                g_idle_add(Some(answer_rename), ptr::null_mut());
+                rename_now(page.cast());
+
+                for control in [add, rename, remove, activate, deactivate, check] {
+                    assert!(
+                        !get_sensitive(control),
+                        "a control stayed usable while Rename's write was in flight"
+                    );
+                }
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(RENAMING),
+                    "the status label does not show progress while Rename's write is in flight"
                 );
-            }
-            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(RENAMING),
-                "the status label does not show progress while Rename's write is in flight"
-            );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// Item 180(a)'s last open row: editing a script's text saves it at
@@ -4942,119 +5046,216 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = AccountLink::without_refresh(client, features);
-
-        // Seeds one inactive script under a name other than
-        // `MANAGED_SCRIPT_NAME`, so the page stays in text mode: rules mode
-        // (item 171a) replaces the text view the debounce save needs.
-        let loaded = match io::activate_now(
-            &link,
-            &SavePlan {
-                writes: vec![io::ScriptWrite::Create {
-                    key: "new".to_owned(),
-                    name: "custom".to_owned(),
-                    text: "keep;\n".to_owned(),
-                }],
-                destroys: Vec::new(),
-                activation: io::ActivationChange::Keep,
-                deactivate_first: false,
-                if_in_state: None,
-                baseline: io::Baseline::default(),
-            },
-        )
-        .unwrap()
-        {
-            ActivateOutcome::Reloaded(loaded) => loaded,
-            ActivateOutcome::WrittenReloadFailed(reason) => {
-                panic!("seeding the script failed: {reason}")
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-        };
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
 
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens here: the load above already ran. The
-        // window gives the page a real `GdkWindow`, the same as the
-        // completion tests need for their buffer edits.
-        unsafe {
-            let window = gtk_window_new(0);
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            gtk_container_add(window.cast(), page.cast());
-            gtk_widget_show_all(window);
+            // Seeds one inactive script under a name other than
+            // `MANAGED_SCRIPT_NAME`, so the page stays in text mode: rules mode
+            // (item 171a) replaces the text view the debounce save needs.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "custom".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the script failed: {reason}")
+                }
+            };
 
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens here: the load above already ran. The
+            // window gives the page a real `GdkWindow`, the same as the
+            // completion tests need for their buffer edits.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
 
-            let cell = state(page.cast()).expect("a loaded page has state");
-            let buffer = cell.borrow().buffer;
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
-            let view = cell.borrow().view;
-            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
-            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
-            gtk_tree_path_free(path);
+                let cell = state(page.cast()).expect("a loaded page has state");
+                let buffer = cell.borrow().buffer;
 
-            let (_, captured) = capture(|| {
+                let view = cell.borrow().view;
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                let (_, captured) = capture(|| {
+                    let mut end = GtkTextIter::default();
+                    gtk_text_buffer_get_end_iter(buffer, &mut end);
+                    let added = cstring_lossy("stop;\n");
+                    gtk_text_buffer_insert(buffer, &mut end, added.as_ptr(), -1);
+
+                    pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
+                    pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+                });
+                // Item 182(c): the debounce save is invisible outside a trace
+                // line, since nothing on screen distinguishes "staged" from
+                // "written" at the moment it happens.
+                assert!(
+                    has(&captured, Level::TRACE, "script", "custom"),
+                    "expected the write to trace the script's name, got {captured:?}"
+                );
+                assert!(
+                    has(
+                        &captured,
+                        Level::TRACE,
+                        "message",
+                        "filters: script text write started"
+                    ),
+                    "expected a write-started trace line, got {captured:?}"
+                );
+                assert!(
+                    has(
+                        &captured,
+                        Level::TRACE,
+                        "message",
+                        "filters: script text written"
+                    ),
+                    "expected a write-succeeded trace line, got {captured:?}"
+                );
+
+                gtk_widget_destroy(window);
+            }
+
+            // A second, independent connection: the save must have reached the
+            // server, not only the page's own form.
+            let verify_client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let verify_features =
+                crate::session_cache::AccountFeatures::from_session(verify_client.session())
+                    .unwrap();
+            let verify_link = AccountLink::without_refresh(verify_client, verify_features);
+            let reloaded =
+                io::load(&verify_link).expect("the server still answers SieveScript/get");
+            let saved = reloaded
+                .scripts
+                .iter()
+                .find(|script| script.script.name == "custom")
+                .expect("the seeded script is still there");
+            assert_eq!(
+                saved.text, "keep;\nstop;\n",
+                "the debounce must have saved the appended line to the server"
+            );
+        });
+    }
+
+    /// A page that the shell destroys while something else still holds a
+    /// reference to it must not keep a timer armed. The children of the page
+    /// are gone after the destroy, but the qdata, and with it the state that
+    /// points at those children, lives until the last reference goes. A
+    /// debounce that fires in that window reads freed widgets.
+    /// Needs a display; skips without one.
+    #[test]
+    fn destroying_the_page_cancels_the_pending_debounce() {
+        use glib_sys::g_main_context_find_source_by_id;
+        use gobject_sys::g_object_ref;
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
+
+            // One inactive script under a name other than `MANAGED_SCRIPT_NAME`
+            // keeps the page in text mode, as the debounce save test needs.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "custom".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the script failed: {reason}")
+                }
+            };
+
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs
+            // `build_widgets`. The window sinks the floating page, as the
+            // account editor does, and the extra reference below stands for
+            // whatever else can hold a page across its destroy.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
+
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
+
+                let view = state(page).expect("a loaded page has state").borrow().view;
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                let buffer = state(page)
+                    .expect("a loaded page has state")
+                    .borrow()
+                    .buffer;
                 let mut end = GtkTextIter::default();
                 gtk_text_buffer_get_end_iter(buffer, &mut end);
                 let added = cstring_lossy("stop;\n");
                 gtk_text_buffer_insert(buffer, &mut end, added.as_ptr(), -1);
 
-                pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
-                pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
-            });
-            // Item 182(c): the debounce save is invisible outside a trace
-            // line, since nothing on screen distinguishes "staged" from
-            // "written" at the moment it happens.
-            assert!(
-                has(&captured, Level::TRACE, "script", "custom"),
-                "expected the write to trace the script's name, got {captured:?}"
-            );
-            assert!(
-                has(
-                    &captured,
-                    Level::TRACE,
-                    "message",
-                    "filters: script text write started"
-                ),
-                "expected a write-started trace line, got {captured:?}"
-            );
-            assert!(
-                has(
-                    &captured,
-                    Level::TRACE,
-                    "message",
-                    "filters: script text written"
-                ),
-                "expected a write-succeeded trace line, got {captured:?}"
-            );
+                let armed = state(page)
+                    .expect("a loaded page has state")
+                    .borrow()
+                    .validate_timeout;
+                assert_ne!(armed, 0, "the edit did not arm the debounce");
 
-            gtk_widget_destroy(window);
-        }
-
-        // A second, independent connection: the save must have reached the
-        // server, not only the page's own form.
-        let verify_client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let verify_features =
-            crate::session_cache::AccountFeatures::from_session(verify_client.session()).unwrap();
-        let verify_link = AccountLink::without_refresh(verify_client, verify_features);
-        let reloaded = io::load(&verify_link).expect("the server still answers SieveScript/get");
-        let saved = reloaded
-            .scripts
-            .iter()
-            .find(|script| script.script.name == "custom")
-            .expect("the seeded script is still there");
-        assert_eq!(
-            saved.text, "keep;\nstop;\n",
-            "the debounce must have saved the appended line to the server"
-        );
+                g_object_ref(page);
+                gtk_widget_destroy(window);
+                assert!(
+                    g_main_context_find_source_by_id(ptr::null_mut(), armed).is_null(),
+                    "a destroyed page kept its debounce armed over its freed widgets"
+                );
+                g_object_unref(page);
+            }
+        });
     }
 
     /// Item 180(d): clicking the button with no script selected refuses
@@ -5062,33 +5263,34 @@ mod tests {
     /// [`NO_SCRIPT_SELECTED`]. Needs a display; skips without one.
     #[test]
     fn external_edit_with_no_selection_refuses() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs
-        // `build_widgets`. No network call happens: nothing is ever loaded
-        // into the form.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            let cell = state(page).expect("a freshly built page has state");
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs
+            // `build_widgets`. No network call happens: nothing is ever loaded
+            // into the form.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                let cell = state(page).expect("a freshly built page has state");
 
-            start_external_edit_with_command(
-                cell,
-                page,
-                external_editor::EditorCommand::Command("true".to_owned()),
-            );
+                start_external_edit_with_command(
+                    cell,
+                    page,
+                    external_editor::EditorCommand::Command("true".to_owned()),
+                );
 
-            assert!(cell.borrow().external_editor_session.is_none());
-            let status = cell.borrow().status;
-            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(text, translate(NO_SCRIPT_SELECTED));
+                assert!(cell.borrow().external_editor_session.is_none());
+                let status = cell.borrow().status;
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(text, translate(NO_SCRIPT_SELECTED));
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// Item 180(d): with no editor command configured anywhere, the button
@@ -5099,38 +5301,43 @@ mod tests {
     /// skips without one.
     #[test]
     fn external_edit_with_no_configured_command_shows_a_status_note() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs
-        // `build_widgets`. No network call happens: the form is filled
-        // directly, the same way a cold-start cache hit (item 180(c)) does.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            let cell = state(page).expect("a freshly built page has state");
-            {
-                let mut ui = cell.borrow_mut();
-                ui.form = FiltersForm::from_cached(&[cache::CachedScript {
-                    name: "custom".to_owned(),
-                    text: "keep;\n".to_owned(),
-                    active: false,
-                }]);
-                ui.form.select(Some(0));
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs
+            // `build_widgets`. No network call happens: the form is filled
+            // directly, the same way a cold-start cache hit (item 180(c)) does.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                let cell = state(page).expect("a freshly built page has state");
+                {
+                    let mut ui = cell.borrow_mut();
+                    ui.form = FiltersForm::from_cached(&[cache::CachedScript {
+                        name: "custom".to_owned(),
+                        text: "keep;\n".to_owned(),
+                        active: false,
+                    }]);
+                    ui.form.select(Some(0));
+                }
 
-            start_external_edit_with_command(cell, page, external_editor::EditorCommand::Default);
+                start_external_edit_with_command(
+                    cell,
+                    page,
+                    external_editor::EditorCommand::Default,
+                );
 
-            assert!(cell.borrow().external_editor_session.is_none());
-            let status = cell.borrow().status;
-            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(text, translate(NO_EXTERNAL_EDITOR));
+                assert!(cell.borrow().external_editor_session.is_none());
+                let status = cell.borrow().status;
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(text, translate(NO_EXTERNAL_EDITOR));
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// Item 180(d): clicking "Edit in External Editor…" writes the selected
@@ -5148,120 +5355,121 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = AccountLink::without_refresh(client, features);
-
-        // Seeds one inactive script under a name other than
-        // `MANAGED_SCRIPT_NAME`, so the page stays in text mode, as
-        // `editing_the_script_text_saves_it_once_the_debounce_fires` does.
-        let loaded = match io::activate_now(
-            &link,
-            &SavePlan {
-                writes: vec![io::ScriptWrite::Create {
-                    key: "new".to_owned(),
-                    name: "custom".to_owned(),
-                    text: "keep;\n".to_owned(),
-                }],
-                destroys: Vec::new(),
-                activation: io::ActivationChange::Keep,
-                deactivate_first: false,
-                if_in_state: None,
-                baseline: io::Baseline::default(),
-            },
-        )
-        .unwrap()
-        {
-            ActivateOutcome::Reloaded(loaded) => loaded,
-            ActivateOutcome::WrittenReloadFailed(reason) => {
-                panic!("seeding the script failed: {reason}")
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-        };
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
 
-        // The fixture the fake "editor" command copies over the real temp
-        // file once started, standing in for a user's edit and save.
-        let dir = std::env::temp_dir();
-        let fixture = dir.join(format!(
-            "jmap-ui-external-edit-fixture-{}-{}.sieve",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::write(&fixture, "keep;\nstop;\n").unwrap();
-        // `build_argv` appends the real temp file path as the command's
-        // last argument; for `sh -c script arg0`, that path becomes `$0`
-        // inside the script.
-        let command = external_editor::EditorCommand::Command(format!(
-            "sh -c 'cat {} > \"$0\"'",
-            fixture.display()
-        ));
+            // Seeds one inactive script under a name other than
+            // `MANAGED_SCRIPT_NAME`, so the page stays in text mode, as
+            // `editing_the_script_text_saves_it_once_the_debounce_fires` does.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "custom".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the script failed: {reason}")
+                }
+            };
 
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        unsafe {
-            let window = gtk_window_new(0);
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-            gtk_container_add(window.cast(), page.cast());
-            gtk_widget_show_all(window);
+            // The fixture the fake "editor" command copies over the real temp
+            // file once started, standing in for a user's edit and save.
+            let dir = std::env::temp_dir();
+            let fixture = dir.join(format!(
+                "jmap-ui-external-edit-fixture-{}-{}.sieve",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::write(&fixture, "keep;\nstop;\n").unwrap();
+            // `build_argv` appends the real temp file path as the command's
+            // last argument; for `sh -c script arg0`, that path becomes `$0`
+            // inside the script.
+            let command = external_editor::EditorCommand::Command(format!(
+                "sh -c 'cat {} > \"$0\"'",
+                fixture.display()
+            ));
 
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
 
-            let cell = state(page.cast()).expect("a loaded page has state");
-            let view = cell.borrow().view;
-            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
-            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
-            gtk_tree_path_free(path);
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
-            start_external_edit_with_command(cell, page.cast(), command);
-            let temp_path = cell
-                .borrow()
-                .external_editor_session
-                .as_ref()
-                .expect("a session starts when a command and a selection are present")
-                .path
-                .clone();
-            assert!(temp_path.exists(), "the script is written to a temp file");
-            assert_eq!(
-                std::fs::read_to_string(&temp_path).unwrap(),
-                "keep;\n",
-                "the temp file starts with the script's current text"
-            );
-            pump_until(
-                || cell.borrow().external_editor_session.is_none(),
-                Duration::from_secs(5),
-            );
+                let cell = state(page.cast()).expect("a loaded page has state");
+                let view = cell.borrow().view;
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
 
-            let buffer = cell.borrow().buffer;
-            assert_eq!(
-                get_text(buffer.cast()),
-                "keep;\nstop;\n",
-                "the buffer picks up the command's change once it exits"
-            );
-            assert!(
-                !temp_path.exists(),
-                "the temp file is removed once the session ends"
-            );
+                start_external_edit_with_command(cell, page.cast(), command);
+                let temp_path = cell
+                    .borrow()
+                    .external_editor_session
+                    .as_ref()
+                    .expect("a session starts when a command and a selection are present")
+                    .path
+                    .clone();
+                assert!(temp_path.exists(), "the script is written to a temp file");
+                assert_eq!(
+                    std::fs::read_to_string(&temp_path).unwrap(),
+                    "keep;\n",
+                    "the temp file starts with the script's current text"
+                );
+                pump_until(
+                    || cell.borrow().external_editor_session.is_none(),
+                    Duration::from_secs(5),
+                );
 
-            // Lets the debounce save this reload triggered finish before the
-            // window (and the page's qdata) is torn down, the same
-            // ordering `editing_the_script_text_saves_it_once_the_debounce_fires`
-            // uses, so no timeout fires against a page mid-teardown.
-            pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
-            pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+                let buffer = cell.borrow().buffer;
+                assert_eq!(
+                    get_text(buffer.cast()),
+                    "keep;\nstop;\n",
+                    "the buffer picks up the command's change once it exits"
+                );
+                assert!(
+                    !temp_path.exists(),
+                    "the temp file is removed once the session ends"
+                );
 
-            gtk_widget_destroy(window);
-        }
-        std::fs::remove_file(&fixture).ok();
+                // Lets the debounce save this reload triggered finish before the
+                // window (and the page's qdata) is torn down, the same
+                // ordering `editing_the_script_text_saves_it_once_the_debounce_fires`
+                // uses, so no timeout fires against a page mid-teardown.
+                pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
+                pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+
+                gtk_widget_destroy(window);
+            }
+            std::fs::remove_file(&fixture).ok();
+        });
     }
 
     /// Item 180(a)'s Add mirrors Rename once the name dialog answers: it
@@ -5273,81 +5481,82 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = AccountLink::without_refresh(client, features);
-
-        // Loads with no script at all: Add needs none, unlike Rename and
-        // Deactivate's seeded fixtures.
-        let loaded = match io::activate_now(
-            &link,
-            &SavePlan {
-                writes: Vec::new(),
-                destroys: Vec::new(),
-                activation: io::ActivationChange::Keep,
-                deactivate_first: false,
-                if_in_state: None,
-                baseline: io::Baseline::default(),
-            },
-        )
-        .unwrap()
-        {
-            ActivateOutcome::Reloaded(loaded) => loaded,
-            ActivateOutcome::WrittenReloadFailed(reason) => {
-                panic!("seeding the empty account failed: {reason}")
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-        };
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
 
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens here: the load above already ran.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
-
-            let (status, add, rename, remove, activate, deactivate, check) = {
-                let ui = state(page).unwrap().borrow();
-                (
-                    ui.status,
-                    ui.add,
-                    ui.rename,
-                    ui.remove,
-                    ui.activate,
-                    ui.deactivate,
-                    ui.check,
-                )
+            // Loads with no script at all: Add needs none, unlike Rename and
+            // Deactivate's seeded fixtures.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: Vec::new(),
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the empty account failed: {reason}")
+                }
             };
 
-            // Runs inside the dialog's own nested main loop: answers OK with
-            // the suggested name left as is, the way `answer_ok` answers
-            // every other dialog with no change needed.
-            g_idle_add(Some(answer_ok), ptr::null_mut());
-            add_now(page.cast());
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens here: the load above already ran.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            for control in [add, rename, remove, activate, deactivate, check] {
-                assert!(
-                    !get_sensitive(control),
-                    "a control stayed usable while Add's write was in flight"
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
+
+                let (status, add, rename, remove, activate, deactivate, check) = {
+                    let ui = state(page).unwrap().borrow();
+                    (
+                        ui.status,
+                        ui.add,
+                        ui.rename,
+                        ui.remove,
+                        ui.activate,
+                        ui.deactivate,
+                        ui.check,
+                    )
+                };
+
+                // Runs inside the dialog's own nested main loop: answers OK with
+                // the suggested name left as is, the way `answer_ok` answers
+                // every other dialog with no change needed.
+                g_idle_add(Some(answer_ok), ptr::null_mut());
+                add_now(page.cast());
+
+                for control in [add, rename, remove, activate, deactivate, check] {
+                    assert!(
+                        !get_sensitive(control),
+                        "a control stayed usable while Add's write was in flight"
+                    );
+                }
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(ADDING),
+                    "the status label does not show progress while Add's write is in flight"
                 );
-            }
-            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(ADDING),
-                "the status label does not show progress while Add's write is in flight"
-            );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// Item 180(a)'s Remove mirrors Deactivate exactly: clicking it writes
@@ -5359,87 +5568,88 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = AccountLink::without_refresh(client, features);
-
-        // Seeds one inactive script, the same way `renaming_asks_for_a_name_
-        // then_disables_the_controls_before_the_worker_answers` does: a
-        // removal needs no active script.
-        let loaded = match io::activate_now(
-            &link,
-            &SavePlan {
-                writes: vec![io::ScriptWrite::Create {
-                    key: "new".to_owned(),
-                    name: "evolution-jmap".to_owned(),
-                    text: "keep;\n".to_owned(),
-                }],
-                destroys: Vec::new(),
-                activation: io::ActivationChange::Keep,
-                deactivate_first: false,
-                if_in_state: None,
-                baseline: io::Baseline::default(),
-            },
-        )
-        .unwrap()
-        {
-            ActivateOutcome::Reloaded(loaded) => loaded,
-            ActivateOutcome::WrittenReloadFailed(reason) => {
-                panic!("seeding the script failed: {reason}")
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-        };
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
 
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens here: the load above already ran.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
-
-            let (view, status, add, rename, remove, activate, deactivate, check) = {
-                let ui = state(page).unwrap().borrow();
-                (
-                    ui.view,
-                    ui.status,
-                    ui.add,
-                    ui.rename,
-                    ui.remove,
-                    ui.activate,
-                    ui.deactivate,
-                    ui.check,
-                )
+            // Seeds one inactive script, the same way `renaming_asks_for_a_name_
+            // then_disables_the_controls_before_the_worker_answers` does: a
+            // removal needs no active script.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "evolution-jmap".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the script failed: {reason}")
+                }
             };
 
-            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
-            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
-            gtk_tree_path_free(path);
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens here: the load above already ran.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            remove_now(page.cast());
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
-            for control in [add, rename, remove, activate, deactivate, check] {
-                assert!(
-                    !get_sensitive(control),
-                    "a control stayed usable while Remove's write was in flight"
+                let (view, status, add, rename, remove, activate, deactivate, check) = {
+                    let ui = state(page).unwrap().borrow();
+                    (
+                        ui.view,
+                        ui.status,
+                        ui.add,
+                        ui.rename,
+                        ui.remove,
+                        ui.activate,
+                        ui.deactivate,
+                        ui.check,
+                    )
+                };
+
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                remove_now(page.cast());
+
+                for control in [add, rename, remove, activate, deactivate, check] {
+                    assert!(
+                        !get_sensitive(control),
+                        "a control stayed usable while Remove's write was in flight"
+                    );
+                }
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(REMOVING),
+                    "the status label does not show progress while Remove's write is in flight"
                 );
-            }
-            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(REMOVING),
-                "the status label does not show progress while Remove's write is in flight"
-            );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// Item 180(c)'s "went offline while the page was open" half: going
@@ -5452,156 +5662,159 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = AccountLink::without_refresh(client, features);
-
-        // Seeds one editable, inactive script: the same create-only plan
-        // `activate_now_deactivates_and_reloads_in_one_call` seeds, minus
-        // its activation.
-        let loaded = match io::activate_now(
-            &link,
-            &SavePlan {
-                writes: vec![io::ScriptWrite::Create {
-                    key: "new".to_owned(),
-                    name: "evolution-jmap".to_owned(),
-                    text: "keep;\n".to_owned(),
-                }],
-                destroys: Vec::new(),
-                activation: io::ActivationChange::Keep,
-                deactivate_first: false,
-                if_in_state: None,
-                baseline: io::Baseline::default(),
-            },
-        )
-        .unwrap()
-        {
-            ActivateOutcome::Reloaded(loaded) => loaded,
-            ActivateOutcome::WrittenReloadFailed(reason) => {
-                panic!("seeding the script failed: {reason}")
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
-        };
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
 
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens here: the load above already ran.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
-
-            apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
-
-            let (
-                view,
-                status,
-                add,
-                rename,
-                remove,
-                activate,
-                deactivate,
-                check,
-                source_view,
-                buffer,
-            ) = {
-                let ui = state(page).unwrap().borrow();
-                (
-                    ui.view,
-                    ui.status,
-                    ui.add,
-                    ui.rename,
-                    ui.remove,
-                    ui.activate,
-                    ui.deactivate,
-                    ui.check,
-                    ui.source_view,
-                    ui.buffer,
-                )
+            // Seeds one editable, inactive script: the same create-only plan
+            // `activate_now_deactivates_and_reloads_in_one_call` seeds, minus
+            // its activation.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "evolution-jmap".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the script failed: {reason}")
+                }
             };
 
-            let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
-            gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
-            gtk_tree_path_free(path);
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens here: the load above already ran.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            assert!(
-                get_sensitive(activate),
-                "the script's own button stayed insensitive before going offline"
-            );
-            let text_before = get_text(buffer.cast());
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
 
-            let cell = state(page).unwrap();
-            let (_, captured) = capture(|| apply_offline_change(cell, true));
-            // Item 182(c): going offline while the page is open is invisible
-            // to AT-SPI beyond the status label text, which a screen reader
-            // already announces; the trace line is for a log-based check.
-            assert!(
-                has(&captured, Level::TRACE, "offline", "true"),
-                "expected an offline=true trace line, got {captured:?}"
-            );
+                let (
+                    view,
+                    status,
+                    add,
+                    rename,
+                    remove,
+                    activate,
+                    deactivate,
+                    check,
+                    source_view,
+                    buffer,
+                ) = {
+                    let ui = state(page).unwrap().borrow();
+                    (
+                        ui.view,
+                        ui.status,
+                        ui.add,
+                        ui.rename,
+                        ui.remove,
+                        ui.activate,
+                        ui.deactivate,
+                        ui.check,
+                        ui.source_view,
+                        ui.buffer,
+                    )
+                };
 
-            for control in [
-                add,
-                rename,
-                remove,
-                activate,
-                deactivate,
-                check,
-                source_view,
-            ] {
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
                 assert!(
-                    !get_sensitive(control),
-                    "a control stayed usable after the shell went offline"
+                    get_sensitive(activate),
+                    "the script's own button stayed insensitive before going offline"
                 );
+                let text_before = get_text(buffer.cast());
+
+                let cell = state(page).unwrap();
+                let (_, captured) = capture(|| apply_offline_change(cell, true));
+                // Item 182(c): going offline while the page is open is invisible
+                // to AT-SPI beyond the status label text, which a screen reader
+                // already announces; the trace line is for a log-based check.
+                assert!(
+                    has(&captured, Level::TRACE, "offline", "true"),
+                    "expected an offline=true trace line, got {captured:?}"
+                );
+
+                for control in [
+                    add,
+                    rename,
+                    remove,
+                    activate,
+                    deactivate,
+                    check,
+                    source_view,
+                ] {
+                    assert!(
+                        !get_sensitive(control),
+                        "a control stayed usable after the shell went offline"
+                    );
+                }
+                assert!(
+                    !get_editable(source_view),
+                    "the script stayed editable after the shell went offline"
+                );
+                assert_eq!(
+                    get_text(buffer.cast()),
+                    text_before,
+                    "going offline changed the buffer text"
+                );
+                let offline_text =
+                    read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    offline_text,
+                    translate(OFFLINE),
+                    "the status label does not say the shell is offline"
+                );
+
+                let (_, captured) = capture(|| apply_offline_change(cell, false));
+                assert!(
+                    has(&captured, Level::TRACE, "offline", "false"),
+                    "expected an offline=false trace line, got {captured:?}"
+                );
+
+                assert!(
+                    get_sensitive(activate),
+                    "the script's own button stayed insensitive after reconnecting"
+                );
+                assert!(
+                    get_editable(source_view),
+                    "the script stayed read-only after reconnecting"
+                );
+                assert_eq!(
+                    get_text(buffer.cast()),
+                    text_before,
+                    "reconnecting changed the buffer text"
+                );
+                let online_text =
+                    read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    online_text, "",
+                    "the offline note stayed after reconnecting"
+                );
+
+                gtk_widget_destroy(page.cast());
             }
-            assert!(
-                !get_editable(source_view),
-                "the script stayed editable after the shell went offline"
-            );
-            assert_eq!(
-                get_text(buffer.cast()),
-                text_before,
-                "going offline changed the buffer text"
-            );
-            let offline_text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                offline_text,
-                translate(OFFLINE),
-                "the status label does not say the shell is offline"
-            );
-
-            let (_, captured) = capture(|| apply_offline_change(cell, false));
-            assert!(
-                has(&captured, Level::TRACE, "offline", "false"),
-                "expected an offline=false trace line, got {captured:?}"
-            );
-
-            assert!(
-                get_sensitive(activate),
-                "the script's own button stayed insensitive after reconnecting"
-            );
-            assert!(
-                get_editable(source_view),
-                "the script stayed read-only after reconnecting"
-            );
-            assert_eq!(
-                get_text(buffer.cast()),
-                text_before,
-                "reconnecting changed the buffer text"
-            );
-            let online_text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                online_text, "",
-                "the offline note stayed after reconnecting"
-            );
-
-            gtk_widget_destroy(page.cast());
-        }
+        });
     }
 
     /// A page whose initial load never finished (offline from a cold start,
@@ -5611,38 +5824,39 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn a_page_with_no_link_ignores_a_shell_online_change() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let gtype = register_static::<FiltersPage>();
-        // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
-        // No network call happens: `LoadOutcome::Offline` is applied directly.
-        unsafe {
-            let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            // No network call happens: `LoadOutcome::Offline` is applied directly.
+            unsafe {
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
 
-            apply_outcome(page, LoadOutcome::Offline, None);
+                apply_outcome(page, LoadOutcome::Offline, None);
 
-            let cell = state(page).unwrap();
-            apply_offline_change(cell, true);
-            assert!(
-                !cell.borrow().offline,
-                "a page with no link must not record a shell offline change"
-            );
+                let cell = state(page).unwrap();
+                apply_offline_change(cell, true);
+                assert!(
+                    !cell.borrow().offline,
+                    "a page with no link must not record a shell offline change"
+                );
 
-            let text = read_string(gtk_label_get_text(
-                state(page).unwrap().borrow().status.cast(),
-            ))
-            .unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(OFFLINE),
-                "the cold-start offline message changed"
-            );
+                let text = read_string(gtk_label_get_text(
+                    state(page).unwrap().borrow().status.cast(),
+                ))
+                .unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(OFFLINE),
+                    "the cold-start offline message changed"
+                );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 }

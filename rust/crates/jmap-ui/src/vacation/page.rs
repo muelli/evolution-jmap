@@ -866,48 +866,49 @@ mod tests {
     /// without one.
     #[test]
     fn the_message_body_wraps_instead_of_scrolling_sideways() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain `GtkScrolledWindow` stands in for the registered
-        // `JmapVacationPage` instance; `build_widgets` only uses it as a
-        // `GtkContainer` (`gtk_container_add`) and a qdata target, both of
-        // which any `GObject` instance supports.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain `GtkScrolledWindow` stands in for the registered
+            // `JmapVacationPage` instance; `build_widgets` only uses it as a
+            // `GtkContainer` (`gtk_container_add`) and a qdata target, both of
+            // which any `GObject` instance supports.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            let grid = state(page.cast()).unwrap().borrow().grid;
-            let body = gtk_grid_get_child_at(grid, 1, 3);
-            let mut wrap_mode: c_int = -1;
-            g_object_get(
-                body.cast(),
-                c"wrap-mode".as_ptr(),
-                &mut wrap_mode as *mut c_int,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                wrap_mode, GTK_WRAP_WORD_CHAR,
-                "the message body does not break an overlong word"
-            );
+                let grid = state(page.cast()).unwrap().borrow().grid;
+                let body = gtk_grid_get_child_at(grid, 1, 3);
+                let mut wrap_mode: c_int = -1;
+                g_object_get(
+                    body.cast(),
+                    c"wrap-mode".as_ptr(),
+                    &mut wrap_mode as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    wrap_mode, GTK_WRAP_WORD_CHAR,
+                    "the message body does not break an overlong word"
+                );
 
-            let mut hscrollbar_policy: c_int = -1;
-            g_object_get(
-                page.cast(),
-                c"hscrollbar-policy".as_ptr(),
-                &mut hscrollbar_policy as *mut c_int,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                hscrollbar_policy, GTK_POLICY_NEVER,
-                "the page can still scroll sideways"
-            );
+                let mut hscrollbar_policy: c_int = -1;
+                g_object_get(
+                    page.cast(),
+                    c"hscrollbar-policy".as_ptr(),
+                    &mut hscrollbar_policy as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    hscrollbar_policy, GTK_POLICY_NEVER,
+                    "the page can still scroll sideways"
+                );
 
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// Keyboard (item 174 (b)): a plain Tab in the message body must move
@@ -917,33 +918,34 @@ mod tests {
     /// a display; skips without one.
     #[test]
     fn the_message_body_lets_tab_move_focus() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: see `the_message_body_wraps_instead_of_scrolling_sideways`.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: see `the_message_body_wraps_instead_of_scrolling_sideways`.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            let grid = state(page.cast()).unwrap().borrow().grid;
-            let body = gtk_grid_get_child_at(grid, 1, 3);
-            let mut accepts_tab: gboolean = GTRUE;
-            g_object_get(
-                body.cast(),
-                c"accepts-tab".as_ptr(),
-                &mut accepts_tab as *mut gboolean,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                accepts_tab, GFALSE,
-                "Tab in the message body inserts a tab character instead of moving focus"
-            );
+                let grid = state(page.cast()).unwrap().borrow().grid;
+                let body = gtk_grid_get_child_at(grid, 1, 3);
+                let mut accepts_tab: gboolean = GTRUE;
+                g_object_get(
+                    body.cast(),
+                    c"accepts-tab".as_ptr(),
+                    &mut accepts_tab as *mut gboolean,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    accepts_tab, GFALSE,
+                    "Tab in the message body inserts a tab character instead of moving focus"
+                );
 
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// Accessibility (item 174 (d)): the "First day" and "Last day" labels'
@@ -954,32 +956,33 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn the_date_field_labels_target_the_entry_not_the_container() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: see the test above; the same stand-in instance works here.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
-
-            let grid = state(page.cast()).unwrap().borrow().grid;
-            for (row, name) in [(0, "First day"), (1, "Last day")] {
-                let label = gtk_grid_get_child_at(grid, 0, row);
-                let field = gtk_grid_get_child_at(grid, 1, row);
-                let target = gtk_label_get_mnemonic_widget(label.cast());
-                let entry = e_date_edit_get_entry(field.cast()).cast();
-                assert_eq!(
-                    target, entry,
-                    "the {name} label's mnemonic relation targets the EDateEdit \
-                     container instead of its entry"
-                );
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
             }
+            // SAFETY: see the test above; the same stand-in instance works here.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            gtk_widget_destroy(page);
-        }
+                let grid = state(page.cast()).unwrap().borrow().grid;
+                for (row, name) in [(0, "First day"), (1, "Last day")] {
+                    let label = gtk_grid_get_child_at(grid, 0, row);
+                    let field = gtk_grid_get_child_at(grid, 1, row);
+                    let target = gtk_label_get_mnemonic_widget(label.cast());
+                    let entry = e_date_edit_get_entry(field.cast()).cast();
+                    assert_eq!(
+                        target, entry,
+                        "the {name} label's mnemonic relation targets the EDateEdit \
+                     container instead of its entry"
+                    );
+                }
+
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// Offline (item 176): the page must say so at once instead of showing
@@ -987,30 +990,31 @@ mod tests {
     /// would otherwise produce. Needs a display; skips without one.
     #[test]
     fn offline_shows_an_offline_message_not_a_generic_load_failure() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: see the tests above; the same stand-in instance works here.
-        // No network call happens: `LoadOutcome::Offline` is applied directly.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: see the tests above; the same stand-in instance works here.
+            // No network call happens: `LoadOutcome::Offline` is applied directly.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            apply_outcome(page.cast(), LoadOutcome::Offline);
+                apply_outcome(page.cast(), LoadOutcome::Offline);
 
-            let status = state(page.cast()).unwrap().borrow().status;
-            let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(OFFLINE),
-                "the status label does not say the account is offline"
-            );
+                let status = state(page.cast()).unwrap().borrow().status;
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(OFFLINE),
+                    "the status label does not say the account is offline"
+                );
 
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// `widget`'s `sensitive` property, the same way
@@ -1039,101 +1043,104 @@ mod tests {
     /// online restores both. Needs a display; skips without one.
     #[test]
     fn going_offline_locks_the_page_without_touching_the_buffer() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        {
-            let state = server.state();
-            let mut state = state.lock().unwrap();
-            let account = state.account_mut(&server.account_id()).unwrap();
-            account
-                .vacation_response
-                .get_mut(&Id::new("singleton"))
-                .unwrap()
-                .is_enabled = true;
-        }
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features = AccountFeatures::from_session(client.session()).unwrap();
-        let link = AccountLink::without_refresh(client, features);
-        let loaded = io::load(&link).unwrap();
-        let form = VacationForm::from_response(&loaded.response);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            {
+                let state = server.state();
+                let mut state = state.lock().unwrap();
+                let account = state.account_mut(&server.account_id()).unwrap();
+                account
+                    .vacation_response
+                    .get_mut(&Id::new("singleton"))
+                    .unwrap()
+                    .is_enabled = true;
+            }
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features = AccountFeatures::from_session(client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
+            let loaded = io::load(&link).unwrap();
+            let form = VacationForm::from_response(&loaded.response);
 
-        // SAFETY: a plain `GtkScrolledWindow` stands in for the registered
-        // `JmapVacationPage` instance, as the tests above do.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+            // SAFETY: a plain `GtkScrolledWindow` stands in for the registered
+            // `JmapVacationPage` instance, as the tests above do.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            apply_outcome(
-                page.cast(),
-                LoadOutcome::Loaded((Arc::new(link), form, loaded.state)),
-            );
+                apply_outcome(
+                    page.cast(),
+                    LoadOutcome::Loaded((Arc::new(link), form, loaded.state)),
+                );
 
-            let (enabled, grid, status, buffer) = {
-                let ui = state(page.cast()).unwrap().borrow();
-                (ui.enabled, ui.grid, ui.status, ui.buffer)
-            };
+                let (enabled, grid, status, buffer) = {
+                    let ui = state(page.cast()).unwrap().borrow();
+                    (ui.enabled, ui.grid, ui.status, ui.buffer)
+                };
 
-            assert!(
-                get_sensitive(enabled),
-                "the check button stayed insensitive before going offline"
-            );
-            assert!(
-                get_sensitive(grid),
-                "the grid stayed insensitive before going offline"
-            );
-            let text_before = get_text(buffer.cast());
+                assert!(
+                    get_sensitive(enabled),
+                    "the check button stayed insensitive before going offline"
+                );
+                assert!(
+                    get_sensitive(grid),
+                    "the grid stayed insensitive before going offline"
+                );
+                let text_before = get_text(buffer.cast());
 
-            let cell = state(page.cast()).unwrap();
-            apply_offline_change(cell, true);
+                let cell = state(page.cast()).unwrap();
+                apply_offline_change(cell, true);
 
-            assert!(
-                !get_sensitive(enabled),
-                "the check button stayed usable after the shell went offline"
-            );
-            assert!(
-                !get_sensitive(grid),
-                "the grid stayed usable after the shell went offline"
-            );
-            assert_eq!(
-                get_text(buffer.cast()),
-                text_before,
-                "going offline changed the message buffer"
-            );
-            let offline_text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                offline_text,
-                translate(OFFLINE),
-                "the status label does not say the shell is offline"
-            );
+                assert!(
+                    !get_sensitive(enabled),
+                    "the check button stayed usable after the shell went offline"
+                );
+                assert!(
+                    !get_sensitive(grid),
+                    "the grid stayed usable after the shell went offline"
+                );
+                assert_eq!(
+                    get_text(buffer.cast()),
+                    text_before,
+                    "going offline changed the message buffer"
+                );
+                let offline_text =
+                    read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    offline_text,
+                    translate(OFFLINE),
+                    "the status label does not say the shell is offline"
+                );
 
-            apply_offline_change(cell, false);
+                apply_offline_change(cell, false);
 
-            assert!(
-                get_sensitive(enabled),
-                "the check button stayed insensitive after reconnecting"
-            );
-            assert!(
-                get_sensitive(grid),
-                "the grid stayed insensitive after reconnecting"
-            );
-            assert_eq!(
-                get_text(buffer.cast()),
-                text_before,
-                "reconnecting changed the message buffer"
-            );
-            let online_text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                online_text, "",
-                "the offline note stayed after reconnecting"
-            );
+                assert!(
+                    get_sensitive(enabled),
+                    "the check button stayed insensitive after reconnecting"
+                );
+                assert!(
+                    get_sensitive(grid),
+                    "the grid stayed insensitive after reconnecting"
+                );
+                assert_eq!(
+                    get_text(buffer.cast()),
+                    text_before,
+                    "reconnecting changed the message buffer"
+                );
+                let online_text =
+                    read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    online_text, "",
+                    "the offline note stayed after reconnecting"
+                );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 
     /// A page whose initial load never finished (offline from a cold start,
@@ -1142,38 +1149,39 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn a_page_with_no_link_ignores_a_shell_online_change() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: see the tests above; the same stand-in instance works here.
-        // No network call happens: `LoadOutcome::Offline` is applied directly.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: see the tests above; the same stand-in instance works here.
+            // No network call happens: `LoadOutcome::Offline` is applied directly.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            apply_outcome(page.cast(), LoadOutcome::Offline);
+                apply_outcome(page.cast(), LoadOutcome::Offline);
 
-            let cell = state(page.cast()).unwrap();
-            apply_offline_change(cell, true);
-            assert!(
-                !cell.borrow().offline,
-                "a page with no link must not record a shell offline change"
-            );
+                let cell = state(page.cast()).unwrap();
+                apply_offline_change(cell, true);
+                assert!(
+                    !cell.borrow().offline,
+                    "a page with no link must not record a shell offline change"
+                );
 
-            let text = read_string(gtk_label_get_text(
-                state(page.cast()).unwrap().borrow().status.cast(),
-            ))
-            .unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(OFFLINE),
-                "the cold-start offline message changed"
-            );
+                let text = read_string(gtk_label_get_text(
+                    state(page.cast()).unwrap().borrow().status.cast(),
+                ))
+                .unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(OFFLINE),
+                    "the cold-start offline message changed"
+                );
 
-            gtk_widget_destroy(page.cast());
-        }
+                gtk_widget_destroy(page.cast());
+            }
+        });
     }
 }

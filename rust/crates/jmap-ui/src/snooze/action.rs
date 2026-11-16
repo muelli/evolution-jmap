@@ -963,24 +963,25 @@ mod tests {
         /// it. Needs a display; skips without one.
         #[test]
         fn the_refusal_dialog_lets_enter_confirm_it() {
-            let _gtk_test_guard = crate::gtk_test_lock::lock();
-            // SAFETY: no arguments. GTK stays on this thread for the whole test.
-            if unsafe { gtk_init_check(std::ptr::null_mut(), std::ptr::null_mut()) } == GFALSE {
-                eprintln!("skipped: no display for GTK");
-                return;
-            }
-            // SAFETY: the dialog is destroyed before returning.
-            unsafe {
-                let text = CString::new("refused").unwrap();
-                let dialog = build_warn_dialog(&text);
+            crate::gtk_test_main::run(|| {
+                // SAFETY: no arguments. GTK stays on this thread for the whole test.
+                if unsafe { gtk_init_check(std::ptr::null_mut(), std::ptr::null_mut()) } == GFALSE {
+                    eprintln!("skipped: no display for GTK");
+                    return;
+                }
+                // SAFETY: the dialog is destroyed before returning.
+                unsafe {
+                    let text = CString::new("refused").unwrap();
+                    let dialog = build_warn_dialog(&text);
 
-                assert!(
-                    !gtk_window_get_default_widget(dialog.cast()).is_null(),
-                    "the dialog has no default response: Enter would do nothing"
-                );
+                    assert!(
+                        !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                        "the dialog has no default response: Enter would do nothing"
+                    );
 
-                evo_sys::gtk_widget_destroy(dialog);
-            }
+                    evo_sys::gtk_widget_destroy(dialog);
+                }
+            });
         }
     }
 }

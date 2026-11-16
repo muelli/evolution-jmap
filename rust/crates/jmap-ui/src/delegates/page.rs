@@ -1682,72 +1682,73 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn the_list_starts_insensitive_with_three_named_columns() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain `GtkScrolledWindow` stands in for the registered
-        // `JmapDelegatesPage` instance; `build_widgets` only uses it as a
-        // `GtkContainer` and a qdata target, both of which any `GObject`
-        // instance supports.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain `GtkScrolledWindow` stands in for the registered
+            // `JmapDelegatesPage` instance; `build_widgets` only uses it as a
+            // `GtkContainer` and a qdata target, both of which any `GObject`
+            // instance supports.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            let mut hscrollbar_policy: c_int = -1;
-            g_object_get(
-                page.cast(),
-                c"hscrollbar-policy".as_ptr(),
-                &mut hscrollbar_policy as *mut c_int,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                hscrollbar_policy, GTK_POLICY_NEVER,
-                "the page can still scroll sideways"
-            );
+                let mut hscrollbar_policy: c_int = -1;
+                g_object_get(
+                    page.cast(),
+                    c"hscrollbar-policy".as_ptr(),
+                    &mut hscrollbar_policy as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    hscrollbar_policy, GTK_POLICY_NEVER,
+                    "the page can still scroll sideways"
+                );
 
-            let ui = state(page.cast()).unwrap().borrow();
-            let text =
-                read_string(evo_sys::gtk_label_get_text(ui.status.cast())).unwrap_or_default();
-            assert_eq!(text, translate(CONTACTING));
+                let ui = state(page.cast()).unwrap().borrow();
+                let text =
+                    read_string(evo_sys::gtk_label_get_text(ui.status.cast())).unwrap_or_default();
+                assert_eq!(text, translate(CONTACTING));
 
-            assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 0).is_null());
-            assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 1).is_null());
-            assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 2).is_null());
-            assert!(
-                evo_sys::gtk_tree_view_get_column(ui.view.cast(), 3).is_null(),
-                "the list has more than three columns"
-            );
-            assert_eq!(
-                widget::get_accessible_name(ui.view.cast()),
-                translate(DELEGATE_COLUMN_TITLE)
-            );
+                assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 0).is_null());
+                assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 1).is_null());
+                assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 2).is_null());
+                assert!(
+                    evo_sys::gtk_tree_view_get_column(ui.view.cast(), 3).is_null(),
+                    "the list has more than three columns"
+                );
+                assert_eq!(
+                    widget::get_accessible_name(ui.view.cast()),
+                    translate(DELEGATE_COLUMN_TITLE)
+                );
 
-            let mut sensitive: glib_sys::gboolean = GTRUE;
-            g_object_get(
-                ui.view.cast(),
-                c"sensitive".as_ptr(),
-                &mut sensitive as *mut glib_sys::gboolean,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                sensitive, GFALSE,
-                "the list is usable before the load answers"
-            );
-            assert!(
-                !get_sensitive(ui.revoke),
-                "Revoke is usable before any row is selected"
-            );
-            assert!(
-                !get_sensitive(ui.add),
-                "Add is usable before the load answers"
-            );
+                let mut sensitive: glib_sys::gboolean = GTRUE;
+                g_object_get(
+                    ui.view.cast(),
+                    c"sensitive".as_ptr(),
+                    &mut sensitive as *mut glib_sys::gboolean,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    sensitive, GFALSE,
+                    "the list is usable before the load answers"
+                );
+                assert!(
+                    !get_sensitive(ui.revoke),
+                    "Revoke is usable before any row is selected"
+                );
+                assert!(
+                    !get_sensitive(ui.add),
+                    "Add is usable before the load answers"
+                );
 
-            drop(ui);
-            gtk_widget_destroy(page);
-        }
+                drop(ui);
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// `widget`'s `sensitive` property.
@@ -1774,30 +1775,32 @@ mod tests {
     /// skips without one.
     #[test]
     fn offline_shows_an_offline_message_not_a_generic_load_failure() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: see the test above; the same stand-in instance works here.
-        // No network call happens: `LoadOutcome::Offline` is applied directly.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: see the test above; the same stand-in instance works here.
+            // No network call happens: `LoadOutcome::Offline` is applied directly.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            apply_outcome(page.cast(), LoadOutcome::Offline);
+                apply_outcome(page.cast(), LoadOutcome::Offline);
 
-            let status = state(page.cast()).unwrap().borrow().status;
-            let text = read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(OFFLINE),
-                "the status label does not say the account is offline"
-            );
+                let status = state(page.cast()).unwrap().borrow().status;
+                let text =
+                    read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(OFFLINE),
+                    "the status label does not say the account is offline"
+                );
 
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// Selecting a delegate's row makes Revoke usable; the button is
@@ -1808,58 +1811,59 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = Arc::new(AccountLink::without_refresh(client, features));
-        let loaded = Loaded {
-            delegates: vec![crate::delegation::Delegate {
-                principal_id: Id::new("P-bob"),
-                calendar_level: CalendarDelegationLevel::Reviewer,
-                address_book_level: AddressBookDelegationLevel::None,
-            }],
-            offered: true,
-            labels: Default::default(),
-        };
-
-        // SAFETY: as the test above; no network call happens here, the
-        // mock client above never makes one outside its own constructor.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
-
-            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
-
-            let (view, revoke) = {
-                let ui = state(page.cast()).unwrap().borrow();
-                (ui.view, ui.revoke)
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = Arc::new(AccountLink::without_refresh(client, features));
+            let loaded = Loaded {
+                delegates: vec![crate::delegation::Delegate {
+                    principal_id: Id::new("P-bob"),
+                    calendar_level: CalendarDelegationLevel::Reviewer,
+                    address_book_level: AddressBookDelegationLevel::None,
+                }],
+                offered: true,
+                labels: Default::default(),
             };
-            assert!(
-                !get_sensitive(revoke),
-                "Revoke is usable before any row is selected"
-            );
 
-            // Moving the list's cursor to row 0 also selects it (single
-            // selection mode), which emits "changed" on the selection
-            // synchronously, the same way a real click does.
-            let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
-            evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
-            evo_sys::gtk_tree_path_free(path);
+            // SAFETY: as the test above; no network call happens here, the
+            // mock client above never makes one outside its own constructor.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            assert!(
-                get_sensitive(revoke),
-                "Revoke stays insensitive after a row is selected"
-            );
+                apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 
-            gtk_widget_destroy(page);
-        }
+                let (view, revoke) = {
+                    let ui = state(page.cast()).unwrap().borrow();
+                    (ui.view, ui.revoke)
+                };
+                assert!(
+                    !get_sensitive(revoke),
+                    "Revoke is usable before any row is selected"
+                );
+
+                // Moving the list's cursor to row 0 also selects it (single
+                // selection mode), which emits "changed" on the selection
+                // synchronously, the same way a real click does.
+                let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                evo_sys::gtk_tree_path_free(path);
+
+                assert!(
+                    get_sensitive(revoke),
+                    "Revoke stays insensitive after a row is selected"
+                );
+
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// A successful load makes Add usable too, not only the list, so a user
@@ -1870,40 +1874,41 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = Arc::new(AccountLink::without_refresh(client, features));
-        let loaded = Loaded {
-            delegates: vec![],
-            offered: true,
-            labels: Default::default(),
-        };
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = Arc::new(AccountLink::without_refresh(client, features));
+            let loaded = Loaded {
+                delegates: vec![],
+                offered: true,
+                labels: Default::default(),
+            };
 
-        // SAFETY: as the test above; no network call happens here.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+            // SAFETY: as the test above; no network call happens here.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            let add = state(page.cast()).unwrap().borrow().add;
-            assert!(!get_sensitive(add), "Add is usable before the load answers");
+                let add = state(page.cast()).unwrap().borrow().add;
+                assert!(!get_sensitive(add), "Add is usable before the load answers");
 
-            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
+                apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 
-            assert!(
-                get_sensitive(add),
-                "Add stays insensitive after a load with no delegates"
-            );
+                assert!(
+                    get_sensitive(add),
+                    "Add stays insensitive after a load with no delegates"
+                );
 
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// Item 180(c)'s "went offline while the page was open" half: going
@@ -1916,85 +1921,86 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = Arc::new(AccountLink::without_refresh(client, features));
-        let loaded = Loaded {
-            delegates: vec![crate::delegation::Delegate {
-                principal_id: Id::new("P-bob"),
-                calendar_level: CalendarDelegationLevel::Reviewer,
-                address_book_level: AddressBookDelegationLevel::None,
-            }],
-            offered: true,
-            labels: Default::default(),
-        };
-
-        // SAFETY: as the tests above; no network call happens here.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
-
-            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
-
-            let (view, add, revoke, status) = {
-                let ui = state(page.cast()).unwrap().borrow();
-                (ui.view, ui.add, ui.revoke, ui.status)
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = Arc::new(AccountLink::without_refresh(client, features));
+            let loaded = Loaded {
+                delegates: vec![crate::delegation::Delegate {
+                    principal_id: Id::new("P-bob"),
+                    calendar_level: CalendarDelegationLevel::Reviewer,
+                    address_book_level: AddressBookDelegationLevel::None,
+                }],
+                offered: true,
+                labels: Default::default(),
             };
 
-            let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
-            evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
-            evo_sys::gtk_tree_path_free(path);
-            assert!(get_sensitive(revoke), "Revoke did not enable on selection");
+            // SAFETY: as the tests above; no network call happens here.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            let cell = state(page.cast()).unwrap();
-            apply_offline_change(cell, true);
+                apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 
-            assert!(!get_sensitive(view), "the list stayed usable while offline");
-            assert!(!get_sensitive(add), "Add stayed usable while offline");
-            assert!(!get_sensitive(revoke), "Revoke stayed usable while offline");
-            let offline_text =
-                read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                offline_text,
-                translate(OFFLINE),
-                "the status label does not say the account is offline"
-            );
-            assert!(
-                !evo_sys::gtk_tree_view_get_column(view.cast(), 0).is_null(),
-                "going offline dropped the list's columns"
-            );
+                let (view, add, revoke, status) = {
+                    let ui = state(page.cast()).unwrap().borrow();
+                    (ui.view, ui.add, ui.revoke, ui.status)
+                };
 
-            apply_offline_change(cell, false);
+                let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                evo_sys::gtk_tree_path_free(path);
+                assert!(get_sensitive(revoke), "Revoke did not enable on selection");
 
-            assert!(
-                get_sensitive(view),
-                "the list stayed insensitive after reconnecting"
-            );
-            assert!(
-                get_sensitive(add),
-                "Add stayed insensitive after reconnecting"
-            );
-            assert!(
-                get_sensitive(revoke),
-                "Revoke did not restore after reconnecting with a row still selected"
-            );
-            let online_text =
-                read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
-            assert_eq!(
-                online_text, "",
-                "the offline note stayed after reconnecting"
-            );
+                let cell = state(page.cast()).unwrap();
+                apply_offline_change(cell, true);
 
-            gtk_widget_destroy(page);
-        }
+                assert!(!get_sensitive(view), "the list stayed usable while offline");
+                assert!(!get_sensitive(add), "Add stayed usable while offline");
+                assert!(!get_sensitive(revoke), "Revoke stayed usable while offline");
+                let offline_text =
+                    read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    offline_text,
+                    translate(OFFLINE),
+                    "the status label does not say the account is offline"
+                );
+                assert!(
+                    !evo_sys::gtk_tree_view_get_column(view.cast(), 0).is_null(),
+                    "going offline dropped the list's columns"
+                );
+
+                apply_offline_change(cell, false);
+
+                assert!(
+                    get_sensitive(view),
+                    "the list stayed insensitive after reconnecting"
+                );
+                assert!(
+                    get_sensitive(add),
+                    "Add stayed insensitive after reconnecting"
+                );
+                assert!(
+                    get_sensitive(revoke),
+                    "Revoke did not restore after reconnecting with a row still selected"
+                );
+                let online_text =
+                    read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    online_text, "",
+                    "the offline note stayed after reconnecting"
+                );
+
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// A page whose initial load never finished (offline from a cold start,
@@ -2003,40 +2009,41 @@ mod tests {
     /// Needs a display; skips without one.
     #[test]
     fn a_page_with_no_link_ignores_a_shell_online_change() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: see the tests above; the same stand-in instance works
-        // here. No network call happens: `LoadOutcome::Offline` is applied
-        // directly.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: see the tests above; the same stand-in instance works
+            // here. No network call happens: `LoadOutcome::Offline` is applied
+            // directly.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            apply_outcome(page.cast(), LoadOutcome::Offline);
+                apply_outcome(page.cast(), LoadOutcome::Offline);
 
-            let cell = state(page.cast()).unwrap();
-            apply_offline_change(cell, true);
-            assert!(
-                !cell.borrow().offline,
-                "a page with no link must not record a shell offline change"
-            );
+                let cell = state(page.cast()).unwrap();
+                apply_offline_change(cell, true);
+                assert!(
+                    !cell.borrow().offline,
+                    "a page with no link must not record a shell offline change"
+                );
 
-            let text = read_string(evo_sys::gtk_label_get_text(
-                state(page.cast()).unwrap().borrow().status.cast(),
-            ))
-            .unwrap_or_default();
-            assert_eq!(
-                text,
-                translate(OFFLINE),
-                "the cold-start offline message changed"
-            );
+                let text = read_string(evo_sys::gtk_label_get_text(
+                    state(page.cast()).unwrap().borrow().status.cast(),
+                ))
+                .unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(OFFLINE),
+                    "the cold-start offline message changed"
+                );
 
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// Item 182(c): going offline while the page is open is invisible to
@@ -2048,44 +2055,45 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = Arc::new(AccountLink::without_refresh(client, features));
-        let loaded = Loaded {
-            delegates: vec![],
-            offered: true,
-            labels: Default::default(),
-        };
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = Arc::new(AccountLink::without_refresh(client, features));
+            let loaded = Loaded {
+                delegates: vec![],
+                offered: true,
+                labels: Default::default(),
+            };
 
-        // SAFETY: no network call happens here.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
-            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
-            let cell = state(page.cast()).unwrap();
+            // SAFETY: no network call happens here.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
+                apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
+                let cell = state(page.cast()).unwrap();
 
-            let (_, captured) = capture(|| apply_offline_change(cell, true));
-            assert!(
-                has(&captured, Level::TRACE, "offline", "true"),
-                "expected an offline=true trace line, got {captured:?}"
-            );
+                let (_, captured) = capture(|| apply_offline_change(cell, true));
+                assert!(
+                    has(&captured, Level::TRACE, "offline", "true"),
+                    "expected an offline=true trace line, got {captured:?}"
+                );
 
-            let (_, captured) = capture(|| apply_offline_change(cell, false));
-            assert!(
-                has(&captured, Level::TRACE, "offline", "false"),
-                "expected an offline=false trace line, got {captured:?}"
-            );
+                let (_, captured) = capture(|| apply_offline_change(cell, false));
+                assert!(
+                    has(&captured, Level::TRACE, "offline", "false"),
+                    "expected an offline=false trace line, got {captured:?}"
+                );
 
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// Item 182(c): the AT-SPI driver cannot see a Revoke round trip start
@@ -2096,72 +2104,73 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = Arc::new(AccountLink::without_refresh(client, features));
-        let loaded = Loaded {
-            delegates: vec![crate::delegation::Delegate {
-                principal_id: Id::new("P-bob"),
-                calendar_level: CalendarDelegationLevel::Reviewer,
-                address_book_level: AddressBookDelegationLevel::None,
-            }],
-            offered: true,
-            labels: Default::default(),
-        };
-
-        // SAFETY: a real worker thread runs `io::revoke` against the mock
-        // server below; the test pumps the default main context for its
-        // answer, the way `crate::filters::page`'s own worker tests do.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
-            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
-
-            let (view, add) = {
-                let ui = state(page.cast()).unwrap().borrow();
-                (ui.view, ui.add)
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = Arc::new(AccountLink::without_refresh(client, features));
+            let loaded = Loaded {
+                delegates: vec![crate::delegation::Delegate {
+                    principal_id: Id::new("P-bob"),
+                    calendar_level: CalendarDelegationLevel::Reviewer,
+                    address_book_level: AddressBookDelegationLevel::None,
+                }],
+                offered: true,
+                labels: Default::default(),
             };
-            let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
-            evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
-            evo_sys::gtk_tree_path_free(path);
 
-            let (_, captured) = capture(|| {
-                on_revoke(ptr::null_mut(), page.cast());
-                pump_until(|| get_sensitive(add), Duration::from_secs(5));
-            });
-            assert!(
-                has(
-                    &captured,
-                    Level::TRACE,
-                    "message",
-                    "delegates: action started"
-                ),
-                "expected an action-started trace line, got {captured:?}"
-            );
-            assert!(
-                has(
-                    &captured,
-                    Level::TRACE,
-                    "message",
-                    "delegates: action written"
-                ),
-                "expected an action-written trace line, got {captured:?}"
-            );
-            assert!(
-                has(&captured, Level::TRACE, "action", "revoke"),
-                "expected the trace lines to name the revoke action, got {captured:?}"
-            );
+            // SAFETY: a real worker thread runs `io::revoke` against the mock
+            // server below; the test pumps the default main context for its
+            // answer, the way `crate::filters::page`'s own worker tests do.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
+                apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 
-            gtk_widget_destroy(page);
-        }
+                let (view, add) = {
+                    let ui = state(page.cast()).unwrap().borrow();
+                    (ui.view, ui.add)
+                };
+                let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                evo_sys::gtk_tree_path_free(path);
+
+                let (_, captured) = capture(|| {
+                    on_revoke(ptr::null_mut(), page.cast());
+                    pump_until(|| get_sensitive(add), Duration::from_secs(5));
+                });
+                assert!(
+                    has(
+                        &captured,
+                        Level::TRACE,
+                        "message",
+                        "delegates: action started"
+                    ),
+                    "expected an action-started trace line, got {captured:?}"
+                );
+                assert!(
+                    has(
+                        &captured,
+                        Level::TRACE,
+                        "message",
+                        "delegates: action written"
+                    ),
+                    "expected an action-written trace line, got {captured:?}"
+                );
+                assert!(
+                    has(&captured, Level::TRACE, "action", "revoke"),
+                    "expected the trace lines to name the revoke action, got {captured:?}"
+                );
+
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// Item 182(c): a failed Grant or Revoke also traces, so the driver can
@@ -2170,60 +2179,61 @@ mod tests {
     /// the write never shows a dialog of its own.
     #[test]
     fn apply_write_outcome_traces_a_failed_grant_and_revoke() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain `GtkScrolledWindow` stands in for the page, as
-        // the tests above use it; no network call happens, the outcome is
-        // applied directly.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain `GtkScrolledWindow` stands in for the page, as
+            // the tests above use it; no network call happens, the outcome is
+            // applied directly.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            let (_, captured) = capture(|| {
-                apply_write_outcome(page.cast(), Err("boom".to_string()), GRANT_FAILED, "grant")
-            });
-            assert!(
-                has(
-                    &captured,
-                    Level::TRACE,
-                    "message",
-                    "delegates: action failed"
-                ),
-                "expected an action-failed trace line, got {captured:?}"
-            );
-            assert!(
-                has(&captured, Level::TRACE, "action", "grant"),
-                "expected the trace line to name the grant action, got {captured:?}"
-            );
+                let (_, captured) = capture(|| {
+                    apply_write_outcome(page.cast(), Err("boom".to_string()), GRANT_FAILED, "grant")
+                });
+                assert!(
+                    has(
+                        &captured,
+                        Level::TRACE,
+                        "message",
+                        "delegates: action failed"
+                    ),
+                    "expected an action-failed trace line, got {captured:?}"
+                );
+                assert!(
+                    has(&captured, Level::TRACE, "action", "grant"),
+                    "expected the trace line to name the grant action, got {captured:?}"
+                );
 
-            let (_, captured) = capture(|| {
-                apply_write_outcome(
-                    page.cast(),
-                    Err("boom".to_string()),
-                    REVOKE_FAILED,
-                    "revoke",
-                )
-            });
-            assert!(
-                has(
-                    &captured,
-                    Level::TRACE,
-                    "message",
-                    "delegates: action failed"
-                ),
-                "expected an action-failed trace line, got {captured:?}"
-            );
-            assert!(
-                has(&captured, Level::TRACE, "action", "revoke"),
-                "expected the trace line to name the revoke action, got {captured:?}"
-            );
+                let (_, captured) = capture(|| {
+                    apply_write_outcome(
+                        page.cast(),
+                        Err("boom".to_string()),
+                        REVOKE_FAILED,
+                        "revoke",
+                    )
+                });
+                assert!(
+                    has(
+                        &captured,
+                        Level::TRACE,
+                        "message",
+                        "delegates: action failed"
+                    ),
+                    "expected an action-failed trace line, got {captured:?}"
+                );
+                assert!(
+                    has(&captured, Level::TRACE, "action", "revoke"),
+                    "expected the trace line to name the revoke action, got {captured:?}"
+                );
 
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// The Add dialog offers "No access" first for both levels (the
@@ -2234,54 +2244,56 @@ mod tests {
     /// display; skips without one.
     #[test]
     fn the_add_dialog_defaults_to_no_access_for_both_levels() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a plain `GtkScrolledWindow` stands in for the registered
-        // `JmapDelegatesPage` instance, the same stand-in the other widget
-        // tests in this file use; `build_add_dialog` only uses it as the
-        // source of `gtk_widget_get_toplevel`.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            let (dialog, entry, calendar_combo, book_combo, find) = build_add_dialog(page.cast());
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain `GtkScrolledWindow` stands in for the registered
+            // `JmapDelegatesPage` instance, the same stand-in the other widget
+            // tests in this file use; `build_add_dialog` only uses it as the
+            // source of `gtk_widget_get_toplevel`.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                let (dialog, entry, calendar_combo, book_combo, find) =
+                    build_add_dialog(page.cast());
 
-            assert!(
-                !get_sensitive(find),
-                "Find is usable with no link to query with"
-            );
-            assert_eq!(
-                widget::get_text(entry.cast()),
-                "",
-                "the principal entry is not empty by default"
-            );
-            let mut activates_default: glib_sys::gboolean = GFALSE;
-            g_object_get(
-                entry.cast(),
-                c"activates-default".as_ptr(),
-                &mut activates_default as *mut glib_sys::gboolean,
-                ptr::null::<c_char>(),
-            );
-            assert_eq!(
-                activates_default, GTRUE,
-                "Enter in the principal entry does not confirm the dialog"
-            );
-            assert_eq!(
-                gtk_combo_box_get_active(calendar_combo.cast()),
-                0,
-                "the calendar level combo does not default to No access"
-            );
-            assert_eq!(
-                gtk_combo_box_get_active(book_combo.cast()),
-                0,
-                "the address book level combo does not default to No access"
-            );
+                assert!(
+                    !get_sensitive(find),
+                    "Find is usable with no link to query with"
+                );
+                assert_eq!(
+                    widget::get_text(entry.cast()),
+                    "",
+                    "the principal entry is not empty by default"
+                );
+                let mut activates_default: glib_sys::gboolean = GFALSE;
+                g_object_get(
+                    entry.cast(),
+                    c"activates-default".as_ptr(),
+                    &mut activates_default as *mut glib_sys::gboolean,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    activates_default, GTRUE,
+                    "Enter in the principal entry does not confirm the dialog"
+                );
+                assert_eq!(
+                    gtk_combo_box_get_active(calendar_combo.cast()),
+                    0,
+                    "the calendar level combo does not default to No access"
+                );
+                assert_eq!(
+                    gtk_combo_box_get_active(book_combo.cast()),
+                    0,
+                    "the address book level combo does not default to No access"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// 179(e): the Add dialog's OK response stays insensitive while the
@@ -2292,44 +2304,46 @@ mod tests {
     fn the_add_dialog_refuses_an_empty_or_no_access_delegate() {
         use evo_sys::gtk_dialog_get_widget_for_response;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: as `the_add_dialog_defaults_to_no_access_for_both_levels`.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            let (dialog, entry, calendar_combo, _book_combo, _find) = build_add_dialog(page.cast());
-            let ok = gtk_dialog_get_widget_for_response(dialog.cast(), GTK_RESPONSE_OK);
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: as `the_add_dialog_defaults_to_no_access_for_both_levels`.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                let (dialog, entry, calendar_combo, _book_combo, _find) =
+                    build_add_dialog(page.cast());
+                let ok = gtk_dialog_get_widget_for_response(dialog.cast(), GTK_RESPONSE_OK);
 
-            assert!(
-                !get_sensitive(ok),
-                "OK is usable with an empty principal and no access granted"
-            );
+                assert!(
+                    !get_sensitive(ok),
+                    "OK is usable with an empty principal and no access granted"
+                );
 
-            widget::set_text(entry.cast(), "bob@example.com");
-            assert!(
-                !get_sensitive(ok),
-                "OK is usable for a principal with no access granted"
-            );
+                widget::set_text(entry.cast(), "bob@example.com");
+                assert!(
+                    !get_sensitive(ok),
+                    "OK is usable for a principal with no access granted"
+                );
 
-            gtk_combo_box_set_active(calendar_combo.cast(), 1);
-            assert!(
-                get_sensitive(ok),
-                "OK stays insensitive once a principal and a level are set"
-            );
+                gtk_combo_box_set_active(calendar_combo.cast(), 1);
+                assert!(
+                    get_sensitive(ok),
+                    "OK stays insensitive once a principal and a level are set"
+                );
 
-            widget::set_text(entry.cast(), "  ");
-            assert!(
-                !get_sensitive(ok),
-                "OK is usable for a whitespace-only principal"
-            );
+                widget::set_text(entry.cast(), "  ");
+                assert!(
+                    !get_sensitive(ok),
+                    "OK is usable for a whitespace-only principal"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(page);
+            }
+        });
     }
 
     /// The Find button needs a link to query principals with, the same
@@ -2340,47 +2354,48 @@ mod tests {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        let server = MockServer::builder().start();
-        let client = Client::connect(server.origin(), Credentials::none()).unwrap();
-        let features =
-            crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
-        let link = Arc::new(AccountLink::without_refresh(client, features));
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(client.session()).unwrap();
+            let link = Arc::new(AccountLink::without_refresh(client, features));
 
-        // SAFETY: as the tests above; no network call happens here.
-        unsafe {
-            let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-            build_widgets(page.cast());
+            // SAFETY: as the tests above; no network call happens here.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
 
-            let (dialog, _entry, _calendar_combo, _book_combo, find) =
-                build_add_dialog(page.cast());
-            assert!(
-                !get_sensitive(find),
-                "Find is usable before the page has a link"
-            );
-            gtk_widget_destroy(dialog);
+                let (dialog, _entry, _calendar_combo, _book_combo, find) =
+                    build_add_dialog(page.cast());
+                assert!(
+                    !get_sensitive(find),
+                    "Find is usable before the page has a link"
+                );
+                gtk_widget_destroy(dialog);
 
-            let loaded = Loaded {
-                delegates: vec![],
-                offered: true,
-                labels: Default::default(),
-            };
-            apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
+                let loaded = Loaded {
+                    delegates: vec![],
+                    offered: true,
+                    labels: Default::default(),
+                };
+                apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 
-            let (dialog, _entry, _calendar_combo, _book_combo, find) =
-                build_add_dialog(page.cast());
-            assert!(
-                get_sensitive(find),
-                "Find stays insensitive once the page has a link"
-            );
+                let (dialog, _entry, _calendar_combo, _book_combo, find) =
+                    build_add_dialog(page.cast());
+                assert!(
+                    get_sensitive(find),
+                    "Find stays insensitive once the page has a link"
+                );
 
-            gtk_widget_destroy(dialog);
-            gtk_widget_destroy(page);
-        }
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(page);
+            }
+        });
     }
 }

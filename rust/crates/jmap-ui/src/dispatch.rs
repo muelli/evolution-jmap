@@ -16,8 +16,9 @@
 //!
 //! Here, "main loop" is the global default `GMainContext`. In Evolution, the
 //! GTK main loop owns it. In a process where nothing owns it (a test), GLib
-//! runs an invoked function on the calling thread. Thus the tests below
-//! acquire the context first, to get the queue that the shell supplies.
+//! runs an invoked function on the calling thread. Thus every GTK test of
+//! this crate runs on `gtk_test_main`'s thread, which owns the
+//! context and supplies the queue that the shell supplies.
 
 use std::ptr;
 
@@ -68,53 +69,29 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
-    use std::sync::{Arc, Mutex, MutexGuard};
     use std::time::{Duration, Instant};
 
-    use glib_sys::{
-        GFALSE, g_main_context_acquire, g_main_context_iteration, g_main_context_release,
-    };
+    use glib_sys::{GFALSE, g_main_context_iteration};
     use gobject_sys::{G_TYPE_OBJECT, g_object_new_with_properties, g_object_unref};
 
     use super::*;
 
-    /// All tests below iterate the one global main context. Thus they must
-    /// not run at the same time.
-    static MAIN_CONTEXT: Mutex<()> = Mutex::new(());
-
-    /// Own the global main context for one test, as the Evolution main loop
-    /// owns it. Without an owner, `g_main_context_invoke` runs closures on the
-    /// calling thread and does not put them in a queue.
-    struct Owned {
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl Owned {
-        fn acquire() -> Self {
-            let lock = MAIN_CONTEXT.lock().unwrap();
-            // SAFETY: NULL is the global context. The lock serializes access.
-            assert_ne!(unsafe { g_main_context_acquire(ptr::null_mut()) }, GFALSE);
-            Self { _lock: lock }
-        }
-
-        /// Iterate without blocking until `done`. Fail after five seconds.
-        fn iterate_until(&self, done: &AtomicBool) {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while !done.load(Ordering::SeqCst) {
-                assert!(Instant::now() < deadline, "main loop never delivered");
-                // SAFETY: this thread owns the context.
-                unsafe { g_main_context_iteration(ptr::null_mut(), GFALSE) };
-                std::thread::yield_now();
-            }
-        }
-    }
-
-    impl Drop for Owned {
-        fn drop(&mut self) {
-            // SAFETY: paired with the acquire above.
-            unsafe { g_main_context_release(ptr::null_mut()) };
+    /// Iterate without blocking until `done`. Fail after five seconds.
+    ///
+    /// The caller runs on the GTK test thread
+    /// (`gtk_test_main`), which owns the global main context, as
+    /// the Evolution main loop owns it. Thus a worker thread puts its answer
+    /// in a queue, and this iteration is what delivers it.
+    fn iterate_until(done: &AtomicBool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done.load(Ordering::SeqCst) {
+            assert!(Instant::now() < deadline, "main loop never delivered");
+            // SAFETY: this thread owns the context.
+            unsafe { g_main_context_iteration(ptr::null_mut(), GFALSE) };
+            std::thread::yield_now();
         }
     }
 
@@ -135,60 +112,62 @@ mod tests {
 
     #[test]
     fn the_answer_reaches_a_live_object_on_the_main_loop() {
-        let owned = Owned::acquire();
-        let object = plain_object();
-        let finished = Arc::new(AtomicBool::new(false));
+        crate::gtk_test_main::run(|| {
+            let object = plain_object();
+            let finished = Arc::new(AtomicBool::new(false));
 
-        let seen = finished.clone();
-        // SAFETY: a new object, with one reference held here.
-        unsafe {
-            spawn_for(
-                object,
-                || 6 * 7,
-                move |_, answer| {
-                    assert_eq!(answer, 42);
-                    seen.store(true, Ordering::SeqCst);
-                },
-            );
-        }
-        owned.iterate_until(&finished);
+            let seen = finished.clone();
+            // SAFETY: a new object, with one reference held here.
+            unsafe {
+                spawn_for(
+                    object,
+                    || 6 * 7,
+                    move |_, answer| {
+                        assert_eq!(answer, 42);
+                        seen.store(true, Ordering::SeqCst);
+                    },
+                );
+            }
+            iterate_until(&finished);
 
-        // SAFETY: this releases the reference of this test.
-        unsafe { g_object_unref(object) };
+            // SAFETY: this releases the reference of this test.
+            unsafe { g_object_unref(object) };
+        });
     }
 
     #[test]
     fn a_dead_object_receives_nothing() {
-        let owned = Owned::acquire();
-        let object = plain_object();
-        let dispatched = Arc::new(AtomicBool::new(false));
-        let finished = Arc::new(AtomicBool::new(false));
+        crate::gtk_test_main::run(|| {
+            let object = plain_object();
+            let dispatched = Arc::new(AtomicBool::new(false));
+            let finished = Arc::new(AtomicBool::new(false));
 
-        let (release, held) = mpsc::channel::<()>();
-        let signal = Signal(dispatched.clone());
-        let seen = finished.clone();
-        // SAFETY: a new object, with one reference held here.
-        unsafe {
-            spawn_for(
-                object,
-                move || {
-                    // Wait until the object is finalized. The test checks this order.
-                    held.recv().unwrap();
-                    signal
-                },
-                move |_, _| seen.store(true, Ordering::SeqCst),
+            let (release, held) = mpsc::channel::<()>();
+            let signal = Signal(dispatched.clone());
+            let seen = finished.clone();
+            // SAFETY: a new object, with one reference held here.
+            unsafe {
+                spawn_for(
+                    object,
+                    move || {
+                        // Wait until the object is finalized. The test checks this order.
+                        held.recv().unwrap();
+                        signal
+                    },
+                    move |_, _| seen.store(true, Ordering::SeqCst),
+                );
+            }
+
+            // SAFETY: this releases the reference of this test, the last one.
+            unsafe { g_object_unref(object) };
+            release.send(()).unwrap();
+
+            // The drop of the answer shows that the dispatch delivered and discarded it.
+            iterate_until(&dispatched);
+            assert!(
+                !finished.load(Ordering::SeqCst),
+                "finish must not run for an object that is gone"
             );
-        }
-
-        // SAFETY: this releases the reference of this test, the last one.
-        unsafe { g_object_unref(object) };
-        release.send(()).unwrap();
-
-        // The drop of the answer shows that the dispatch delivered and discarded it.
-        owned.iterate_until(&dispatched);
-        assert!(
-            !finished.load(Ordering::SeqCst),
-            "finish must not run for an object that is gone"
-        );
+        });
     }
 }

@@ -1610,43 +1610,44 @@ mod tests {
         /// Needs a display; skips without one.
         #[test]
         fn destroying_the_composer_during_the_custom_time_dialog_stops_the_action() {
-            let _gtk_test_guard = crate::gtk_test_lock::lock();
-            if !display() {
-                eprintln!("skipped: no display for GTK");
-                return;
-            }
-            let server = jmap_mock::MockServer::builder()
-                .max_delayed_send(86_400)
-                .start();
-            let events = observe(|| {
-                // SAFETY: GTK stays on this thread. GTK owns the only
-                // reference to the window, as it does for a composer.
-                unsafe {
-                    let window: *mut GObject = gtk_window_new(0).cast();
-                    STATE.set(window, RefCell::new(linked_state(&server)));
-                    g_object_set_data_full(
-                        window,
-                        c"probe".as_ptr(),
-                        window.cast(),
-                        Some(window_finalized),
-                    );
-                    gtk_widget_show_all(window.cast());
-                    // Both run inside the nested main loop of the dialog, in order.
-                    g_idle_add(Some(close_window), window.cast());
-                    g_idle_add(Some(answer_ok), ptr::null_mut());
-                    activate_custom(window);
+            crate::gtk_test_main::run(|| {
+                if !display() {
+                    eprintln!("skipped: no display for GTK");
+                    return;
                 }
-                note("action returned");
+                let server = jmap_mock::MockServer::builder()
+                    .max_delayed_send(86_400)
+                    .start();
+                let events = observe(|| {
+                    // SAFETY: GTK stays on this thread. GTK owns the only
+                    // reference to the window, as it does for a composer.
+                    unsafe {
+                        let window: *mut GObject = gtk_window_new(0).cast();
+                        STATE.set(window, RefCell::new(linked_state(&server)));
+                        g_object_set_data_full(
+                            window,
+                            c"probe".as_ptr(),
+                            window.cast(),
+                            Some(window_finalized),
+                        );
+                        gtk_widget_show_all(window.cast());
+                        // Both run inside the nested main loop of the dialog, in order.
+                        g_idle_add(Some(close_window), window.cast());
+                        g_idle_add(Some(answer_ok), ptr::null_mut());
+                        activate_custom(window);
+                    }
+                    note("action returned");
+                });
+                assert_eq!(
+                    events,
+                    [
+                        "window destroyed",
+                        "dialog answered",
+                        "window finalized",
+                        "action returned"
+                    ]
+                );
             });
-            assert_eq!(
-                events,
-                [
-                    "window destroyed",
-                    "dialog answered",
-                    "window finalized",
-                    "action returned"
-                ]
-            );
         }
 
         /// GNOME HIG: every flow works with the keyboard only. The
@@ -1655,89 +1656,92 @@ mod tests {
         /// Needs a display; skips without one.
         #[test]
         fn the_custom_time_dialog_lets_enter_confirm_it() {
-            let _gtk_test_guard = crate::gtk_test_lock::lock();
-            if !display() {
-                eprintln!("skipped: no display for GTK");
-                return;
-            }
-            // SAFETY: a plain toplevel window stands in for the live
-            // composer; `build_custom_time_dialog` only passes it to
-            // `gtk_window_set_transient_for`. Both widgets are destroyed
-            // before returning.
-            unsafe {
-                let window: *mut GObject = gtk_window_new(0).cast();
-                let (dialog, field) = build_custom_time_dialog(window);
+            crate::gtk_test_main::run(|| {
+                if !display() {
+                    eprintln!("skipped: no display for GTK");
+                    return;
+                }
+                // SAFETY: a plain toplevel window stands in for the live
+                // composer; `build_custom_time_dialog` only passes it to
+                // `gtk_window_set_transient_for`. Both widgets are destroyed
+                // before returning.
+                unsafe {
+                    let window: *mut GObject = gtk_window_new(0).cast();
+                    let (dialog, field) = build_custom_time_dialog(window);
 
-                assert!(
-                    !gtk_window_get_default_widget(dialog.cast()).is_null(),
-                    "the dialog has no default response: Enter would do nothing"
-                );
-                let mut activates_default: gboolean = GFALSE;
-                g_object_get(
-                    e_date_edit_get_entry(field.cast()).cast(),
-                    c"activates-default".as_ptr(),
-                    &mut activates_default as *mut gboolean,
-                    ptr::null::<c_char>(),
-                );
-                assert_ne!(
-                    activates_default, GFALSE,
-                    "the field's entry does not activate the default: Enter would do nothing"
-                );
+                    assert!(
+                        !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                        "the dialog has no default response: Enter would do nothing"
+                    );
+                    let mut activates_default: gboolean = GFALSE;
+                    g_object_get(
+                        e_date_edit_get_entry(field.cast()).cast(),
+                        c"activates-default".as_ptr(),
+                        &mut activates_default as *mut gboolean,
+                        ptr::null::<c_char>(),
+                    );
+                    assert_ne!(
+                        activates_default, GFALSE,
+                        "the field's entry does not activate the default: Enter would do nothing"
+                    );
 
-                gtk_widget_destroy(dialog);
-                gtk_widget_destroy(window.cast());
-            }
+                    gtk_widget_destroy(dialog);
+                    gtk_widget_destroy(window.cast());
+                }
+            });
         }
 
         /// GNOME HIG: 12px between a dialog's content and its edges. Needs
         /// a display; skips without one.
         #[test]
         fn the_custom_time_dialog_has_a_hig_content_margin() {
-            let _gtk_test_guard = crate::gtk_test_lock::lock();
-            if !display() {
-                eprintln!("skipped: no display for GTK");
-                return;
-            }
-            // SAFETY: as above.
-            unsafe {
-                let window: *mut GObject = gtk_window_new(0).cast();
-                let (dialog, _field) = build_custom_time_dialog(window);
+            crate::gtk_test_main::run(|| {
+                if !display() {
+                    eprintln!("skipped: no display for GTK");
+                    return;
+                }
+                // SAFETY: as above.
+                unsafe {
+                    let window: *mut GObject = gtk_window_new(0).cast();
+                    let (dialog, _field) = build_custom_time_dialog(window);
 
-                let content_area = gtk_dialog_get_content_area(dialog.cast());
-                assert_eq!(
-                    gtk_container_get_border_width(content_area.cast()),
-                    12,
-                    "the content area has no HIG margin: content touches the dialog's edges"
-                );
+                    let content_area = gtk_dialog_get_content_area(dialog.cast());
+                    assert_eq!(
+                        gtk_container_get_border_width(content_area.cast()),
+                        12,
+                        "the content area has no HIG margin: content touches the dialog's edges"
+                    );
 
-                gtk_widget_destroy(dialog);
-                gtk_widget_destroy(window.cast());
-            }
+                    gtk_widget_destroy(dialog);
+                    gtk_widget_destroy(window.cast());
+                }
+            });
         }
 
         /// No label precedes the field: a screen reader needs its own
         /// accessible name instead. Needs a display; skips without one.
         #[test]
         fn the_custom_time_field_has_an_accessible_name() {
-            let _gtk_test_guard = crate::gtk_test_lock::lock();
-            if !display() {
-                eprintln!("skipped: no display for GTK");
-                return;
-            }
-            // SAFETY: as above.
-            unsafe {
-                let window: *mut GObject = gtk_window_new(0).cast();
-                let (dialog, field) = build_custom_time_dialog(window);
+            crate::gtk_test_main::run(|| {
+                if !display() {
+                    eprintln!("skipped: no display for GTK");
+                    return;
+                }
+                // SAFETY: as above.
+                unsafe {
+                    let window: *mut GObject = gtk_window_new(0).cast();
+                    let (dialog, field) = build_custom_time_dialog(window);
 
-                assert_eq!(
-                    widget::get_accessible_name(field.cast()),
-                    translate(SEND_TIME_NAME),
-                    "the field keeps no name a screen reader can announce"
-                );
+                    assert_eq!(
+                        widget::get_accessible_name(field.cast()),
+                        translate(SEND_TIME_NAME),
+                        "the field keeps no name a screen reader can announce"
+                    );
 
-                gtk_widget_destroy(dialog);
-                gtk_widget_destroy(window.cast());
-            }
+                    gtk_widget_destroy(dialog);
+                    gtk_widget_destroy(window.cast());
+                }
+            });
         }
 
         /// The shell destroys the composer while a refusal shows. The dialog
@@ -1746,25 +1750,26 @@ mod tests {
         /// a display; skips without one.
         #[test]
         fn destroying_the_composer_during_a_refusal_keeps_the_dialog_until_its_destroy() {
-            let _gtk_test_guard = crate::gtk_test_lock::lock();
-            if !display() {
-                eprintln!("skipped: no display for GTK");
-                return;
-            }
-            let events = observe(|| {
-                // SAFETY: as above.
-                unsafe {
-                    let window: *mut GObject = gtk_window_new(0).cast();
-                    gtk_widget_show_all(window.cast());
-                    g_idle_add(Some(probe_and_close), window.cast());
-                    refuse_send(window, "refused".to_owned());
+            crate::gtk_test_main::run(|| {
+                if !display() {
+                    eprintln!("skipped: no display for GTK");
+                    return;
                 }
-                note("refusal returned");
+                let events = observe(|| {
+                    // SAFETY: as above.
+                    unsafe {
+                        let window: *mut GObject = gtk_window_new(0).cast();
+                        gtk_widget_show_all(window.cast());
+                        g_idle_add(Some(probe_and_close), window.cast());
+                        refuse_send(window, "refused".to_owned());
+                    }
+                    note("refusal returned");
+                });
+                assert_eq!(
+                    events,
+                    ["window destroyed", "dialog finalized", "refusal returned"]
+                );
             });
-            assert_eq!(
-                events,
-                ["window destroyed", "dialog finalized", "refusal returned"]
-            );
         }
 
         /// GNOME HIG: every flow works with the keyboard only. The refusal
@@ -1772,28 +1777,29 @@ mod tests {
         /// a display; skips without one.
         #[test]
         fn the_refusal_dialog_lets_enter_confirm_it() {
-            let _gtk_test_guard = crate::gtk_test_lock::lock();
-            if !display() {
-                eprintln!("skipped: no display for GTK");
-                return;
-            }
-            // SAFETY: a plain toplevel window stands in for the live
-            // composer; `build_refusal_dialog` only passes it to
-            // `gtk_window_set_transient_for`. Both widgets are destroyed
-            // before returning.
-            unsafe {
-                let window: *mut GObject = gtk_window_new(0).cast();
-                let text = CString::new("refused").unwrap();
-                let dialog = build_refusal_dialog(window, &text);
+            crate::gtk_test_main::run(|| {
+                if !display() {
+                    eprintln!("skipped: no display for GTK");
+                    return;
+                }
+                // SAFETY: a plain toplevel window stands in for the live
+                // composer; `build_refusal_dialog` only passes it to
+                // `gtk_window_set_transient_for`. Both widgets are destroyed
+                // before returning.
+                unsafe {
+                    let window: *mut GObject = gtk_window_new(0).cast();
+                    let text = CString::new("refused").unwrap();
+                    let dialog = build_refusal_dialog(window, &text);
 
-                assert!(
-                    !gtk_window_get_default_widget(dialog.cast()).is_null(),
-                    "the dialog has no default response: Enter would do nothing"
-                );
+                    assert!(
+                        !gtk_window_get_default_widget(dialog.cast()).is_null(),
+                        "the dialog has no default response: Enter would do nothing"
+                    );
 
-                gtk_widget_destroy(dialog);
-                gtk_widget_destroy(window.cast());
-            }
+                    gtk_widget_destroy(dialog);
+                    gtk_widget_destroy(window.cast());
+                }
+            });
         }
     }
 }

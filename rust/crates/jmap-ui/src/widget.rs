@@ -258,30 +258,31 @@ mod tests {
     /// one. Needs a display; skips without one.
     #[test]
     fn setting_an_accessible_role_is_visible_on_read_back() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a freshly made label, destroyed before returning.
-        unsafe {
-            let label = gtk_label_new(ptr::null());
-            assert_eq!(
-                get_accessible_role(label.cast()),
-                ATK_ROLE_LABEL,
-                "a plain label should start with GTK's own default role"
-            );
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a freshly made label, destroyed before returning.
+            unsafe {
+                let label = gtk_label_new(ptr::null());
+                assert_eq!(
+                    get_accessible_role(label.cast()),
+                    ATK_ROLE_LABEL,
+                    "a plain label should start with GTK's own default role"
+                );
 
-            set_accessible_role(label.cast(), ATK_ROLE_STATUSBAR);
-            assert_eq!(
-                get_accessible_role(label.cast()),
-                ATK_ROLE_STATUSBAR,
-                "the role set should be the role read back"
-            );
+                set_accessible_role(label.cast(), ATK_ROLE_STATUSBAR);
+                assert_eq!(
+                    get_accessible_role(label.cast()),
+                    ATK_ROLE_STATUSBAR,
+                    "the role set should be the role read back"
+                );
 
-            gtk_widget_destroy(label);
-        }
+                gtk_widget_destroy(label);
+            }
+        });
     }
 
     /// A fresh widget has no accessible name of its own: `set_accessible_name`
@@ -289,29 +290,30 @@ mod tests {
     /// `labelled-by` relation. Needs a display; skips without one.
     #[test]
     fn setting_an_accessible_name_is_visible_on_read_back() {
-        let _gtk_test_guard = crate::gtk_test_lock::lock();
-        // SAFETY: no arguments. GTK stays on this thread for the whole test.
-        if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
-            eprintln!("skipped: no display for GTK");
-            return;
-        }
-        // SAFETY: a freshly made label, destroyed before returning.
-        unsafe {
-            let label = gtk_label_new(ptr::null());
-            assert_eq!(
-                get_accessible_name(label.cast()),
-                "",
-                "a plain label should start with no accessible name"
-            );
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a freshly made label, destroyed before returning.
+            unsafe {
+                let label = gtk_label_new(ptr::null());
+                assert_eq!(
+                    get_accessible_name(label.cast()),
+                    "",
+                    "a plain label should start with no accessible name"
+                );
 
-            set_accessible_name(label.cast(), "Filter scripts");
-            assert_eq!(
-                get_accessible_name(label.cast()),
-                "Filter scripts",
-                "the name set should be the name read back"
-            );
+                set_accessible_name(label.cast(), "Filter scripts");
+                assert_eq!(
+                    get_accessible_name(label.cast()),
+                    "Filter scripts",
+                    "the name set should be the name read back"
+                );
 
-            gtk_widget_destroy(label);
-        }
+                gtk_widget_destroy(label);
+            }
+        });
     }
 }
