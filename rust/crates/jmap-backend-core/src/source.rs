@@ -659,11 +659,16 @@ impl RegistrySource {
         };
         let Some(source) = source else {
             // SAFETY: a NULL return means the GError was set.
-            let message = unsafe { std::ffi::CStr::from_ptr((*error).message) };
+            let message = unsafe { std::ffi::CStr::from_ptr((*error).message) }
+                .to_string_lossy()
+                .into_owned();
+            // SAFETY: `error` is `(transfer full)`; free it before the panic
+            // takes ownership of `message`, a copy, not a borrow of it.
+            unsafe { glib_sys::g_error_free(error) };
             panic!(
                 "the registry could not read {}: {}",
                 path.display(),
-                message.to_string_lossy()
+                message
             );
         };
         Self {
