@@ -341,11 +341,12 @@ unsafe impl ObjectSubclass for JmapFolder {
         // SAFETY: the instance is in finalization, so nothing can still reach
         // it and no borrow from `get` is alive. Without this, the id leaks
         // (once for each folder that the user opened), and the reference of
-        // the cache on its `CamelDataCache` also leaks.
+        // each cache on its `CamelDataCache` also leaks.
         unsafe {
             (*instance).mailbox.clear();
             (*instance).owner.clear();
             (*instance).cache.clear();
+            (*instance).pending_append_cache.clear();
         };
     }
 }
