@@ -198,6 +198,40 @@ fn echo_round_trips_through_the_real_api_endpoint() {
     assert_eq!(client.echo(sent.clone()).unwrap(), sent);
 }
 
+/// RFC 8887 WebSocket transport round-trips Core/echo through the advertised endpoint.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+#[cfg(feature = "websocket")]
+fn websocket_transport_round_trips_through_the_real_api() {
+    let client = connect();
+    let ws = client
+        .connect_websocket()
+        .expect("websocket connection establishes");
+
+    assert!(!ws.url().is_empty());
+    assert!(!ws.is_closed());
+
+    let payload = json!({"hello": "jmap over websocket"});
+    let responses = ws
+        .call(
+            ["urn:ietf:params:jmap:core"],
+            [
+                jmap_proto::request::Invocation::new("Core/echo", &payload, "ws-echo-1")
+                    .expect("build invocation"),
+            ],
+        )
+        .expect("Core/echo succeeds over websocket");
+
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].name, "Core/echo");
+    assert_eq!(responses[0].call_id, "ws-echo-1");
+    let echoed: serde_json::Value = responses[0].parse().expect("parse echoed payload");
+    assert_eq!(echoed, payload);
+
+    ws.close().expect("websocket closes cleanly");
+    assert!(ws.is_closed());
+}
+
 /// If the account has the mail capability, `Mailbox/get` answers with at
 /// least one mailbox: every real mailbox has an Inbox. An account with no
 /// mail capability at all (a contacts-or-calendars-only test account) is not
