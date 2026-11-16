@@ -3397,12 +3397,10 @@ unsafe fn start_external_edit_with_command(
     };
 
     let external_editor::EditorCommand::Command(command) = command else {
-        // No command is configured anywhere; item 180(d)'s "else the
-        // default handler for text" is a separate, still open, follow-up
-        // (it needs a way to notice the handler has finished with no child
-        // process of our own to poll). Refusing cleanly here, rather than
-        // guessing at that completion signal, is the correct-over-fast
-        // choice for this slice.
+        // No command is configured anywhere. This refuses instead of
+        // falling back to the desktop's default handler for text, by
+        // design: a default-handler launch gives no child process of
+        // ours to poll, so we have no way to notice when editing ends.
         // SAFETY: as above.
         return unsafe { set_status(cell, &translate(NO_EXTERNAL_EDITOR)) };
     };

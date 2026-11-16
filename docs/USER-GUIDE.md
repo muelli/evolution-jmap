@@ -130,6 +130,8 @@ Turn on `Edit as text` to write the script by hand instead of using the rules li
 
 Use `Check` to test a script on the server. `Check` never saves the script.
 
+Use `Edit in External Editor…` to edit the script text in another program. Evolution picks the program in this order: the External Editor plugin's own command, then `$VISUAL`, then `$EDITOR`. If none of these is set, Evolution shows a message and does not open the script. It does not fall back to a desktop default handler for text, because Evolution cannot then tell when you are done editing.
+
 `Activate`, `Deactivate`, `Rename`, `Add` and `Remove` take effect at once. You do not need to click `OK` in the account editor for these. `Activate` first checks the script and refuses a broken one. A script's text saves on its own soon after you stop typing, once it parses. `OK` still saves anything not yet sent; `Cancel` cannot undo a change already sent.
 
 ### Scheduled send
