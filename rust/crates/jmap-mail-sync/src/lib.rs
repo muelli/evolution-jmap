@@ -196,7 +196,13 @@ impl MailSync {
     /// any shared mail accounts at all, even if the primary account's own
     /// state did not move. A later claim can track each shared account's own
     /// state and skip this when none of them changed either.
+    ///
+    /// Refreshes the session first if a prior call already marked it stale
+    /// (RFC 8620 §2.0, ROADMAP item 166 row C1-26).
     pub fn folder_tree_since(&self, since: &State) -> Result<FolderUpdate, SyncError> {
+        if self.client.is_session_stale() {
+            self.client.refresh_session()?;
+        }
         match self.client.all_changes(&self.account_id, "Mailbox", since) {
             Ok(changes) if changes.is_empty() => {
                 if shared_mail_accounts(self.client.session()).is_empty() {
