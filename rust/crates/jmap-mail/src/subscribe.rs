@@ -82,7 +82,7 @@ pub fn set_subscribed(
         return Err(StoreError::NoFolder(path.to_owned()));
     };
 
-    store.set_subscribed(&folder.id, subscribed)?;
+    store.set_subscribed(&folder.id, folder.account_id.as_ref(), subscribed)?;
 
     let mut folder = folder.clone();
     folder.subscribed = subscribed;

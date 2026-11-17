@@ -1329,23 +1329,26 @@ impl JmapStore {
     ///
     /// `mailbox` can be a mailbox of a shared account merged into this
     /// account's folder tree ([`FolderTree::merge_shared`]). `Mailbox/set` is
-    /// a method call under one `accountId`, so this resolves the mailbox's
-    /// real owner first and subscribes under that account instead of this
-    /// store's own, the same way [`Self::file_message`] already does
-    /// (ROADMAP item 179(d)). The resolve reads [`Self::held_folders`], the
-    /// cached tree, not [`Self::folders`]: a mailbox id reaches this function
-    /// only once Camel has already listed the account that showed it, and
-    /// [`Self::folders`] would otherwise list the account here for the first
-    /// time, which `tests/subscriptions.rs`'s
-    /// `a_store_that_has_not_listed_yet_does_not_gain_a_listing` forbids.
-    pub fn set_subscribed(&self, mailbox: &Id, subscribed: bool) -> Result<(), StoreError> {
-        let account = self
-            .held_folders()
-            .and_then(|tree| tree.owning_account(mailbox).cloned());
+    /// a method call under one `accountId`, so this subscribes under
+    /// `owner`, the account that owns the mailbox, instead of this store's
+    /// own (ROADMAP item 179(d)). `None` names this store's own account,
+    /// which is the usual case.
+    ///
+    /// The caller gives the owner; this does not look it up by mailbox id,
+    /// for the reason [`Self::search`] gives: a mailbox id is unique in one
+    /// account only, and a lookup by id alone ([`FolderTree::owning_account`])
+    /// then finds the wrong account. The caller already holds the folder it
+    /// found in the tree, which knows its own `account_id` directly.
+    pub fn set_subscribed(
+        &self,
+        mailbox: &Id,
+        owner: Option<&Id>,
+        subscribed: bool,
+    ) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        let account = account.unwrap_or_else(|| sync.account_id().clone());
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             mailbox_id = mailbox.as_str(),
             subscribed,
