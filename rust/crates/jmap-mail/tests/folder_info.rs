@@ -459,3 +459,32 @@ fn a_deep_parent_chain_becomes_a_broad_forest_rather_than_a_deep_one() {
     assert_eq!(roots, DEPTH.div_ceil(jmap_mail_sync::folder::MAX_DEPTH));
     assert_eq!(deepest, jmap_mail_sync::folder::MAX_DEPTH);
 }
+
+/// The companion case to the deep chain above: a server can make a sibling
+/// list wide instead of deep, with no `parentId` at all.
+/// `camel_folder_info_free` recurses over `next` the same way it recurses
+/// over `child`, so `from_forest` caps the width too
+/// (`jmap_mail::folder_info::MAX_FOLDERS_IN_LISTING`). This test checks the
+/// cap stops the chain from growing past it, and that dropping a request far
+/// past it does not crash.
+#[test]
+fn a_wide_sibling_list_is_capped_rather_than_linked_in_full() {
+    const WIDTH: usize = 100_000;
+    let mailboxes: Vec<Mailbox> = (0..WIDTH)
+        .map(|index| mailbox(&format!("M{index}"), &format!("Folder{index}")))
+        .collect();
+
+    let chain = chain(&mailboxes);
+
+    let mut count = 0;
+    let mut info = chain.as_ptr();
+    while !info.is_null() {
+        count += 1;
+        // SAFETY: `info` is an entry of the chain the wrapper owns.
+        info = unsafe { (*info).next };
+    }
+
+    assert_eq!(count, jmap_mail::folder_info::MAX_FOLDERS_IN_LISTING);
+    // The drop at the end of this scope is the step that would have recursed
+    // WIDTH deep without the cap.
+}

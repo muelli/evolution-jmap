@@ -43,6 +43,17 @@ use eds_sys::{
 };
 use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree};
 
+/// The upper bound on how many folders [`FolderInfoChain::from_forest`] links
+/// into one forest.
+///
+/// `camel_folder_info_free` recurses over both `next` and `child`. `FolderTree`
+/// already caps depth (`jmap_mail_sync::folder::MAX_DEPTH`); this caps the
+/// other side of the same risk, a sibling list a server made wide instead of
+/// deep. Past the cap, the remaining folders are left out of this forest only:
+/// `FolderTree` itself, which `Email/query` and mail delivery use, still has
+/// every one of them. Real mail accounts hold nowhere near this many folders.
+pub const MAX_FOLDERS_IN_LISTING: usize = 20_000;
+
 /// A `CamelFolderInfo` forest, owned.
 ///
 /// The pointer is the head of the *root* sibling chain, which is what
@@ -80,8 +91,9 @@ impl FolderInfoChain {
     /// The depth of the tree comes from a `parentId` chain the server chose, so
     /// recursing over it would be a stack overflow a server could ask for — the
     /// same reasoning that made the walk in `jmap-mail-sync` iterative.
-    /// `camel_folder_info_free` recursing over the result is Camel's own
-    /// bound and not one this side can lift.
+    /// `camel_folder_info_free` also recurses over `next`, so a wide sibling
+    /// list costs stack space the same way a deep one does; [`MAX_FOLDERS_IN_LISTING`]
+    /// bounds that side of the same risk.
     pub fn from_forest(siblings: &[FolderInfo], depth: Option<usize>) -> Self {
         let mut head: *mut CamelFolderInfo = ptr::null_mut();
         // Each entry is a sibling list, the info it hangs off — NULL for the
@@ -89,10 +101,15 @@ impl FolderInfoChain {
         // levels below it are still wanted.
         let mut pending: Vec<(&[FolderInfo], *mut CamelFolderInfo, Option<usize>)> =
             vec![(siblings, ptr::null_mut(), depth)];
+        let mut remaining = MAX_FOLDERS_IN_LISTING;
 
         while let Some((siblings, parent, depth)) = pending.pop() {
             let mut previous: *mut CamelFolderInfo = ptr::null_mut();
             for folder in siblings {
+                if remaining == 0 {
+                    break;
+                }
+                remaining -= 1;
                 let info = alloc_info(folder, parent);
                 // SAFETY: `previous` and `parent` are infos allocated by
                 // `alloc_info` earlier in this loop and not yet handed to
