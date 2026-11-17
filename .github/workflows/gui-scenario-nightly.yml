@@ -41,7 +41,9 @@ jobs:
       - run: ci/dovecot-oracle.sh start
       - name: Run every scenario
         run: |
-          scenarios=$(cd ci/gui-scenario/scenarios && ls *.py | sed 's/\.py$//')
+          # live-smoke needs --live and a real JMAP server; it always fails
+          # here, so it is not part of this mock-only run.
+          scenarios=$(cd ci/gui-scenario/scenarios && ls *.py | sed 's/\.py$//' | grep -v '^live-smoke$')
           ci/gui-scenario/run.sh $scenarios
       - uses: actions/upload-artifact@v4
         if: failure()
