@@ -14,17 +14,19 @@ mod common;
 
 use std::ffi::{CStr, CString};
 use std::ptr;
+use std::time::Duration;
 
 use common::Account;
 use common::signals::Context;
 use eds_sys::{
-    CAMEL_NETWORK_SECURITY_METHOD_NONE, CamelFolder, CamelNetworkSettings, CamelService,
-    camel_network_settings_set_host, camel_network_settings_set_port,
-    camel_network_settings_set_security_method, camel_service_connect_sync,
-    camel_service_disconnect_sync, camel_service_ref_session, camel_service_ref_settings,
-    camel_session_set_online, camel_store_get_folder_sync, camel_store_get_inbox_folder_sync,
+    CAMEL_NETWORK_SECURITY_METHOD_NONE, CamelFolder, CamelNetworkSettings, CamelOfflineStore,
+    CamelService, camel_network_settings_set_host, camel_network_settings_set_port,
+    camel_network_settings_set_security_method, camel_offline_store_set_online_sync,
+    camel_service_connect_sync, camel_service_disconnect_sync, camel_service_ref_session,
+    camel_service_ref_settings, camel_session_set_online, camel_store_get_folder_sync,
+    camel_store_get_inbox_folder_sync,
 };
-use glib_sys::{GError, GTRUE, g_error_free};
+use glib_sys::{GError, GFALSE, GTRUE, g_error_free};
 use gobject_sys::g_object_unref;
 use jmap_mock::MockServer;
 use jmap_proto::mail::role;
@@ -290,5 +292,70 @@ fn the_folder_tree_cache_is_not_readable_by_other_users() {
     assert_eq!(
         file_mode, 0o600,
         "the folder-tree cache file must not be group- or world-readable"
+    );
+}
+
+/// ROADMAP item 176(b): a `GNetworkMonitor` change (cable back) must
+/// reconnect the store and restart push, with no process restart. Evolution
+/// drives this at the Camel level with `camel_offline_store_set_online_sync`:
+/// a network-changed handler takes every service offline when the network
+/// goes away, and online again when it returns, through the same calls this
+/// test makes by hand.
+#[test]
+fn going_back_online_restarts_the_store_and_its_push_subscription() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    server
+        .state()
+        .lock()
+        .unwrap()
+        .account_mut(&account_id)
+        .unwrap()
+        .seed_mailbox("Inbox", Some(role::INBOX));
+    let port: u16 = server.origin().rsplit(':').next().unwrap().parse().unwrap();
+
+    let account = Account::open();
+    let service = account.store.cast::<CamelService>();
+    let offline_store = account.store.cast::<CamelOfflineStore>();
+    set_host_port(service, port);
+
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: a live service.
+    unsafe {
+        let connected = camel_service_connect_sync(service, ptr::null_mut(), &mut error);
+        assert_eq!(connected, GTRUE, "connect: {}", message(error));
+    }
+    server.wait_for_event_source_subscriber(Duration::from_secs(2));
+    assert!(
+        account.jmap().is_pushing(),
+        "a connected store must subscribe to push"
+    );
+
+    // The cable is pulled: the network monitor reports no network, and
+    // Evolution takes every service offline.
+    // SAFETY: a live offline store.
+    let offline = unsafe {
+        camel_offline_store_set_online_sync(offline_store, GFALSE, ptr::null_mut(), &mut error)
+    };
+    assert_eq!(offline, GTRUE, "go offline: {}", message(error));
+    assert!(
+        !account.jmap().is_pushing(),
+        "an offline store must not keep listening for push"
+    );
+
+    // The cable is back: the network monitor reports a network again, and
+    // Evolution takes the service online, with no restart of the process.
+    // SAFETY: a live offline store.
+    let online = unsafe {
+        camel_offline_store_set_online_sync(offline_store, GTRUE, ptr::null_mut(), &mut error)
+    };
+    assert_eq!(online, GTRUE, "go online: {}", message(error));
+    assert!(
+        account.jmap().is_connected(),
+        "going online must reconnect the store"
+    );
+    assert!(
+        account.jmap().is_pushing(),
+        "going online must restart the push subscription"
     );
 }
