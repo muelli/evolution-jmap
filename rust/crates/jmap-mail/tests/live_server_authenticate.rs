@@ -49,6 +49,7 @@ fn write_account_config() -> Option<(ServerConfig, String)> {
     let config = ServerConfig {
         target: ConnectTarget::Origin(origin.clone()),
         user: Some(user),
+        rebase_urls: false,
     };
     Some((config, origin))
 }

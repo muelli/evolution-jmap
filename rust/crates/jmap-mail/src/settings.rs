@@ -42,10 +42,12 @@
 //! two doors — property and accessor — looking at one value instead of two.
 
 use std::ffi::CStr;
+use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eds_sys::{
     CamelNetworkSecurityMethod, CamelNetworkSettings, CamelOfflineSettings,
-    CamelOfflineSettingsClass, camel_network_settings_dup_auth_mechanism,
+    CamelOfflineSettingsClass, CamelSettings, camel_network_settings_dup_auth_mechanism,
     camel_network_settings_dup_host, camel_network_settings_dup_user,
     camel_network_settings_get_port, camel_network_settings_get_security_method,
     camel_network_settings_get_type, camel_network_settings_set_auth_mechanism,
@@ -53,19 +55,25 @@ use eds_sys::{
     camel_network_settings_set_security_method, camel_network_settings_set_user,
     camel_offline_settings_get_type,
 };
-use glib_sys::GType;
+use glib_sys::{GFALSE, GType};
 use gobject_sys::{
-    GObject, GObjectClass, GParamSpec, GValue, g_object_class_override_property, g_value_get_enum,
-    g_value_get_string, g_value_get_uint, g_value_set_enum, g_value_set_uint, g_value_take_string,
+    G_PARAM_READWRITE, GObject, GObjectClass, GParamSpec, GValue, g_object_class_install_property,
+    g_object_class_override_property, g_param_spec_boolean, g_value_get_boolean, g_value_get_enum,
+    g_value_get_string, g_value_get_uint, g_value_set_boolean, g_value_set_enum, g_value_set_uint,
+    g_value_take_string,
 };
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
 
-/// The instance struct. Adds nothing of its own: every value this type carries
-/// is stored by the `CamelNetworkSettings` interface, in per-object data.
+/// The instance struct. Every value of the `CamelNetworkSettings` interface
+/// is stored by the interface itself, in per-object data. `rebase_urls` is
+/// the one value this type stores on its own: the rebase opt-in has no
+/// interface to back it, so `jmap-backend-collection`'s `mail_child` module
+/// binds it here by plain property name instead.
 #[repr(C)]
 pub struct JmapSettings {
     parent: CamelOfflineSettings,
+    rebase_urls: AtomicBool,
 }
 
 /// The class struct, where the property overrides and the two accessors that
@@ -100,6 +108,17 @@ const PROP_HOST: u32 = PROPERTIES[1].0;
 const PROP_PORT: u32 = PROPERTIES[2].0;
 const PROP_SECURITY_METHOD: u32 = PROPERTIES[3].0;
 const PROP_USER: u32 = PROPERTIES[4].0;
+
+/// The id of the one property this class declares on its own, rather than
+/// overriding from `CamelNetworkSettings`. Dense with [`PROPERTIES`], so it
+/// cannot collide with them either.
+const PROP_REBASE_URLS: u32 = 6;
+
+/// The name of [`PROP_REBASE_URLS`]: `e_source_camel_generate_subtype`
+/// mirrors it, by this name, onto the `ESourceCamel` subtype it generates for
+/// the `jmap` protocol. `jmap-backend-collection`'s `mail_child` module binds
+/// the account's `[JMAP Rebase]` onto that mirrored property.
+const PROP_NAME_REBASE_URLS: &CStr = c"rebase-urls";
 
 // SAFETY: both structs are #[repr(C)] and lead with the CamelOfflineSettings
 // instance and class structs, whose layouts eds-sys's tests/layout.rs checks
@@ -142,6 +161,19 @@ unsafe impl ObjectSubclass for JmapSettings {
                 // here.
                 g_object_class_override_property(object_class, id, name.as_ptr());
             }
+
+            // Not an interface property: a plain boolean this class stores on
+            // its own instance. `FALSE` is also the default of a never-set
+            // `[JMAP Rebase]`, so an account with no opt-in gets the same
+            // answer on both sides.
+            let pspec = g_param_spec_boolean(
+                PROP_NAME_REBASE_URLS.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                GFALSE,
+                G_PARAM_READWRITE,
+            );
+            g_object_class_install_property(object_class, PROP_REBASE_URLS, pspec);
         }
     }
 }
@@ -189,6 +221,14 @@ unsafe extern "C" fn set_property(
                     g_value_get_enum(value) as CamelNetworkSecurityMethod,
                 ),
                 PROP_USER => camel_network_settings_set_user(settings, g_value_get_string(value)),
+                // Not an interface property: read straight from the GValue
+                // and store it on this instance, by the contract above.
+                PROP_REBASE_URLS => object
+                    .cast::<JmapSettings>()
+                    .as_ref()
+                    .expect("object is a live instance by the contract above")
+                    .rebase_urls
+                    .store(g_value_get_boolean(value) != GFALSE, Ordering::Relaxed),
                 _ => log_critical(&format!(
                     "CamelJmapSettings has no property with id {id}; the value is dropped"
                 )),
@@ -228,10 +268,48 @@ unsafe extern "C" fn get_property(
                 PROP_USER => {
                     g_value_take_string(value, camel_network_settings_dup_user(settings));
                 }
+                PROP_REBASE_URLS => g_value_set_boolean(
+                    value,
+                    object
+                        .cast::<JmapSettings>()
+                        .as_ref()
+                        .expect("object is a live instance by the contract above")
+                        .rebase_urls
+                        .load(Ordering::Relaxed) as _,
+                ),
                 _ => log_critical(&format!(
                     "CamelJmapSettings has no property with id {id}; nothing is read"
                 )),
             }
         }
     });
+}
+
+/// Whether `settings` opts in to the rebase of the JMAP session's URLs onto
+/// the origin of the actual connection (see
+/// [`jmap_backend_core::rebase::rebase_urls`], the account-side read of the
+/// same fact).
+///
+/// `jmap-backend-collection`'s `mail_child` module binds this property from
+/// the account's `[JMAP Rebase]` onto the mail child's own settings
+/// extension, which `e_source_camel_configure_service` then shares with the
+/// live `CamelService` as its `CamelSettings`. This function is the mail
+/// side's read of that value: a `CamelService` has no `ESource` of its own
+/// to read the opt-in from directly (see `crate::connect`'s module doc).
+///
+/// # Safety
+///
+/// `settings` must be a valid instance of the type [`settings_type`]
+/// registers, i.e. the one `camel_service_ref_settings` returns for a JMAP
+/// store or transport. It is only read from, and nothing outlives the call.
+pub unsafe fn rebase_urls(settings: *mut CamelSettings) -> bool {
+    // SAFETY: the contract above.
+    unsafe {
+        settings
+            .cast::<JmapSettings>()
+            .as_ref()
+            .expect("settings is a live instance by the contract above")
+            .rebase_urls
+            .load(Ordering::Relaxed)
+    }
 }

@@ -287,6 +287,7 @@ fn an_authentication_the_user_stopped_does_not_reach_the_server() {
     let config = ServerConfig {
         target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
+        rebase_urls: false,
     };
 
     let outcome = {
@@ -328,6 +329,7 @@ fn a_connection_does_not_inherit_the_cancellation_of_the_call_that_opened_it() {
     let config = ServerConfig {
         target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
+        rebase_urls: false,
     };
 
     let flag = CancelFlag::new();
