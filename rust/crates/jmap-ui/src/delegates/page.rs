@@ -49,10 +49,10 @@ use evo_sys::{
     gtk_tree_selection_set_mode, gtk_tree_view_append_column, gtk_tree_view_column_add_attribute,
     gtk_tree_view_column_new, gtk_tree_view_column_pack_start, gtk_tree_view_column_set_expand,
     gtk_tree_view_column_set_title, gtk_tree_view_get_selection, gtk_tree_view_new_with_model,
-    gtk_tree_view_set_headers_visible,
-    gtk_widget_destroy, gtk_widget_get_toplevel, gtk_widget_set_hexpand, gtk_widget_set_sensitive,
-    gtk_widget_set_size_request, gtk_widget_set_vexpand, gtk_widget_show_all, gtk_window_get_type,
-    gtk_window_set_title, gtk_window_set_transient_for,
+    gtk_tree_view_set_headers_visible, gtk_widget_destroy, gtk_widget_get_toplevel,
+    gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_size_request,
+    gtk_widget_set_vexpand, gtk_widget_show_all, gtk_window_get_type, gtk_window_set_title,
+    gtk_window_set_transient_for,
 };
 use gio_sys::{
     GAsyncReadyCallback, GAsyncResult, GCancellable, GTask, g_task_new, g_task_propagate_boolean,
