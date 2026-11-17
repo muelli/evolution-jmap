@@ -1,24 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! ROADMAP item 179(a), finding F3: a real Evolution showed bob's shared
-//! folders in `folder-tree.json` with the right `account_id`, but no children
-//! under "Shared/bob@...". `folders.rs`'s `Request` filters the answer to the
-//! subscribed folders when Camel asks with `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`
-//! (the account's "Show only subscribed folders" setting, or the default
-//! Evolution sends while first building a `CamelSubscribable` store's tree).
+//! A real Evolution showed bob's shared folders in its folder tree, with the
+//! right `account_id`, but no children under "Shared/bob@...". `folders.rs`'s
+//! `Request` filters the answer to the subscribed folders when Camel asks
+//! with `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED` (the account's "Show only
+//! subscribed folders" setting, or the default Evolution sends while first
+//! building a `CamelSubscribable` store's tree).
 //!
-//! This test checks the one real-server fact that decides whether that filter
-//! hides a shared folder's children: what `isSubscribed` the owner's own
-//! `Mailbox/get` gives for a share, seen from the grantee's side.
-//! `notes/SHARED-MAILBOXES-2026-10-30.md` (157 (a)) already found a grantee
-//! often cannot change it. If it comes back `false`, as it does on Stalwart
-//! (confirmed live: grantee's own `Mailbox/get` returns the owner's own
-//! subscription flag, not anything about the grantee's wish to see it), then
-//! [`FolderTree::merge_shared`] must not let that flag decide whether the
-//! folder is visible, the same "show what the server grants, regardless of
-//! `isSubscribed`" rule ROADMAP item 163 already applies to address books and
-//! calendars.
+//! This test checks the one real-server fact that decides whether that
+//! filter hides a shared folder's children: what `isSubscribed` the
+//! grantee's own `Mailbox/get` gives for a share. Confirmed live: it comes
+//! back `false` on Stalwart by default, and nothing in Evolution can set it.
+//! So [`FolderTree::merge_shared`] must not let that flag decide whether the
+//! folder is visible.
 //!
 //! ## Running it
 //!
@@ -121,11 +116,11 @@ fn route_through_loopback() {
 }
 
 /// A shared mailbox must appear to the grantee's folder tree regardless of
-/// the owner's own `isSubscribed` value for it: the same visibility rule
-/// ROADMAP item 163 already applies to shared address books and calendars.
+/// the grantee's own `isSubscribed` value for it, which starts false for a
+/// new share and which nothing in Evolution can set.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
-fn a_shared_mailbox_is_visible_in_the_folder_tree_regardless_of_the_owners_subscription() {
+fn a_shared_mailbox_is_visible_in_the_folder_tree_regardless_of_the_grantees_subscription() {
     route_through_loopback();
     let Some((owner, _owner_address)) = connect_owner() else {
         eprintln!(
@@ -200,7 +195,7 @@ fn a_shared_mailbox_is_visible_in_the_folder_tree_regardless_of_the_owners_subsc
     assert!(
         merged.subscribed,
         "a shared folder must stay visible to Evolution's \"only subscribed\" filter \
-         regardless of the owner's own isSubscribed value for it"
+         regardless of the grantee's own isSubscribed value for it"
     );
 
     owner
