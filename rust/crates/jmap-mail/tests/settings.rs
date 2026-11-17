@@ -31,13 +31,13 @@ use eds_sys::{
     camel_network_settings_set_host, camel_network_settings_set_user,
     camel_offline_settings_get_type, camel_settings_clone, camel_settings_equal,
 };
-use glib_sys::{GFALSE, gpointer};
+use glib_sys::{GFALSE, GTRUE, gpointer};
 use gobject_sys::{
     GObject, g_object_class_find_property, g_object_get, g_object_new, g_object_set,
     g_object_unref, g_type_class_ref, g_type_class_unref, g_type_is_a,
 };
 use jmap_backend_core::subclass::ObjectSubclass;
-use jmap_mail::settings::{JmapSettings, settings_type};
+use jmap_mail::settings::{JmapSettings, rebase_urls, settings_type};
 use jmap_mail::store::store_type;
 
 /// The five properties that `CamelNetworkSettings` declares, spelled exactly
@@ -291,5 +291,48 @@ fn the_store_instantiates_these_settings_and_not_camels_default() {
             "the store does not instantiate CamelJmapSettings"
         );
         g_type_class_unref(class.cast());
+    }
+}
+
+/// `rebase-urls` is not part of `CamelNetworkSettings`: it is a property this
+/// class declares on its own, the way `jmap-backend-collection`'s
+/// `mail_child` module needs it. The round trip exercises both halves: a
+/// value `g_object_set` writes, which is how `e_source_camel_configure_service`'s
+/// generated binding reaches this class, and [`rebase_urls`], which is how
+/// `ServerConfig::from_settings` reads it back.
+#[test]
+fn rebase_urls_set_by_name_reaches_the_accessor() {
+    let settings = new_settings();
+    // SAFETY: `settings` is an instance of the type, and `rebase-urls` is a
+    // boolean property. The accessor only reads the instance.
+    unsafe {
+        assert!(
+            !rebase_urls(settings),
+            "an unconfigured settings object already opts in to the rebase"
+        );
+
+        g_object_set(
+            settings.cast::<GObject>(),
+            c"rebase-urls".as_ptr(),
+            GTRUE,
+            ptr::null::<i8>(),
+        );
+        assert!(
+            rebase_urls(settings),
+            "a rebase-urls property set by name did not reach the accessor"
+        );
+
+        g_object_set(
+            settings.cast::<GObject>(),
+            c"rebase-urls".as_ptr(),
+            GFALSE,
+            ptr::null::<i8>(),
+        );
+        assert!(
+            !rebase_urls(settings),
+            "a rebase-urls property cleared by name did not reach the accessor"
+        );
+
+        g_object_unref(settings.cast());
     }
 }

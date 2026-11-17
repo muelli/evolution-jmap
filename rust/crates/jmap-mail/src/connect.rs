@@ -548,13 +548,13 @@ pub fn open_mail(config: &ServerConfig, credentials: Credentials) -> Result<Mail
     // operation that opened the connection stays set forever after one Stop.
     // The scope that the vfunc installs (`jmap_backend_core::cancel::observe`)
     // cancels a JMAP operation. The client checks that scope first.
-    // `false`: Camel keeps the server of this account in `CamelNetworkSettings`,
-    // not in an `ESource` extension (the docs of `crate::server` tell why).
-    // Thus there is no per-source rebase opt-in
-    // (`jmap_backend_core::rebase::rebase_urls`) to read here.
+    // `config.rebase_urls`: Camel keeps the server of this account in
+    // `CamelNetworkSettings`, not in an `ESource` extension (the docs of
+    // `crate::server` tell why), so the opt-in travels through a
+    // `CamelJmapSettings` property instead; see `crate::settings::rebase_urls`.
     // `JMAP_LIVE_SERVER_REBASE_URLS` still applies through the OR with the
     // environment variable in `source::connect`.
-    let client = source::connect(&config.target, false, credentials)?;
+    let client = source::connect(&config.target, config.rebase_urls, credentials)?;
     // Check this before the account lookup. An anonymous session has no
     // capability. Thus a lookup first reports "no mail capability", not the
     // unauthenticated connection. See `StoreError::Unauthenticated`.

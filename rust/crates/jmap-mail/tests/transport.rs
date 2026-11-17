@@ -52,6 +52,7 @@ fn config(server: &MockServer) -> ServerConfig {
     ServerConfig {
         target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
+        rebase_urls: false,
     }
 }
 
@@ -212,6 +213,7 @@ fn a_failed_attempt_leaves_a_working_connection_alone() {
         // Port 1 is reserved and nothing listens there.
         target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
+        rebase_urls: false,
     };
     authenticate(&*transport, &unreachable, Credentials::none())
         .expect_err("nothing listens there");

@@ -44,6 +44,7 @@ fn config(server: &MockServer) -> ServerConfig {
     ServerConfig {
         target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
+        rebase_urls: false,
     }
 }
 
@@ -350,6 +351,7 @@ fn an_unreachable_server_is_an_error_not_a_credentials_problem() {
         // Port 1 is reserved. Nothing listens there.
         target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
+        rebase_urls: false,
     };
     let error = expect_error(open(&config, None));
     assert_eq!(error.authentication_result(), CAMEL_AUTHENTICATION_ERROR);

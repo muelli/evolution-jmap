@@ -386,6 +386,7 @@ fn the_documented_services_both_reach_the_mock_server() {
             Ok(ServerConfig {
                 target: ConnectTarget::Origin("http://127.0.0.1:8080".to_owned()),
                 user: None,
+                rebase_urls: false,
             }),
             "docs/examples/{name} does not reach the mock server"
         );

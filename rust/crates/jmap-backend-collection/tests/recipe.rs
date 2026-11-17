@@ -491,6 +491,7 @@ fn the_documented_transport_reaches_the_mock_server() {
                         "http://127.0.0.1:8080".to_owned()
                     ),
                     user: None,
+                    rebase_urls: false,
                 }),
                 "docs/examples/{name} does not reach the mock server"
             );

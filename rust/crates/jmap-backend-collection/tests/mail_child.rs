@@ -59,6 +59,7 @@ use jmap_backend_collection::mail_child::{
 };
 use jmap_backend_collection::prepare_mail::MAIL_BACKEND_NAME;
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::rebase;
 use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
@@ -542,6 +543,7 @@ fn the_transport_sends_through_the_server_the_provider_would_connect_to() {
             Ok(ServerConfig {
                 target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
                 user: Some("vera@example.com".to_owned()),
+                rebase_urls: false,
             })
         );
         assert_eq!(
@@ -578,7 +580,38 @@ fn a_plaintext_account_reaches_its_transport_as_plaintext() {
             Ok(ServerConfig {
                 target: ConnectTarget::Origin("http://localhost:8080".to_owned()),
                 user: Some("vera".to_owned()),
+                rebase_urls: false,
             })
+        );
+    });
+}
+
+#[test]
+fn the_transports_rebase_opt_in_follows_the_account() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    with_timeout(|| {
+        // Mail has no `ESource` of its own to read `[JMAP Rebase]` from (see
+        // `jmap_mail::connect`'s module doc), so the opt-in travels through a
+        // `CamelJmapSettings` property that `e_source_camel_generate_subtype`
+        // mirrors onto the mail child's own settings extension. This test
+        // checks the same end result as the server() tests above: what
+        // `connect_sync` reads, not the written keys.
+        let account = Source::account();
+        // SAFETY: a live source.
+        unsafe { rebase::write(account.0, true) };
+        let transport = Source::service(E_SOURCE_EXTENSION_MAIL_TRANSPORT, MAIL_BACKEND_NAME);
+
+        // SAFETY: two live sources.
+        unsafe { follow_collection(account.0, transport.0) };
+
+        assert_eq!(
+            transport.server(),
+            Ok(ServerConfig {
+                target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
+                user: Some("vera@example.com".to_owned()),
+                rebase_urls: true,
+            }),
+            "the transport did not follow the account's rebase opt-in"
         );
     });
 }

@@ -748,6 +748,7 @@ fn the_mail_account_names_the_server_the_store_would_connect_to() {
         Ok(ServerConfig {
             target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
             user: Some("vera".to_owned()),
+            rebase_urls: false,
         })
     );
 }
@@ -886,6 +887,7 @@ fn an_account_the_user_did_not_secure_reaches_its_server_in_plaintext() {
         Ok(ServerConfig {
             target: ConnectTarget::Origin("http://localhost:8080".to_owned()),
             user: Some("vera".to_owned()),
+            rebase_urls: false,
         })
     );
 }
@@ -936,6 +938,7 @@ fn moving_an_account_to_another_server_reaches_the_settings_camel_holds() {
             // default.
             target: ConnectTarget::Domain("jmap.example.org".to_owned()),
             user: Some("vera.new".to_owned()),
+            rebase_urls: false,
         })
     );
 }

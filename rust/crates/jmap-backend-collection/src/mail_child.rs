@@ -85,9 +85,9 @@ use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_MAIL_ACCOUNT,
     E_SOURCE_EXTENSION_MAIL_TRANSPORT, E_SOURCE_EXTENSION_SECURITY, ESource, ESourceBackend,
     ESourceSecurity, e_binding_bind_property, e_binding_bind_property_full,
-    e_source_authentication_get_type, e_source_backend_dup_backend_name, e_source_get_extension,
-    e_source_mail_account_get_type, e_source_mail_transport_get_type, e_source_security_get_type,
-    e_source_security_set_method,
+    e_source_authentication_get_type, e_source_backend_dup_backend_name,
+    e_source_camel_get_extension_name, e_source_get_extension, e_source_mail_account_get_type,
+    e_source_mail_transport_get_type, e_source_security_get_type, e_source_security_set_method,
 };
 use glib_sys::{GFALSE, GTRUE, gboolean, gpointer};
 use gobject_sys::{
@@ -266,7 +266,53 @@ pub unsafe fn follow_server(collection: *mut ESource, child: *mut ESource) {
         // setter copies.
         unsafe { e_source_security_set_method(security, MAIL_SECURITY_METHOD_TLS.as_ptr()) };
     }
+
+    // The rebase opt-in. A `CamelService` has no `ESource` of its own to read
+    // `[JMAP Rebase]` from (`jmap_mail::connect`'s module doc tells why), so
+    // this crate's own extension type cannot be bound onto the mail child the
+    // way `[Authentication]`/`[Security]` are above. Instead,
+    // `jmap_mail::settings::JmapSettings` carries a plain `rebase-urls`
+    // property, and `e_source_camel_generate_subtype` mirrors that property,
+    // by the same name, onto the mail child's own generated settings
+    // extension when `evolution-source-registry` loads the `jmap` Camel
+    // provider, the same way it mirrors every provider's settings onto every
+    // mail source. Binding onto that mirrored property gets the opt-in to the
+    // live `CamelSettings` the same way host and port already get there.
+    //
+    // Test for the group on the account, and never create it, for the same
+    // reason as `[Authentication]` above: an account that never opted in has
+    // nothing to copy, and the mirrored property's own default is already
+    // `FALSE`.
+    // SAFETY: valid sources by the contract of this function, and a header
+    // constant.
+    if let Some(from) =
+        unsafe { extension_if_present(collection, jmap_backend_core::rebase::EXTENSION_NAME) }
+    {
+        // SAFETY: a NUL-terminated protocol name, by a header constant.
+        let settings_extension_name =
+            unsafe { e_source_camel_get_extension_name(jmap_backend_core::BACKEND_NAME.as_ptr()) };
+        // SAFETY: created on demand on the mail source, and owned by it, the
+        // same way the mail child's `[Authentication]` is above.
+        let to = unsafe { e_source_get_extension(child, settings_extension_name) };
+        // SAFETY: two live extension objects and a NUL-terminated property
+        // name that both have; the binding is `(transfer none)` and owned by
+        // the two objects it joins.
+        unsafe {
+            e_binding_bind_property(
+                from,
+                PROP_NAME_REBASE_URLS.as_ptr(),
+                to,
+                PROP_NAME_REBASE_URLS.as_ptr(),
+                G_BINDING_SYNC_CREATE,
+            );
+        }
+    }
 }
+
+/// The name of the rebase opt-in property, on both `[JMAP Rebase]` and the
+/// mail child's generated settings extension. The two sides happen to agree
+/// on the name; nothing requires them to.
+const PROP_NAME_REBASE_URLS: &CStr = c"rebase-urls";
 
 /// Converts the `secure` of the account to the `[Security] Method` of a mail
 /// source: a `CamelNetworkSecurityMethod` nick, not one of the two EDS words.

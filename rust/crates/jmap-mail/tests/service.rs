@@ -52,6 +52,7 @@ fn config(server: &MockServer) -> ServerConfig {
     ServerConfig {
         target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
+        rebase_urls: false,
     }
 }
 
@@ -158,6 +159,7 @@ fn an_unreachable_server_is_an_error_with_the_gerror_camel_routes_on() {
         // Port 1 is reserved and nothing listens there.
         target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
+        rebase_urls: false,
     };
 
     let reported = Reported::of(open(&store, &config, None));
@@ -199,6 +201,7 @@ fn an_account_with_no_server_fails_without_asking_for_a_password() {
     let config = ServerConfig {
         target: ConnectTarget::Origin(String::new()),
         user: None,
+        rebase_urls: false,
     };
 
     let outcome = open(&store, &config, None);
@@ -229,6 +232,7 @@ fn a_failed_attempt_leaves_a_working_connection_alone() {
     let unreachable = ServerConfig {
         target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
+        rebase_urls: false,
     };
     open(&store, &unreachable, None).expect_err("nothing listens there");
 

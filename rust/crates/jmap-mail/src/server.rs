@@ -63,6 +63,10 @@ pub struct ServerConfig {
     pub target: ConnectTarget,
     /// The user name to authenticate as, if the account names one.
     pub user: Option<String>,
+    /// Whether this account opts in to the rebase of the session's URLs onto
+    /// the origin of the actual connection. [`crate::settings::rebase_urls`]
+    /// reads it off the settings object this is built from.
+    pub rebase_urls: bool,
 }
 
 impl ServerConfig {
@@ -95,9 +99,13 @@ impl ServerConfig {
         let secure = unsafe { camel_network_settings_get_security_method(network) }
             != CAMEL_NETWORK_SECURITY_METHOD_NONE;
 
+        // SAFETY: the contract above is the contract of `crate::settings::rebase_urls`.
+        let rebase_urls = unsafe { crate::settings::rebase_urls(settings) };
+
         Ok(Self {
             target: connect_target(host.as_deref(), port, secure)?,
             user,
+            rebase_urls,
         })
     }
 }
