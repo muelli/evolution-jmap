@@ -42,11 +42,12 @@ use evo_sys::{
     e_date_edit_get_date, e_date_edit_get_entry, e_date_edit_new,
     e_date_edit_set_allow_no_date_set, e_date_edit_set_date, e_date_edit_set_show_time,
     e_date_edit_set_time, e_mail_config_page_get_type, e_shell_get_default, gtk_box_new,
-    gtk_box_pack_start, gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_entry_new,
-    gtk_grid_attach, gtk_grid_new, gtk_grid_set_column_spacing, gtk_grid_set_row_spacing,
-    gtk_label_new, gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
+    gtk_box_pack_start, gtk_check_button_new_with_mnemonic, gtk_combo_box_get_type,
+    gtk_container_add, gtk_container_get_children, gtk_entry_new, gtk_grid_attach, gtk_grid_new,
+    gtk_grid_set_column_spacing, gtk_grid_set_row_spacing, gtk_label_get_text, gtk_label_new,
+    gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
     gtk_label_set_xalign, gtk_scrolled_window_get_type, gtk_text_view_get_buffer,
-    gtk_text_view_new, gtk_text_view_set_accepts_tab, gtk_widget_set_hexpand,
+    gtk_text_view_new, gtk_text_view_set_accepts_tab, gtk_widget_hide, gtk_widget_set_hexpand,
     gtk_widget_set_sensitive, gtk_widget_set_vexpand, gtk_widget_show_all,
 };
 use gio_sys::{
@@ -57,11 +58,12 @@ use gio_sys::{
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_new_literal, gboolean, gpointer};
 use gobject_sys::{
     GObject, GObjectClass, GTypeInstance, g_object_ref, g_object_unref, g_signal_connect_data,
-    g_signal_handler_disconnect, g_type_from_name,
+    g_signal_handler_disconnect, g_type_check_instance_is_a, g_type_from_name,
 };
 use jmap_backend_core::callback::gcallback;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
+use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::object_data::ObjectData;
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, TypeSizes};
 use jmap_backend_core::trampoline::{guard, log_critical};
@@ -240,6 +242,12 @@ unsafe fn attach_row(grid: *mut GtkWidget, row: c_int, label: &CStr, input: *mut
 /// the `EDateEdit` container leaves that entry with no accessible name at
 /// all, even though the visible label and the Alt-key shortcut both work.
 ///
+/// `mnemonic_target` also gets the caption as its own accessible name,
+/// not just the mnemonic relation: a live AT-SPI walk of the page before
+/// its first load found the relation alone does not resolve to a name for
+/// an `EDateEdit`'s nested entry there, even though the relation itself
+/// already targets the right widget.
+///
 /// # Safety
 ///
 /// `grid` must be a live grid; `input` and `mnemonic_target` must be live
@@ -257,6 +265,8 @@ unsafe fn attach_row_targeted(
     // per the contract.
     unsafe {
         let label = gtk_label_new_with_mnemonic(text.as_ptr());
+        let caption = read_string(gtk_label_get_text(label.cast())).unwrap_or_default();
+        widget::set_accessible_name(mnemonic_target.cast(), &caption);
         gtk_label_set_xalign(label.cast(), 1.0);
         gtk_label_set_mnemonic_widget(label.cast(), mnemonic_target);
         gtk_grid_attach(grid.cast(), label, 0, row, 1, 1);
@@ -340,6 +350,11 @@ unsafe fn build_widgets(page: *mut GObject) {
         let buffer = gtk_text_view_get_buffer(body.cast());
 
         gtk_widget_show_all(page.cast());
+        // See `hide_time_combo`: `show_all` just re-showed both fields'
+        // time combos, and the `show-time` property is already off, so
+        // setting it again here would not hide them again.
+        hide_time_combo(from_date);
+        hide_time_combo(to_date);
 
         // After a successful load, the check button controls the grid.
         g_signal_connect_data(
@@ -773,6 +788,39 @@ unsafe fn snapshot(ui: &UiState) -> VacationForm {
     }
 }
 
+/// Hides `field`'s time combo, bypassing `e_date_edit_set_show_time`.
+///
+/// A later `gtk_widget_show_all` on an ancestor (`build_widgets`'s own, on
+/// the whole page) re-shows every descendant it did not itself hide,
+/// including this combo: `show-time` turning it off only calls
+/// `gtk_widget_hide` once, on the value's first change, from `GtkWidget`'s
+/// default-visible state to hidden. Calling the setter again after
+/// `show_all` with the same value it already holds is a no-op: the
+/// property's own change guard skips the call that would hide it again.
+/// Walking to the combo directly and hiding it is unconditional.
+///
+/// # Safety
+///
+/// `field` must be a live `EDateEdit` widget, on the main thread.
+unsafe fn hide_time_combo(field: *mut GtkWidget) {
+    // SAFETY: per the contract. The list is freed right after, never past
+    // this call.
+    unsafe {
+        let children = gtk_container_get_children(field.cast());
+        let mut node = children;
+        while !node.is_null() {
+            let child = (*node).data as *mut GtkWidget;
+            if g_type_check_instance_is_a(child.cast::<GTypeInstance>(), gtk_combo_box_get_type())
+                != GFALSE
+            {
+                gtk_widget_hide(child);
+            }
+            node = (*node).next;
+        }
+        glib_sys::g_list_free(children);
+    }
+}
+
 /// A date-only [`EDateEdit`] that can have no date. This agrees with the
 /// nullable date bounds of RFC 8621 §8.
 ///
@@ -839,9 +887,8 @@ unsafe fn set_date(field: *mut GtkWidget, value: &str) {
 mod tests {
     use std::ffi::{c_char, c_void};
 
-    use evo_sys::{gtk_label_get_mnemonic_widget, gtk_label_get_text, gtk_widget_destroy};
+    use evo_sys::{gtk_label_get_mnemonic_widget, gtk_widget_destroy};
     use gobject_sys::g_object_get;
-    use jmap_backend_core::marshal::read_string;
     use jmap_client::{Client, Credentials};
     use jmap_mock::MockServer;
     use jmap_proto::Id;
@@ -857,6 +904,7 @@ mod tests {
         ) -> *mut GtkWidget;
         /// The message row's column (`attach_row`'s `input`), row 3.
         fn gtk_grid_get_child_at(grid: *mut GtkWidget, left: c_int, top: c_int) -> *mut GtkWidget;
+        fn gtk_widget_get_visible(widget: *mut GtkWidget) -> glib_sys::gboolean;
     }
 
     /// Layout (item 174 (a)): the message body must not force the page to
@@ -978,6 +1026,94 @@ mod tests {
                         "the {name} label's mnemonic relation targets the EDateEdit \
                      container instead of its entry"
                     );
+                }
+
+                gtk_widget_destroy(page);
+            }
+        });
+    }
+
+    /// Accessibility (item 174, read-only offline state): the date field's
+    /// own accessible name must not depend only on the mnemonic relation.
+    /// A live AT-SPI walk of the page before its first load (the state it
+    /// stays in while offline) found the relation does not resolve to a
+    /// name there, even though `gtk_label_get_mnemonic_widget` already
+    /// targets the right entry; a direct name is a name either way. Needs
+    /// a display; skips without one.
+    #[test]
+    fn the_date_field_entries_have_their_own_accessible_name() {
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: see the test above; the same stand-in instance works here.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
+
+                let grid = state(page.cast()).unwrap().borrow().grid;
+                for (row, name) in [(0, "First day:"), (1, "Last day:")] {
+                    let field = gtk_grid_get_child_at(grid, 1, row);
+                    let entry = e_date_edit_get_entry(field.cast()).cast();
+                    assert_eq!(
+                        widget::get_accessible_name(entry),
+                        name,
+                        "the {name} entry has no accessible name of its own"
+                    );
+                }
+
+                gtk_widget_destroy(page);
+            }
+        });
+    }
+
+    /// Layout (item 174, read-only offline state): the date fields must
+    /// stay date-only, as the module comment on their construction already
+    /// promises. A live AT-SPI walk of the offline page, then a screenshot,
+    /// found a "Time" combo visibly showing next to each date, even though
+    /// `new_date_field` already turns `show-time` off: `build_widgets`'s own
+    /// later `gtk_widget_show_all` re-shows every descendant `show-time`
+    /// hid, because turning it off only calls `gtk_widget_hide`, it does
+    /// not mark the combo `no-show-all`. Needs a display; skips without
+    /// one.
+    #[test]
+    fn the_date_fields_stay_date_only_after_the_page_is_shown() {
+        crate::gtk_test_main::run(|| {
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: see the tests above; the same stand-in instance works here.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
+
+                let grid = state(page.cast()).unwrap().borrow().grid;
+                for (row, name) in [(0, "First day"), (1, "Last day")] {
+                    let field = gtk_grid_get_child_at(grid, 1, row);
+                    let children = gtk_container_get_children(field.cast());
+                    let mut node = children;
+                    let mut found_combo = false;
+                    while !node.is_null() {
+                        let child = (*node).data as *mut GtkWidget;
+                        if g_type_check_instance_is_a(
+                            child.cast::<GTypeInstance>(),
+                            gtk_combo_box_get_type(),
+                        ) != GFALSE
+                        {
+                            found_combo = true;
+                            assert_eq!(
+                                gtk_widget_get_visible(child),
+                                GFALSE,
+                                "the {name} field's time combo is visible after the page is shown"
+                            );
+                        }
+                        node = (*node).next;
+                    }
+                    glib_sys::g_list_free(children);
+                    assert!(found_combo, "the {name} field has no time combo to check");
                 }
 
                 gtk_widget_destroy(page);
