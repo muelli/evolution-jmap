@@ -47,6 +47,7 @@ MAIL_CAPABILITY = "urn:ietf:params:jmap:mail"
 CONTACTS_CAPABILITY = "urn:ietf:params:jmap:contacts"
 CALENDARS_CAPABILITY = "urn:ietf:params:jmap:calendars"
 SUBMISSION_CAPABILITY = "urn:ietf:params:jmap:submission"
+PRINCIPALS_CAPABILITY = "urn:ietf:params:jmap:principals"
 
 
 class ScenarioFailure(Exception):
@@ -500,6 +501,38 @@ class Jmap:
         if email is None:
             return None
         return {name for name, value in (email.get("keywords") or {}).items() if value}
+
+    def resolve_principal_id(self, email):
+        """Return the one principal id whose address matches `email`.
+
+        Mirrors `jmap_ui::delegates::io::resolve_principal`'s own
+        `Principal/query` lookup, so a scenario can check a grant's
+        `shareWith` key, which the product writes with this id, not the
+        typed address.
+        """
+        found = self.call(
+            "Principal/query", {"filter": {"email": email}}, extra_using=(PRINCIPALS_CAPABILITY,)
+        )["ids"]
+        if len(found) != 1:
+            raise ScenarioFailure(f"Principal/query found {len(found)} matches for {email!r}")
+        return found[0]
+
+    def principal_display(self, principal_id):
+        """Return the Delegates list's row text for `principal_id`.
+
+        Mirrors `jmap_ui::delegation::principal_label`: "name <email>",
+        whichever of the two the server has, or the raw id with neither.
+        """
+        found = self.call(
+            "Principal/get", {"ids": [principal_id]}, extra_using=(PRINCIPALS_CAPABILITY,)
+        )["list"]
+        if not found:
+            return principal_id
+        name = (found[0].get("name") or "").strip()
+        email = (found[0].get("email") or "").strip() or None
+        if name and email:
+            return f"{name} <{email}>"
+        return name or email or principal_id
 
 
 # AT-SPI.

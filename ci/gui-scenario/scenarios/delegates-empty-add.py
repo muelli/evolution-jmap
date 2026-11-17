@@ -159,12 +159,14 @@ def run():
 
     click_button(dialog, OK_LABEL)
     wait_for(lambda: window(ADD_DIALOG) is None, "the Add Delegate dialog closes")
-    wait_for(lambda: find(editor, "table cell", PRINCIPAL), f"{PRINCIPAL!r} listed")
-    say(f"page: {PRINCIPAL!r} listed, the dialog only let a real grant through")
+    principal_id = server.resolve_principal_id(PRINCIPAL)
+    principal_display = server.principal_display(principal_id)
+    wait_for(lambda: find(editor, "table cell", principal_display), f"{principal_display!r} listed")
+    say(f"page: {principal_display!r} listed, the dialog only let a real grant through")
 
     calendar_rights = wait_for(
-        lambda: shared_with(server, "Calendar", calendar_id, PRINCIPAL),
-        f"{PRINCIPAL!r} in the calendar's shareWith",
+        lambda: shared_with(server, "Calendar", calendar_id, principal_id),
+        f"{principal_id!r} in the calendar's shareWith",
     )
     if not calendar_rights.get("mayWriteOwn"):
         raise ScenarioFailure(f"the calendar share is not Author: {calendar_rights}")

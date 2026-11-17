@@ -10,11 +10,13 @@
    either collection with that principal, and the page shows the empty
    status bar again.
 
+The Add dialog's field takes a principal id or an address (ROADMAP item
+185(b)): the mock seeds "bob@example.com" as a real principal so this
+scenario's typed address resolves the same way a real server's does.
+
 With `--live` (item 182(b)), the principal is `harness/stalwart/
 seed-manual-test.py`'s own seeded "bob" account id, read from the --state
-file: the Add dialog's field takes only a principal id today (ROADMAP item
-185(b) is the open row for an address), and a real server, unlike the mock,
-refuses an address that is not also a valid id.
+file, since a real server refuses an address that is not also a valid id.
 """
 
 from scenario import (
@@ -63,24 +65,6 @@ def _server():
     if LIVE_USER:
         return Jmap(user=LIVE_USER, password=LIVE_PASSWORD, rebase=True)
     return Jmap()
-
-
-def _principal_display(server, principal_id):
-    """The table row text for `principal_id`, mirroring
-    `jmap_ui::delegation::principal_label`: "name <email>", whichever of the
-    two the server has, or the raw id with neither (the mock has no
-    `Principal/get`, so a mock run always falls back to the raw id).
-    """
-    found = server.call(
-        "Principal/get", {"ids": [principal_id]}, extra_using=("urn:ietf:params:jmap:principals",)
-    )["list"]
-    if not found:
-        return principal_id
-    name = (found[0].get("name") or "").strip()
-    email = (found[0].get("email") or "").strip() or None
-    if name and email:
-        return f"{name} <{email}>"
-    return name or email or principal_id
 
 
 def setup():
@@ -162,9 +146,11 @@ def run():
         authenticate(LIVE_PASSWORD, remember=True, label="authentication-request")
         principal = live_state()["accounts"]["bob"]
     server = _server()
-    # The mock has no Principal/get, so a mock run's row shows the raw
-    # PRINCIPAL unchanged; a real server resolves it to a name/email label.
-    principal_display = _principal_display(server, principal) if LIVE_USER else principal
+    # `principal` is what the user types; the server resolves it to a
+    # principal id (`io::resolve_principal`), the key `shareWith` and the
+    # Delegates list actually carry.
+    principal_id = principal if LIVE_USER else server.resolve_principal_id(principal)
+    principal_display = server.principal_display(principal_id)
     calendars = server.names("Calendar")
     books = server.names("AddressBook")
     calendar_id = next(iter(calendars))
@@ -206,14 +192,14 @@ def run():
     screenshot("delegates-added")
 
     calendar_rights = wait_for(
-        lambda: shared_with(server, "Calendar", calendar_id, principal),
-        f"{principal!r} in the calendar's shareWith",
+        lambda: shared_with(server, "Calendar", calendar_id, principal_id),
+        f"{principal_id!r} in the calendar's shareWith",
     )
     if not calendar_rights.get("mayWriteOwn"):
         raise ScenarioFailure(f"the calendar share is not Author: {calendar_rights}")
     book_rights = wait_for(
-        lambda: shared_with(server, "AddressBook", book_id, principal),
-        f"{principal!r} in the address book's shareWith",
+        lambda: shared_with(server, "AddressBook", book_id, principal_id),
+        f"{principal_id!r} in the address book's shareWith",
     )
     if not book_rights.get("mayRead") or book_rights.get("mayWrite"):
         raise ScenarioFailure(f"the address book share is not Reviewer: {book_rights}")
@@ -232,11 +218,11 @@ def run():
     say(f"page: {NO_DELEGATES!r} again")
 
     wait_for(
-        lambda: shared_with(server, "Calendar", calendar_id, principal) is None,
+        lambda: shared_with(server, "Calendar", calendar_id, principal_id) is None,
         "the principal gone from the calendar's shareWith",
     )
     wait_for(
-        lambda: shared_with(server, "AddressBook", book_id, principal) is None,
+        lambda: shared_with(server, "AddressBook", book_id, principal_id) is None,
         "the principal gone from the address book's shareWith",
     )
     say("server: both collections no longer share with the principal")
