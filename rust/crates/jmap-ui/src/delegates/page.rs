@@ -134,7 +134,7 @@ const BOOK_COLUMN_TITLE: &CStr = N_(c"Address Books");
 const REVOKE_LABEL: &CStr = N_(c"Re_voke");
 const ADD_LABEL: &CStr = N_(c"_Add…");
 const ADD_DIALOG_TITLE: &CStr = N_(c"Add Delegate");
-const PRINCIPAL_LABEL: &CStr = N_(c"_Principal:");
+const PRINCIPAL_LABEL: &CStr = N_(c"_Delegate:");
 const CALENDAR_LEVEL_LABEL: &CStr = N_(c"Ca_lendar access:");
 const BOOK_LEVEL_LABEL: &CStr = N_(c"Address _book access:");
 
@@ -142,12 +142,12 @@ const FIND_LABEL: &CStr = N_(c"_Find…");
 const PICKER_DIALOG_TITLE: &CStr = N_(c"Find Delegate");
 const PICKER_SEARCH_LABEL: &CStr = N_(c"_Search:");
 const PICKER_SEARCH_BUTTON: &CStr = N_(c"Search");
-const PICKER_PICK_LABEL: &CStr = N_(c"_Pick");
+const PICKER_PICK_LABEL: &CStr = N_(c"Se_lect");
 const PICKER_NAME_COLUMN_TITLE: &CStr = N_(c"Name");
 const PICKER_EMAIL_COLUMN_TITLE: &CStr = N_(c"Email");
-const PICKER_NO_RESULTS: &CStr = N_(c"No principals matched.");
+const PICKER_NO_RESULTS: &CStr = N_(c"No delegates matched.");
 const PICKER_NOT_SUPPORTED: &CStr =
-    N_(c"This server does not support directory search. Enter the principal ID directly.");
+    N_(c"This server does not support directory search. Enter the delegate’s ID directly.");
 const PICKER_SEARCHING: &CStr = N_(c"Searching…");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const PICKER_SEARCH_FAILED: &CStr = N_(c"The search failed: %1$s");
@@ -960,7 +960,7 @@ unsafe fn build_add_dialog(
 
 /// Builds the principal picker dialog, unshown and not yet run: a search
 /// entry and button, a status label, and a two-column (name, email) list
-/// of matches. Pick starts insensitive until a row is selected.
+/// of matches. Select starts insensitive until a row is selected.
 ///
 /// # Safety
 ///

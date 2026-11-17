@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-17 09:53+0000\n"
+"POT-Creation-Date: 2026-11-17 11:23+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -521,7 +521,7 @@ msgid "Add Delegate"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:137
-msgid "_Principal:"
+msgid "_Delegate:"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:138
@@ -549,7 +549,7 @@ msgid "Search"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:145
-msgid "_Pick"
+msgid "Se_lect"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:146
@@ -563,12 +563,12 @@ msgid "Email"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:148
-msgid "No principals matched."
+msgid "No delegates matched."
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:150
 msgid ""
-"This server does not support directory search. Enter the principal ID "
+"This server does not support directory search. Enter the delegate’s ID "
 "directly."
 msgstr ""
 
