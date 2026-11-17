@@ -29,6 +29,22 @@ fuzz_target!(|data: &[u8]| {
         let _ = jmap_ical::maps_keyword(text, &false_val);
         let _ = jmap_ical::maps_keyword(text, &str_val);
 
+        // Exercise timestamp conversion and recurrence parsing helpers.
+        let _ = jmap_ical::event::to_utc_date_time(text);
+        let _ = jmap_ical::event::from_utc_date_time(text);
+        let _ = jmap_ical::event::to_ical_date_time(text);
+        let _ = jmap_ical::event::to_local_date_time(text);
+        let _ = jmap_ical::event::offset_seconds(text);
+        let _ = jmap_ical::event::at_offset(text, "+00:00");
+        let _ = jmap_ical::event::at_offset(text, text);
+        let _ = jmap_ical::event::from_offset(text, "+00:00");
+        let _ = jmap_ical::event::from_offset(text, text);
+        let _ = jmap_ical::event::rrule_entry(text);
+        let _ = jmap_ical::event::rrule_to_rule(text, jmap_ical::event::Ends::At("+00:00"));
+        let _ = jmap_ical::event::rrule_to_rule(text, jmap_ical::event::Ends::At(text));
+        let _ = jmap_ical::event::make_entry(text, text);
+        let _ = jmap_ical::event::make_uri_entry(text, text);
+
         if let Ok(event) = jmap_ical::ical_to_event(text) {
             let ical2 = jmap_ical::event_to_ical(&event);
             let _ = jmap_ical::ical_to_event(&ical2);
@@ -86,6 +102,66 @@ fuzz_target!(|data: &[u8]| {
             }
 
             let mut pruned = event.clone();
+            jmap_ical::prune_time_zones(&mut pruned);
+            let _ = jmap_ical::event_to_ical(&pruned);
+        }
+
+        // Exercise JSCalendar deserialization and roundtrip from arbitrary JSON.
+        if let Ok(event_json) = serde_json::from_str::<jmap_proto::calendars::CalendarEvent>(text) {
+            let ical1 = jmap_ical::event_to_ical(&event_json);
+            let _ = jmap_ical::ical_to_event(&ical1);
+
+            let _ = jmap_ical::scheduling_ical(&event_json, "REQUEST", None);
+            let _ = jmap_ical::scheduling_ical(&event_json, "REPLY", None);
+            let _ = jmap_ical::scheduling_ical(&event_json, "CANCEL", None);
+            let _ = jmap_ical::scheduling_ical(&event_json, text, None);
+            if let Some(ref overrides) = event_json.recurrence_overrides {
+                for recurrence_id in overrides.keys() {
+                    let _ = jmap_ical::scheduling_ical(&event_json, "REQUEST", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event_json, "REPLY", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event_json, "CANCEL", Some(recurrence_id));
+                }
+            }
+
+            let _ = jmap_ical::maps_alerts(&event_json);
+            let _ = jmap_ical::maps_time_zone(&event_json);
+
+            if let Some(ref keywords) = event_json.keywords {
+                for (key, val) in keywords {
+                    let _ = jmap_ical::maps_keyword(key, val);
+                }
+            }
+
+            if let Some(ref tzid) = event_json.time_zone {
+                let _ = jmap_ical::unique_tzid_to_iana(tzid);
+                let _ = jmap_ical::windows_time_zone_to_iana(tzid);
+                let _ = jmap_ical::resolve_canonical_time_zone(tzid);
+                let _ = jmap_ical::time_zone_definition(&event_json, tzid);
+                let _ = jmap_ical::names_time_zone(tzid);
+                let _ = jmap_ical::defines_time_zone(&event_json, tzid);
+            }
+
+            if let Some(ref rule) = event_json.recurrence_rule {
+                let _ = jmap_ical::unstateable_until(rule);
+                let _ = jmap_ical::maps_recurrence_rule(rule);
+            }
+
+            if let Some(ref locations) = event_json.locations {
+                let _ = jmap_ical::maps_locations(locations);
+            }
+
+            if let Some(ref vlocations) = event_json.virtual_locations {
+                let _ = jmap_ical::maps_virtual_locations(vlocations);
+            }
+
+            if let Some(ref overrides) = event_json.recurrence_overrides {
+                for (recurrence_id, patch) in overrides {
+                    let _ = jmap_ical::maps_recurrence_override(&event_json, recurrence_id, patch);
+                    let _ = jmap_ical::sends_recurrence_override(&event_json, recurrence_id, patch);
+                }
+            }
+
+            let mut pruned = event_json.clone();
             jmap_ical::prune_time_zones(&mut pruned);
             let _ = jmap_ical::event_to_ical(&pruned);
         }
