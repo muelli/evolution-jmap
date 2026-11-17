@@ -1087,13 +1087,21 @@ impl JmapStore {
     ///
     /// `mailbox` can be a mailbox of a shared account merged into this
     /// account's folder tree ([`FolderTree::merge_shared`]). `Email/query` is
-    /// a method call under one `accountId`, so this resolves the mailbox's
-    /// real owner first ([`FolderTree::owning_account`]) and searches under
-    /// that account instead of this store's own, the same way
-    /// [`Self::messages`] already does (ROADMAP item 179(d)).
+    /// a method call under one `accountId`, so this asks `owner`, the
+    /// account that owns the mailbox, instead of this store's own (ROADMAP
+    /// item 179(d)). `None` names this store's own account, which is the
+    /// usual case.
+    ///
+    /// The caller gives the owner; this does not look it up by mailbox id,
+    /// for the reason [`Self::messages`] gives: a mailbox id is unique in
+    /// one account only, and a lookup by id alone
+    /// ([`FolderTree::owning_account`]) then finds the wrong account. The
+    /// folder Camel opened knows the answer
+    /// ([`crate::folder::JmapFolder::owner`]).
     pub fn search(
         &self,
         mailbox: &Id,
+        owner: Option<&Id>,
         filter: Filter<EmailQueryFilter>,
     ) -> Result<Vec<Id>, StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
@@ -1102,11 +1110,7 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
-        let account = self
-            .folders(0)
-            .ok()
-            .and_then(|tree| tree.owning_account(mailbox).cloned())
-            .unwrap_or_else(|| sync.account_id().clone());
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(mailbox_id = mailbox.as_str(), "searching mailbox");
         match retry_once_after(
             || sync.search_as(&account, mailbox, filter.clone()),

@@ -64,12 +64,78 @@ fn search_reaches_the_shared_mailboxs_owning_account() {
 
     let filter = Filter::condition(EmailQueryFilter::default().subject("Invoice"));
     let matches = store
-        .search(&shared_inbox_id, filter)
+        .search(&shared_inbox_id, Some(&shared_account_id), filter)
         .expect("the search to reach the shared mailbox's own account");
 
     assert_eq!(
         matches,
         vec![wanted],
         "the match lives in the shared account, not this store's own"
+    );
+}
+
+/// The id collision: a shared mailbox can have the same mailbox id as a
+/// mailbox of the store's own account. `JmapStore::search` must use the
+/// owner the caller gives it, not look the mailbox id up in the merged tree
+/// ([`jmap_mail_sync::FolderTree::owning_account`]), because that lookup
+/// finds the store's own folder first and answers `None` for it (an
+/// ordinary folder of the store's own account carries no `account_id`),
+/// which then searches the wrong account. The folder Camel opened already
+/// knows the right one; `tests/messages.rs`'s own collision test proves
+/// that through the real FFI path, so this test calls the store directly,
+/// the same way `search_reaches_the_shared_mailboxs_owning_account` above
+/// does.
+#[test]
+fn a_shared_mailboxs_search_reaches_its_own_account_when_the_mailbox_ids_collide() {
+    let server = MockServer::builder().start();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    let (mailbox_id, wanted) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+
+        let own = state
+            .account_mut(&server.account_id())
+            .expect("the mock's own account");
+        let own_mailbox_id = own.seed_mailbox("Inbox", None);
+        own.seed_email(EmailSeed::new(
+            own_mailbox_id.clone(),
+            ("Alice", "alice@example.com"),
+            "Status report",
+            "text",
+            "2026-01-15T09:00:00Z",
+        ));
+
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let shared_mailbox_id = sharer.seed_mailbox("Inbox", None);
+        let wanted = sharer.seed_email(EmailSeed::new(
+            shared_mailbox_id.clone(),
+            ("Bob", "bob@example.com"),
+            "Invoice 42",
+            "text",
+            "2026-01-15T09:00:00Z",
+        ));
+
+        assert_eq!(
+            own_mailbox_id, shared_mailbox_id,
+            "the two accounts must number their mailboxes from the same id"
+        );
+        (shared_mailbox_id, wanted)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    store.folders(CACHED).expect("listed");
+
+    let filter = Filter::condition(EmailQueryFilter::default().subject("Invoice"));
+    let matches = store
+        .search(&mailbox_id, Some(&shared_account_id), filter)
+        .expect("the search to reach the shared mailbox's own account");
+
+    assert_eq!(
+        matches,
+        vec![wanted],
+        "the search used the wrong account despite the id collision"
     );
 }

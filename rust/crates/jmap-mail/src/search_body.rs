@@ -125,11 +125,12 @@ pub unsafe extern "C" fn search_body_sync(
             else {
                 return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
+            let owner = JmapFolder::borrow(folder).and_then(JmapFolder::owner);
             let Some(store) = parent_store(folder) else {
                 return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
 
-            match store.search(&mailbox, filter) {
+            match store.search(&mailbox, owner, filter) {
                 Ok(ids) => {
                     let uids: Vec<&str> = ids.iter().map(jmap_proto::Id::as_str).collect();
                     *out_uids = pooled_uid_array(&uids);
