@@ -47,11 +47,12 @@ use evo_sys::{
     gtk_list_store_newv, gtk_scrolled_window_get_type, gtk_scrolled_window_new, gtk_tree_path_free,
     gtk_tree_path_get_indices_with_depth, gtk_tree_selection_get_selected_rows,
     gtk_tree_selection_set_mode, gtk_tree_view_append_column, gtk_tree_view_column_add_attribute,
-    gtk_tree_view_column_new, gtk_tree_view_column_pack_start, gtk_tree_view_column_set_title,
-    gtk_tree_view_get_selection, gtk_tree_view_new_with_model, gtk_tree_view_set_headers_visible,
-    gtk_widget_destroy, gtk_widget_get_toplevel, gtk_widget_set_hexpand, gtk_widget_set_sensitive,
-    gtk_widget_set_size_request, gtk_widget_set_vexpand, gtk_widget_show_all, gtk_window_get_type,
-    gtk_window_set_title, gtk_window_set_transient_for,
+    gtk_tree_view_column_new, gtk_tree_view_column_pack_start, gtk_tree_view_column_set_expand,
+    gtk_tree_view_column_set_title, gtk_tree_view_get_selection, gtk_tree_view_new_with_model,
+    gtk_tree_view_set_headers_visible, gtk_widget_destroy, gtk_widget_get_toplevel,
+    gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_size_request,
+    gtk_widget_set_vexpand, gtk_widget_show_all, gtk_window_get_type, gtk_window_set_title,
+    gtk_window_set_transient_for,
 };
 use gio_sys::{
     GAsyncReadyCallback, GAsyncResult, GCancellable, GTask, g_task_new, g_task_propagate_boolean,
@@ -93,6 +94,14 @@ const PICKER_STATE: ObjectData<RefCell<PickerState>> =
 /// constants [`crate::vacation::page`] defines.
 const GTK_POLICY_NEVER: c_int = 2;
 const GTK_POLICY_AUTOMATIC: c_int = 1;
+/// `GtkTreeViewColumn`'s `sizing` value that keeps a column's width from
+/// growing with its content, so a long delegate name or email cannot force
+/// the page wider than the window (`gtktreeviewcolumn.h`: GROW_ONLY = 0,
+/// AUTOSIZE = 1, FIXED = 2).
+const GTK_TREE_VIEW_COLUMN_FIXED: c_int = 2;
+/// A starting width for a fixed-sizing text column; `expand` on the column
+/// still lets it grow into whatever room the view actually has.
+const TEXT_COLUMN_WIDTH: c_int = 160;
 
 const COLUMN_PRINCIPAL: c_int = 0;
 const COLUMN_CALENDAR: c_int = 1;
@@ -126,7 +135,7 @@ const REVOKE_LABEL: &CStr = N_(c"Re_voke");
 const ADD_LABEL: &CStr = N_(c"_Add…");
 const ADD_DIALOG_TITLE: &CStr = N_(c"Add Delegate");
 const PRINCIPAL_LABEL: &CStr = N_(c"_Principal:");
-const CALENDAR_LEVEL_LABEL: &CStr = N_(c"_Calendar access:");
+const CALENDAR_LEVEL_LABEL: &CStr = N_(c"Ca_lendar access:");
 const BOOK_LEVEL_LABEL: &CStr = N_(c"Address _book access:");
 
 const FIND_LABEL: &CStr = N_(c"_Find…");
@@ -308,13 +317,24 @@ unsafe impl InterfaceImpl for PageInterface {
 /// # Safety
 ///
 /// `view` must be a live `GtkTreeView` with a model that has `column`.
-unsafe fn add_text_column(view: *mut GtkWidget, title: &'static CStr, column: c_int) {
+unsafe fn add_text_column(view: *mut GtkWidget, title: &'static CStr, column: c_int, expand: bool) {
     // SAFETY: the column and the renderer are new, and the view takes the
     // column, which takes the renderer.
     unsafe {
         let renderer: *mut GtkCellRenderer = gtk_cell_renderer_text_new();
         let tree_column = gtk_tree_view_column_new();
         gtk_tree_view_column_set_title(tree_column, translate_static(title));
+        gtk_tree_view_column_set_expand(tree_column, flag(expand));
+        if expand {
+            // A long principal name or email must not force the page wider
+            // than the window: a fixed sizing mode caps the column's own
+            // width request independently of its content, and the
+            // ellipsis marks that the text was cut off instead of
+            // clipping it with no visual cue.
+            widget::set_enum_named(tree_column.cast(), c"sizing", GTK_TREE_VIEW_COLUMN_FIXED);
+            widget::set_int_named(tree_column.cast(), c"fixed-width", TEXT_COLUMN_WIDTH);
+            widget::set_enum_named(renderer.cast(), c"ellipsize", widget::PANGO_ELLIPSIZE_END);
+        }
         gtk_tree_view_column_pack_start(tree_column, renderer, GTRUE);
         gtk_tree_view_column_add_attribute(tree_column, renderer, c"text".as_ptr(), column);
         gtk_tree_view_append_column(view.cast(), tree_column);
@@ -490,9 +510,9 @@ unsafe fn build_widgets(page: *mut GObject) {
         g_object_unref(store.cast());
         gtk_tree_view_set_headers_visible(view.cast(), GTRUE);
         widget::set_accessible_name(view.cast(), &translate(DELEGATE_COLUMN_TITLE));
-        add_text_column(view, DELEGATE_COLUMN_TITLE, COLUMN_PRINCIPAL);
-        add_text_column(view, CALENDAR_COLUMN_TITLE, COLUMN_CALENDAR);
-        add_text_column(view, BOOK_COLUMN_TITLE, COLUMN_BOOK);
+        add_text_column(view, DELEGATE_COLUMN_TITLE, COLUMN_PRINCIPAL, true);
+        add_text_column(view, CALENDAR_COLUMN_TITLE, COLUMN_CALENDAR, false);
+        add_text_column(view, BOOK_COLUMN_TITLE, COLUMN_BOOK, false);
         gtk_widget_set_hexpand(view, GTRUE);
         gtk_widget_set_vexpand(view, GTRUE);
         gtk_widget_set_sensitive(view, GFALSE);
@@ -1013,8 +1033,8 @@ unsafe fn build_picker_dialog(
         g_object_unref(store.cast());
         gtk_tree_view_set_headers_visible(view.cast(), GTRUE);
         widget::set_accessible_name(view.cast(), &translate(PICKER_DIALOG_TITLE));
-        add_text_column(view, PICKER_NAME_COLUMN_TITLE, PICKER_COLUMN_NAME);
-        add_text_column(view, PICKER_EMAIL_COLUMN_TITLE, PICKER_COLUMN_EMAIL);
+        add_text_column(view, PICKER_NAME_COLUMN_TITLE, PICKER_COLUMN_NAME, true);
+        add_text_column(view, PICKER_EMAIL_COLUMN_TITLE, PICKER_COLUMN_EMAIL, true);
         let selection = gtk_tree_view_get_selection(view.cast());
         gtk_tree_selection_set_mode(selection, GTK_SELECTION_BROWSE);
         gtk_container_add(scroller.cast(), view);
@@ -1593,7 +1613,8 @@ mod tests {
     use std::ffi::{c_char, c_int, c_void};
     use std::time::{Duration, Instant};
 
-    use glib_sys::g_main_context_iteration;
+    use evo_sys::gtk_tree_view_get_column;
+    use glib_sys::{GList, g_list_free, g_main_context_iteration};
     use gobject_sys::g_object_get;
     use jmap_backend_core::marshal::read_string;
     use jmap_tracing_capture::{capture, has};
@@ -1666,6 +1687,114 @@ mod tests {
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), labels.len(), "every level needs its own text");
+    }
+
+    /// Layout (item 174 (a)): a long principal name or email must not force
+    /// the page to scroll sideways. Without a fixed sizing mode, a tree view
+    /// column's width request grows with its longest cell, and the page
+    /// cannot scroll horizontally (`hscrollbar-policy` is `NEVER`), so the
+    /// Delegate column would otherwise widen the whole page past the
+    /// window. Needs a display; skips without one.
+    #[test]
+    fn an_expanding_text_column_does_not_grow_with_its_content() {
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain list store and tree view, both destroyed (the
+            // store's one reference moves to the view) before returning.
+            unsafe {
+                let mut types = [G_TYPE_STRING];
+                let store = gtk_list_store_newv(1, types.as_mut_ptr());
+                let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
+                g_object_unref(store.cast());
+                add_text_column(view, c"Delegate", 0, true);
+
+                let column = gtk_tree_view_get_column(view.cast(), 0);
+                assert!(!column.is_null(), "the column was not appended");
+
+                let mut sizing: c_int = -1;
+                g_object_get(
+                    column.cast(),
+                    c"sizing".as_ptr(),
+                    &mut sizing as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    sizing, GTK_TREE_VIEW_COLUMN_FIXED,
+                    "the column grows with its content instead of staying a fixed width"
+                );
+
+                let mut fixed_width: c_int = -1;
+                g_object_get(
+                    column.cast(),
+                    c"fixed-width".as_ptr(),
+                    &mut fixed_width as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    fixed_width, TEXT_COLUMN_WIDTH,
+                    "the column has no fixed width to cap its size request at"
+                );
+
+                gtk_widget_destroy(view);
+            }
+        });
+    }
+
+    /// GNOME HIG (item 174 (c)): a text column fixed to [`TEXT_COLUMN_WIDTH`]
+    /// clips a longer name or email with no visual cue that it was cut off.
+    /// The renderer needs `ellipsize` set to mark the cut with "…". Needs a
+    /// display; skips without one.
+    #[test]
+    fn an_expanding_text_column_ellipsizes_a_clipped_value() {
+        unsafe extern "C" {
+            fn gtk_cell_layout_get_cells(
+                cell_layout: *mut evo_sys::GtkTreeViewColumn,
+            ) -> *mut GList;
+        }
+
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a plain list store and tree view, both destroyed (the
+            // store's one reference moves to the view) before returning.
+            unsafe {
+                let mut types = [G_TYPE_STRING];
+                let store = gtk_list_store_newv(1, types.as_mut_ptr());
+                let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
+                g_object_unref(store.cast());
+                add_text_column(view, c"Delegate", 0, true);
+
+                let column = gtk_tree_view_get_column(view.cast(), 0);
+                assert!(!column.is_null(), "the column was not appended");
+
+                let cells = gtk_cell_layout_get_cells(column);
+                assert!(!cells.is_null(), "the column has no cell renderer");
+                let renderer = (*cells).data;
+                g_list_free(cells);
+
+                let mut ellipsize: c_int = -1;
+                g_object_get(
+                    renderer.cast(),
+                    c"ellipsize".as_ptr(),
+                    &mut ellipsize as *mut c_int,
+                    ptr::null::<c_char>(),
+                );
+                assert_eq!(
+                    ellipsize,
+                    widget::PANGO_ELLIPSIZE_END,
+                    "the renderer does not mark a clipped value with an ellipsis"
+                );
+
+                gtk_widget_destroy(view);
+            }
+        });
     }
 
     unsafe extern "C" {
