@@ -6,8 +6,8 @@
 use libfuzzer_sys::fuzz_target;
 
 use jmap_client::eventsource::{
-    ALL_TYPES, EventSourceItem, EventSourceTimeouts, SharedHeaders, expand_url,
-    parse_chunked_stream, parse_response_head, parse_stream,
+    expand_url, parse_chunked_stream, parse_response_head, parse_stream, EventSourceItem,
+    EventSourceTimeouts, SharedHeaders, ALL_TYPES,
 };
 use jmap_client::transport::CancelFlag;
 use jmap_client::url::{origin, origin_of, same_origin, split_http_scheme};
@@ -26,6 +26,13 @@ fuzz_target!(|data: &[u8]| {
             let _ = &state_change.changed;
             let _ = &state_change.extra;
             let _ = &state_change.kind;
+            for (account_id, type_states) in &state_change.changed {
+                let _ = account_id.as_str();
+                for (type_name, state) in type_states {
+                    let _ = type_name.as_str();
+                    let _ = state.as_str();
+                }
+            }
         }
     }
 
@@ -39,8 +46,38 @@ fuzz_target!(|data: &[u8]| {
             let _ = &state_change.changed;
             let _ = &state_change.extra;
             let _ = &state_change.kind;
+            for (account_id, type_states) in &state_change.changed {
+                let _ = account_id.as_str();
+                for (type_name, state) in type_states {
+                    let _ = type_name.as_str();
+                    let _ = state.as_str();
+                }
+            }
         }
     }
+
+    let (tx_small, rx_small) = std::sync::mpsc::channel();
+    let _ = parse_stream(
+        std::io::BufReader::with_capacity(1, data),
+        &cancel,
+        &tx_small,
+    );
+    let _ = parse_chunked_stream(
+        std::io::BufReader::with_capacity(1, data),
+        &cancel,
+        &tx_small,
+    );
+    let _ = parse_stream(
+        std::io::BufReader::with_capacity(7, data),
+        &cancel,
+        &tx_small,
+    );
+    let _ = parse_chunked_stream(
+        std::io::BufReader::with_capacity(7, data),
+        &cancel,
+        &tx_small,
+    );
+    while rx_small.try_recv().is_ok() {}
 
     let cancelled = CancelFlag::new();
     cancelled.cancel();
@@ -60,6 +97,8 @@ fuzz_target!(|data: &[u8]| {
     }
 
     let _ = parse_response_head(std::io::BufReader::new(data));
+    let _ = parse_response_head(std::io::BufReader::with_capacity(1, data));
+    let _ = parse_response_head(std::io::BufReader::with_capacity(7, data));
 
     let timeouts = EventSourceTimeouts::default();
     let _ = format!("{timeouts:?}");
@@ -76,6 +115,8 @@ fuzz_target!(|data: &[u8]| {
 
     let empty_headers = SharedHeaders::new(vec![]);
     let _ = format!("{empty_headers:?}");
+    let cloned_empty = empty_headers.clone();
+    let _ = format!("{cloned_empty:?}");
     empty_headers.set(vec![]);
 
     if let Ok(s) = std::str::from_utf8(data) {
@@ -86,6 +127,25 @@ fuzz_target!(|data: &[u8]| {
         let _ = expand_url(s, &[ALL_TYPES], false, u32::MAX);
         let _ = expand_url(s, &["*"], true, 60);
         let _ = expand_url(s, &[s, "custom/type", "a,b"], false, 15);
+        let _ = expand_url(
+            "https://example.com/eventsource/{types}/{closeafter}/{ping}",
+            &[s],
+            false,
+            10,
+        );
+        let _ = expand_url(
+            "https://example.com/eventsource?types={types}&ping={ping}",
+            &[s, "Thread"],
+            true,
+            120,
+        );
+        let _ = expand_url("https://example.com/eventsource?custom=1", &[s], true, 0);
+        let _ = expand_url(
+            "https://example.com/eventsource/{types}",
+            &[s, "Email,Mailbox", "*", "a/b", "c?d#e"],
+            true,
+            60,
+        );
 
         let _ = origin(s);
         let _ = origin_of(s);
@@ -95,17 +155,30 @@ fuzz_target!(|data: &[u8]| {
         let _ = same_origin("https://example.com", s);
         let _ = same_origin(s, "http://example.com:80");
         let _ = same_origin(s, "https://example.com:443");
+        let _ = same_origin(s, "http://localhost");
+        let _ = same_origin(s, "https://[::1]:8443");
+        let _ = same_origin(s, "http://[::1]:80/");
+        let _ = same_origin(s, "https://example.org:443/path?query#frag");
 
         let headers = SharedHeaders::new(vec![("X-Fuzz".to_string(), s.to_string())]);
         let _ = format!("{headers:?}");
+        let cloned_headers = headers.clone();
+        let _ = format!("{cloned_headers:?}");
         headers.set(vec![(s.to_string(), "val".to_string())]);
+        headers.set(vec![("Last-Event-ID".to_string(), s.to_string())]);
 
         let multi_headers = SharedHeaders::new(vec![
             ("Header-1".to_string(), s.to_string()),
             ("Header-2".to_string(), "val".to_string()),
         ]);
         let _ = format!("{multi_headers:?}");
+        let cloned_multi = multi_headers.clone();
+        let _ = format!("{cloned_multi:?}");
         multi_headers.set(vec![(s.to_string(), s.to_string())]);
+        multi_headers.set(vec![
+            ("Authorization".to_string(), format!("Bearer {s}")),
+            ("Last-Event-ID".to_string(), s.to_string()),
+        ]);
 
         let reconnected = EventSourceItem::Reconnected {
             last_event_id: Some(s.to_string()),
