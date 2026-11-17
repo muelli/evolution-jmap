@@ -88,7 +88,7 @@ fn folder_lifecycle_round_trips_through_the_store_cache_against_the_real_server(
     );
 
     store
-        .set_subscribed(&renamed.id, false)
+        .set_subscribed(&renamed.id, None, false)
         .expect("set_subscribed failed against the real server");
     let cached = store.folders(0).expect("cached listing after unsubscribe");
     let found = cached

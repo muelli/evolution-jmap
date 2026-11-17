@@ -248,7 +248,7 @@ fn import_message_and_subscription_trace_structured_fields() {
         assert!(!uid.as_str().is_empty());
 
         store
-            .set_subscribed(&fixture.inbox_id, true)
+            .set_subscribed(&fixture.inbox_id, None, true)
             .expect("set_subscribed");
     });
 

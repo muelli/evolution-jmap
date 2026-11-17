@@ -45,13 +45,10 @@ use jmap_proto::mail::role;
 
 /// ROADMAP item 179(d): `Mailbox/set` is a method call under one `accountId`,
 /// so subscribing to a shared mailbox must reach that mailbox's own account,
-/// not the account this store otherwise addresses. Unlike
-/// `expunge.rs`'s `expunge_message_destroys_in_the_shared_mailboxs_owning_account`,
-/// this lists first (`store.folders(CACHED)`): `set_subscribed` resolves the
-/// owner from the held listing, not a fresh one, so
-/// `a_store_that_has_not_listed_yet_does_not_gain_a_listing` above still
-/// holds; a real `subscribe_folder_sync` call only ever names a mailbox
-/// Camel already saw in a listing.
+/// not the account this store otherwise addresses. The owner comes from the
+/// caller (the free function `set_subscribed` passes the found folder's own
+/// `account_id`, read from the held listing), the same way `search` and
+/// `messages` take it, not from a fresh lookup by mailbox id.
 #[test]
 fn set_subscribed_reaches_the_shared_mailboxs_owning_account() {
     let server = MockServer::builder().start();
@@ -70,7 +67,7 @@ fn set_subscribed_reaches_the_shared_mailboxs_owning_account() {
     store.folders(CACHED).expect("listed");
 
     store
-        .set_subscribed(&shared_inbox_id, false)
+        .set_subscribed(&shared_inbox_id, Some(&shared_account_id), false)
         .expect("the subscription to reach the shared mailbox's own account");
 
     let state = server.state();
@@ -85,6 +82,63 @@ fn set_subscribed_reaches_the_shared_mailboxs_owning_account() {
             .is_subscribed,
         Some(false),
         "the subscription must change in the shared account, not this store's own"
+    );
+}
+
+/// The id collision: a shared mailbox can have the same mailbox id as a
+/// mailbox of the store's own account. `JmapStore::set_subscribed` must use
+/// the owner the caller gives it, not look the mailbox id up in the merged
+/// tree ([`jmap_mail_sync::FolderTree::owning_account`]), because that lookup
+/// finds the store's own folder first and answers `None` for it (an ordinary
+/// folder of the store's own account carries no `account_id`), which then
+/// subscribes the wrong account. The folder the caller found in the tree
+/// already knows the right one, the same shape
+/// `search_owning_account.rs`'s own collision test proves for `search`.
+#[test]
+fn a_shared_mailboxs_subscription_reaches_its_own_account_when_the_mailbox_ids_collide() {
+    let server = MockServer::builder().start();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    let mailbox_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+
+        let own = state
+            .account_mut(&server.account_id())
+            .expect("the mock's own account");
+        let own_mailbox_id = own.seed_mailbox("Inbox", None);
+
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let shared_mailbox_id = sharer.seed_mailbox("Inbox", None);
+
+        assert_eq!(
+            own_mailbox_id, shared_mailbox_id,
+            "the two accounts must number their mailboxes from the same id"
+        );
+        shared_mailbox_id
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    store.folders(CACHED).expect("listed");
+
+    store
+        .set_subscribed(&mailbox_id, Some(&shared_account_id), false)
+        .expect("the subscription to reach the shared mailbox's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert_eq!(
+        state
+            .account(&shared_account_id)
+            .unwrap()
+            .mailboxes
+            .get(&mailbox_id)
+            .unwrap()
+            .is_subscribed,
+        Some(false),
+        "the subscription used the wrong account despite the id collision"
     );
 }
 
@@ -120,7 +174,9 @@ fn held(store: &JmapStore, path: &str) -> Option<bool> {
 fn the_write_reaches_the_server() {
     let (server, store, inbox) = connected();
 
-    store.set_subscribed(&inbox, false).expect("unsubscribed");
+    store
+        .set_subscribed(&inbox, None, false)
+        .expect("unsubscribed");
 
     // Read back over a connection of its own, so the answer is the server's
     // and not the store's copy of it.
@@ -138,7 +194,9 @@ fn the_held_listing_agrees_with_the_write() {
     let (server, store, inbox) = connected();
     store.folders(CACHED).expect("listed");
 
-    store.set_subscribed(&inbox, false).expect("unsubscribed");
+    store
+        .set_subscribed(&inbox, None, false)
+        .expect("unsubscribed");
     drop(server);
 
     assert_eq!(held(&store, "Inbox"), Some(false));
@@ -150,7 +208,9 @@ fn the_folders_next_to_it_are_left_alone() {
     let (_server, store, inbox) = connected();
     store.folders(CACHED).expect("listed");
 
-    store.set_subscribed(&inbox, false).expect("unsubscribed");
+    store
+        .set_subscribed(&inbox, None, false)
+        .expect("unsubscribed");
 
     assert_eq!(held(&store, "Sent"), Some(true));
 }
@@ -162,8 +222,12 @@ fn subscribing_again_puts_the_folder_back() {
     let (server, store, inbox) = connected();
     store.folders(CACHED).expect("listed");
 
-    store.set_subscribed(&inbox, false).expect("unsubscribed");
-    store.set_subscribed(&inbox, true).expect("subscribed");
+    store
+        .set_subscribed(&inbox, None, false)
+        .expect("unsubscribed");
+    store
+        .set_subscribed(&inbox, None, true)
+        .expect("subscribed");
     drop(server);
 
     assert_eq!(held(&store, "Inbox"), Some(true));
@@ -180,7 +244,9 @@ fn a_tree_already_handed_out_is_not_edited_underneath_its_reader() {
     let (_server, store, inbox) = connected();
     let handed_out = store.folders(CACHED).expect("listed");
 
-    store.set_subscribed(&inbox, false).expect("unsubscribed");
+    store
+        .set_subscribed(&inbox, None, false)
+        .expect("unsubscribed");
 
     assert_eq!(
         handed_out.find("Inbox").map(|folder| folder.subscribed),
@@ -202,7 +268,9 @@ fn a_tree_already_handed_out_is_not_edited_underneath_its_reader() {
 fn a_store_that_has_not_listed_yet_does_not_gain_a_listing() {
     let (server, store, inbox) = connected();
 
-    store.set_subscribed(&inbox, false).expect("unsubscribed");
+    store
+        .set_subscribed(&inbox, None, false)
+        .expect("unsubscribed");
     {
         let account_id = server.account_id();
         let state = server.state();
@@ -232,7 +300,9 @@ fn a_refresh_after_the_write_still_rebuilds_from_the_server() {
     let (_server, store, inbox) = connected();
     let listed = store.folders(CACHED).expect("listed");
 
-    store.set_subscribed(&inbox, false).expect("unsubscribed");
+    store
+        .set_subscribed(&inbox, None, false)
+        .expect("unsubscribed");
     let refreshed = store.folders(REFRESH).expect("refreshed");
 
     assert!(!Arc::ptr_eq(&listed, &refreshed));
@@ -249,7 +319,7 @@ fn a_store_with_no_connection_cannot_change_a_subscription() {
     let store = JmapStore::detached();
 
     let failure = store
-        .set_subscribed(&Id::new("M1"), false)
+        .set_subscribed(&Id::new("M1"), None, false)
         .expect_err("no connection, no write");
     assert!(
         matches!(failure, StoreError::Disconnected),
@@ -265,7 +335,7 @@ fn a_folder_the_account_no_longer_has_is_reported_as_missing() {
     let (_server, store, _inbox) = connected();
 
     let failure = store
-        .set_subscribed(&Id::new("M404"), false)
+        .set_subscribed(&Id::new("M404"), None, false)
         .expect_err("no such mailbox");
     assert!(
         matches!(failure, StoreError::NoFolder(_)),
@@ -354,7 +424,9 @@ fn camel_is_told_what_the_held_listing_says() {
     store.folders(CACHED).expect("listed");
 
     assert!(asks_camel(&store, "Inbox"));
-    store.set_subscribed(&inbox, false).expect("unsubscribed");
+    store
+        .set_subscribed(&inbox, None, false)
+        .expect("unsubscribed");
     drop(server);
 
     assert!(!asks_camel(&store, "Inbox"));
