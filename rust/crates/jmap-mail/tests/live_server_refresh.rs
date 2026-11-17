@@ -203,7 +203,7 @@ fn a_second_refresh_applies_a_real_delta() {
     // message goes first.
     account
         .jmap()
-        .expunge_message(&uid_second, &created.id)
+        .expunge_message(&uid_second, &created.id, None)
         .expect("expunge_message failed against the real server for the second message");
     account
         .jmap()

@@ -184,7 +184,7 @@ fn expunge_sync_removes_only_the_deleted_message_on_the_real_server() {
     // message is deleted first.
     account
         .jmap()
-        .expunge_message(&uid_kept, &created.id)
+        .expunge_message(&uid_kept, &created.id, None)
         .expect("expunge_message failed against the real server for the kept message");
     account
         .jmap()

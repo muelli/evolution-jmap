@@ -236,6 +236,7 @@ fn load_contact_yields_an_econtact_keyed_by_the_jmap_id() {
             vcard.contains(&format!("X-JMAP-BASE:{revision}")),
             "the contact carries no stamp of its base: {vcard}"
         );
+        assert!(!take_string(&mut extra).is_empty(), "no extra");
         marshal::contact_unref(contact);
     }
 }

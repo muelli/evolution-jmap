@@ -194,7 +194,7 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
 
     account
         .jmap()
-        .expunge_message(&uid, &created.id)
+        .expunge_message(&uid, &created.id, None)
         .expect("expunge_message failed against the real server");
     account
         .jmap()

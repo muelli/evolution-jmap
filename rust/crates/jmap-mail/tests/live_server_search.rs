@@ -233,11 +233,11 @@ fn a_translatable_expression_is_answered_by_the_real_server() {
     // both messages first.
     account
         .jmap()
-        .expunge_message(&lunch_uid, &created.id)
+        .expunge_message(&lunch_uid, &created.id, None)
         .expect("expunge_message failed against the real server for the lunch message");
     account
         .jmap()
-        .expunge_message(&other_uid, &created.id)
+        .expunge_message(&other_uid, &created.id, None)
         .expect("expunge_message failed against the real server for the other message");
     account
         .jmap()

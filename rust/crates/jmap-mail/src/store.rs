@@ -1140,23 +1140,29 @@ impl JmapStore {
     /// `mailbox` and `trash` can both be mailboxes of a shared account
     /// merged into this account's folder tree ([`FolderTree::merge_shared`]).
     /// `Email/get` and `Email/set` are method calls under one `accountId`,
-    /// so this resolves `mailbox`'s real owner first
-    /// ([`FolderTree::owning_account`]) and trashes under that account
-    /// instead of this store's own, the same way [`Self::expunge_message`]
-    /// already does (ROADMAP item 179(d)). The caller is responsible for
-    /// `trash` naming a mailbox of that same owner.
-    pub fn trash_message(&self, uid: &Id, mailbox: &Id, trash: &Id) -> Result<(), StoreError> {
+    /// so this trashes under `owner`, the account that owns `mailbox`,
+    /// instead of this store's own (ROADMAP item 179(d)). `None` names this
+    /// store's own account, which is the usual case. The caller is
+    /// responsible for `trash` naming a mailbox of that same owner.
+    ///
+    /// The caller gives the owner; this does not look it up by mailbox id,
+    /// for the reason [`Self::search`] gives: a mailbox id is unique in one
+    /// account only, and a lookup by id alone
+    /// ([`FolderTree::owning_account`]) then finds the wrong account.
+    pub fn trash_message(
+        &self,
+        uid: &Id,
+        mailbox: &Id,
+        trash: &Id,
+        owner: Option<&Id>,
+    ) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
-        let account = self
-            .folders(0)
-            .ok()
-            .and_then(|tree| tree.owning_account(mailbox).cloned())
-            .unwrap_or_else(|| sync.account_id().clone());
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         retry_once_after(
             || sync.trash_message_as(&account, uid, mailbox, trash),
             SyncError::is_unauthorized,
@@ -1181,22 +1187,28 @@ impl JmapStore {
     ///
     /// `mailbox` can be a mailbox of a shared account merged into this
     /// account's folder tree ([`FolderTree::merge_shared`]). `Email/get` and
-    /// `Email/set` are method calls under one `accountId`, so this resolves
-    /// the mailbox's real owner first ([`FolderTree::owning_account`]) and
-    /// expunges under that account instead of this store's own, the same
-    /// way [`Self::file_message`] already does (ROADMAP item 179(d)).
-    pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), StoreError> {
+    /// `Email/set` are method calls under one `accountId`, so this expunges
+    /// under `owner`, the account that owns `mailbox`, instead of this
+    /// store's own (ROADMAP item 179(d)). `None` names this store's own
+    /// account, which is the usual case.
+    ///
+    /// The caller gives the owner; this does not look it up by mailbox id,
+    /// for the reason [`Self::search`] gives: a mailbox id is unique in one
+    /// account only, and a lookup by id alone
+    /// ([`FolderTree::owning_account`]) then finds the wrong account.
+    pub fn expunge_message(
+        &self,
+        uid: &Id,
+        mailbox: &Id,
+        owner: Option<&Id>,
+    ) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
-        let account = self
-            .folders(0)
-            .ok()
-            .and_then(|tree| tree.owning_account(mailbox).cloned())
-            .unwrap_or_else(|| sync.account_id().clone());
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             uid = uid.as_str(),
             mailbox_id = mailbox.as_str(),
