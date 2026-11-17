@@ -14,9 +14,11 @@ fuzz_target!(|data: &[u8]| {
         let _ = jmap_ical::resolve_canonical_time_zone(text);
         let _ = jmap_ical::names_time_zone(text);
         let _ = jmap_ical::free_busy_type(text);
+        let _ = jmap_ical::freebusy::mailto(text);
 
         // Exercise availability to VFREEBUSY conversion with arbitrary attendee and dates.
         let date = jmap_proto::state::UtcDate::new(text);
+        let _ = jmap_ical::freebusy::instant(&date);
         let period = jmap_proto::principals::BusyPeriod::new(date.clone(), date.clone(), text);
         let _ = jmap_ical::busy_periods_to_vfreebusy(text, &date, &date, &[period]);
 
@@ -61,6 +63,12 @@ fuzz_target!(|data: &[u8]| {
             let _ = jmap_ical::maps_alerts(&event1);
             let _ = jmap_ical::maps_time_zone(&event1);
 
+            if let Some(ref keywords) = event1.keywords {
+                for (key, val) in keywords {
+                    let _ = jmap_ical::maps_keyword(key, val);
+                }
+            }
+
             if let Some(ref tzid) = event1.time_zone {
                 let _ = jmap_ical::unique_tzid_to_iana(tzid);
                 let _ = jmap_ical::windows_time_zone_to_iana(tzid);
@@ -92,6 +100,80 @@ fuzz_target!(|data: &[u8]| {
 
             let mut pruned = event1.clone();
             jmap_ical::prune_time_zones(&mut pruned);
+            let _ = jmap_ical::event_to_ical(&pruned);
+        }
+
+        // Exercise JSCalendar deserialization and roundtrip from arbitrary JSON.
+        if let Ok(event_json) = serde_json::from_str::<jmap_proto::calendars::CalendarEvent>(text) {
+            let ical1 = jmap_ical::event_to_ical(&event_json);
+            if let Ok(event2) = jmap_ical::ical_to_event(&ical1) {
+                let ical2 = jmap_ical::event_to_ical(&event2);
+                if let Ok(event3) = jmap_ical::ical_to_event(&ical2) {
+                    let ical3 = jmap_ical::event_to_ical(&event3);
+                    assert_eq!(
+                        ical2, ical3,
+                        "Export_2 and Export_3 must be identical fixed point from JSON event"
+                    );
+                    assert_eq!(
+                        event2, event3,
+                        "Event_2 and Event_3 must be identical fixed point from JSON event"
+                    );
+                }
+            }
+
+            let _ = jmap_ical::scheduling_ical(&event_json, "REQUEST", None);
+            let _ = jmap_ical::scheduling_ical(&event_json, "REPLY", None);
+            let _ = jmap_ical::scheduling_ical(&event_json, "CANCEL", None);
+            let _ = jmap_ical::scheduling_ical(&event_json, text, None);
+            if let Some(ref overrides) = event_json.recurrence_overrides {
+                for recurrence_id in overrides.keys() {
+                    let _ = jmap_ical::scheduling_ical(&event_json, "REQUEST", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event_json, "REPLY", Some(recurrence_id));
+                    let _ = jmap_ical::scheduling_ical(&event_json, "CANCEL", Some(recurrence_id));
+                }
+            }
+
+            let _ = jmap_ical::maps_alerts(&event_json);
+            let _ = jmap_ical::maps_time_zone(&event_json);
+
+            if let Some(ref keywords) = event_json.keywords {
+                for (key, val) in keywords {
+                    let _ = jmap_ical::maps_keyword(key, val);
+                }
+            }
+
+            if let Some(ref tzid) = event_json.time_zone {
+                let _ = jmap_ical::unique_tzid_to_iana(tzid);
+                let _ = jmap_ical::windows_time_zone_to_iana(tzid);
+                let _ = jmap_ical::resolve_canonical_time_zone(tzid);
+                let _ = jmap_ical::time_zone_definition(&event_json, tzid);
+                let _ = jmap_ical::names_time_zone(tzid);
+                let _ = jmap_ical::defines_time_zone(&event_json, tzid);
+            }
+
+            if let Some(ref rule) = event_json.recurrence_rule {
+                let _ = jmap_ical::unstateable_until(rule);
+                let _ = jmap_ical::maps_recurrence_rule(rule);
+            }
+
+            if let Some(ref locations) = event_json.locations {
+                let _ = jmap_ical::maps_locations(locations);
+            }
+
+            if let Some(ref vlocations) = event_json.virtual_locations {
+                let _ = jmap_ical::maps_virtual_locations(vlocations);
+            }
+
+            if let Some(ref overrides) = event_json.recurrence_overrides {
+                for (recurrence_id, patch) in overrides {
+                    let _ = jmap_ical::maps_recurrence_override(&event_json, recurrence_id, patch);
+                    let _ = jmap_ical::sends_recurrence_override(&event_json, recurrence_id, patch);
+                }
+            }
+
+            let mut pruned = event_json.clone();
+            jmap_ical::prune_time_zones(&mut pruned);
+            let _ = jmap_ical::event_to_ical(&pruned);
         }
     }
 });

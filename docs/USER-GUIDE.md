@@ -200,6 +200,16 @@ These actions work offline. Evolution queues each one and sends it to the server
 - Save a draft.
 - Create, edit or delete a contact or a calendar event.
 
+A move, a copy and a delete show in the message list right away. You do not need to wait for the next sync to see them.
+
+### If a queued change is refused
+
+Most servers accept a queued change once you go back online. A few refusals are final: for example, you lost the right to change that folder, or the folder no longer exists.
+
+For a final refusal, Evolution undoes the change in the message list and reports the server's reason as a mail error, the same way it reports any other folder error. A move or a copy then shows the message back where it was before you moved or copied it.
+
+A refusal that is not final, such as a full quota or a server that is briefly unreachable, keeps the change queued. Evolution tries again at the next sync.
+
 ### What needs a connection right away
 
 A few actions need the server at once. Evolution shows an "offline" message or an error instead of queuing these:
