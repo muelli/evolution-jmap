@@ -11,6 +11,7 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarRights};
 use jmap_proto::contacts::{AddressBookRights, ContactCard};
 use jmap_proto::mail::{EmailAddress, EmailHeader, Mailbox, MailboxRights};
+use jmap_proto::principals::Principal;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -428,6 +429,11 @@ fn seed_default_data(
     account.seed_identity("Alice", "alice@example.com");
     account.seed_address_book("Personal", true);
     account.seed_calendar("Personal", true);
+    // The Delegates page's Add dialog resolves a typed address through
+    // `Principal/query` (ROADMAP item 185(b)): seed the two people the
+    // GUI scenarios already use as mail senders as real principals too.
+    account.seed_principal(Principal::new("Bob").with_email("bob@example.com"));
+    account.seed_principal(Principal::new("Carol").with_email("carol@example.com"));
     let inbox = account.seed_mailbox("Inbox", Some(jmap_proto::mail::role::INBOX));
     account.seed_mailbox("Sent", Some(jmap_proto::mail::role::SENT));
     account.seed_mailbox("Drafts", Some(jmap_proto::mail::role::DRAFTS));
