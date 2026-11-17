@@ -5367,8 +5367,8 @@ fn current_user_principal_resolves_through_the_real_api() {
     };
 
     // 1. Session advertises currentUserPrincipalId as the account id:
-    let advertised = client
-        .session()
+    let session = client.session();
+    let advertised = session
         .accounts
         .get(&account_id)
         .and_then(|acct| acct.account_capabilities.get(CAPABILITY_PRINCIPALS))
@@ -5406,11 +5406,8 @@ fn current_user_principal_resolves_through_the_real_api() {
         .expect("current_user_principal must succeed")
         .expect("owner principal must be resolved");
     assert_eq!(principal.id.as_ref(), Some(&account_id));
-    if client.session().username.contains('@') {
-        assert_eq!(
-            principal.email.as_deref(),
-            Some(client.session().username.as_str())
-        );
+    if session.username.contains('@') {
+        assert_eq!(principal.email.as_deref(), Some(session.username.as_str()));
     }
 
     // 4. Client::current_user_principal_id agrees:
