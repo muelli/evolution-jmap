@@ -132,6 +132,6 @@ fn a_parent_made_by_another_connection_is_found_by_looking_again_on_the_real_ser
 
     manage::delete_folder(&store, &created.path).expect("cleanup: delete_folder(child) failed");
     store
-        .delete_folder(&parent.id)
+        .delete_folder(&parent.id, None)
         .expect("cleanup: delete_folder(parent) failed");
 }

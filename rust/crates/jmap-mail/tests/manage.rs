@@ -758,7 +758,9 @@ fn create_folder_reaches_the_shared_parents_owning_account() {
 }
 
 /// A shared mailbox must be deleted in its own account, the same reason as
-/// the create test above.
+/// the create test above. The owner comes from the caller, the same way
+/// `search_owning_account.rs` and `subscriptions.rs` give it, not from a
+/// fresh lookup by mailbox id.
 #[test]
 fn delete_folder_reaches_the_shared_mailboxs_owning_account() {
     let server = MockServer::builder().start();
@@ -776,7 +778,7 @@ fn delete_folder_reaches_the_shared_mailboxs_owning_account() {
     store.folders(CACHED).expect("listed");
 
     store
-        .delete_folder(&shared_folder_id)
+        .delete_folder(&shared_folder_id, Some(&shared_account_id))
         .expect("the delete reaches the shared mailbox's own account");
 
     let state = server.state();
@@ -788,6 +790,65 @@ fn delete_folder_reaches_the_shared_mailboxs_owning_account() {
             .mailboxes
             .contains(&shared_folder_id),
         "the folder must be gone from the shared account"
+    );
+}
+
+/// The id collision: a shared mailbox can have the same mailbox id as a
+/// mailbox of the store's own account. `JmapStore::delete_folder` must use
+/// the owner the caller gives it, not look the mailbox id up in the merged
+/// tree (`FolderTree::owning_account`), because that lookup finds the
+/// store's own folder first and answers `None` for it, which then deletes
+/// the wrong account's folder. Mirrors
+/// `search_owning_account.rs`'s own collision test.
+#[test]
+fn a_shared_mailboxs_delete_reaches_its_own_account_when_the_mailbox_ids_collide() {
+    let server = MockServer::builder().start();
+    let shared_account_id = Id::new("agent-shared-owner");
+    let mailbox_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+
+        let own = state
+            .account_mut(&server.account_id())
+            .expect("the mock's own account");
+        let own_mailbox_id = own.seed_mailbox("Inbox", None);
+
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let shared_mailbox_id = sharer.seed_mailbox("Projects", None);
+
+        assert_eq!(
+            own_mailbox_id, shared_mailbox_id,
+            "the two accounts must number their mailboxes from the same id"
+        );
+        shared_mailbox_id
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    store.folders(CACHED).expect("listed");
+
+    store
+        .delete_folder(&mailbox_id, Some(&shared_account_id))
+        .expect("the delete reaches the shared mailbox's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        !state
+            .account(&shared_account_id)
+            .unwrap()
+            .mailboxes
+            .contains(&mailbox_id),
+        "the delete used the wrong account despite the id collision"
+    );
+    assert!(
+        state
+            .account(&server.account_id())
+            .unwrap()
+            .mailboxes
+            .contains(&mailbox_id),
+        "the store's own mailbox with the same id must survive"
     );
 }
 

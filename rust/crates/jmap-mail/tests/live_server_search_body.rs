@@ -251,7 +251,7 @@ fn a_body_term_is_answered_by_the_real_server() {
         .expect("expunge_message failed against the real server for the shared-only message");
     account
         .jmap()
-        .delete_folder(&created.id)
+        .delete_folder(&created.id, None)
         .expect("delete_folder failed against the real server");
 
     // SAFETY: the one reference `new_folder` returned.

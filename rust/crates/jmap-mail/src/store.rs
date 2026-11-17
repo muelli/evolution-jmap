@@ -1465,18 +1465,21 @@ impl JmapStore {
     /// incorrect.
     ///
     /// `mailbox` can be a mailbox of a shared account merged into this
-    /// store's folder tree ([`FolderTree::merge_shared`]); this resolves
-    /// its real owner first and deletes under that account instead of this
-    /// store's own, the same way [`Self::set_subscribed`] does (ROADMAP
-    /// item 179(d)).
-    pub fn delete_folder(&self, mailbox: &Id) -> Result<(), StoreError> {
-        let account = self
-            .held_folders()
-            .and_then(|tree| tree.owning_account(mailbox).cloned());
+    /// store's folder tree ([`FolderTree::merge_shared`]). `Mailbox/set` is
+    /// a method call under one `accountId`, so this deletes under `owner`,
+    /// the account that owns the mailbox, instead of this store's own
+    /// (ROADMAP item 179(d)). `None` names this store's own account, which
+    /// is the usual case.
+    ///
+    /// The caller gives the owner; this does not look it up by mailbox id,
+    /// for the reason [`Self::search`] gives: a mailbox id is unique in one
+    /// account only, and a lookup by id alone ([`FolderTree::owning_account`])
+    /// then finds the wrong account.
+    pub fn delete_folder(&self, mailbox: &Id, owner: Option<&Id>) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        let account = account.unwrap_or_else(|| sync.account_id().clone());
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(mailbox_id = mailbox.as_str(), "deleting mail folder");
         if let Err(failure) = retry_once_after(
             || sync.delete_folder_as(&account, mailbox),

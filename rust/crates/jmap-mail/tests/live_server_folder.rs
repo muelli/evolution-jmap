@@ -115,7 +115,7 @@ fn folder_lifecycle_round_trips_through_the_store_cache_against_the_real_server(
     assert!(!found.subscribed);
 
     store
-        .delete_folder(&renamed.id)
+        .delete_folder(&renamed.id, None)
         .expect("delete_folder failed against the real server");
     let cached = store.folders(0).expect("cached listing after delete");
     assert!(

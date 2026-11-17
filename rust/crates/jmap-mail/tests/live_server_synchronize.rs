@@ -186,7 +186,7 @@ fn synchronize_sync_carries_a_flag_change_to_the_real_server() {
         .expect("expunge_message failed against the real server");
     account
         .jmap()
-        .delete_folder(&created.id)
+        .delete_folder(&created.id, None)
         .expect("delete_folder failed against the real server");
 
     // SAFETY: the one reference `new_folder` returned.

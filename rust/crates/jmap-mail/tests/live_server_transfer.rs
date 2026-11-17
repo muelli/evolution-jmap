@@ -205,11 +205,11 @@ fn transfer_messages_to_sync_moves_a_message_on_the_real_server() {
         .expect("expunge_message failed against the real server");
     account
         .jmap()
-        .delete_folder(&source_info.id)
+        .delete_folder(&source_info.id, None)
         .expect("delete_folder failed against the real server for the source");
     account
         .jmap()
-        .delete_folder(&dest_info.id)
+        .delete_folder(&dest_info.id, None)
         .expect("delete_folder failed against the real server for the destination");
 
     // SAFETY: the one reference each `new_folder` call returned.

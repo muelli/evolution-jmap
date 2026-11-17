@@ -188,7 +188,7 @@ fn expunge_sync_removes_only_the_deleted_message_on_the_real_server() {
         .expect("expunge_message failed against the real server for the kept message");
     account
         .jmap()
-        .delete_folder(&created.id)
+        .delete_folder(&created.id, None)
         .expect("delete_folder failed against the real server");
 
     // SAFETY: this is the one reference that `new_folder` returned.

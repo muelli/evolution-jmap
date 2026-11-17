@@ -198,7 +198,7 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
         .expect("expunge_message failed against the real server");
     account
         .jmap()
-        .delete_folder(&created.id)
+        .delete_folder(&created.id, None)
         .expect("delete_folder failed against the real server");
 
     // SAFETY: the one reference `new_folder` returned.

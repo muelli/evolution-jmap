@@ -268,11 +268,11 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
         .expect("expunge_message failed against the real server");
     account
         .jmap()
-        .delete_folder(&source_info.id)
+        .delete_folder(&source_info.id, None)
         .expect("delete_folder failed against the real server for the source");
     account
         .jmap()
-        .delete_folder(&dest_info.id)
+        .delete_folder(&dest_info.id, None)
         .expect("delete_folder failed against the real server for the destination");
 
     // SAFETY: the one reference each `new_folder` call returned.

@@ -91,6 +91,6 @@ fn set_subscribed_resolves_a_real_path_and_looks_again_for_a_new_one() {
     assert!(folder.subscribed);
 
     store
-        .delete_folder(&created.id)
+        .delete_folder(&created.id, None)
         .expect("delete_folder failed against the real server");
 }
