@@ -313,7 +313,9 @@ fn folder_management_traces_structured_fields() {
             .expect("rename_folder");
         assert_eq!(renamed.display_name, "Archived Projects");
 
-        store.delete_folder(&created_id).expect("delete_folder");
+        store
+            .delete_folder(&created_id, None)
+            .expect("delete_folder");
     });
 
     assert!(
@@ -372,7 +374,7 @@ fn store_operations_error_paths_trace_structured_fields() {
     let store = fixture.store();
 
     let (_, logs) = capture(|| {
-        let _ = store.delete_folder(&Id::from("nonexistent_mailbox"));
+        let _ = store.delete_folder(&Id::from("nonexistent_mailbox"), None);
     });
 
     assert!(

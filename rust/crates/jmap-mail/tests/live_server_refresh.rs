@@ -207,7 +207,7 @@ fn a_second_refresh_applies_a_real_delta() {
         .expect("expunge_message failed against the real server for the second message");
     account
         .jmap()
-        .delete_folder(&created.id)
+        .delete_folder(&created.id, None)
         .expect("delete_folder failed against the real server");
 
     // SAFETY: the one reference `new_folder` returned.

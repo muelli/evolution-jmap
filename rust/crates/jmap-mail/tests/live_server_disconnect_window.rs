@@ -131,6 +131,6 @@ fn dropping_the_connection_does_not_wait_out_a_message_listing_in_flight_on_the_
     let cleanup_store = JmapStore::detached();
     cleanup_store.store_connection(cleanup_sync);
     cleanup_store
-        .delete_folder(&created.id)
+        .delete_folder(&created.id, None)
         .expect("cleanup: delete_folder failed against the real server");
 }

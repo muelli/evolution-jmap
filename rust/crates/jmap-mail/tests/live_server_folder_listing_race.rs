@@ -119,6 +119,6 @@ fn a_folder_created_while_a_refresh_is_in_flight_is_not_lost_to_a_stale_answer_o
     );
 
     store
-        .delete_folder(&created.id)
+        .delete_folder(&created.id, None)
         .expect("cleanup: delete_folder failed against the real server");
 }

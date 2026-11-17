@@ -174,7 +174,7 @@ pub fn delete_folder(store: &JmapStore, path: &str) -> Result<FolderInfo, StoreE
         return Err(StoreError::NoFolder(path.to_owned()));
     };
 
-    store.delete_folder(&folder.id)?;
+    store.delete_folder(&folder.id, folder.account_id.as_ref())?;
     Ok(folder.clone())
 }
 

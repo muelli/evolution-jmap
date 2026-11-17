@@ -118,6 +118,6 @@ fn get_quota_info_sync_reads_the_real_servers_own_answer() {
     unsafe { g_object_unref(folder.cast()) };
     account
         .jmap()
-        .delete_folder(&created.id)
+        .delete_folder(&created.id, None)
         .expect("delete_folder failed against the real server");
 }
