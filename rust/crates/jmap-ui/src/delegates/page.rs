@@ -135,7 +135,7 @@ const REVOKE_LABEL: &CStr = N_(c"Re_voke");
 const ADD_LABEL: &CStr = N_(c"_Add…");
 const ADD_DIALOG_TITLE: &CStr = N_(c"Add Delegate");
 const PRINCIPAL_LABEL: &CStr = N_(c"_Principal:");
-const CALENDAR_LEVEL_LABEL: &CStr = N_(c"_Calendar access:");
+const CALENDAR_LEVEL_LABEL: &CStr = N_(c"Ca_lendar access:");
 const BOOK_LEVEL_LABEL: &CStr = N_(c"Address _book access:");
 
 const FIND_LABEL: &CStr = N_(c"_Find…");

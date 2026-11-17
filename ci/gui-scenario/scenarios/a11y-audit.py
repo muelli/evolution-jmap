@@ -34,8 +34,11 @@ still surface as that next field going unreached. Run on all three pages
 now: the Vacation Responder page's message body used to trap Tab as an
 inserted character, fixed in item 174(b) with `gtk_text_view_set_accepts_
 tab`; PAGES' "tab_check" flag gates the walk per page. The Delegates page
-(item 174's "surfaces added since the sweep" row) joined the walk here;
-its Add and Find dialogs stay a separate claim.
+(item 174's "surfaces added since the sweep" row) joined the walk here.
+Its Add dialog and the Find dialog it opens (both their own nested
+`gtk_dialog_run` loop, `page.rs::ask_for_grant`/`ask_for_principal`) are
+audited by `audit_delegates_dialogs`, the same way the Server Filters
+page's name and rule dialogs already are.
 """
 
 import pyatspi
@@ -252,6 +255,42 @@ def audit_name_and_rule_dialogs(editor):
     wait_for(lambda: window("New Rule") is None, "the rule dialog closes")
 
 
+def audit_delegates_dialogs(editor):
+    """Open the Delegates page's Add dialog and the Find dialog it opens,
+    auditing both for item 174's (b)/(c)/(d) checks.
+
+    Both run their own nested `gtk_dialog_run` loop (`page.rs::ask_for_
+    grant` for Add, `ask_for_principal` for Find), so both are opened with
+    `click_at`, not `do_action`, the same workaround `audit_name_and_rule_
+    dialogs` uses for the script Add and rule Add buttons.
+    """
+    delegates = PAGES[2]
+    open_page(editor, delegates)
+    loaded(editor, delegates)
+    add_button = wait_for(
+        lambda: find(editor, "push button", "Add…", showing=True), "the Delegates Add button"
+    )
+    click_at(add_button)
+    add_dialog = wait_for(lambda: window("Add Delegate"), "the Add Delegate dialog")
+    audit_dialog(add_dialog, "Add Delegate")
+    audit_mnemonics(add_dialog, "Add Delegate")
+    audit_tab_reachability(add_dialog, "Add Delegate")
+
+    find_button = wait_for(
+        lambda: find(add_dialog, "push button", "Find…", showing=True), "the Find button"
+    )
+    click_at(find_button)
+    find_dialog = wait_for(lambda: window("Find Delegate"), "the Find Delegate dialog")
+    audit_dialog(find_dialog, "Find Delegate")
+    audit_mnemonics(find_dialog, "Find Delegate")
+    audit_tab_reachability(find_dialog, "Find Delegate")
+    click_button(find_dialog, "Cancel")
+    wait_for(lambda: window("Find Delegate") is None, "the Find Delegate dialog closes")
+
+    click_button(add_dialog, "Cancel")
+    wait_for(lambda: window("Add Delegate") is None, "the Add Delegate dialog closes")
+
+
 def audit_send_later_dialog():
     """Open a composer and audit the Send Later custom-time dialog.
 
@@ -293,6 +332,7 @@ def run():
     for page in PAGES:
         audit_page(editor, page)
     audit_name_and_rule_dialogs(editor)
+    audit_delegates_dialogs(editor)
     audit_send_later_dialog()
 
 
