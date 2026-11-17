@@ -536,10 +536,12 @@ unsafe fn server_matches(
     let expression = unsafe { read_string(expression) }?;
     let filter = search_sexp::translate(&expression)?;
     // SAFETY: as above.
-    let mailbox = unsafe { JmapFolder::borrow(folder) }?.mailbox()?.clone();
+    let folder_ref = unsafe { JmapFolder::borrow(folder) }?;
+    let mailbox = folder_ref.mailbox()?.clone();
+    let owner = folder_ref.owner();
     // SAFETY: as above.
     let store = unsafe { parent_store(folder) }?;
-    let matches = match store.search(&mailbox, filter) {
+    let matches = match store.search(&mailbox, owner, filter) {
         Ok(ids) => ids,
         Err(StoreError::Disconnected) => return None,
         Err(failure) => return Some(Err(failure)),
