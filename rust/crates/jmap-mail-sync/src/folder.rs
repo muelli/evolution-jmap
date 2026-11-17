@@ -294,12 +294,10 @@ impl FolderTree {
     /// whose own `myRights` said otherwise: the account-level restriction
     /// cannot be looser than the share itself.
     ///
-    /// Every merged folder also gets `subscribed: true`, regardless of the
-    /// owner's own `isSubscribed` for it (ROADMAP item 179(a) finding F3): a
-    /// grantee often cannot change that flag, and it was never a sign of the
-    /// grantee's own wish to see the folder. This is the same "show what the
-    /// server grants, regardless of `isSubscribed`" rule item 163 already
-    /// applies to shared calendars and address books.
+    /// Every merged folder also gets `subscribed: true`, regardless of
+    /// `isSubscribed`. That flag is per grantee and starts false for a new
+    /// share, and nothing in Evolution can set it; honouring it would hide
+    /// every share.
     pub fn merge_shared(mut self, shared: &[(SharedMailAccount, FolderTree)]) -> Self {
         if shared.is_empty() {
             return self;
@@ -903,14 +901,11 @@ fn stamp_account(folder: &mut FolderInfo, id: &Id) {
 /// Sets `subscribed` to `true` on a folder and every folder below it, for
 /// [`FolderTree::merge_shared`].
 ///
-/// `isSubscribed` on a shared mailbox is the owner's own flag, not the
-/// grantee's wish to see it, and a grantee often cannot change it. Camel's
+/// `isSubscribed` on a shared mailbox is the grantee's own flag. It starts
+/// false for a new share, and nothing in Evolution can set it. Camel's
 /// `Request` hides an unsubscribed folder's children when Evolution asks
-/// with `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`, so without this a shared
-/// folder whose owner never subscribed to it would show in the tree with
-/// no children: the owner's own folder list decides what the grantee sees,
-/// the same bug ROADMAP item 163 already avoids for shared calendars and
-/// address books by showing them regardless of `isSubscribed`.
+/// with `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`, so without this fix a shared
+/// folder would show in the tree with no children on every new share.
 fn force_visible(folder: &mut FolderInfo) {
     let mut stack: Vec<&mut FolderInfo> = vec![folder];
     while let Some(folder) = stack.pop() {
@@ -1303,15 +1298,14 @@ mod tests {
         });
     }
 
-    /// ROADMAP item 179(a) finding F3 (confirmed live against Stalwart): a
-    /// grantee's own `Mailbox/get` for a shared account returns the owner's
-    /// `isSubscribed`, not anything about the grantee's own wish to see it,
-    /// and a grantee often cannot change it. Camel hides an unsubscribed
-    /// folder's children from the tree whenever Evolution asks with
+    /// Confirmed live against Stalwart: a grantee's own `Mailbox/get` for a
+    /// shared account returns `isSubscribed: false` by default, and nothing
+    /// in Evolution can set it. Camel hides an unsubscribed folder's
+    /// children from the tree whenever Evolution asks with
     /// `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED`, so a merged folder must show
-    /// regardless of the owner's own flag, not inherit it.
+    /// regardless of that flag.
     #[test]
-    fn merge_shared_shows_a_folder_the_owner_never_subscribed_to() {
+    fn merge_shared_shows_a_folder_the_grantee_never_subscribed_to() {
         let shared = FolderTree::from_mailboxes(&[
             Mailbox::new("Team Shared")
                 .with_id(Id::from("t"))
