@@ -268,6 +268,7 @@ fn load_component_yields_an_icalcomponent_keyed_by_the_jmap_id() {
             "the component carries no stamp of its base: {text}"
         );
         marshal::component_unref(component);
+        g_free(extra.cast());
     }
 }
 
