@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Scenario: the Vacation Responder and Server Filters pages of the account
-editor while offline (ROADMAP item 176(a), the "Server Filters/Vacation
-offline" row of the offline matrix).
+"""Scenario: the Vacation Responder, Server Filters and Delegates pages of
+the account editor while offline (ROADMAP item 176(a), the "Server
+Filters/Vacation offline" row of the offline matrix, and item 174's
+read-only offline states).
 
 Before this scenario's fix, opening either page while the shell is offline
 (File > Work Offline, e_shell_get_online()) made the page try to connect
@@ -16,10 +17,18 @@ The short `wait_for` timeout below is deliberate: it is well under the
 30-second connect timeout, so a reverted fix (the page falling through to
 its old "wait, then fail" behaviour) makes this scenario time out and fail,
 not pass late.
+
+Item 174's audit of each page's read-only offline state runs here too: a
+page's offline note and its now-insensitive controls still need an
+accessible name each, and still need unique mnemonics, the same rule the
+page's online state already meets. Added to this scenario, not a new one,
+because it needs the same "already offline, page open" setup.
 """
 
 from scenario import (
     Jmap,
+    ScenarioFailure,
+    audit_mnemonics,
     do_action,
     evolution,
     expect_no_errors,
@@ -31,6 +40,7 @@ from scenario import (
     say,
     screenshot,
     select_folder,
+    unnamed_widgets,
     wait_for,
     window,
     write_collection_mail_account,
@@ -40,10 +50,12 @@ ACCOUNT = "JMAP scenario mail"
 EDITOR = "Account Editor"
 VACATION_PAGE = "Vacation Responder"
 FILTERS_PAGE = "Server Filters"
+DELEGATES_PAGE = "Delegates"
 OFFLINE_VACATION = (
     "You are offline. The autoresponder cannot be read or changed until you reconnect."
 )
 OFFLINE_FILTERS = "You are offline. Filters cannot be read or changed until you reconnect."
+OFFLINE_DELEGATES = "You are offline. Delegates cannot be read until you reconnect."
 # Well under jmap-client's 30-second connect timeout: see the module note.
 OFFLINE_MESSAGE_TIMEOUT = 10
 # The X keysym of the Menu key.
@@ -77,6 +89,24 @@ def open_page(page_name):
     return editor
 
 
+def audit_offline_a11y(editor, page_name):
+    """Raise if the account editor, with `page_name` open and read-only
+    offline, has an unnamed focusable widget or a duplicate mnemonic
+    (item 174's read-only offline state check).
+
+    Checks the whole editor, not just the page: the editor's own sidebar
+    and OK/Cancel/Help row stay sensitive and in scope, the same way the
+    online a11y audit (a11y-audit.py) checks them for every page.
+    """
+    offenders = list(unnamed_widgets(editor))
+    if offenders:
+        raise ScenarioFailure(
+            f"unnamed focusable widgets offline on the {page_name!r} page: {offenders}"
+        )
+    say(f"a11y-audit: no unnamed focusable widget offline on the {page_name!r} page")
+    audit_mnemonics(editor, page_name)
+
+
 def close_with_cancel(editor):
     cancel = wait_for(
         lambda: find(editor, "push button", "Cancel", showing=True), "the editor's Cancel button"
@@ -105,6 +135,7 @@ def run():
     )
     say(f"Vacation Responder: {OFFLINE_VACATION!r}")
     screenshot("vacation-offline")
+    audit_offline_a11y(editor, VACATION_PAGE)
     close_with_cancel(editor)
 
     editor = open_page(FILTERS_PAGE)
@@ -115,6 +146,18 @@ def run():
     )
     say(f"Server Filters: {OFFLINE_FILTERS!r}")
     screenshot("filters-offline")
+    audit_offline_a11y(editor, FILTERS_PAGE)
+    close_with_cancel(editor)
+
+    editor = open_page(DELEGATES_PAGE)
+    wait_for(
+        lambda: find(editor, "status bar", OFFLINE_DELEGATES),
+        "the offline message on the Delegates page",
+        timeout=OFFLINE_MESSAGE_TIMEOUT,
+    )
+    say(f"Delegates: {OFFLINE_DELEGATES!r}")
+    screenshot("delegates-offline")
+    audit_offline_a11y(editor, DELEGATES_PAGE)
     close_with_cancel(editor)
 
     menu_item("File/Work Online")
