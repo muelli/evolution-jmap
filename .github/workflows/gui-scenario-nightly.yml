@@ -38,6 +38,7 @@ jobs:
           workspaces: rust
       - run: cmake -S . -B build -G Ninja
       - run: cmake --build build
+      - run: ci/dovecot-oracle.sh start
       - name: Run every scenario
         run: |
           scenarios=$(cd ci/gui-scenario/scenarios && ls *.py | sed 's/\.py$//')
