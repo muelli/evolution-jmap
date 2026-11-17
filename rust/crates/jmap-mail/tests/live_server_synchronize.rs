@@ -182,7 +182,7 @@ fn synchronize_sync_carries_a_flag_change_to_the_real_server() {
     // the message first.
     account
         .jmap()
-        .expunge_message(&uid, &created.id)
+        .expunge_message(&uid, &created.id, None)
         .expect("expunge_message failed against the real server");
     account
         .jmap()

@@ -201,7 +201,7 @@ fn transfer_messages_to_sync_moves_a_message_on_the_real_server() {
     // first.
     account
         .jmap()
-        .expunge_message(&uid, &dest_info.id)
+        .expunge_message(&uid, &dest_info.id, None)
         .expect("expunge_message failed against the real server");
     account
         .jmap()

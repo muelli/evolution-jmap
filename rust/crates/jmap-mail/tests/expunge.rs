@@ -951,7 +951,7 @@ fn expunge_message_destroys_in_the_shared_mailboxs_owning_account() {
     store.store_connection(sync_against(&server));
 
     store
-        .expunge_message(&shared_uid, &shared_inbox_id)
+        .expunge_message(&shared_uid, &shared_inbox_id, Some(&shared_account_id))
         .expect("the expunge to reach the shared mailbox's own account");
 
     let state = server.state();
@@ -998,7 +998,12 @@ fn trash_message_moves_into_the_shared_mailboxs_own_trash() {
     store.store_connection(sync_against(&server));
 
     store
-        .trash_message(&shared_uid, &shared_inbox_id, &shared_trash_id)
+        .trash_message(
+            &shared_uid,
+            &shared_inbox_id,
+            &shared_trash_id,
+            Some(&shared_account_id),
+        )
         .expect("the trash to reach the shared mailbox's own account");
 
     let state = server.state();
@@ -1016,6 +1021,124 @@ fn trash_message_moves_into_the_shared_mailboxs_own_trash() {
         mailboxes.keys().collect::<Vec<_>>(),
         vec![&shared_trash_id],
         "the message must move into the shared mailbox's own trash"
+    );
+}
+
+/// The id collision: a shared mailbox can have the same mailbox id as a
+/// mailbox of the store's own account. `JmapStore::expunge_message` must use
+/// the owner the caller gives it, not look the mailbox id up in the merged
+/// tree (`FolderTree::owning_account`), because that lookup finds the
+/// store's own folder first and answers `None` for it, which then destroys
+/// against the wrong account. Mirrors `search_owning_account.rs`'s own
+/// collision test.
+#[test]
+fn a_shared_mailboxs_expunge_reaches_its_own_account_when_the_mailbox_ids_collide() {
+    let server = MockServer::builder().start();
+    let shared_account_id = Id::new("agent-shared-owner");
+    let (mailbox_id, shared_uid) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+
+        let own = state
+            .account_mut(&server.account_id())
+            .expect("the mock's own account");
+        let own_mailbox_id = own.seed_mailbox("Inbox", None);
+
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let shared_mailbox_id = sharer.seed_mailbox("Projects", None);
+        assert_eq!(
+            own_mailbox_id, shared_mailbox_id,
+            "the two accounts must number their mailboxes from the same id"
+        );
+        let uid = sharer.seed_email(EmailSeed::new(
+            shared_mailbox_id.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        (shared_mailbox_id, uid)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+
+    store
+        .expunge_message(&shared_uid, &mailbox_id, Some(&shared_account_id))
+        .expect("the expunge to reach the shared mailbox's own account despite the id collision");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        !state
+            .account(&shared_account_id)
+            .unwrap()
+            .emails
+            .contains(&shared_uid),
+        "the message must be destroyed in the shared mailbox's own account"
+    );
+}
+
+/// The same id collision as above, for `JmapStore::trash_message`.
+#[test]
+fn a_shared_mailboxs_trash_reaches_its_own_account_when_the_mailbox_ids_collide() {
+    let server = MockServer::builder().start();
+    let shared_account_id = Id::new("agent-shared-owner");
+    let (mailbox_id, shared_trash_id, shared_uid) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+
+        let own = state
+            .account_mut(&server.account_id())
+            .expect("the mock's own account");
+        let own_mailbox_id = own.seed_mailbox("Inbox", None);
+
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let shared_mailbox_id = sharer.seed_mailbox("Projects", None);
+        assert_eq!(
+            own_mailbox_id, shared_mailbox_id,
+            "the two accounts must number their mailboxes from the same id"
+        );
+        let trash = sharer.seed_mailbox("Trash", None);
+        let uid = sharer.seed_email(EmailSeed::new(
+            shared_mailbox_id.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        (shared_mailbox_id, trash, uid)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+
+    store
+        .trash_message(
+            &shared_uid,
+            &mailbox_id,
+            &shared_trash_id,
+            Some(&shared_account_id),
+        )
+        .expect("the trash to reach the shared mailbox's own account despite the id collision");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let mailboxes = state
+        .account(&shared_account_id)
+        .unwrap()
+        .emails
+        .get(&shared_uid)
+        .unwrap()
+        .mailbox_ids
+        .clone()
+        .unwrap_or_default();
+    assert_eq!(
+        mailboxes.keys().collect::<Vec<_>>(),
+        vec![&shared_trash_id],
+        "the message must move into the shared mailbox's own trash despite the id collision"
     );
 }
 

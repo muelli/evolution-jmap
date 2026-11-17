@@ -286,7 +286,7 @@ fn append_message_sync_carries_a_message_and_its_row_to_the_real_server() {
     // first.
     account
         .jmap()
-        .expunge_message(&Id::from(uid), &created.id)
+        .expunge_message(&Id::from(uid), &created.id, None)
         .expect("expunge_message failed against the real server");
     account
         .jmap()

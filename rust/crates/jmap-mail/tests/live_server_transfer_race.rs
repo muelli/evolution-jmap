@@ -264,7 +264,7 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
     // first.
     account
         .jmap()
-        .expunge_message(&uid, &dest_info.id)
+        .expunge_message(&uid, &dest_info.id, None)
         .expect("expunge_message failed against the real server");
     account
         .jmap()

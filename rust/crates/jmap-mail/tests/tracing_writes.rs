@@ -221,7 +221,7 @@ fn file_and_expunge_message_trace_structured_fields() {
             .expect("file_message");
 
         store
-            .expunge_message(&message_uid, &archive_id)
+            .expunge_message(&message_uid, &archive_id, None)
             .expect("expunge_message");
     });
 

@@ -168,11 +168,16 @@ pub(crate) unsafe fn expunge_folder(
         // SAFETY: as above.
         return Err(StoreError::NoFolder(unsafe { name_of(folder) }));
     }
-    // Clone the mailbox. A borrow would stay alive across all requests of the
-    // walk, and the store below is borrowed from the same instance graph.
+    // Clone the mailbox and its owner. A borrow would stay alive across all
+    // requests of the walk, and the store below is borrowed from the same
+    // instance graph.
     // SAFETY: as above. Camel calls the vfunc on an instance of this class.
-    let mailbox = match unsafe { JmapFolder::borrow(folder).and_then(JmapFolder::mailbox) } {
-        Some(mailbox) => mailbox.clone(),
+    let found = unsafe { JmapFolder::borrow(folder) }.and_then(|info| {
+        info.mailbox()
+            .map(|mailbox| (mailbox.clone(), info.owner().cloned()))
+    });
+    let (mailbox, owner) = match found {
+        Some(found) => found,
         // SAFETY: as above.
         None => return Err(StoreError::NoFolder(unsafe { name_of(folder) })),
     };
@@ -195,9 +200,12 @@ pub(crate) unsafe fn expunge_folder(
     // trash would have prevented loses mail. `mailbox` can be a mailbox of
     // a shared account merged into this account's folder tree
     // (`FolderTree::merge_shared`); the trash that matters is then that
-    // account's own, not this store's (ROADMAP item 179(d)).
+    // account's own, not this store's (ROADMAP item 179(d)). `owner` comes
+    // from the folder Camel opened, not a fresh lookup by mailbox id: a
+    // mailbox id is unique in one account only, and a lookup by id alone
+    // (`FolderTree::owning_account`) can find the wrong account.
     let tree = store.folders(0)?;
-    let trash = match tree.owning_account(&mailbox) {
+    let trash = match &owner {
         Some(owner) => tree.shared_role(owner, FolderRole::Trash),
         None => tree.role(FolderRole::Trash),
     }
@@ -218,8 +226,8 @@ pub(crate) unsafe fn expunge_folder(
         // server write.
         let Ok(text) = uid.to_str() else { continue };
         let gone = match &move_into {
-            Some(trash) => store.trash_message(&Id::new(text), &mailbox, trash),
-            None => store.expunge_message(&Id::new(text), &mailbox),
+            Some(trash) => store.trash_message(&Id::new(text), &mailbox, trash, owner.as_ref()),
+            None => store.expunge_message(&Id::new(text), &mailbox, owner.as_ref()),
         };
         match gone {
             // The message left this mailbox, or the account has no such message.

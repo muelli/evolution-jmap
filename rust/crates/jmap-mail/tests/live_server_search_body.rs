@@ -243,11 +243,11 @@ fn a_body_term_is_answered_by_the_real_server() {
 
     account
         .jmap()
-        .expunge_message(&both_words_uid, &created.id)
+        .expunge_message(&both_words_uid, &created.id, None)
         .expect("expunge_message failed against the real server for the both-words message");
     account
         .jmap()
-        .expunge_message(&shared_only_uid, &created.id)
+        .expunge_message(&shared_only_uid, &created.id, None)
         .expect("expunge_message failed against the real server for the shared-only message");
     account
         .jmap()
