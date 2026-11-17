@@ -30,10 +30,12 @@ every showing, sensitive push button, check box, text field and table is
 actually visited. A combo box is excluded from what it expects to
 observe directly (see TAB_OBSERVABLE_ROLES's doc comment); Tab still has
 to pass through it to reach the field after it, so a trap there would
-still surface as that next field going unreached. Run on both pages now:
-the Vacation Responder page's message body used to trap Tab as an
+still surface as that next field going unreached. Run on all three pages
+now: the Vacation Responder page's message body used to trap Tab as an
 inserted character, fixed in item 174(b) with `gtk_text_view_set_accepts_
-tab`; PAGES' "tab_check" flag gates the walk per page.
+tab`; PAGES' "tab_check" flag gates the walk per page. The Delegates page
+(item 174's "surfaces added since the sweep" row) joined the walk here;
+its Add and Find dialogs stay a separate claim.
 """
 
 import pyatspi
@@ -96,6 +98,14 @@ PAGES = (
         "ready_name": "Send automatic replies",
         "anchor_role": "check box",
         "anchor_name": "Send automatic replies",
+        "tab_check": True,
+    },
+    {
+        "name": "Delegates",
+        "ready_role": "push button",
+        "ready_name": "Add…",
+        "anchor_role": "push button",
+        "anchor_name": "Revoke",
         "tab_check": True,
     },
 )
