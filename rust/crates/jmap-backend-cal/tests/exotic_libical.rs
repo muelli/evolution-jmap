@@ -13,6 +13,7 @@ use eds_sys::{
     i_cal_component_new_from_string, i_cal_property_get_location,
     i_cal_property_get_parameter_as_string,
 };
+use glib_sys::g_free;
 use gobject_sys::g_object_unref;
 use jmap_backend_cal::marshal;
 use jmap_ical::{event_to_ical, ical_to_event};
@@ -109,6 +110,7 @@ fn libical_vs_jmap_ical_bidi_controls() {
         let cn_str = CStr::from_ptr(cn_param).to_string_lossy();
         // Check what libical returns for CN: does it return quotes or unquoted?
         println!("libical org CN: {cn_str}");
+        g_free(cn_param.cast());
         g_object_unref(org_prop.cast());
 
         let att_prop = i_cal_component_get_first_property(ev, I_CAL_ATTENDEE_PROPERTY);
@@ -116,6 +118,7 @@ fn libical_vs_jmap_ical_bidi_controls() {
         let att_cn_param = i_cal_property_get_parameter_as_string(att_prop, c"CN".as_ptr());
         let att_cn_str = CStr::from_ptr(att_cn_param).to_string_lossy();
         println!("libical att CN: {att_cn_str}");
+        g_free(att_cn_param.cast());
         g_object_unref(att_prop.cast());
 
         g_object_unref(ev.cast());
@@ -195,6 +198,7 @@ fn libical_vs_jmap_ical_zero_width_characters() {
             cn_str, zw_organizer,
             "libical preserves zero-width organizer CN"
         );
+        g_free(cn_param.cast());
         g_object_unref(org_prop.cast());
 
         let att_prop = i_cal_component_get_first_property(ev, I_CAL_ATTENDEE_PROPERTY);
@@ -205,6 +209,7 @@ fn libical_vs_jmap_ical_zero_width_characters() {
             att_cn_str, zw_attendee,
             "libical preserves zero-width attendee CN"
         );
+        g_free(att_cn_param.cast());
         g_object_unref(att_prop.cast());
 
         g_object_unref(ev.cast());
@@ -273,12 +278,14 @@ fn libical_vs_jmap_ical_crlf_handling() {
         let cn_param = i_cal_property_get_parameter_as_string(org_prop, c"CN".as_ptr());
         let cn_str = CStr::from_ptr(cn_param).to_string_lossy();
         println!("libical org CN with caret escape: {cn_str:?}");
+        g_free(cn_param.cast());
         g_object_unref(org_prop.cast());
 
         let att_prop = i_cal_component_get_first_property(ev, I_CAL_ATTENDEE_PROPERTY);
         let att_cn_param = i_cal_property_get_parameter_as_string(att_prop, c"CN".as_ptr());
         let att_cn_str = CStr::from_ptr(att_cn_param).to_string_lossy();
         println!("libical att CN with caret escape: {att_cn_str:?}");
+        g_free(att_cn_param.cast());
         g_object_unref(att_prop.cast());
 
         g_object_unref(ev.cast());
