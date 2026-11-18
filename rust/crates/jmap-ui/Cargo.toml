@@ -45,6 +45,10 @@ glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
 jmap-config = { workspace = true }
+# Snooze creates the account's snoozed mailbox through its own client, not
+# through the CamelStore vfunc path, so it asks the backend to refresh the
+# folder list itself (see snooze::action::jmap_store_of).
+jmap-mail = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Splits the External Editor command line into an argv (filters::
