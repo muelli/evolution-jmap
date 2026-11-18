@@ -23,12 +23,19 @@ page's offline note and its now-insensitive controls still need an
 accessible name each, and still need unique mnemonics, the same rule the
 page's online state already meets. Added to this scenario, not a new one,
 because it needs the same "already offline, page open" setup.
+
+Item 174(d)'s live Tab-reachability check (`audit_tab_reachability`) runs
+here too, started from the editor's own Cancel button: a page's read-only
+state leaves its own controls insensitive, so the walk must stay inside
+the editor's chrome (sidebar, OK/Cancel/Help) and never trap focus on, or
+skip into, one of the page's now-disabled widgets.
 """
 
 from scenario import (
     Jmap,
     ScenarioFailure,
     audit_mnemonics,
+    audit_tab_reachability,
     do_action,
     evolution,
     expect_no_errors,
@@ -91,8 +98,9 @@ def open_page(page_name):
 
 def audit_offline_a11y(editor, page_name):
     """Raise if the account editor, with `page_name` open and read-only
-    offline, has an unnamed focusable widget or a duplicate mnemonic
-    (item 174's read-only offline state check).
+    offline, has an unnamed focusable widget, a duplicate mnemonic, or a
+    Tab walk that traps or skips a widget (item 174's read-only offline
+    state checks).
 
     Checks the whole editor, not just the page: the editor's own sidebar
     and OK/Cancel/Help row stay sensitive and in scope, the same way the
@@ -105,6 +113,12 @@ def audit_offline_a11y(editor, page_name):
         )
     say(f"a11y-audit: no unnamed focusable widget offline on the {page_name!r} page")
     audit_mnemonics(editor, page_name)
+    cancel = wait_for(
+        lambda: find(editor, "push button", "Cancel", showing=True), "the editor's Cancel button"
+    )
+    cancel.queryComponent().grabFocus()
+    audit_tab_reachability(editor, page_name)
+    say(f"a11y-audit: live Tab reachability offline on the {page_name!r} page")
 
 
 def close_with_cancel(editor):
