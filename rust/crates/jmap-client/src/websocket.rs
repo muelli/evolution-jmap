@@ -114,6 +114,22 @@ impl Default for WebSocketTimeouts {
     }
 }
 
+/// Outcome of an RFC 6455 Section 5.5.1 client-initiated WebSocket close handshake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CloseHandshakeOutcome {
+    /// The server echoed a Close control frame (RFC 6455 Section 5.5.1).
+    EchoedClose {
+        /// Optional status code from the server's Close frame.
+        code: Option<u16>,
+        /// Optional close reason string from the server's Close frame.
+        reason: Option<String>,
+    },
+    /// The server closed the TCP stream with a clean EOF without sending a Close frame (Stalwart 1.1.1, Finding 28).
+    EofWithoutCloseFrame,
+    /// The server reset the TCP connection without sending a Close frame (Stalwart 1.0.1, Finding 28).
+    ResetWithoutCloseFrame,
+}
+
 /// An action or parsed event resulting from processing an inbound WebSocket message.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InboundFrameAction {
@@ -456,12 +472,15 @@ impl WebSocketConnection {
         let r_closed = Arc::clone(&closed);
 
         let reader_handle = thread::spawn(move || {
-            while !r_closed.load(Ordering::Relaxed) {
+            while !r_closed.load(Ordering::Acquire) {
                 let read_result = {
                     let mut guard = match r_ws.lock() {
                         Ok(g) => g,
                         Err(_) => break,
                     };
+                    if r_closed.load(Ordering::Acquire) {
+                        break;
+                    }
                     guard.read()
                 };
 
@@ -475,9 +494,17 @@ impl WebSocketConnection {
                             }
                         }
                         InboundFrameAction::RequestError { id, error } => {
-                            if let Some(id) = id
-                                && let Some(sender) = r_pending.lock().unwrap().remove(&id)
-                            {
+                            let mut map = r_pending.lock().unwrap();
+                            let sender = if let Some(ref req_id) = id {
+                                map.remove(req_id)
+                            } else if map.len() == 1 {
+                                let sole_key = map.keys().next().cloned().unwrap();
+                                map.remove(&sole_key)
+                            } else {
+                                None
+                            };
+                            drop(map);
+                            if let Some(sender) = sender {
                                 let _ = sender.send(PendingResponse::RequestError(error));
                             }
                         }
@@ -687,23 +714,107 @@ impl WebSocketConnection {
         Ok(())
     }
 
-    /// Cleanly close the WebSocket connection (RFC 6455 Section 5.5.1).
-    pub fn close(&self) -> Result<(), Error> {
-        self.closed.store(true, Ordering::Relaxed);
-        if let Ok(mut guard) = self.ws.lock() {
-            let _ = guard.close(Some(tungstenite::protocol::CloseFrame {
-                code: tungstenite::protocol::frame::coding::CloseCode::Normal,
-                reason: "Normal closure".into(),
-            }));
-            let _ = guard.flush();
-        }
+    fn drain_pending(&self) {
         let mut map = self.pending.lock().unwrap();
         for (_, sender) in map.drain() {
             let _ = sender.send(PendingResponse::Error(Error::Transport(
                 "connection closed".into(),
             )));
         }
+    }
+
+    /// Cleanly close the WebSocket connection (RFC 6455 Section 5.5.1).
+    pub fn close(&self) -> Result<(), Error> {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        if let Ok(mut guard) = self.ws.lock() {
+            let _ = guard.close(Some(normal_close_frame()));
+            let _ = guard.flush();
+        }
+        self.drain_pending();
         Ok(())
+    }
+
+    /// Initiate a clean close and observe the server's close handshake response.
+    pub fn close_with_outcome(&self) -> Result<CloseHandshakeOutcome, Error> {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return Err(Error::Transport("connection is already closed".into()));
+        }
+        self.drain_pending();
+        let mut guard = self
+            .ws
+            .lock()
+            .map_err(|_| Error::Transport("websocket lock poisoned".into()))?;
+        guard
+            .close(Some(normal_close_frame()))
+            .map_err(|e| Error::Transport(format!("failed to send websocket close frame: {e}")))?;
+        guard
+            .flush()
+            .map_err(|e| Error::Transport(format!("failed to flush websocket close frame: {e}")))?;
+        let _ = guard
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(2)));
+
+        for _ in 0..8 {
+            match guard.read() {
+                Ok(tungstenite::Message::Close(frame)) => {
+                    let (code, reason) = match frame {
+                        Some(f) => (Some(u16::from(f.code)), Some(f.reason.to_string())),
+                        None => (None, None),
+                    };
+                    return Ok(CloseHandshakeOutcome::EchoedClose { code, reason });
+                }
+                Ok(_) => continue,
+                Err(tungstenite::Error::Protocol(
+                    tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+                ))
+                | Err(tungstenite::Error::ConnectionClosed) => {
+                    return Ok(CloseHandshakeOutcome::EofWithoutCloseFrame);
+                }
+                Err(tungstenite::Error::Io(ref e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    return Ok(CloseHandshakeOutcome::EofWithoutCloseFrame);
+                }
+                Err(tungstenite::Error::Io(ref e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::BrokenPipe
+                    ) =>
+                {
+                    return Ok(CloseHandshakeOutcome::ResetWithoutCloseFrame);
+                }
+                Err(tungstenite::Error::Io(ref e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Err(Error::Transport(
+                        "timed out awaiting websocket close frame".into(),
+                    ));
+                }
+                Err(e) => {
+                    return Err(Error::Transport(format!(
+                        "websocket close handshake failed: {e}"
+                    )));
+                }
+            }
+        }
+
+        Err(Error::Transport(
+            "did not receive close frame within 8 inbound frames".into(),
+        ))
+    }
+}
+
+fn normal_close_frame() -> tungstenite::protocol::CloseFrame {
+    tungstenite::protocol::CloseFrame {
+        code: tungstenite::protocol::frame::coding::CloseCode::Normal,
+        reason: "Normal closure".into(),
     }
 }
 
@@ -1305,10 +1416,7 @@ fn connect_and_stream_push(
         }
     }
 
-    let _ = ws.close(Some(tungstenite::protocol::CloseFrame {
-        code: tungstenite::protocol::frame::coding::CloseCode::Normal,
-        reason: "Normal closure".into(),
-    }));
+    let _ = ws.close(Some(normal_close_frame()));
     let _ = ws.flush();
     Ok(())
 }

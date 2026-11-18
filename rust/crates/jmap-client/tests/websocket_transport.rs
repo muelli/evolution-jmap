@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use jmap_client::{Client, Credentials, Error};
+use jmap_client::{Client, CloseHandshakeOutcome, Credentials, Error, WebSocketTimeouts};
 use jmap_proto::request::Invocation;
 use jmap_proto::websocket::WebSocketRequest;
 use serde_json::json;
@@ -559,4 +559,107 @@ fn websocket_honours_concurrency_limit() {
     assert!(max_observed.load(Ordering::SeqCst) <= 2);
 
     conn.close().expect("clean close");
+}
+
+#[test]
+fn websocket_request_error_without_request_id_resolves_sole_pending_request() {
+    let ws_server = TestWsServer::start(|mut ws| {
+        while let Ok(msg) = ws.read() {
+            match msg {
+                Message::Text(_) => {
+                    // Stalwart 1.1.1 omits requestId on RequestError frames.
+                    let err = json!({
+                        "@type": "RequestError",
+                        "type": "urn:ietf:params:jmap:error:notRequest",
+                        "status": 400,
+                        "detail": "Unknown capability"
+                    });
+                    ws.send(Message::Text(serde_json::to_string(&err).unwrap().into()))
+                        .unwrap();
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    let http_server = start_session_server(ws_server.ws_url(), Some(4));
+    let client = Client::connect(http_server.origin(), Credentials::none()).unwrap();
+    let timeouts = WebSocketTimeouts {
+        connect: Duration::from_secs(5),
+        request: Duration::from_millis(500),
+    };
+    let conn = client
+        .connect_websocket_with_timeouts(timeouts)
+        .expect("websocket connects");
+
+    let req = WebSocketRequest::new(["urn:ietf:params:jmap:core", "urn:example:unknown"])
+        .with_id("req-missing-id")
+        .call("Core/echo", &json!({}), "c1")
+        .unwrap();
+
+    let err = conn.send_request(req).unwrap_err();
+    match err {
+        Error::Http { status, problem } => {
+            assert_eq!(status, 400);
+            let prob = problem.expect("problem details present");
+            assert_eq!(prob.error_type, "urn:ietf:params:jmap:error:notRequest");
+            assert_eq!(prob.detail.as_deref(), Some("Unknown capability"));
+        }
+        other => panic!("expected Error::Http, got: {other:?}"),
+    }
+
+    conn.close().expect("clean close");
+}
+
+#[test]
+fn websocket_close_with_outcome_distinguishes_echoed_close_and_eof() {
+    // (a) Server echoes Close(1000) per RFC 6455 Section 5.5.1.
+    let echo_server = TestWsServer::start(|mut ws| {
+        while let Ok(msg) = ws.read() {
+            if let Message::Close(frame) = msg {
+                let _ = ws.close(frame);
+                break;
+            }
+        }
+    });
+    let http_echo = start_session_server(echo_server.ws_url(), Some(4));
+    let client_echo = Client::connect(http_echo.origin(), Credentials::none()).unwrap();
+    let conn_echo = client_echo
+        .connect_websocket()
+        .expect("websocket connects to echo server");
+    let outcome_echo = conn_echo
+        .close_with_outcome()
+        .expect("close handshake with echo succeeds");
+    assert!(
+        matches!(
+            outcome_echo,
+            CloseHandshakeOutcome::EchoedClose {
+                code: Some(1000),
+                ..
+            }
+        ),
+        "expected EchoedClose with code 1000, got: {outcome_echo:?}"
+    );
+    assert!(conn_echo.is_closed());
+
+    // (b) Server drops TCP stream with EOF without sending a Close frame (Stalwart 1.1.1).
+    let eof_server = TestWsServer::start(|mut ws| {
+        while let Ok(msg) = ws.read() {
+            if let Message::Close(_) = msg {
+                // Drop ws immediately without flushing tungstenite's queued close reply.
+                break;
+            }
+        }
+    });
+    let http_eof = start_session_server(eof_server.ws_url(), Some(4));
+    let client_eof = Client::connect(http_eof.origin(), Credentials::none()).unwrap();
+    let conn_eof = client_eof
+        .connect_websocket()
+        .expect("websocket connects to eof server");
+    let outcome_eof = conn_eof
+        .close_with_outcome()
+        .expect("close handshake with eof succeeds");
+    assert_eq!(outcome_eof, CloseHandshakeOutcome::EofWithoutCloseFrame);
+    assert!(conn_eof.is_closed());
 }
