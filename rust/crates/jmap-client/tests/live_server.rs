@@ -323,6 +323,107 @@ fn websocket_push_delivers_state_change_from_second_client_through_the_real_api(
     sub.stop();
 }
 
+/// RFC 8887 WebSocket RequestError and RFC 6455 close handshake behavior on live servers.
+///
+/// Pins server-specific differences between Cyrus IMAP and Stalwart 1.1.1:
+/// - Unknown capability in `using`: Cyrus answers `RequestError` with type
+///   `urn:ietf:params:jmap:error:unknownCapability` and matching `requestId`;
+///   Stalwart 1.1.1 answers `urn:ietf:params:jmap:error:notRequest` without `requestId`
+///   (STALWART-RFC-FINDINGS.md Finding 29).
+/// - Close handshake (RFC 6455 §5.5.1): Cyrus echoes Close(1000); Stalwart 1.1.1 drops
+///   the Close frame without echoing one and terminates TCP with clean EOF instead of
+///   1.0.1's TCP reset (STALWART-RFC-FINDINGS.md Finding 28).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+#[cfg(feature = "websocket")]
+fn websocket_close_handshake_and_request_error_through_the_real_api() {
+    let client = connect();
+    let ws = client
+        .connect_websocket()
+        .expect("websocket connection establishes");
+
+    let err = ws
+        .call(
+            [
+                "urn:ietf:params:jmap:core",
+                "urn:example:unknown-capability",
+            ],
+            [
+                jmap_proto::request::Invocation::new("Core/echo", &json!({}), "ws-unk-1")
+                    .expect("build invocation"),
+            ],
+        )
+        .expect_err("unknown capability over websocket must return RequestError");
+
+    match err {
+        Error::Http { status, problem } => {
+            assert_eq!(status, 400);
+            let prob = problem.expect("RequestError problem details present");
+            if is_cyrus_server(&client) {
+                assert_eq!(
+                    prob.error_type,
+                    "urn:ietf:params:jmap:error:unknownCapability"
+                );
+            } else {
+                assert_eq!(
+                    prob.error_type, "urn:ietf:params:jmap:error:notRequest",
+                    "Stalwart 1.1.1 reports notRequest for unknown capability (Finding 29)"
+                );
+            }
+        }
+        other => panic!("expected Error::Http RequestError, got: {other:?}"),
+    }
+
+    // Connection remains open and usable after a RequestError.
+    let payload = json!({"after": "request-error"});
+    let responses = ws
+        .call(
+            ["urn:ietf:params:jmap:core"],
+            [
+                jmap_proto::request::Invocation::new("Core/echo", &payload, "ws-echo-after")
+                    .expect("build invocation"),
+            ],
+        )
+        .expect("Core/echo succeeds after RequestError");
+    assert_eq!(responses.len(), 1);
+    let echoed: serde_json::Value = responses[0].parse().expect("parse echoed payload");
+    assert_eq!(echoed, payload);
+
+    // Observe the RFC 6455 close handshake outcome.
+    let outcome = ws.close_with_outcome().expect("close handshake completes");
+    if is_cyrus_server(&client) {
+        assert!(
+            matches!(
+                outcome,
+                jmap_client::CloseHandshakeOutcome::EchoedClose {
+                    code: Some(1000),
+                    ..
+                }
+            ),
+            "Cyrus conforms to RFC 6455 §5.5.1 by echoing Close(1000), got: {outcome:?}"
+        );
+    } else {
+        assert_eq!(
+            outcome,
+            jmap_client::CloseHandshakeOutcome::EofWithoutCloseFrame,
+            "Stalwart 1.1.1 drops the client Close frame and closes TCP with clean EOF (Finding 28)"
+        );
+    }
+
+    assert!(ws.is_closed());
+    let post_close = ws.call(
+        ["urn:ietf:params:jmap:core"],
+        [
+            jmap_proto::request::Invocation::new("Core/echo", &json!({}), "ws-post-close")
+                .expect("build invocation"),
+        ],
+    );
+    assert!(
+        matches!(post_close, Err(Error::Transport(_))),
+        "calls after close_with_outcome must fail with Transport error, got: {post_close:?}"
+    );
+}
+
 /// If the account has the mail capability, `Mailbox/get` answers with at
 /// least one mailbox: every real mailbox has an Inbox. An account with no
 /// mail capability at all (a contacts-or-calendars-only test account) is not

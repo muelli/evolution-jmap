@@ -107,7 +107,7 @@ pub mod url;
 pub mod websocket;
 #[cfg(feature = "websocket")]
 pub use websocket::{
-    DEFAULT_CONNECT_TIMEOUT as DEFAULT_WS_CONNECT_TIMEOUT,
+    CloseHandshakeOutcome, DEFAULT_CONNECT_TIMEOUT as DEFAULT_WS_CONNECT_TIMEOUT,
     DEFAULT_MAX_FRAME_SIZE as DEFAULT_WS_MAX_FRAME_SIZE,
     DEFAULT_MAX_MESSAGE_SIZE as DEFAULT_WS_MAX_MESSAGE_SIZE,
     DEFAULT_REQUEST_TIMEOUT as DEFAULT_WS_REQUEST_TIMEOUT, InboundFrameAction, WebSocketConnection,
