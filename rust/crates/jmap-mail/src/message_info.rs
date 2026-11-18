@@ -1393,11 +1393,16 @@ fn message_flags(word: CamelMessageFlags) -> MessageFlags {
     flags
 }
 
+/// True if `c` is an explicit Unicode bidirectional control: an embedding,
+/// an override or an isolate.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
 /// True if `text` carries an explicit Unicode bidirectional control: an
 /// embedding, an override or an isolate.
 fn has_bidi_control(text: &str) -> bool {
-    text.chars()
-        .any(|c| matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+    text.chars().any(is_bidi_control)
 }
 
 /// Wraps `text` in a directional isolate (FSI U+2068 ... PDI U+2069) if it
@@ -1419,8 +1424,9 @@ fn isolate_if_bidi(text: &str) -> Cow<'_, str> {
     }
 }
 
-/// A keyword, with a space, `%`, NUL, CR or LF percent-encoded so it survives
-/// Camel's own `labels` summary database column unchanged.
+/// A keyword, with a space, `%`, NUL, CR, LF or a bidi control character
+/// percent-encoded so it survives Camel's own `labels` summary database
+/// column unchanged, and never reaches it raw.
 ///
 /// `message_info_save`/`message_info_load` (`camel-message-info.c`) join the
 /// column's names with one literal space and split back on the same
@@ -1428,9 +1434,17 @@ fn isolate_if_bidi(text: &str) -> Cow<'_, str> {
 /// Escaping `%` first keeps the encoding reversible; escaping NUL, CR and LF
 /// here also keeps them out of the string before `c_string` would otherwise
 /// replace them with U+FFFD, a second, unrelated loss the same column had.
+/// A bidi control (see [`is_bidi_control`]) is escaped for a third reason:
+/// Evolution's message list shows a user flag as a label next to the other
+/// columns in the same row, so an unpaired override in a keyword could
+/// otherwise change their reading direction, the same risk [`isolate_if_bidi`]
+/// closes for the subject and preview columns. Wrapping the keyword in an
+/// isolate instead of escaping it is not safe here: [`decode_camel_label`]
+/// must give back the exact original keyword for the diff this crate sends
+/// to the server, and the isolate marks would become part of that keyword.
 /// [`decode_camel_label`] reverses this.
 fn encode_camel_label(tag: &str) -> Cow<'_, str> {
-    if !tag.contains([' ', '%', '\0', '\r', '\n']) {
+    if !tag.contains([' ', '%', '\0', '\r', '\n']) && !has_bidi_control(tag) {
         return Cow::Borrowed(tag);
     }
     let mut encoded = String::with_capacity(tag.len());
@@ -1441,6 +1455,12 @@ fn encode_camel_label(tag: &str) -> Cow<'_, str> {
             '\0' => encoded.push_str("%00"),
             '\r' => encoded.push_str("%0D"),
             '\n' => encoded.push_str("%0A"),
+            c if is_bidi_control(c) => {
+                let mut buf = [0u8; 4];
+                for byte in c.encode_utf8(&mut buf).as_bytes() {
+                    encoded.push_str(&format!("%{byte:02X}"));
+                }
+            }
             _ => encoded.push(c),
         }
     }
@@ -1453,30 +1473,33 @@ fn encode_camel_label(tag: &str) -> Cow<'_, str> {
 /// encoding (an older row, or a label another tool wrote); it is kept
 /// verbatim rather than treated as a decode error, so a row this function
 /// does not fully recognise still comes back whole.
+///
+/// This works a byte at a time, not a char at a time: [`encode_camel_label`]
+/// escapes a bidi control one UTF-8 byte per `%XX`, so a multi-byte
+/// character comes back as several consecutive escapes that only decode to
+/// the right character once every one of its bytes is collected.
 fn decode_camel_label(tag: &str) -> Cow<'_, str> {
     if !tag.contains('%') {
         return Cow::Borrowed(tag);
     }
-    let mut decoded = String::with_capacity(tag.len());
-    let mut chars = tag.chars();
-    while let Some(c) = chars.next() {
-        if c != '%' {
-            decoded.push(c);
-            continue;
-        }
-        let rest = chars.as_str();
-        let hex = rest
-            .get(..2)
-            .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()));
-        match hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
-            Some(byte) => {
-                decoded.push(byte as char);
-                chars = rest[2..].chars();
+    let bytes = tag.as_bytes();
+    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = tag
+                .get(index + 1..index + 3)
+                .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()));
+            if let Some(byte) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                decoded.push(byte);
+                index += 3;
+                continue;
             }
-            None => decoded.push('%'),
         }
+        decoded.push(bytes[index]);
+        index += 1;
     }
-    Cow::Owned(decoded)
+    Cow::Owned(String::from_utf8_lossy(&decoded).into_owned())
 }
 
 /// An addr-spec, with any `<`, `>` or `,` replaced.

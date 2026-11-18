@@ -28,15 +28,17 @@ use eds_sys::compat::CamelSummaryMessageRecord;
 use eds_sys::{
     CAMEL_MESSAGE_ANSWERED, CAMEL_MESSAGE_ATTACHMENTS, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DRAFT,
     CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FORWARDED, CAMEL_MESSAGE_JUNK, CAMEL_MESSAGE_NOTJUNK,
-    CAMEL_MESSAGE_SEEN, CamelMessageInfo, camel_message_info_get_cc,
-    camel_message_info_get_date_received, camel_message_info_get_date_sent,
-    camel_message_info_get_flags, camel_message_info_get_folder_flagged,
-    camel_message_info_get_from, camel_message_info_get_message_id, camel_message_info_get_preview,
+    CAMEL_MESSAGE_SEEN, CamelMessageInfo, camel_message_info_dup_user_flags,
+    camel_message_info_get_cc, camel_message_info_get_date_received,
+    camel_message_info_get_date_sent, camel_message_info_get_flags,
+    camel_message_info_get_folder_flagged, camel_message_info_get_from,
+    camel_message_info_get_message_id, camel_message_info_get_preview,
     camel_message_info_get_references, camel_message_info_get_size, camel_message_info_get_subject,
     camel_message_info_get_to, camel_message_info_get_uid, camel_message_info_get_user_flag,
     camel_message_info_load, camel_message_info_new_from_headers, camel_message_info_save,
     camel_message_info_set_flags, camel_name_value_array_append, camel_name_value_array_free,
-    camel_name_value_array_new,
+    camel_name_value_array_new, camel_named_flags_free, camel_named_flags_get,
+    camel_named_flags_get_length,
 };
 use glib_sys::{GFALSE, GTRUE, g_free, g_string_free, g_string_new, gchar};
 use gobject_sys::{g_object_unref, g_type_check_instance_is_a};
@@ -1143,6 +1145,45 @@ fn a_keyword_with_a_space_does_not_split_through_camels_label_column() {
         free_saved_strings(&mut record);
         g_string_free(bdata, GTRUE);
         g_object_unref(restored.cast());
+        g_object_unref(info.cast());
+    }
+}
+
+/// RFC 8621 lets a keyword be any Unicode string, so a hostile server can
+/// send one with an unpaired directional override (RLO, U+202E) and no
+/// closing mark. Evolution's message list shows a Camel user flag as a label
+/// next to the other columns in the same row, the same row context
+/// `a_bidi_override_in_the_preview_does_not_escape_its_own_column` already
+/// covers for the preview column. The override must not reach the stored
+/// label text raw, and the keyword must still round trip exactly, since
+/// `row_keywords` reads the stored name back to diff against the server.
+#[test]
+fn a_bidi_override_in_a_keyword_does_not_escape_its_own_label() {
+    let mut message = row("Em0029");
+    message.tags = vec!["Click \u{202e}desolc\u{202c} here".to_owned()];
+    let info = info_of(&message);
+
+    // SAFETY: `info` is a live message info this test owns. `dup_user_flags`
+    // gives a copy that this test frees.
+    unsafe {
+        let user_flags = camel_message_info_dup_user_flags(info);
+        let stored = (0..camel_named_flags_get_length(user_flags))
+            .filter_map(|index| {
+                let name = camel_named_flags_get(user_flags, index);
+                (!name.is_null()).then(|| CStr::from_ptr(name).to_string_lossy().into_owned())
+            })
+            .collect::<Vec<String>>();
+        camel_named_flags_free(user_flags);
+
+        assert!(
+            stored.iter().all(|name| !name.contains('\u{202e}')),
+            "the stored label must not carry the raw override: {stored:?}"
+        );
+        assert_eq!(
+            row_keywords(info),
+            Keywords::new(&message.flags, &message.tags),
+            "the keyword must still round trip exactly for the server diff"
+        );
         g_object_unref(info.cast());
     }
 }
