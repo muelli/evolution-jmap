@@ -300,8 +300,9 @@ struct UiState {
     rule_down: *mut GtkWidget,
     rule_enable: *mut GtkWidget,
     rule_disable: *mut GtkWidget,
-    /// The generation of the last Check click. A reply tagged with any other
-    /// generation is stale and must not overwrite the status label.
+    /// The generation of the last status-changing action: a Check click or
+    /// an instant-apply text save (item 180(a)). A reply tagged with any
+    /// other generation is stale and must not overwrite the status label.
     check_generation: u64,
     /// The tag item 171b applies to the line a local Sieve parse rejects.
     /// Created once, in [`build_widgets`], and kept for the page's whole
@@ -374,19 +375,23 @@ struct ExternalEditorSession {
     poll_timeout: c_uint,
 }
 
-/// A fresh generation for one Check click, process-wide so it never repeats.
+/// A fresh generation for one status-changing action (a Check click or an
+/// instant-apply text save), process-wide so it never repeats.
 static CHECK_GENERATIONS: AtomicU64 = AtomicU64::new(0);
 
 impl UiState {
-    /// Marks a new Check in flight. Returns the generation to tag its reply
-    /// with.
+    /// Marks a new Check or instant-apply save in flight. Returns the
+    /// generation to tag its reply with.
     fn begin_check(&mut self) -> u64 {
         self.check_generation = CHECK_GENERATIONS.fetch_add(1, Ordering::SeqCst);
         self.check_generation
     }
 
-    /// True if `generation` is the latest Check this page started. A click
-    /// started after it makes this one stale.
+    /// True if `generation` is the latest status-changing action this page
+    /// started. A Check click or a text save started after it makes this
+    /// one stale, whichever kind it is: both share one generation counter,
+    /// so only the most recently started action's reply reaches the status
+    /// label.
     fn check_is_current(&self, generation: u64) -> bool {
         self.check_generation == generation
     }
@@ -1728,6 +1733,10 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
     tracing::trace!(script = name, "filters: script text write started");
 
     cell.borrow_mut().saving_text = true;
+    // A Check click racing this same save must not have its own answer
+    // overwritten by this save's reply landing later, and the reverse:
+    // whichever of the two started last wins the status label.
+    let generation = cell.borrow_mut().begin_check();
     // SAFETY: the widgets are live, and no borrow is held.
     unsafe {
         set_script_controls_sensitive(cell, false);
@@ -1741,6 +1750,8 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
             return;
         };
         cell.borrow_mut().saving_text = false;
+        // A newer Check or save started after this one: its reply is stale.
+        let current = cell.borrow().check_is_current(generation);
         match outcome {
             Ok(ActivateOutcome::Reloaded(loaded)) => {
                 tracing::trace!(script = name, "filters: script text written");
@@ -1760,7 +1771,9 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
                 }
                 // SAFETY: as above.
                 unsafe {
-                    set_status(cell, "");
+                    if current {
+                        set_status(cell, "");
+                    }
                     refresh(cell);
                 }
             }
@@ -1769,7 +1782,9 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
                 let text = translate_with(SAVE_TEXT_RELOAD_FAILED, &[&reason]);
                 // SAFETY: as above.
                 unsafe {
-                    set_status(cell, &text);
+                    if current {
+                        set_status(cell, &text);
+                    }
                     refresh(cell);
                 }
             }
@@ -1778,7 +1793,9 @@ unsafe fn maybe_save_text(cell: &RefCell<UiState>, page: *mut GObject) {
                 let text = translate_with(SAVE_TEXT_FAILED, &[&reason]);
                 // SAFETY: as above.
                 unsafe {
-                    set_status(cell, &text);
+                    if current {
+                        set_status(cell, &text);
+                    }
                     refresh(cell);
                 }
             }
@@ -3379,6 +3396,17 @@ unsafe extern "C" fn on_check(_button: *mut GObject, page: gpointer) {
         };
         // SAFETY: the widgets are live, and no borrow is held.
         unsafe { flush(cell) };
+        // A debounce save armed by the edit just flushed, but not yet
+        // fired, must not go on to start after this Check and steal the
+        // status label with its own, different-shaped answer to the same
+        // validation. The same cancel `on_script_changed` uses to replace
+        // its own earlier timeout.
+        let pending = std::mem::replace(&mut cell.borrow_mut().validate_timeout, 0);
+        if pending != 0 {
+            // SAFETY: a source id this page added, not yet fired (it would
+            // have cleared the field itself).
+            unsafe { g_source_remove(pending) };
+        }
         let job = {
             let ui = cell.borrow();
             let link = ui.link.clone();
@@ -5449,6 +5477,119 @@ mod tests {
                 saved.text, "keep;\nstop;\n",
                 "the debounce must have saved the appended line to the server"
             );
+        });
+    }
+
+    /// A Check click can race the instant-apply debounce save of the same
+    /// text (item 180(a)): both validate the same script text with the
+    /// server. Before this fix, `maybe_save_text`'s finish handler had no
+    /// generation guard, so a save reply landing after a newer Check's own
+    /// reply overwrote the status label with its own, stale, answer. The
+    /// shared generation counter ([`UiState::begin_check`]) now makes the
+    /// Check's answer win, since it starts after the save. Needs a
+    /// display; skips without one.
+    #[test]
+    fn a_check_click_wins_over_a_racing_debounce_save_reply() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        // The mock's canned long refusal for this marker (jmap-mock's own
+        // `sieve::LONG_ERROR_TRIGGER`/`LONG_ERROR_DETAIL`, private to that
+        // crate): a comment, so the local Sieve parser accepts it and the
+        // debounce save fires.
+        const TRIGGER_TEXT: &str = "keep;\n# trigger-long-error\n";
+        const LONG_ERROR_DETAIL: &str = "rate limit exceeded (HTTP 429 / limit) on upload, retry \
+after 265s: you have exceeded the number of requests this account may make in the current \
+time window. Wait for the window to reset, or ask an administrator to raise the limit.";
+
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().sieve_validate_long_error().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
+
+            // Seeds one inactive script under a name other than
+            // `MANAGED_SCRIPT_NAME`, so the page stays in text mode, as
+            // `editing_the_script_text_saves_it_once_the_debounce_fires` does.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "custom".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the script failed: {reason}")
+                }
+            };
+
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
+
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
+
+                let cell = state(page.cast()).expect("a loaded page has state");
+                let buffer = cell.borrow().buffer;
+                let status = cell.borrow().status;
+
+                let view = cell.borrow().view;
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                let added = cstring_lossy("# trigger-long-error\n");
+                gtk_text_buffer_insert(buffer, &mut end, added.as_ptr(), -1);
+                assert_eq!(get_text(buffer.cast()), TRIGGER_TEXT);
+
+                // Catches the debounce save right as it starts: `saving_text`
+                // is set synchronously, before the network round trip, so no
+                // reply has landed yet. The Check click starts right after,
+                // a later generation than the save's own.
+                pump_until(|| cell.borrow().saving_text, Duration::from_secs(5));
+                on_check(ptr::null_mut(), page.cast());
+
+                pump_until(|| !cell.borrow().saving_text, Duration::from_secs(5));
+                pump_until(
+                    || {
+                        let text =
+                            read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                        text != translate(SAVING_TEXT) && text != translate(CHECKING)
+                    },
+                    Duration::from_secs(5),
+                );
+
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    text, LONG_ERROR_DETAIL,
+                    "a stale debounce-save reply overwrote the Check click's own answer"
+                );
+
+                gtk_widget_destroy(window);
+            }
         });
     }
 
