@@ -1018,6 +1018,7 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-core",
  "jmap-config",
+ "jmap-mail",
  "serde",
  "serde_json",
  "shlex 1.3.0",

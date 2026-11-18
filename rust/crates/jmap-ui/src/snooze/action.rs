@@ -32,7 +32,7 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use eds_sys::{
-    CamelFolder, ESource, camel_folder_get_parent_store, camel_service_get_provider,
+    CamelFolder, CamelStore, ESource, camel_folder_get_parent_store, camel_service_get_provider,
     camel_service_get_uid, e_source_dup_parent, e_source_registry_ref_source,
 };
 use evo_sys::{
@@ -55,7 +55,7 @@ use evo_sys::{
 #[cfg(not(evolution_eui_manager))]
 use glib_sys::{GError, g_error_free};
 use glib_sys::{GFALSE, GTRUE, gpointer};
-use gobject_sys::{GObject, g_object_unref};
+use gobject_sys::{GObject, g_object_ref, g_object_unref};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::{g_object_set, g_signal_connect_data};
 use jmap_backend_core::BACKEND_NAME;
@@ -557,6 +557,70 @@ unsafe fn service_uid_of(folder: *mut CamelFolder) -> Option<String> {
     }
 }
 
+/// The store of the folder of the reader, with a reference this function
+/// gives, if the folder belongs to this provider.
+///
+/// # Safety
+///
+/// `reader` must be a live `EMailReader`, on the main loop.
+unsafe fn jmap_store_of(reader: *mut EMailReader) -> Option<*mut CamelStore> {
+    // SAFETY: the reader is live. This code releases the folder reference.
+    // The store is borrowed from the folder (`camel_folder_get_parent_store`
+    // transfers no reference), so this takes its own before the folder goes.
+    unsafe {
+        let folder = e_mail_reader_ref_folder(reader);
+        if folder.is_null() {
+            return None;
+        }
+        let store = if service_uid_of(folder).is_some() {
+            let store = camel_folder_get_parent_store(folder);
+            if store.is_null() {
+                None
+            } else {
+                g_object_ref(store.cast());
+                Some(store)
+            }
+        } else {
+            None
+        };
+        g_object_unref(folder.cast());
+        store
+    }
+}
+
+/// A `CamelStore` reference that can move to a worker thread.
+///
+/// `CamelStore` is a GObject, so its reference count is atomic (the same
+/// reasoning as [`crate::link::SendSource`]).
+struct SendStore(*mut CamelStore);
+
+// SAFETY: see the doc of the type. Reference counting is thread-safe.
+unsafe impl Send for SendStore {}
+
+impl SendStore {
+    /// Take ownership of `store`, a reference that the caller owns.
+    ///
+    /// # Safety
+    ///
+    /// `store` must be a live `CamelStore`, and the caller must own the
+    /// reference and give it away. The wrapper releases it one time, on drop.
+    unsafe fn adopt(store: *mut CamelStore) -> Self {
+        Self(store)
+    }
+
+    /// The store. It stays alive while `self` is alive.
+    fn as_ptr(&self) -> *mut CamelStore {
+        self.0
+    }
+}
+
+impl Drop for SendStore {
+    fn drop(&mut self) {
+        // SAFETY: the reference that `adopt` took, released one time.
+        unsafe { g_object_unref(self.0.cast()) };
+    }
+}
+
 /// The source to connect with for the folder of the reader.
 /// It is the source of the service in the registry, or its collection source
 /// if it has one. The caller owns the returned reference.
@@ -695,6 +759,9 @@ unsafe fn activate(owner: *mut GObject, preset: Preset) {
     };
     // SAFETY: this gives the reference from `connect_source_of` to the wrapper.
     let source = unsafe { SendSource::adopt(source) };
+    // SAFETY: the reader is live. The worker owns the reference and drops it
+    // after the folder-list refresh below.
+    let store = unsafe { jmap_store_of(reader) }.map(|store| unsafe { SendStore::adopt(store) });
 
     if !cell.borrow_mut().begin() {
         // A snooze from an earlier click is still on its worker thread.
@@ -705,7 +772,26 @@ unsafe fn activate(owner: *mut GObject, preset: Preset) {
         // SAFETY: the worker owns the reference from `connect_source_of`.
         let outcome = unsafe { link::connect_account(source.as_ptr()) };
         drop(source);
-        outcome.and_then(|link| snooze_all(&link, &uids, &until))
+        let outcome = outcome.and_then(|link| snooze_all(&link, &uids, &until));
+        // The snoozed mailbox is created, and the message moved into it,
+        // through this crate's own client, not through the `CamelStore`
+        // vfunc path that normally keeps Camel's open folders and its
+        // folder tree in step, so Camel does not learn about either change
+        // on its own. A live push subscription would tell it, but the
+        // Cyrus mail extension that offers snooze also makes push stay off
+        // (see `jmap_backend_core::push`), so nothing else asks. Ask
+        // directly, on this same worker thread: both calls make a network
+        // round trip. This runs even if the snooze itself failed, because
+        // the mailbox can exist on the server regardless (`snoozed_mailbox`
+        // succeeded before a later `Email/set` failed).
+        if let Some(store) = store {
+            // SAFETY: the worker owns the reference from `jmap_store_of`.
+            unsafe {
+                jmap_mail::push::refresh_open_folders(store.as_ptr());
+                jmap_mail::push::refresh_folder_list_if_structural(store.as_ptr());
+            }
+        }
+        outcome
     };
     let finish = |owner: *mut GObject, outcome: Result<usize, String>| {
         // SAFETY: `with_strong` gives the live owner.
