@@ -1088,6 +1088,35 @@ fn an_offline_move_that_rechains_still_reports_an_unsaved_flag() {
     );
 }
 
+/// Re-audit finding F6 (`AUDIT-FFI-20261118.md`). The refusal above must not
+/// also rewrite `rechain`'s own durable side effect: the inbox row's filing
+/// stays the first one, moved into Projects, not the joined filing the
+/// refused rechain never finished.
+#[test]
+fn a_refused_rechain_leaves_the_origin_rows_filing_untouched() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    fixture.mark_read();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+
+    let _ = fixture.transfer_straight(projects, fixture.archive, &[fixture.uid()], true);
+
+    assert_eq!(
+        filing_of(fixture.inbox, fixture.uid()),
+        Some(Filing::moved(
+            fixture.inbox_id.clone(),
+            fixture.projects_id.clone()
+        )),
+        "a refused rechain must not rewrite the origin row's filing"
+    );
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+}
+
 /// ROADMAP item 181(a): the user already dragged the message away, so the
 /// source row must not still look present while the move waits to land.
 /// `queue_filing` hides it the way a queued delete already hides its own

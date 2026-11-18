@@ -419,9 +419,15 @@ enum Filed {
 /// rests on, so without this exception an offline move of the selected
 /// message almost always fails.
 ///
-/// Every other result takes the row away (a filing that lands, or a rechain
-/// that joins this row's filing to an earlier one), so the held-over failure
-/// goes to the caller after all.
+/// A filing that lands still takes the row away, so that case reports the
+/// held-over failure to the caller too. A rechain would also take the row
+/// away, but it reaches a *different* row first: [`rechain`] rewrites the
+/// filing of the row the first queued filing started on, a durable write
+/// (see [`rewrite_origin_row`]) that a later refusal cannot take back. So a
+/// held-over settle refuses the rechain itself, before `queue_filing` can
+/// touch that other row: this row then keeps the filing it already had,
+/// the other row's filing is untouched, and nothing is rewritten on the
+/// strength of a filing this call is about to report as failed.
 ///
 /// # Safety
 ///
@@ -451,7 +457,7 @@ unsafe fn file_message(
         let owner = JmapFolder::borrow(folder).and_then(JmapFolder::owner);
         let filed = match store.file_message(&Id::new(text), owner, filing) {
             Ok(()) => Filed::Landed,
-            Err(StoreError::Disconnected) => queue_filing(folder, summary, uid, filing),
+            Err(StoreError::Disconnected) => queue_filing(folder, summary, uid, filing, held_over)?,
             Err(other) => return Err(other),
         };
         // The row of a filing that did not land carries the unsaved keyword
@@ -478,6 +484,10 @@ unsafe fn file_message(
 /// first filing started on (named by [`Filing::out_of_mailbox`] for a move,
 /// [`Filing::copy_source`] for a copy) gets the combined filing instead.
 ///
+/// `held_over` is [`file_message`]'s own settle failure, carried here so a
+/// rechain can refuse it before it rewrites the other row: see
+/// [`file_message`]'s doc comment for why.
+///
 /// # Safety
 ///
 /// `folder` must point at a live `JmapFolder` and `summary` at its summary.
@@ -486,12 +496,13 @@ unsafe fn queue_filing(
     summary: *mut CamelFolderSummary,
     uid: &CStr,
     filing: &Filing,
-) -> Filed {
+    held_over: bool,
+) -> Result<Filed, StoreError> {
     // SAFETY: the contract above. `Owned` releases the row's reference when it
     // drops at the end of this function.
     let Some(info) = (unsafe { Owned::from_raw(camel_folder_summary_get(summary, uid.as_ptr())) })
     else {
-        return Filed::NoOp;
+        return Ok(Filed::NoOp);
     };
     // SAFETY: `info` is a live row for as long as this function holds it, and
     // `folder` is a live folder of this provider.
@@ -512,12 +523,20 @@ unsafe fn queue_filing(
                 uid = uid.to_string_lossy().as_ref(),
                 "queued a copy beside a waiting filing"
             );
-            return Filed::Queued(Filing::copied_into(filing.into_mailbox().clone()));
+            return Ok(Filed::Queued(Filing::copied_into(
+                filing.into_mailbox().clone(),
+            )));
+        }
+        // A held-over settle and a rechain do not mix: refuse here, before
+        // either row changes, rather than rewrite the other row's filing on
+        // the strength of a filing this call is about to report as failed.
+        if held_over {
+            return Err(StoreError::Disconnected);
         }
         if let Some(origin) = waiting.out_of_mailbox() {
             let joined = Filing::moved(origin.clone(), filing.into_mailbox().clone());
             // SAFETY: the contract above.
-            return unsafe { rechain(folder, uid, origin, joined) };
+            return Ok(unsafe { rechain(folder, uid, origin, joined) });
         }
         // The waiting filing is a copy with a known source: a move out of
         // it now must take the message out of its *source*, not out of
@@ -525,7 +544,7 @@ unsafe fn queue_filing(
         if let Some(source) = waiting.copy_source() {
             let joined = Filing::copied_from(source.clone(), filing.into_mailbox().clone());
             // SAFETY: the contract above.
-            return unsafe { rechain(folder, uid, source, joined) };
+            return Ok(unsafe { rechain(folder, uid, source, joined) });
         }
     }
     // SAFETY: `info` is a live row for as long as this function holds it.
@@ -543,7 +562,7 @@ unsafe fn queue_filing(
         }
     }
     tracing::trace!(uid = uid.to_string_lossy().as_ref(), "queued filing");
-    Filed::Queued(filing.clone())
+    Ok(Filed::Queued(filing.clone()))
 }
 
 /// Joins a second queued filing to the first one, and gives back the one
