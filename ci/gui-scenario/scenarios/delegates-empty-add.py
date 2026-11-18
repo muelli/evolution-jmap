@@ -43,7 +43,7 @@ PAGE = "Delegates"
 MENU_KEY = 0xFF67
 
 ADD_DIALOG = "Add Delegate"
-OK_LABEL = "Add…"
+OK_LABEL = "Add"
 PRINCIPAL = "carol@example.com"
 WHITESPACE_PRINCIPAL = "   "
 # CALENDAR_LEVELS index 3 is CalendarDelegationLevel::Author (not "No access").

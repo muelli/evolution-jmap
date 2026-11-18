@@ -183,7 +183,7 @@ def run():
         f"the address book level combo shows {BOOK_LEVEL_NAME!r}",
     )
     screenshot("delegates-add-filled")
-    click_button(dialog, "Add…")
+    click_button(dialog, "Add")
     wait_for(lambda: window(ADD_DIALOG) is None, "the Add Delegate dialog closes")
     wait_for(lambda: find(editor, "table cell", principal_display), f"{principal_display!r} listed")
     wait_for(lambda: find(editor, "table cell", CALENDAR_LEVEL_NAME), "its calendar level listed")
