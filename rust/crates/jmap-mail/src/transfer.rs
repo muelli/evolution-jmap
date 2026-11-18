@@ -448,7 +448,8 @@ unsafe fn file_message(
             Err(other) => return Err(other),
         };
         let store = parent_store(folder).ok_or(StoreError::Disconnected)?;
-        let filed = match store.file_message(&Id::new(text), filing) {
+        let owner = JmapFolder::borrow(folder).and_then(JmapFolder::owner);
+        let filed = match store.file_message(&Id::new(text), owner, filing) {
             Ok(()) => Filed::Landed,
             Err(StoreError::Disconnected) => queue_filing(folder, summary, uid, filing),
             Err(other) => return Err(other),
@@ -805,8 +806,10 @@ pub(crate) unsafe fn replay_filing(
     // SAFETY: the contract above: a live folder of this provider.
     let leaves_here = unsafe { left_here(folder, &filing) };
     // SAFETY: the contract above.
+    // SAFETY: the contract above.
+    let owner = unsafe { JmapFolder::borrow(folder) }.and_then(JmapFolder::owner);
     let result = match unsafe { parent_store(folder) } {
-        Some(store) => store.file_message(&Id::new(text), &filing),
+        Some(store) => store.file_message(&Id::new(text), owner, &filing),
         None => Err(StoreError::Disconnected),
     };
     match result {
