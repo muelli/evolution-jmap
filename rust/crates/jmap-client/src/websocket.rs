@@ -66,6 +66,9 @@ use crate::eventsource::SharedHeaders;
 use crate::transport::CancelFlag;
 use crate::{Client, Error};
 
+#[doc(hidden)]
+pub use tungstenite;
+
 /// Default duration allowed for establishing the TCP and WebSocket connection.
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -878,6 +881,12 @@ fn parse_websocket_url(url: &str) -> Result<ParsedWsUrl, Error> {
         (authority.to_owned(), port)
     };
 
+    if host.is_empty() {
+        return Err(Error::Transport(format!(
+            "missing host in websocket URL: {url}"
+        )));
+    }
+
     let dial = if host.contains(':') {
         format!("[{host}]:{port}")
     } else {
@@ -1034,6 +1043,10 @@ impl WebSocketPushSubscription {
             raw_url.to_owned()
         };
 
+        let _ = parse_websocket_url(&url)?;
+        let _ = tungstenite::http::Uri::try_from(&url)
+            .map_err(|e| Error::Transport(format!("invalid websocket uri: {e}")))?;
+
         let http_equivalent = to_http_equivalent_url(&url);
         let may_carry = crate::url::may_carry_credentials(client.session_url(), &http_equivalent);
 
@@ -1130,6 +1143,27 @@ impl WebSocketPushSubscription {
     pub fn drop_connection(&self) {
         if let Some(stream) = self.socket.lock().expect("socket lock poisoned").as_ref() {
             let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    /// Return a clone of the subscription cancellation flag.
+    pub fn cancel_flag(&self) -> CancelFlag {
+        self.cancel.clone()
+    }
+
+    /// Return the shared header map applied to future reconnect attempts.
+    pub fn shared_headers(&self) -> SharedHeaders {
+        self.headers.clone()
+    }
+
+    /// Return a closure that shuts down the active TCP socket without
+    /// cancelling the subscription.
+    pub fn connection_dropper(&self) -> impl Fn() + Send + Sync + 'static {
+        let socket = Arc::clone(&self.socket);
+        move || {
+            if let Some(stream) = socket.lock().expect("socket lock poisoned").as_ref() {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
         }
     }
 

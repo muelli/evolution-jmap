@@ -221,6 +221,17 @@ impl EventSourceSubscription {
         }
     }
 
+    /// Return a closure that shuts down the active TCP socket without
+    /// cancelling the subscription.
+    pub fn connection_dropper(&self) -> impl Fn() + Send + Sync + 'static {
+        let socket = Arc::clone(&self.socket);
+        move || {
+            if let Some(stream) = socket.lock().expect("socket lock poisoned").as_ref() {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+        }
+    }
+
     /// Replace headers sent on future reconnect attempts.
     ///
     /// Callers can update authentication tokens after credential refreshes.

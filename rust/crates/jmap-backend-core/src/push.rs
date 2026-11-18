@@ -16,8 +16,9 @@
 //! now, with its tests.
 //!
 //! [`PushRefresh`] is the Rust half of that callback, without the EDS call.
-//! Its pump thread owns the [`EventSourceSubscription`]. It decides which
-//! pushes concern the backend, and calls an action that the caller supplies.
+//! Its pump thread owns a [`WebSocketPushSubscription`] or an
+//! [`EventSourceSubscription`]. It decides which pushes concern the backend,
+//! and calls an action that the caller supplies.
 //! This injected action makes the module testable: a real `EBookMetaBackend`
 //! needs a running `evolution-source-registry`. Thus the tests drive the pump
 //! with a counting closure, and the backends pass a closure that calls
@@ -28,9 +29,9 @@
 //!
 //! Push makes refreshes faster, but correctness never depends on it. The
 //! periodic refresh of EDS still runs if the stream never connects, if the
-//! server advertises no `eventSourceUrl`, or if the action does nothing
-//! because the backend is gone. Nothing here reports an error, and that is
-//! deliberate.
+//! server advertises neither WebSocket push nor `eventSourceUrl`, or if the
+//! action does nothing because the backend is gone. Nothing here reports an
+//! error, and that is deliberate.
 //!
 //! ## Lifetime
 //!
@@ -50,11 +51,13 @@ use std::time::Duration;
 use gobject_sys::GObject;
 use jmap_client::eventsource::{SharedHeaders, expand_url};
 use jmap_client::transport::CancelFlag;
-use jmap_client::{Client, EventSourceSubscription};
+use jmap_client::{
+    Client, EventSourceSubscription, WebSocketPushSubscription, WebSocketPushTimeouts,
+};
 use jmap_proto::Id;
 use jmap_proto::State;
 use jmap_proto::push::StateChange;
-use jmap_proto::session::{CAPABILITY_CYRUS_MAIL, Session};
+use jmap_proto::session::{CAPABILITY_CYRUS_MAIL, CAPABILITY_WEBSOCKET, Session};
 
 use crate::weak::WeakBackend;
 
@@ -74,13 +77,15 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// timeouts in common use.
 const PING_SECONDS: u32 = 120;
 
-/// Starts to push refreshes at `backend` if its server advertises a location
-/// to listen to (`eventSourceUrl`, RFC 8620 §7.3). If not, returns `None`
-/// without an error: on a server without push, the periodic refresh of EDS
-/// stays the only trigger. Also returns `None`, the same way, when the
-/// account's server is Cyrus: Cyrus holds its own lock for the whole
-/// lifetime of an EventSource stream, which deadlocks every other JMAP call
-/// the session makes meanwhile.
+/// Starts to push refreshes at `backend`, preferring RFC 8887 WebSocket when
+/// `urn:ietf:params:jmap:websocket` advertises `supportsPush: true` and
+/// falling back to `eventSourceUrl` (RFC 8620 §7.3). If neither is available
+/// or WebSocket push fails to initialize without an EventSource fallback,
+/// returns `None` without an error: on a server without push, the periodic
+/// refresh of EDS stays the only trigger. Also returns `None`, the same way,
+/// when the account's server is Cyrus: Cyrus holds its own lock for the whole
+/// lifetime of an EventSource stream, and its WebSocket push handler aborts
+/// on `WebSocketPushEnable`.
 ///
 /// `schedule_refresh` is the EDS call to make, which is per backend
 /// (`e_book_meta_backend_schedule_refresh` and its calendar twin). The call
@@ -133,39 +138,18 @@ pub unsafe fn start_for_with(
     if is_cyrus_account(&client.session(), account_id) {
         tracing::debug!(
             account_id = account_id.as_str(),
-            "the account is on a Cyrus server; Cyrus holds its own lock for the whole \
-             lifetime of an EventSource stream, which would deadlock every other JMAP \
-             call this session makes, so push stays off for it"
+            "the account is on a Cyrus server; push stays off for it"
         );
         return None;
     }
-    let session = client.session();
-    let template = session.event_source_url.trim();
-    if template.is_empty() {
-        tracing::debug!("the server advertises no eventSourceUrl; push is unavailable");
-        return None;
-    }
-    let url = expand_url(template, types, false, PING_SECONDS);
-    let headers = client
-        .authorization_header()
-        .map(|value| vec![("Authorization".to_owned(), value)])
-        .unwrap_or_default();
     // SAFETY: `backend` is valid and referenced, by this function's contract.
     let weak = unsafe { WeakBackend::new(backend) };
-
-    tracing::debug!(account_id = account_id.as_str(), "subscribing to JMAP push");
-    Some(PushRefresh::start(
-        url,
-        headers,
-        account_id.clone(),
-        types.iter().map(|name| (*name).to_owned()).collect(),
-        move |matched: &[String]| {
-            // SAFETY: `with_strong` runs this only while it holds a strong
-            // reference to the object that `backend` pointed to, and the
-            // caller promised that `action` accepts the type of that object.
-            weak.with_strong(|object| action(object, matched));
-        },
-    ))
+    PushRefresh::start_for_client(client, account_id, types, move |matched: &[String]| {
+        // SAFETY: `with_strong` runs this only while it holds a strong
+        // reference to the object that `backend` pointed to, and the
+        // caller promised that `action` accepts the type of that object.
+        weak.with_strong(|object| action(object, matched));
+    })
 }
 
 /// Whether `account_id` advertises Cyrus's mail vendor capability in
@@ -178,11 +162,24 @@ fn is_cyrus_account(session: &Session, account_id: &Id) -> bool {
         .is_some_and(|account| account.has_capability(CAPABILITY_CYRUS_MAIL))
 }
 
+/// Whether `session` advertises `urn:ietf:params:jmap:websocket` with
+/// `supportsPush: true`.
+fn ws_supports_push(session: &Session) -> bool {
+    session
+        .capabilities
+        .get(CAPABILITY_WEBSOCKET)
+        .and_then(|capability| capability.get("supportsPush"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
 /// A live JMAP Push subscription that refreshes one backend.
 pub struct PushRefresh {
     cancel: CancelFlag,
     pump: Option<JoinHandle<()>>,
     headers: SharedHeaders,
+    drop_conn: Box<dyn Fn() + Send + Sync>,
+    is_websocket: bool,
 }
 
 impl PushRefresh {
@@ -216,14 +213,58 @@ impl PushRefresh {
     ) -> Self {
         let cancel = CancelFlag::new();
         let headers = SharedHeaders::new(headers);
+        let subscription = EventSourceSubscription::start(url, headers.clone(), cancel.clone());
+        let drop_conn = Box::new(subscription.connection_dropper());
+        Self::spawn_pump(
+            cancel,
+            headers,
+            drop_conn,
+            false,
+            account_id,
+            types,
+            move || subscription.recv_timeout(POLL_INTERVAL),
+            refresh,
+        )
+    }
+
+    fn from_websocket(
+        subscription: WebSocketPushSubscription,
+        account_id: Id,
+        types: Vec<String>,
+        refresh: impl Fn(&[String]) + Send + 'static,
+    ) -> Self {
+        let cancel = subscription.cancel_flag();
+        let headers = subscription.shared_headers();
+        let drop_conn = Box::new(subscription.connection_dropper());
+        Self::spawn_pump(
+            cancel,
+            headers,
+            drop_conn,
+            true,
+            account_id,
+            types,
+            move || subscription.recv_timeout(POLL_INTERVAL),
+            refresh,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_pump(
+        cancel: CancelFlag,
+        headers: SharedHeaders,
+        drop_conn: Box<dyn Fn() + Send + Sync>,
+        is_websocket: bool,
+        account_id: Id,
+        types: Vec<String>,
+        mut recv_next: impl FnMut() -> Option<StateChange> + Send + 'static,
+        refresh: impl Fn(&[String]) + Send + 'static,
+    ) -> Self {
         let pump = {
             let cancel = cancel.clone();
-            let headers = headers.clone();
             thread::spawn(move || {
-                let subscription = EventSourceSubscription::start(url, headers, cancel.clone());
                 let mut last_state: BTreeMap<String, State> = BTreeMap::new();
                 while !cancel.is_cancelled() {
-                    let Some(change) = subscription.recv_timeout(POLL_INTERVAL) else {
+                    let Some(change) = recv_next() else {
                         continue;
                     };
                     let matched = concerns(&change, &account_id, &types, &mut last_state);
@@ -241,7 +282,103 @@ impl PushRefresh {
             cancel,
             pump: Some(pump),
             headers,
+            drop_conn,
+            is_websocket,
         }
+    }
+
+    /// Subscribes to JMAP push notifications for `client` and `account_id`,
+    /// preferring RFC 8887 WebSocket when `supportsPush: true` is advertised
+    /// and falling back to EventSource otherwise.
+    pub fn start_for_client(
+        client: &Client,
+        account_id: &Id,
+        types: &[&str],
+        refresh: impl Fn(&[String]) + Send + 'static,
+    ) -> Option<Self> {
+        Self::start_for_client_with_timeouts(
+            client,
+            account_id,
+            types,
+            WebSocketPushTimeouts::default(),
+            refresh,
+        )
+    }
+
+    /// Like [`PushRefresh::start_for_client`], with explicit WebSocket push
+    /// timeouts.
+    pub fn start_for_client_with_timeouts(
+        client: &Client,
+        account_id: &Id,
+        types: &[&str],
+        ws_timeouts: WebSocketPushTimeouts,
+        refresh: impl Fn(&[String]) + Send + 'static,
+    ) -> Option<Self> {
+        let session = client.session();
+        if is_cyrus_account(&session, account_id) {
+            tracing::debug!(
+                account_id = account_id.as_str(),
+                "the account is on a Cyrus server; push stays off for it"
+            );
+            return None;
+        }
+        let type_names: Vec<String> = types.iter().map(|name| (*name).to_owned()).collect();
+        if ws_supports_push(&session) {
+            match client.websocket_push_with_timeouts(types, ws_timeouts) {
+                Ok(subscription) => {
+                    tracing::debug!(
+                        account_id = account_id.as_str(),
+                        "subscribing to JMAP push over WebSocket"
+                    );
+                    return Some(Self::from_websocket(
+                        subscription,
+                        account_id.clone(),
+                        type_names,
+                        refresh,
+                    ));
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        account_id = account_id.as_str(),
+                        %error,
+                        "failed to start WebSocket push; falling back to EventSource"
+                    );
+                }
+            }
+        }
+        let template = session.event_source_url.trim();
+        if template.is_empty() {
+            tracing::debug!("the server advertises no eventSourceUrl; push is unavailable");
+            return None;
+        }
+        let url = expand_url(template, types, false, PING_SECONDS);
+        let headers = client
+            .authorization_header()
+            .map(|value| vec![("Authorization".to_owned(), value)])
+            .unwrap_or_default();
+
+        tracing::debug!(
+            account_id = account_id.as_str(),
+            "subscribing to JMAP push over EventSource"
+        );
+        Some(Self::start(
+            url,
+            headers,
+            account_id.clone(),
+            type_names,
+            refresh,
+        ))
+    }
+
+    /// Whether this subscription uses the RFC 8887 WebSocket transport.
+    pub fn is_websocket(&self) -> bool {
+        self.is_websocket
+    }
+
+    /// Drop the active underlying transport socket without cancelling the
+    /// subscription.
+    pub fn drop_connection(&self) {
+        (self.drop_conn)();
     }
 
     /// Replaces the `Authorization` header that this subscription sends on
@@ -259,6 +396,7 @@ impl PushRefresh {
     /// refresh can start after this returns. Idempotent; `Drop` calls it.
     pub fn stop(&mut self) {
         self.cancel.cancel();
+        (self.drop_conn)();
         let Some(pump) = self.pump.take() else {
             return;
         };
