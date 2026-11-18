@@ -1045,24 +1045,33 @@ impl JmapStore {
     /// the two mailboxes, and the message id identifies the message in the
     /// account, not in a folder.
     ///
-    /// `filing`'s destination mailbox can be a mailbox of a shared account
-    /// merged into this account's folder tree ([`FolderTree::merge_shared`]).
-    /// `Email/set` is a method call under one `accountId`, so this resolves
-    /// the mailbox's real owner first ([`FolderTree::owning_account`]) and
-    /// files the message under that account instead of this store's own, the
-    /// same way [`Self::import_message`] already does (ROADMAP item 179(d)).
-    pub fn file_message(&self, uid: &Id, filing: &Filing) -> Result<(), StoreError> {
+    /// `filing`'s source mailbox can be a mailbox of a shared account merged
+    /// into this account's folder tree ([`FolderTree::merge_shared`]).
+    /// `Email/set` is a method call under one `accountId`, so this files the
+    /// message under `owner`, the account that owns the source mailbox,
+    /// instead of this store's own (ROADMAP item 179(d)). `None` names this
+    /// store's own account, which is the usual case.
+    ///
+    /// The caller gives the owner; this does not look it up by mailbox id,
+    /// for the reason [`Self::search`] gives: a mailbox id is unique in one
+    /// account only, and a lookup by id alone ([`FolderTree::owning_account`])
+    /// then finds the wrong account. It is the *source* mailbox's owner, not
+    /// the destination's, because the destination folder is not always open
+    /// when the offline replay walk calls this. The folder Camel opened
+    /// knows the answer ([`crate::folder::JmapFolder::owner`]).
+    pub fn file_message(
+        &self,
+        uid: &Id,
+        owner: Option<&Id>,
+        filing: &Filing,
+    ) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
-        let account = self
-            .folders(0)
-            .ok()
-            .and_then(|tree| tree.owning_account(filing.into_mailbox()).cloned())
-            .unwrap_or_else(|| sync.account_id().clone());
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(uid = uid.as_str(), "filing message");
         match retry_once_after(
             || sync.file_message_as(&account, uid, filing),

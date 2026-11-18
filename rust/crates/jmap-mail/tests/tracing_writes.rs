@@ -217,7 +217,7 @@ fn file_and_expunge_message_trace_structured_fields() {
     let (_, logs) = capture(|| {
         let filing = Filing::moved(fixture.inbox_id.clone(), archive_id.clone());
         store
-            .file_message(&message_uid, &filing)
+            .file_message(&message_uid, None, &filing)
             .expect("file_message");
 
         store
