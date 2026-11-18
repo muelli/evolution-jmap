@@ -458,6 +458,42 @@ pub unsafe fn pending_filing(info: *mut CamelMessageInfo) -> Option<Filing> {
         .clone()
 }
 
+/// Writes `next` on the row, but only while the row still holds `expected`.
+/// It gives back `Err` with the filing the row holds instead.
+///
+/// [`crate::transfer::replay_filing`] reads a filing, sends it, and writes
+/// the answer back. The row is not locked across that request, and another
+/// thread can queue a filing on the row in that window. The read and the
+/// write here share the lock of the slot, so the caller either replaces the
+/// filing it sent or learns which other filing to answer for.
+///
+/// A row that this provider did not build carries no filing at all. The call
+/// then writes nothing and reports `Ok`, the same silence
+/// [`set_pending_filing`] keeps for such a row.
+///
+/// # Safety
+///
+/// `info` must be NULL or point at a live `CamelMessageInfo`.
+pub(crate) unsafe fn swap_pending_filing(
+    info: *mut CamelMessageInfo,
+    expected: Option<&Filing>,
+    next: Option<Filing>,
+) -> Result<(), Option<Filing>> {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let slot = unsafe { JmapMessageInfo::borrow(info) }.and_then(|row| row.filing.get());
+    let Some(slot) = slot else {
+        return Ok(());
+    };
+    let mut held = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if held.as_ref() != expected {
+        return Err(held.clone());
+    }
+    *held = next;
+    Ok(())
+}
+
 /// Records the filing that a move or copy could not send while offline, or
 /// clears it once the filing lands or the row gives up on it.
 ///

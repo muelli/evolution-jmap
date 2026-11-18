@@ -157,7 +157,7 @@ use std::ptr;
 
 use eds_sys::{
     CAMEL_MESSAGE_DELETED, CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass,
-    CamelFolderSummary, camel_folder_changed, camel_folder_get_folder_summary,
+    CamelFolderSummary, CamelMessageInfo, camel_folder_changed, camel_folder_get_folder_summary,
     camel_folder_get_full_name, camel_folder_get_parent_store, camel_folder_lock,
     camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_get,
     camel_folder_summary_remove_uid, camel_folder_summary_save, camel_folder_summary_touch,
@@ -185,7 +185,9 @@ use jmap_proto::Id;
 use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, folder_type, parent_store};
-use crate::message_info::{pending_append, pending_filing, set_pending_filing};
+use crate::message_info::{
+    pending_append, pending_filing, set_pending_filing, swap_pending_filing,
+};
 use crate::synchronize::push_row;
 
 /// Installs the filing vfunc of the folder on a class whose first member is a
@@ -800,6 +802,11 @@ impl Replay {
 /// the destination row and the reason go back to the caller, which has the
 /// one `camel_folder_changed` of the walk and its error report.
 ///
+/// Each of those outcomes writes the row after the request, and the row is
+/// not locked across it. A filing that another thread queued on the row in
+/// that window is not this call's to clear, and the row stays where it is,
+/// because the row carries that filing: see [`settle_sent_filing`].
+///
 /// # Safety
 ///
 /// `folder` must point at a live `JmapFolder` and `summary` at its summary.
@@ -834,10 +841,17 @@ pub(crate) unsafe fn replay_filing(
     match result {
         Ok(()) => {
             // SAFETY: `info` is still the live row.
-            unsafe {
-                set_pending_filing(info.as_ptr(), None);
-                camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
+            if !unsafe { settle_sent_filing(info.as_ptr(), &filing) } {
+                // The row still has a filing to send. Keep it on the work
+                // list: an empty join cleared the mark with the filing it
+                // took away, and `push_row` cleared it before the request.
+                // SAFETY: `info` is still the live row.
+                unsafe { camel_message_info_set_folder_flagged(info.as_ptr(), GTRUE) };
+                tracing::trace!(uid = text, "amended a filing queued during the replay");
+                return Replay::nothing();
             }
+            // SAFETY: `info` is still the live row.
+            unsafe { camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE) };
             tracing::trace!(uid = text, "replayed filing");
             Replay {
                 remove: leaves_here,
@@ -859,8 +873,15 @@ pub(crate) unsafe fn replay_filing(
             // removed here, the same restraint `push_row` already applies to
             // a vanished message: the next refresh finds it gone and removes it.
             // SAFETY: `info` is still the live row.
+            if unsafe { swap_pending_filing(info.as_ptr(), Some(&filing), None) }.is_err() {
+                // A filing queued during the request, for a message the
+                // server no longer has. It is not this call's to clear: the
+                // next walk sends it, and ends it the same way.
+                tracing::trace!(uid = text, "kept a filing queued during the replay");
+                return Replay::nothing();
+            }
+            // SAFETY: `info` is still the live row.
             unsafe {
-                set_pending_filing(info.as_ptr(), None);
                 camel_message_info_set_folder_flagged(info.as_ptr(), GFALSE);
             }
             tracing::trace!(uid = text, "dropped filing");
@@ -870,8 +891,20 @@ pub(crate) unsafe fn replay_filing(
         // destination row that showed it, instead of asking again for ever.
         Err(refusal) if refusal.refuses_retry() => {
             // SAFETY: `info` is still the live row.
+            if unsafe { swap_pending_filing(info.as_ptr(), Some(&filing), None) }.is_err() {
+                // A filing queued during the request. The refused one never
+                // reached the server, so that filing is still true for a
+                // message that never moved: keep it, and the hide and the
+                // mark its own writer set with it. The refusal still goes
+                // to the caller.
+                tracing::trace!(uid = text, "kept a filing queued during the replay");
+                return Replay {
+                    remove: false,
+                    failure: Some(refusal),
+                };
+            }
+            // SAFETY: `info` is still the live row.
             unsafe {
-                set_pending_filing(info.as_ptr(), None);
                 // Undoes queue_filing's hide, before the folder-flagged
                 // clear below: Camel's own `camel_message_info_set_flags`
                 // sets `CAMEL_MESSAGE_FOLDER_FLAGGED` again on any change
@@ -905,6 +938,72 @@ pub(crate) unsafe fn replay_filing(
             }
         }
     }
+}
+
+/// Takes the filing that [`replay_filing`] sent off the row, now that the
+/// server has it, and gives back whether the row has nothing left to send.
+///
+/// The row is not locked across the request. Another thread can queue a
+/// filing on it in that window: [`rewrite_origin_row`] writes the joined
+/// filing of a [`rechain`] here, or clears it for a join that is empty. Such
+/// a filing was built for a message that is still where it was, because the
+/// first filing of the chain had not been sent yet. This call sent it, so
+/// the message is in `sent.into_mailbox()` now, a mailbox the joined filing
+/// names nowhere: the message only passes through it. The filing thus gets
+/// the one amendment that makes it true again, a move out of that mailbox
+/// into the destination the user chose. The row keeps it for the next walk.
+///
+/// A filing from any other writer stands as it is. It was built for the
+/// message where the user saw it, and it adds or removes its own mailboxes,
+/// with no assumption about the one this call just filed into.
+///
+/// Each write goes through [`swap_pending_filing`], so this call only ever
+/// replaces a filing it has read. A write that loses to yet another thread
+/// reads that thread's filing and answers for it instead.
+///
+/// # Safety
+///
+/// `info` must point at a live `CamelMessageInfo`.
+unsafe fn settle_sent_filing(info: *mut CamelMessageInfo, sent: &Filing) -> bool {
+    let mut held = Some(sent.clone());
+    loop {
+        let next = match &held {
+            // The filing this call sent, and the server has it now.
+            Some(filing) if filing == sent => None,
+            Some(filing) if rechained_from(sent, filing) => Some(Filing::moved(
+                sent.into_mailbox().clone(),
+                filing.into_mailbox().clone(),
+            )),
+            Some(filing) => Some(filing.clone()),
+            // An empty join: the chain goes back to the mailbox it started
+            // in, which a move out of this call's destination reaches now.
+            None => sent
+                .out_of_mailbox()
+                .map(|origin| Filing::moved(sent.into_mailbox().clone(), origin.clone())),
+        };
+        let next = next.filter(|filing| !filing.is_empty());
+        let settled = next.is_none();
+        // SAFETY: the contract above.
+        match unsafe { swap_pending_filing(info, held.as_ref(), next) } {
+            Ok(()) => return settled,
+            Err(other) => held = other,
+        }
+    }
+}
+
+/// Whether `queued` is `sent` after a [`rechain`]: the same chain, out of
+/// the same row, with the destination the user chose last.
+///
+/// A rechain keeps the mailbox the chain starts in ([`Filing::out_of_mailbox`]
+/// for a move, [`Filing::copy_source`] for a copy) and changes only the
+/// destination. A filing with no such mailbox starts no chain, and a filing
+/// that names another one belongs to another chain. Both are the work of a
+/// writer that only overwrote this row.
+fn rechained_from(sent: &Filing, queued: &Filing) -> bool {
+    let starts_a_chain = sent.out_of_mailbox().is_some() || sent.copy_source().is_some();
+    starts_a_chain
+        && sent.out_of_mailbox() == queued.out_of_mailbox()
+        && sent.copy_source() == queued.copy_source()
 }
 
 /// Whether the message leaves the mailbox of this folder when the filing
@@ -1068,8 +1167,10 @@ mod tests {
     use std::ptr;
 
     use glib_sys::{g_free, g_ptr_array_add, g_ptr_array_free, g_ptr_array_new_with_free_func};
+    use jmap_mail_sync::Filing;
+    use jmap_proto::Id;
 
-    use super::uid_list;
+    use super::{rechained_from, uid_list};
 
     /// A NULL element of Camel's uid array never happens in practice, but
     /// `uid_list` must keep its position rather than compact it away:
@@ -1101,5 +1202,43 @@ mod tests {
             assert_eq!(uids[1], None, "the hole stays a hole, at its own index");
             assert_eq!(uids[2].as_deref(), Some(third.as_c_str()));
         }
+    }
+
+    /// `settle_sent_filing` amends a rechained filing, and only that one. A
+    /// rechain keeps the mailbox the chain starts in and changes only the
+    /// destination, so the two filings agree on that mailbox.
+    #[test]
+    fn only_a_filing_of_the_same_chain_is_a_rechain_of_the_sent_one() {
+        let (inbox, archive, projects) = (Id::new("M1"), Id::new("M2"), Id::new("M3"));
+        let moved = Filing::moved(inbox.clone(), archive.clone());
+        assert!(
+            rechained_from(&moved, &Filing::moved(inbox.clone(), projects.clone())),
+            "a move chain out of the same mailbox is a rechain"
+        );
+        assert!(
+            rechained_from(
+                &Filing::copied_from(inbox.clone(), archive.clone()),
+                &Filing::copied_from(inbox.clone(), projects.clone())
+            ),
+            "a copy chain out of the same mailbox is a rechain"
+        );
+        assert!(
+            !rechained_from(&moved, &Filing::copied_into(projects.clone())),
+            "a copy out of the row is its own request, not a rechain"
+        );
+        assert!(
+            !rechained_from(
+                &Filing::copied_from(inbox.clone(), archive.clone()),
+                &Filing::moved(inbox.clone(), projects.clone())
+            ),
+            "a move out of the row is its own request, not a rechain of a copy"
+        );
+        assert!(
+            !rechained_from(
+                &Filing::copied_into(archive),
+                &Filing::copied_into(projects)
+            ),
+            "a copy with no source starts no chain to rechain"
+        );
     }
 }
