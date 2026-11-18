@@ -15,20 +15,25 @@ Checks:
 - Clearing the field and saving removes the keywords property entirely.
 """
 
+import time
+
 import contact_photo as cp
 from scenario import (
+    POLL_SECONDS,
     Jmap,
     click_button,
     descendants,
     double_click,
+    evolution,
     expect_no_errors,
+    find,
     labelled_by_name,
+    log_count,
     main,
     pyatspi,
     say,
     set_text,
     text_of,
-    wait_find,
     wait_for,
     window,
 )
@@ -38,6 +43,7 @@ CATEGORIES_BUTTON_NAMES = ("Categories...", "Categories…")
 FULL_NAME = "Cara Categories"
 CARD_UID = "gui-scenario-categories"
 EDITOR = "Contact Editor"
+REFRESHED = "reported address book changes"
 END_KEY = 0xFF57
 BACKSPACE_KEY = 0xFF08
 
@@ -107,14 +113,49 @@ def clear_text(node):
 
 
 def open_editor():
-    item = wait_find("label", FULL_NAME, showing=True)
-    double_click(item)
-    return wait_for(lambda: window(EDITOR), "the contact editor")
+    """Open the contact editor and retry if a refresh cancels activation.
+
+    Saving a contact causes two address book view refreshes: one after the
+    save itself and one from the JMAP push notification. In Evolution's
+    card box, a refresh cancels any in-flight contact fetch for a
+    double-click activation without opening the editor. Retrying the
+    double-click after a short wait recovers from both that cancellation
+    and a dropped Xvfb click.
+    """
+    attempt = 0
+
+    def try_open():
+        nonlocal attempt
+        editor = window(EDITOR)
+        if editor is not None:
+            return editor
+        item = find(evolution(), "label", FULL_NAME, showing=True)
+        if item is None:
+            return None
+        attempt += 1
+        say(f"open_editor: double-click attempt {attempt}")
+        double_click(item)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            editor = window(EDITOR)
+            if editor is not None:
+                return editor
+            time.sleep(POLL_SECONDS)
+        return None
+
+    return wait_for(try_open, "the contact editor")
 
 
 def save_and_close(editor):
+    """Save the contact, wait for the editor to close, and wait for view refresh."""
+    refreshes = log_count(REFRESHED, "dbus.log")
     click_button(editor, "Save")
     wait_for(lambda: window(EDITOR) is None, "the editor closed")
+    wait_for(
+        lambda: log_count(REFRESHED, "dbus.log") > refreshes,
+        "the address book refresh after save",
+        timeout=30,
+    )
 
 
 def keywords_of(server, card_id):
@@ -152,12 +193,17 @@ def run():
 
     editor = open_editor()
     field = wait_for(lambda: categories_field(editor), "the Categories field")
+    wait_for(
+        lambda: "Family" in text_of(field),
+        "the Categories field shows the saved categories",
+    )
     set_text(field, "Work")
     save_and_close(editor)
     wait_for_keywords(server, card_id, {"Work": True})
 
     editor = open_editor()
     field = wait_for(lambda: categories_field(editor), "the Categories field")
+    wait_for(lambda: text_of(field) == "Work", "the Categories field shows 'Work'")
     clear_text(field)
     save_and_close(editor)
     wait_for_no_keywords(server, card_id)
