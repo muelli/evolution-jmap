@@ -404,6 +404,8 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // The Undo button of the info bar after a collection delete.
     "gtk_button_new_with_mnemonic",
     "gtk_button_get_type",
+    // A dialog button's label, checked by HIG wording tests.
+    "gtk_button_get_label",
     "gtk_widget_show",
     // The Server Filters page's script list. The list is a GtkTreeView over
     // a GtkListStore of two text columns, Name and Active.

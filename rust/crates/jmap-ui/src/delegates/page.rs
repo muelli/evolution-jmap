@@ -133,6 +133,10 @@ const BOOK_COLUMN_TITLE: &CStr = N_(c"Address Books");
 
 const REVOKE_LABEL: &CStr = N_(c"Re_voke");
 const ADD_LABEL: &CStr = N_(c"_Add…");
+// The Add dialog's own OK button completes the action with no further
+// dialog, so HIG wording drops the ellipsis `ADD_LABEL` needs for the page
+// button that opens this dialog.
+const ADD_CONFIRM_LABEL: &CStr = N_(c"_Add");
 const ADD_DIALOG_TITLE: &CStr = N_(c"Add Delegate");
 const PRINCIPAL_LABEL: &CStr = N_(c"_Delegate:");
 const CALENDAR_LEVEL_LABEL: &CStr = N_(c"Ca_lendar access:");
@@ -861,7 +865,11 @@ unsafe fn build_add_dialog(
             translate_static(N_(c"_Cancel")),
             GTK_RESPONSE_CANCEL,
         );
-        gtk_dialog_add_button(dialog.cast(), translate_static(ADD_LABEL), GTK_RESPONSE_OK);
+        gtk_dialog_add_button(
+            dialog.cast(),
+            translate_static(ADD_CONFIRM_LABEL),
+            GTK_RESPONSE_OK,
+        );
         gtk_dialog_set_default_response(dialog.cast(), GTK_RESPONSE_OK);
 
         let content_area = gtk_dialog_get_content_area(dialog.cast());
@@ -2417,6 +2425,39 @@ mod tests {
                     gtk_combo_box_get_active(book_combo.cast()),
                     0,
                     "the address book level combo does not default to No access"
+                );
+
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(page);
+            }
+        });
+    }
+
+    /// GNOME HIG: a button with an ellipsis promises a further dialog
+    /// before the action completes. The Add dialog's own OK button adds
+    /// the delegate and closes the dialog right away, so it must read
+    /// "_Add" with no ellipsis, unlike the page's own button that opens
+    /// this dialog. Needs a display; skips without one.
+    #[test]
+    fn the_add_dialog_ok_button_has_no_ellipsis() {
+        use evo_sys::{gtk_button_get_label, gtk_dialog_get_widget_for_response};
+
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: as `the_add_dialog_defaults_to_no_access_for_both_levels`.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                let (dialog, ..) = build_add_dialog(page.cast());
+                let ok = gtk_dialog_get_widget_for_response(dialog.cast(), GTK_RESPONSE_OK);
+
+                let label = read_string(gtk_button_get_label(ok.cast())).unwrap_or_default();
+                assert_eq!(
+                    label, "_Add",
+                    "the Add dialog's OK button wrongly promises a further dialog"
                 );
 
                 gtk_widget_destroy(dialog);
