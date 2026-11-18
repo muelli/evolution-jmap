@@ -31,7 +31,7 @@
 //! rejects. `evo-sys` gives that one struct a real layout instead of a
 //! zero-sized handle; see the comment on its `build.rs` definition.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, c_int, c_uint, c_ulong};
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -114,7 +114,7 @@ use crate::link::{self, AccountLink, LoadOutcome, SendSource};
 use crate::widget::{self, flag, get_bool, get_text, set_bool, set_text};
 
 const NAME: &CStr = c"JmapFiltersPage";
-const STATE: ObjectData<RefCell<UiState>> = ObjectData::new(c"jmap-filters-page-state");
+const STATE: ObjectData<PageState> = ObjectData::new(c"jmap-filters-page-state");
 
 /// The columns of the list store: the script name, and whether the account
 /// runs it.
@@ -392,6 +392,20 @@ impl UiState {
     }
 }
 
+/// The qdata of a page: the state of its widgets, and a flag that tells the
+/// shell destroyed it.
+///
+/// GObject frees qdata in finalize, not in dispose. A reference that outlives
+/// the destroy (the account editor keeps one, and a [`crate::hold::Hold`]
+/// keeps one across a dialog) thus leaves the qdata in place after the
+/// destroy freed the children of the page. The flag closes that window.
+struct PageState {
+    /// Set by [`on_page_destroy`], before GTK destroys the children. From
+    /// then on [`state`] answers `None`, so every handler stands down.
+    destroyed: Cell<bool>,
+    ui: RefCell<UiState>,
+}
+
 /// What a page holds outside its own widget tree: the armed sources, the
 /// standalone popup window and the handlers on the shell singleton. Each of
 /// these outlives the children of the page, so each needs an explicit
@@ -503,16 +517,25 @@ unsafe extern "C" fn on_page_destroy(_widget: *mut GObject, page: gpointer) {
     guard("JmapFiltersPage::destroy", (), || {
         let page = page.cast::<GObject>();
         // SAFETY: GTK emits `destroy` on a page that is still live.
-        let Some(cell) = (unsafe { state(page) }) else {
+        let Some(page_state) = (unsafe { STATE.get(page) }) else {
             return;
         };
-        let outside = cell.borrow_mut().take_outside();
+        // Mark the page before anything else: the release below runs other
+        // code, GTK destroys the children after this handler, and a late
+        // answer can arrive later still. Each of those calls `state`, which
+        // answers `None` from here on.
+        page_state.destroyed.set(true);
+        let outside = page_state.ui.borrow_mut().take_outside();
         // SAFETY: the borrow above ended, as `release` requires.
         unsafe { outside.release() };
     });
 }
 
-/// The qdata of the page, while the page is alive.
+/// The qdata of the page, while the page is alive and not destroyed.
+///
+/// Answers `None` once the shell destroyed the page, because the children
+/// the state points at are freed then. Every caller treats `None` as "do
+/// nothing", so one check here stands every handler down.
 ///
 /// # Safety
 ///
@@ -520,7 +543,11 @@ unsafe extern "C" fn on_page_destroy(_widget: *mut GObject, page: gpointer) {
 /// longer than the page (callers use it in one main-loop callback).
 unsafe fn state<'a>(page: *mut GObject) -> Option<&'a RefCell<UiState>> {
     // SAFETY: per the contract. instance_init sets the data one time.
-    unsafe { STATE.get(page) }
+    let page_state = unsafe { STATE.get(page) }?;
+    if page_state.destroyed.get() {
+        return None;
+    }
+    Some(&page_state.ui)
 }
 
 pub struct FiltersPage;
@@ -860,51 +887,54 @@ unsafe fn build_widgets(page: *mut GObject) {
 
         STATE.set(
             page,
-            RefCell::new(UiState {
-                link: None,
-                form: FiltersForm::default(),
-                showing: None,
-                rules: None,
-                force_text: false,
-                syncing: false,
-                store,
-                view,
-                source_label,
-                source_view,
-                buffer,
-                status,
-                add,
-                rename,
-                remove,
-                activate,
-                deactivate,
-                check,
-                external_edit,
-                edit_as_text,
-                rules_box,
-                rules_store,
-                rules_view,
-                rule_add,
-                rule_edit,
-                rule_remove,
-                rule_up,
-                rule_down,
-                rule_enable,
-                rule_disable,
-                check_generation: 0,
-                error_tag,
-                validate_timeout: 0,
-                saving_text: false,
-                completion_window,
-                completion_list,
-                completion_candidates: Vec::new(),
-                completion_selected: 0,
-                offline: false,
-                shell: shell.cast(),
-                shell_online_handler,
-                shell_network_handler,
-                external_editor_session: None,
-            }),
+            PageState {
+                destroyed: Cell::new(false),
+                ui: RefCell::new(UiState {
+                    link: None,
+                    form: FiltersForm::default(),
+                    showing: None,
+                    rules: None,
+                    force_text: false,
+                    syncing: false,
+                    store,
+                    view,
+                    source_label,
+                    source_view,
+                    buffer,
+                    status,
+                    add,
+                    rename,
+                    remove,
+                    activate,
+                    deactivate,
+                    check,
+                    external_edit,
+                    edit_as_text,
+                    rules_box,
+                    rules_store,
+                    rules_view,
+                    rule_add,
+                    rule_edit,
+                    rule_remove,
+                    rule_up,
+                    rule_down,
+                    rule_enable,
+                    rule_disable,
+                    check_generation: 0,
+                    error_tag,
+                    validate_timeout: 0,
+                    saving_text: false,
+                    completion_window,
+                    completion_list,
+                    completion_candidates: Vec::new(),
+                    completion_selected: 0,
+                    offline: false,
+                    shell: shell.cast(),
+                    shell_online_handler,
+                    shell_network_handler,
+                    external_editor_session: None,
+                }),
+            },
         );
 
         // The state above outlives the children of the page: it is qdata,
@@ -3734,6 +3764,7 @@ unsafe extern "C" fn submit_finish(
 mod tests {
     use std::os::raw::c_char;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
     use std::time::{Duration, Instant};
 
     use evo_sys::{
@@ -3741,7 +3772,10 @@ mod tests {
         gtk_source_view_get_auto_indent, gtk_text_buffer_new, gtk_text_view_get_accepts_tab,
         gtk_tree_view_get_column, gtk_window_get_default_widget,
     };
-    use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free, g_main_context_iteration};
+    use glib_sys::{
+        G_LOG_LEVEL_CRITICAL, G_LOG_LEVEL_WARNING, G_SOURCE_REMOVE, GList, GLogLevelFlags,
+        g_idle_add, g_list_free, g_log_set_default_handler, g_main_context_iteration,
+    };
     use gobject_sys::{g_object_get, g_object_new_with_properties, g_object_set_data_full};
     use jmap_backend_core::marshal::read_string;
     use jmap_backend_core::subclass::register_static;
@@ -6259,6 +6293,78 @@ mod tests {
                 );
 
                 gtk_widget_destroy(page.cast());
+            }
+        });
+    }
+
+    /// Counts the GLib criticals that `body` logs. A critical is how GTK
+    /// reports a call on something that is not the widget it expects, which
+    /// is what a freed child looks like.
+    fn criticals_from(body: impl FnOnce()) -> usize {
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn count_one(
+            _domain: *const c_char,
+            level: GLogLevelFlags,
+            _message: *const c_char,
+            _data: gpointer,
+        ) {
+            if level & (G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_WARNING) != 0 {
+                COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        COUNT.store(0, Ordering::SeqCst);
+        // SAFETY: the handler is a plain counter, and the previous one goes
+        // back before this function returns.
+        let previous = unsafe { g_log_set_default_handler(Some(count_one), ptr::null_mut()) };
+        body();
+        // SAFETY: `previous` is the handler this call replaced.
+        unsafe { g_log_set_default_handler(previous, ptr::null_mut()) };
+        COUNT.load(Ordering::SeqCst)
+    }
+
+    /// An answer that arrives after the shell destroyed the page must do
+    /// nothing.
+    ///
+    /// [`crate::dispatch::spawn_for`] holds a weak reference, which only
+    /// tells that the page is not finalized. The account editor, and a
+    /// [`crate::hold::Hold`] across a dialog, both keep a reference over a
+    /// destroy, so a load answer can still reach a page whose children the
+    /// destroy already freed. Needs a display; skips without one.
+    #[test]
+    fn an_answer_after_the_destroy_leaves_the_freed_children_alone() {
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered. The window sinks the floating
+            // page, and the extra reference below stands for the one the
+            // account editor keeps over a destroy.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
+
+                g_object_ref(page);
+                gtk_widget_destroy(window);
+
+                let criticals = criticals_from(|| {
+                    apply_outcome(page, LoadOutcome::Failed("late answer".to_owned()), None);
+                });
+                assert_eq!(
+                    criticals, 0,
+                    "the late answer worked on the children the destroy freed"
+                );
+                assert!(
+                    state(page).is_none(),
+                    "a destroyed page must answer no state, so every handler stands down"
+                );
+                g_object_unref(page);
             }
         });
     }
