@@ -242,9 +242,10 @@ const ACTIVATE_LABEL: &CStr = N_(c"Acti_vate");
 // GNOME HIG: a button that opens a dialog gets a trailing ellipsis.
 const RULE_ADD_LABEL: &CStr = N_(c"A_dd…");
 const EXTERNAL_EDIT: &CStr = N_(c"Not in Evolution's rules format, so it shows as text.");
-// Mnemonic on "x", not "E": "_Edit as text" owns Alt+E already. GNOME HIG: a
-// button that opens another window gets a trailing ellipsis.
-const EXTERNAL_EDITOR_LABEL: &CStr = N_(c"Edit in E_xternal Editor…");
+// Mnemonic on "x", not "E": "_Edit as text" owns Alt+E already. No trailing
+// ellipsis: the button spawns the editor and starts polling at once, with
+// no Evolution dialog in between.
+const EXTERNAL_EDITOR_LABEL: &CStr = N_(c"Edit in E_xternal Editor");
 const NO_EXTERNAL_EDITOR: &CStr = N_(
     c"No external editor is configured. Set the External Editor plugin's command, or $VISUAL or $EDITOR.",
 );
@@ -355,7 +356,7 @@ struct UiState {
     external_editor_session: Option<ExternalEditorSession>,
 }
 
-/// Item 180(d): one open "Edit in External Editor…" session. [`write_temp_file`]'s
+/// Item 180(d): one open "Edit in External Editor" session. [`write_temp_file`]'s
 /// path and the child process [`spawn`] started, plus the poll timeout that
 /// watches the file for a change and the child for an exit.
 ///
@@ -3909,7 +3910,7 @@ mod tests {
         assert_ne!(mnemonic(ACTIVATE_LABEL), 'c');
     }
 
-    /// Item 180(d): "Edit in External Editor…" and "Check" are always shown
+    /// Item 180(d): "Edit in External Editor" and "Check" are always shown
     /// together in the script section, and "Edit as text" whenever the
     /// managed script is selected; none of the three may share a mnemonic.
     #[test]
@@ -3931,6 +3932,19 @@ mod tests {
         for label in [ADD_LABEL, RENAME_LABEL, RULE_ADD_LABEL, RULE_EDIT_LABEL] {
             assert!(label.to_str().unwrap().ends_with('…'), "{label:?}");
         }
+    }
+
+    /// GNOME HIG: the ellipsis is for a button that opens a dialog before
+    /// the action completes. "Edit in External Editor" spawns the
+    /// configured editor and starts polling at once, with no Evolution
+    /// dialog in between, the same wrong-ellipsis shape the Add dialog's
+    /// own OK button had.
+    #[test]
+    fn the_external_editor_button_has_no_ellipsis() {
+        assert!(
+            !EXTERNAL_EDITOR_LABEL.to_str().unwrap().ends_with('…'),
+            "the External Editor button wrongly promises a further dialog"
+        );
     }
 
     /// GNOME HIG: every flow works with the keyboard only. The name dialog
@@ -5580,7 +5594,7 @@ mod tests {
         });
     }
 
-    /// Item 180(d): clicking "Edit in External Editor…" writes the selected
+    /// Item 180(d): clicking "Edit in External Editor" writes the selected
     /// script to a private temp file and starts the chosen command; once
     /// that command changes the file and exits, the poll loop loads the new
     /// text into the buffer (so the existing debounce save applies to it,

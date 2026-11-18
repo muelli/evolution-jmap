@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-18 02:16+0000\n"
+"POT-Creation-Date: 2026-11-18 04:19+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -557,8 +557,8 @@ msgid "Se_lect"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:150
-#: rust/crates/jmap-ui/src/filters/page.rs:655
-#: rust/crates/jmap-ui/src/filters/page.rs:755
+#: rust/crates/jmap-ui/src/filters/page.rs:656
+#: rust/crates/jmap-ui/src/filters/page.rs:756
 msgid "Name"
 msgstr ""
 
@@ -615,7 +615,7 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:865
 #: rust/crates/jmap-ui/src/delegates/page.rs:996
-#: rust/crates/jmap-ui/src/filters/page.rs:3284
+#: rust/crates/jmap-ui/src/filters/page.rs:3285
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:455
 #: rust/crates/jmap-ui/src/send_later/extension.rs:906
 msgid "_Cancel"
@@ -877,76 +877,76 @@ msgstr ""
 msgid "Not in Evolution's rules format, so it shows as text."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:247
-msgid "Edit in E_xternal Editor…"
+#: rust/crates/jmap-ui/src/filters/page.rs:248
+msgid "Edit in E_xternal Editor"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:249
+#: rust/crates/jmap-ui/src/filters/page.rs:250
 msgid ""
 "No external editor is configured. Set the External Editor plugin's command, "
 "or $VISUAL or $EDITOR."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:252
+#: rust/crates/jmap-ui/src/filters/page.rs:253
 msgid "The configured external editor command could not be parsed."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:255
+#: rust/crates/jmap-ui/src/filters/page.rs:256
 #, c-format
 msgid "The script could not be opened in an external editor: %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the operating-system error.
-#: rust/crates/jmap-ui/src/filters/page.rs:257
+#: rust/crates/jmap-ui/src/filters/page.rs:258
 #, c-format
 msgid "The external editor could not be started: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:258
+#: rust/crates/jmap-ui/src/filters/page.rs:259
 msgid "C_heck"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:577
+#: rust/crates/jmap-ui/src/filters/page.rs:578
 msgid "Server Filters"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:656
+#: rust/crates/jmap-ui/src/filters/page.rs:657
 msgid "Active"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:670
+#: rust/crates/jmap-ui/src/filters/page.rs:671
 msgid "Re_move"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:691
+#: rust/crates/jmap-ui/src/filters/page.rs:692
 msgid "_Script:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:754
+#: rust/crates/jmap-ui/src/filters/page.rs:755
 msgid "Enabled"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:768
+#: rust/crates/jmap-ui/src/filters/page.rs:769
 msgid "Rem_ove"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:769
+#: rust/crates/jmap-ui/src/filters/page.rs:770
 msgid "Move _Up"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:770
+#: rust/crates/jmap-ui/src/filters/page.rs:771
 msgid "Move Do_wn"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:771
+#: rust/crates/jmap-ui/src/filters/page.rs:772
 msgid "E_nable"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:772
+#: rust/crates/jmap-ui/src/filters/page.rs:773
 msgid "Disa_ble"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:3287
+#: rust/crates/jmap-ui/src/filters/page.rs:3288
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:458
 msgid "_OK"
 msgstr ""
