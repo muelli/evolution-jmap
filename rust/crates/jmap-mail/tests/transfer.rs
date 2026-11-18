@@ -998,6 +998,96 @@ fn a_move_with_no_connection_is_queued_and_the_row_stays() {
     );
 }
 
+/// The same move, on a row whose keyword the user changed and Camel has not
+/// saved yet. Evolution's mark-seen timer makes this the usual state of the
+/// row the cursor rests on, so an offline move of the selected message hits
+/// it almost every time.
+///
+/// The settle (`push_row`) cannot reach the server either, but its failure
+/// must not refuse the move: the row stays in this folder with the keyword
+/// and the work-list mark still on it, so the change is not lost, only held
+/// over to the reconnect walk.
+#[test]
+fn an_offline_move_of_a_row_with_an_unsaved_flag_is_queued() {
+    let fixture = Fixture::start();
+    fixture.mark_read();
+    assert!(fixture.account.jmap().drop_connection());
+
+    let transferred =
+        fixture.transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true);
+
+    transferred.expect_ok();
+    assert_eq!(
+        transferred.reported(),
+        vec![Some(fixture.uid().to_string())],
+        "an unsaved keyword must not refuse a move that is only queued"
+    );
+    assert!(
+        filing_of(fixture.inbox, fixture.uid()).is_some(),
+        "the row kept no queued filing"
+    );
+}
+
+/// The other half: the held-over keyword is not dropped. `synchronize_sync`
+/// walks the row with `push_row` first and `replay_filing` after it, so the
+/// reconnect sends the keyword and then the move, both from the one row.
+#[test]
+fn a_queued_move_lands_the_unsaved_flag_it_held_over() {
+    let fixture = Fixture::start();
+    fixture.mark_read();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, fixture.archive, &[fixture.uid()], true)
+        .expect_ok();
+
+    fixture.reconnect();
+    fixture.synchronize(fixture.inbox).expect_ok();
+
+    assert_eq!(
+        fixture.keywords_on_server(fixture.uid()),
+        BTreeMap::from([("$seen".to_owned(), true)]),
+        "the queued move lost the user's unsaved flag change"
+    );
+    assert_eq!(
+        fixture.mailboxes_on_server(fixture.uid()),
+        BTreeMap::from([(fixture.archive_id.clone(), true)]),
+        "the queued move never reached the server after reconnecting"
+    );
+}
+
+/// The limit of that rule. A second offline move out of the folder the
+/// message only passes through rechains the two filings and removes this
+/// row ([`a_second_queued_move_empties_the_folder_it_passed_through`]). A
+/// row that goes away is again the only record of the unsaved keyword, so
+/// the settle failure reaches the user, as it did before the rule.
+#[test]
+fn an_offline_move_that_rechains_still_reports_an_unsaved_flag() {
+    let fixture = Fixture::start();
+    let projects = open(&fixture.account, "Projects");
+    fixture.list_folders();
+    fixture.mark_read();
+    assert!(fixture.account.jmap().drop_connection());
+    fixture
+        .transfer_straight(fixture.inbox, projects, &[fixture.uid()], true)
+        .expect_ok();
+
+    let again = fixture.transfer_straight(projects, fixture.archive, &[fixture.uid()], true);
+
+    let refused = !again.ok;
+    let message = again.message();
+    drop(again);
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(projects.cast()) };
+    assert!(
+        refused,
+        "a move that takes the row away must still report the unsaved flag"
+    );
+    assert!(
+        message.contains("not connected"),
+        "the reported reason was {message:?}"
+    );
+}
+
 /// ROADMAP item 181(a): the user already dragged the message away, so the
 /// source row must not still look present while the move waits to land.
 /// `queue_filing` hides it the way a queued delete already hides its own

@@ -49,6 +49,10 @@
 //! `camel_folder_changed` fired. Camel and the user still see a move or copy
 //! that succeeded right away, the same as a flag change does.
 //!
+//! The settle above is held over in the same way, because the row stays. The
+//! reconnect walk writes the keyword before it sends the filing. See
+//! `file_message` for the limit of this.
+//!
 //! ## Hiding the source row of a queued move
 //!
 //! A queued move stays in the source folder's summary (the section above),
@@ -401,11 +405,23 @@ enum Filed {
 ///
 /// A move settles the row first (see the module header): the move removes the
 /// row, which is the only record of an unsaved change. An unchanged row sends
-/// no request there. If that settle fails, including with no connection, its
-/// failure is reported as is: an unsaved flag change that could not be
-/// written must not be folded silently into a filing that then "succeeds"
-/// differently (queued instead of sent). Only the filing request itself is
-/// offline-queued.
+/// no request there. A settle failure is reported as is: an unsaved flag
+/// change that could not be written must not be folded silently into a filing
+/// that then "succeeds" differently (queued instead of sent).
+///
+/// A settle that fails with no connection is the one exception, and only when
+/// the filing below is queued as well. The reason the failure matters is the
+/// removal of the row, and a queued filing removes no row: the row stays in
+/// this folder with the keyword and the mark `CAMEL_MESSAGE_FOLDER_FLAGGED`
+/// still on it, and `synchronize_sync`'s reconnect walk calls `push_row` on
+/// it again, before `replay_filing` sends the filing. The change is thus held
+/// over, not lost. Evolution's mark-seen timer dirties the row the cursor
+/// rests on, so without this exception an offline move of the selected
+/// message almost always fails.
+///
+/// Every other result takes the row away (a filing that lands, or a rechain
+/// that joins this row's filing to an earlier one), so the held-over failure
+/// goes to the caller after all.
 ///
 /// # Safety
 ///
@@ -422,15 +438,27 @@ unsafe fn file_message(
     };
     // SAFETY: the contract above. `push_row` has the same contract for this pair.
     unsafe {
-        if moving {
-            push_row(folder, summary, uid)?;
-        }
+        let settled = match moving {
+            true => push_row(folder, summary, uid),
+            false => Ok(()),
+        };
+        let held_over = match settled {
+            Ok(()) => false,
+            Err(StoreError::Disconnected) => true,
+            Err(other) => return Err(other),
+        };
         let store = parent_store(folder).ok_or(StoreError::Disconnected)?;
-        match store.file_message(&Id::new(text), filing) {
-            Ok(()) => Ok(Filed::Landed),
-            Err(StoreError::Disconnected) => Ok(queue_filing(folder, summary, uid, filing)),
-            Err(other) => Err(other),
+        let filed = match store.file_message(&Id::new(text), filing) {
+            Ok(()) => Filed::Landed,
+            Err(StoreError::Disconnected) => queue_filing(folder, summary, uid, filing),
+            Err(other) => return Err(other),
+        };
+        // The row of a filing that did not land carries the unsaved keyword
+        // to the reconnect walk. A row that goes away carries nothing.
+        if held_over && !matches!(filed, Filed::Queued(_) | Filed::NoOp) {
+            return Err(StoreError::Disconnected);
         }
+        Ok(filed)
     }
 }
 
