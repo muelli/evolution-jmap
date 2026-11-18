@@ -37,7 +37,7 @@
 //!   for the editor to show a problem before the Check button's own round
 //!   trip to the server.
 //! - [`external_editor`] picks the command for step (d)'s "Edit in External
-//!   Editor…" button: the External Editor plugin's GSettings key, then
+//!   Editor" button: the External Editor plugin's GSettings key, then
 //!   `$VISUAL`, then `$EDITOR`, else the desktop's default handler.
 //!
 //! Only [`page`], [`extension`] and the second half of [`rule_dialog`] have
