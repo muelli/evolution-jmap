@@ -646,3 +646,39 @@ fn attendee_cn_tabs_reaches_fixed_point_stability() {
         "Event_2 and Event_3 must be identical fixed point"
     );
 }
+
+#[test]
+fn roundtrip_ten_or_more_participants_reaches_fixed_point_stability() {
+    let ical = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//evolution-jmap//Test Fixture//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:ten-participants-2026\r\n\
+DTSTART:20261118T100000Z\r\n\
+ORGANIZER;CN=\"Alice\":mailto:alice@example.com\r\n\
+ATTENDEE;CN=\"Bob\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:bob@example.com\r\n\
+ATTENDEE;CN=\"Carol\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:carol@example.com\r\n\
+ATTENDEE;CN=\"Dave\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:dave@example.com\r\n\
+ATTENDEE;CN=\"Eve\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:eve@example.com\r\n\
+ATTENDEE;CN=\"Frank\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:frank@example.com\r\n\
+ATTENDEE;CN=\"Grace\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:grace@example.com\r\n\
+ATTENDEE;CN=\"Heidi\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:heidi@example.com\r\n\
+ATTENDEE;CN=\"Ivan\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:ivan@example.com\r\n\
+ATTENDEE;CN=\"Judy\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:judy@example.com\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let event1 = ical_to_event(ical).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}

@@ -309,8 +309,10 @@ Lossy: the mapping does not map `title`, `cid` and the `FILENAME` parameter
 
 ### 3.8 Participants (`ORGANIZER`, `ATTENDEE`)
 
-**Out** (`drawn_participants`, map order):
+**Out** (`drawn_participants`, numeric `p1, p2, ...` order then map order):
 
+- Invented `p1, p2, ...` keys sort numerically before other keys so events with
+  ten or more participants keep document order across round trips.
 - The address of a participant is `calendarAddress`, else `sendTo.imip`. It
   must be a URI. Otherwise the mapping does not write the participant.
 - The first participant with the role `owner` gets
