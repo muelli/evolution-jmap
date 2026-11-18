@@ -159,6 +159,18 @@ A contact can keep its photo on a web server instead of in the contact. The addr
 
 This keeps the owner of that web server from learning when you look at the contact.
 
+### Shared mailboxes
+
+A server can grant you access to another user's mailboxes. Evolution shows them as one extra branch per sharing user, under your own mail account, the same way it shows another user's folders over IMAP.
+
+Evolution shows every mailbox the server grants, even one the owner has not marked as subscribed. A grant you have not subscribed to still appears.
+
+Your rights in each shared mailbox can differ from your rights in your own account. Evolution hides an action a mailbox's grant does not allow, such as Create, Delete, Rename or changing a star, label or category.
+
+A read mark (`$seen`) on a shared message is shared state on the message, not a mark kept per person. When you or the owner reads a message in a shared mailbox, every other person with access sees it as read too.
+
+A share does not carry over to a child mailbox you create inside it. It grants only the mailbox itself. A share also does not let you send mail as the owner.
+
 ## Stars, labels and categories
 
 Use the star to flag a message. Use a label to put a message in a category, such as Work or Personal. Evolution offers five built-in labels: Important, Work, Personal, To Do, and Later. You can also add a label with your own name.
