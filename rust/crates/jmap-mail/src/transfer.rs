@@ -160,10 +160,10 @@ use eds_sys::{
     CamelFolderSummary, CamelMessageInfo, camel_folder_changed, camel_folder_get_folder_summary,
     camel_folder_get_full_name, camel_folder_get_parent_store, camel_folder_lock,
     camel_folder_summary_add, camel_folder_summary_check_uid, camel_folder_summary_get,
-    camel_folder_summary_remove_uid, camel_folder_summary_save, camel_folder_summary_touch,
-    camel_folder_unlock, camel_message_info_clone, camel_message_info_set_dirty,
-    camel_message_info_set_flags, camel_message_info_set_folder_flagged,
-    camel_store_get_folder_sync,
+    camel_folder_summary_lock, camel_folder_summary_remove_uid, camel_folder_summary_save,
+    camel_folder_summary_touch, camel_folder_summary_unlock, camel_folder_unlock,
+    camel_message_info_clone, camel_message_info_set_dirty, camel_message_info_set_flags,
+    camel_message_info_set_folder_flagged, camel_store_get_folder_sync,
 };
 use gio_sys::GCancellable;
 #[cfg(camel_folder_get_uids)]
@@ -707,13 +707,15 @@ unsafe fn rewrite_origin_row(folder: *mut CamelFolder, uid: &CStr, origin: &Id, 
 /// a destination row that keeps that mark hides the message in the folder
 /// the user chose, as well as in the folder it came from.
 ///
-/// Four rows get no clone:
+/// Four rows get no row in the destination:
 ///
 /// - A row that waits for its own upload ([`crate::append`]'s queue). Its uid
 ///   names nothing on the server, so a second row would ask for a second
 ///   upload of the same message.
 /// - A row the destination already has. The destination is then a mailbox the
 ///   message is already in, or a second queued filing of the same message.
+///   The test for it and the add are one step, under the lock of the
+///   destination summary: see the comment there.
 /// - A row that vanished since the caller listed it.
 /// - A row whose filing is empty: a second queued move that comes back to the
 ///   mailbox the first one started from asks the server for nothing.
@@ -734,10 +736,6 @@ unsafe fn place_in_destination(
     // SAFETY: the contract above.
     let target = unsafe { camel_folder_get_folder_summary(destination) };
     if target.is_null() || target == summary {
-        return false;
-    }
-    // SAFETY: a live summary, and a uid that outlives the call.
-    if unsafe { camel_folder_summary_check_uid(target, uid.as_ptr()) } != GFALSE {
         return false;
     }
     // SAFETY: the contract above. `Owned` releases the row's reference when it
@@ -763,7 +761,33 @@ unsafe fn place_in_destination(
     unsafe {
         set_pending_filing(copy.as_ptr(), Some(filing.clone()));
         camel_message_info_set_flags(copy.as_ptr(), CAMEL_MESSAGE_DELETED, 0);
-        camel_folder_summary_add(target, copy.as_ptr(), GTRUE);
+    }
+    // The question and the add are one step. `force_keep_uid` keeps the uid of
+    // the clone, which also tells Camel to skip its own test for a uid the
+    // summary has already (`camel_folder_summary_add` in
+    // `camel-folder-summary.c` of evolution-data-server 3.52.3). A refresh of
+    // this same folder adds its rows under this same lock
+    // ([`crate::summary::apply_delta`]), so a uid that arrives between the two
+    // would get a second add, and with it a second count of one message.
+    //
+    // The lock holds across these two calls alone. Both take this summary and
+    // no other lock, so no other thread can wait the other way round. The work
+    // above needs the summary of the *source* and the row of the clone, and
+    // stays outside.
+    // SAFETY: a live summary, a uid that outlives the call, and a row this
+    // function owns. Camel's summary lock is recursive: both calls take it
+    // again themselves.
+    let added = unsafe {
+        camel_folder_summary_lock(target);
+        let arrived = camel_folder_summary_check_uid(target, uid.as_ptr()) != GFALSE;
+        if !arrived {
+            camel_folder_summary_add(target, copy.as_ptr(), GTRUE);
+        }
+        camel_folder_summary_unlock(target);
+        !arrived
+    };
+    if !added {
+        return false;
     }
     tracing::trace!(uid = uid.to_string_lossy().as_ref(), "queued arrival");
     true
