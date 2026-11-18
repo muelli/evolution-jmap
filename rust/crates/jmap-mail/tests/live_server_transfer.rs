@@ -92,7 +92,13 @@ fn transfer_messages_to_sync_moves_a_message_on_the_real_server() {
     .into_bytes();
     let uid = account
         .jmap()
-        .import_message(&source_info.id, source_bytes, &Keywords::default(), None)
+        .import_message(
+            &source_info.id,
+            None,
+            source_bytes,
+            &Keywords::default(),
+            None,
+        )
         .expect("import_message failed against the real server");
 
     // SAFETY: `account.store` is a live `CamelStore`, and both `FolderInfo`s

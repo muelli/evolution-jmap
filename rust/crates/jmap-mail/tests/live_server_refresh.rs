@@ -94,6 +94,7 @@ fn a_second_refresh_applies_a_real_delta() {
         .jmap()
         .import_message(
             &created.id,
+            None,
             message(&subject_first),
             &Keywords::default(),
             None,

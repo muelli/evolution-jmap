@@ -119,7 +119,13 @@ fn a_transfer_out_of_a_folder_does_not_lose_to_a_listing_already_in_flight_on_th
     .into_bytes();
     let uid = account
         .jmap()
-        .import_message(&source_info.id, source_bytes, &Keywords::default(), None)
+        .import_message(
+            &source_info.id,
+            None,
+            source_bytes,
+            &Keywords::default(),
+            None,
+        )
         .expect("import_message failed against the real server");
 
     // Swaps the account's connection for the gated one. source_info and

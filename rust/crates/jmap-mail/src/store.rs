@@ -1253,15 +1253,20 @@ impl JmapStore {
     ///
     /// `mailbox` can be a mailbox of a shared account merged into this
     /// account's folder tree ([`FolderTree::merge_shared`]). `Email/import`
-    /// is a method call under one `accountId`, so this resolves the mailbox's
-    /// real owner first ([`FolderTree::owning_account`]) and uploads and
-    /// imports under that account instead of this store's own, the same way
-    /// [`Self::may_add_items`] already reads the right mailbox's own
-    /// permission rather than assuming the store's own account (ROADMAP item
-    /// 179(d), the append-path slice).
+    /// is a method call under one `accountId`, so this uploads and imports
+    /// under `owner`, the account that owns the mailbox, instead of this
+    /// store's own (ROADMAP item 179(d), the append-path slice). `None`
+    /// names this store's own account, which is the usual case.
+    ///
+    /// The caller gives the owner; this does not look it up by mailbox id,
+    /// for the reason [`Self::search`] gives: a mailbox id is unique in one
+    /// account only, and a lookup by id alone ([`FolderTree::owning_account`])
+    /// then finds the wrong account. The folder Camel opened knows the
+    /// answer ([`crate::folder::JmapFolder::owner`]).
     pub fn import_message(
         &self,
         mailbox: &Id,
+        owner: Option<&Id>,
         source: Vec<u8>,
         keywords: &Keywords,
         received_at: Option<i64>,
@@ -1272,11 +1277,7 @@ impl JmapStore {
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
-        let account = self
-            .folders(0)
-            .ok()
-            .and_then(|tree| tree.owning_account(mailbox).cloned())
-            .unwrap_or_else(|| sync.account_id().clone());
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(
             mailbox_id = mailbox.as_str(),
             size = source.len(),

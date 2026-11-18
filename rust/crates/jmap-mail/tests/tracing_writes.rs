@@ -243,7 +243,7 @@ fn import_message_and_subscription_trace_structured_fields() {
     let (_, logs) = capture(|| {
         let raw = b"From: me@example.com\r\nTo: you@example.com\r\nSubject: Import\r\n\r\nImported body\r\n".to_vec();
         let uid = store
-            .import_message(&fixture.inbox_id, raw, &Keywords::default(), None)
+            .import_message(&fixture.inbox_id, None, raw, &Keywords::default(), None)
             .expect("import_message");
         assert!(!uid.as_str().is_empty());
 

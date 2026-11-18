@@ -94,7 +94,7 @@ fn synchronize_sync_carries_a_flag_change_to_the_real_server() {
     .into_bytes();
     let uid = account
         .jmap()
-        .import_message(&created.id, source, &Keywords::default(), None)
+        .import_message(&created.id, None, source, &Keywords::default(), None)
         .expect("import_message failed against the real server");
 
     // SAFETY: `account.store` is a live `CamelStore`. `created` is a
