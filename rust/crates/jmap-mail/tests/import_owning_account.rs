@@ -1,0 +1,97 @@
+// SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! `JmapStore::import_message`, routed to the mailbox's own account when it
+//! belongs to a shared account merged into the folder tree.
+//!
+//! `tests/append.rs`'s `appending_to_a_shared_mailbox_lands_in_its_owning_account`
+//! covers the ordinary case through the real Camel FFI; this file calls
+//! `JmapStore::import_message` directly, the same way `search_owning_account.rs`
+//! does for `search`, to reach the id-collision case no FFI test needs a
+//! live folder for.
+
+mod common;
+
+use common::sync_against;
+use jmap_mail::store::JmapStore;
+use jmap_mail_sync::Keywords;
+use jmap_mock::MockServer;
+use jmap_proto::Id;
+
+/// The RFC 5322 bytes of a message from Evolution.
+const MESSAGE: &[u8] = b"From: Bob <bob@example.com>\r\n\
+To: Alice <alice@example.com>\r\n\
+Subject: Invoice 42\r\n\
+Message-ID: <invoice@example.com>\r\n\
+Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
+\r\n\
+Please find the invoice attached.\r\n";
+
+/// No flags: the tree the store already has, with no new request. Matches
+/// `search_owning_account.rs`'s `CACHED`.
+const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
+
+/// The id collision: a shared mailbox can have the same mailbox id as a
+/// mailbox of the store's own account. `JmapStore::import_message` must use
+/// the owner the caller gives it, not look the mailbox id up in the merged
+/// tree (`jmap_mail_sync::FolderTree::owning_account`), because that lookup
+/// finds the store's own folder first and answers `None` for it (an
+/// ordinary folder of the store's own account carries no `account_id`),
+/// which then imports into the wrong account. The folder Camel opened
+/// already knows the right one, the same shape `search_owning_account.rs`'s
+/// own collision test proves for `search`.
+#[test]
+fn a_shared_mailboxs_import_reaches_its_own_account_when_the_mailbox_ids_collide() {
+    let server = MockServer::builder().start();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    let mailbox_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+
+        let own = state
+            .account_mut(&server.account_id())
+            .expect("the mock's own account");
+        let own_mailbox_id = own.seed_mailbox("Inbox", None);
+
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let shared_mailbox_id = sharer.seed_mailbox("Inbox", None);
+
+        assert_eq!(
+            own_mailbox_id, shared_mailbox_id,
+            "the two accounts must number their mailboxes from the same id"
+        );
+        shared_mailbox_id
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    store.folders(CACHED).expect("listed");
+
+    store
+        .import_message(
+            &mailbox_id,
+            Some(&shared_account_id),
+            MESSAGE.to_vec(),
+            &Keywords::default(),
+            None,
+        )
+        .expect("the import to reach the shared mailbox's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert!(
+        state
+            .account(&server.account_id())
+            .unwrap()
+            .emails
+            .is_empty(),
+        "the import used the wrong account despite the id collision"
+    );
+    assert_eq!(
+        state.account(&shared_account_id).unwrap().emails.len(),
+        1,
+        "the message must land in the shared mailbox's own account"
+    );
+}

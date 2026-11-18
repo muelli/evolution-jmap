@@ -95,6 +95,7 @@ fn expunge_sync_removes_only_the_deleted_message_on_the_real_server() {
         .jmap()
         .import_message(
             &created.id,
+            None,
             message(&subject_deleted),
             &Keywords::default(),
             None,
@@ -104,6 +105,7 @@ fn expunge_sync_removes_only_the_deleted_message_on_the_real_server() {
         .jmap()
         .import_message(
             &created.id,
+            None,
             message(&subject_kept),
             &Keywords::default(),
             None,

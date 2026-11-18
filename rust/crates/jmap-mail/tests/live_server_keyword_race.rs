@@ -82,7 +82,7 @@ fn a_delta_replays_onto_a_row_still_queued_for_the_server() {
 
     let uid = account
         .jmap()
-        .import_message(&created.id, message, &Keywords::default(), None)
+        .import_message(&created.id, None, message, &Keywords::default(), None)
         .expect("import_message failed against the real server");
 
     // SAFETY: `account.store` is a live `CamelStore`.

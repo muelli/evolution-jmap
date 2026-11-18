@@ -113,13 +113,15 @@ unsafe extern "C" fn append_message_sync(
             // cancel the requests below.
             let _cancel = observe(cancellable);
 
-            let Some(mailbox) = JmapFolder::borrow(folder).and_then(JmapFolder::mailbox) else {
+            let jmap_folder = JmapFolder::borrow(folder);
+            let Some(mailbox) = jmap_folder.and_then(JmapFolder::mailbox) else {
                 return fail_bool(
                     error,
                     &StoreError::NoFolder(name_of(folder)),
                     StoreError::to_gerror,
                 );
             };
+            let owner = jmap_folder.and_then(JmapFolder::owner);
 
             // Write the message before the store is found: this failure is not
             // the fault of the account.
@@ -155,7 +157,7 @@ unsafe extern "C" fn append_message_sync(
 
             // The upload takes `source` by value, so a failed attempt gives it
             // back no other way than a clone kept for the offline path below.
-            match store.import_message(mailbox, source.clone(), &keywords, received_at) {
+            match store.import_message(mailbox, owner, source.clone(), &keywords, received_at) {
                 Ok(uid) => {
                     report(appended_uid, &uid);
                     GTRUE
@@ -311,10 +313,12 @@ pub(crate) unsafe fn replay_append(
         return Ok(None);
     };
     // SAFETY: the contract above.
-    let cache = unsafe { JmapFolder::borrow(folder) }.and_then(JmapFolder::pending_append_cache);
+    let jmap_folder = unsafe { JmapFolder::borrow(folder) };
+    let cache = jmap_folder.and_then(JmapFolder::pending_append_cache);
     let Some(cache) = cache else {
         return Err(StoreError::Disconnected);
     };
+    let owner = jmap_folder.and_then(JmapFolder::owner);
     let Some(source) = cache.load(text) else {
         // The bytes are gone, which only a damaged cache directory can cause:
         // retrying forever cannot fix a missing file. Give up quietly, the
@@ -334,7 +338,7 @@ pub(crate) unsafe fn replay_append(
     let recv = unsafe { received_at(info.as_ptr()) };
 
     let result = match unsafe { parent_store(folder) } {
-        Some(store) => store.import_message(append.mailbox(), source, &keywords, recv),
+        Some(store) => store.import_message(append.mailbox(), owner, source, &keywords, recv),
         None => Err(StoreError::Disconnected),
     };
     let new_uid = match result {

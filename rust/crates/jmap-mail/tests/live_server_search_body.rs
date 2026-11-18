@@ -169,6 +169,7 @@ fn a_body_term_is_answered_by_the_real_server() {
         .jmap()
         .import_message(
             &created.id,
+            None,
             message(&format!("{shared_word} {only_word}")),
             &Keywords::default(),
             None,
@@ -178,6 +179,7 @@ fn a_body_term_is_answered_by_the_real_server() {
         .jmap()
         .import_message(
             &created.id,
+            None,
             message(&shared_word),
             &Keywords::default(),
             None,
