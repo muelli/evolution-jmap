@@ -655,8 +655,10 @@ pub fn drawn_alarms(event: &CalendarEvent) -> Vec<Component> {
 /// The guest list, as the lines a `VEVENT` states it on: an `ORGANIZER` for the
 /// participant that owns the event, and an `ATTENDEE` for everyone attending it.
 ///
-/// In the map's own order, so a document is stable across renderings. Only the
-/// *first* owner gets an `ORGANIZER`: RFC 8984 §4.4.6 admits several: the role
+/// Orders invented `p1, p2, ...` keys numerically before other keys in map
+/// order, so a document is stable across renderings even with ten or more
+/// participants. Only the *first* owner gets an `ORGANIZER`: RFC 8984 §4.4.6
+/// admits several: the role
 /// is a set member like any other, where RFC 5545 §3.6.1 admits one line, and
 /// showing the first is better than showing an event nobody called.
 ///
@@ -669,7 +671,9 @@ pub fn drawn_alarms(event: &CalendarEvent) -> Vec<Component> {
 pub fn drawn_participants(event: &CalendarEvent) -> Vec<ICalendarEntry> {
     let mut lines = Vec::new();
     let mut organizer_drawn = false;
-    for participant in event.participants.iter().flatten().map(|(_, value)| value) {
+    let mut participants: Vec<(&String, &Value)> = event.participants.iter().flatten().collect();
+    participants.sort_by_key(|(key, _)| participant_sort_key(key));
+    for (_, participant) in participants {
         let Some(address) = calendar_address(participant) else {
             continue;
         };
@@ -704,6 +708,24 @@ pub fn drawn_participants(event: &CalendarEvent) -> Vec<ICalendarEntry> {
         );
     }
     lines
+}
+
+/// Sort key for participant map entries in [`drawn_participants`].
+///
+/// Orders invented keys (`p1`, `p2`, ..., `p10`) numerically before other
+/// keys so events with ten or more participants preserve document order across
+/// round trips instead of sorting `p10` before `p2`.
+fn participant_sort_key(key: &str) -> (u8, usize, &str) {
+    let Some(suffix) = key.strip_prefix(INVENTED_PARTICIPANT_KEY) else {
+        return (1, 0, key);
+    };
+    if suffix.is_empty() || suffix.starts_with('0') || !suffix.bytes().all(|b| b.is_ascii_digit()) {
+        return (1, 0, key);
+    }
+    match suffix.parse::<usize>() {
+        Ok(n) => (0, n, ""),
+        Err(_) => (1, 0, key),
+    }
 }
 
 /// The places the event may be joined online at, as the `CONFERENCE` lines a
