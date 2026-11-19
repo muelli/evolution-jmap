@@ -176,7 +176,7 @@ fn message_source_and_keywords_trace_structured_fields() {
         let after = Keywords::from_iter(["$seen".to_string()]);
         let change = KeywordChange::between(&before, &after);
         store
-            .set_keywords(&message_uid, &change)
+            .set_keywords(&message_uid, &change, None)
             .expect("set_keywords");
     });
 

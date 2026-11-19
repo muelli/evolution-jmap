@@ -118,7 +118,7 @@ use crate::append::replay_append;
 use crate::changes::Changes;
 use crate::connect::StoreError;
 use crate::expunge::Walk;
-use crate::folder::parent_store;
+use crate::folder::{JmapFolder, parent_store};
 use crate::message_info::{pending_append, row_keywords, server_keywords, set_server_keywords};
 use crate::transfer::replay_filing;
 
@@ -347,8 +347,9 @@ pub(crate) unsafe fn push_row(
                 // the row on the work list: do not settle a row with no write.
                 return Ok(());
             };
+            let owner = JmapFolder::borrow(folder).and_then(|f| f.owner().cloned());
             match parent_store(folder) {
-                Some(store) => store.set_keywords(&Id::new(text), &change),
+                Some(store) => store.set_keywords(&Id::new(text), &change, owner.as_ref()),
                 None => Err(StoreError::Disconnected),
             }
         };

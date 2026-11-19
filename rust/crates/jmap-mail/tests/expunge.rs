@@ -64,7 +64,7 @@ use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
 use jmap_mail::store::JmapStore;
-use jmap_mail_sync::MailSync;
+use jmap_mail_sync::{KeywordChange, Keywords, MailSync};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
@@ -1077,6 +1077,70 @@ fn a_shared_mailboxs_expunge_reaches_its_own_account_when_the_mailbox_ids_collid
             .emails
             .contains(&shared_uid),
         "the message must be destroyed in the shared mailbox's own account"
+    );
+}
+
+/// The same id collision, for a keyword write: a flag set in a shared
+/// mailbox must land on the owner's message, not on this account's own
+/// message that has the same id.
+#[test]
+fn a_shared_mailboxs_keyword_write_reaches_its_own_account_when_the_ids_collide() {
+    let server = MockServer::builder().start();
+    let shared_account_id = Id::new("agent-shared-owner");
+    let (own_uid, shared_uid) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let seed = |mailbox: Id| {
+            EmailSeed::new(
+                mailbox,
+                ("Bob", "bob@example.com"),
+                "Lunch?",
+                "One o'clock.",
+                "2026-01-15T09:30:00Z",
+            )
+        };
+        let own = state
+            .account_mut(&server.account_id())
+            .expect("the mock's own account");
+        let own_mailbox = own.seed_mailbox("Inbox", None);
+        let own_uid = own.seed_email(seed(own_mailbox));
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let shared_mailbox = sharer.seed_mailbox("Projects", None);
+        let shared_uid = sharer.seed_email(seed(shared_mailbox));
+        assert_eq!(
+            own_uid, shared_uid,
+            "the two accounts must number their emails alike"
+        );
+        (own_uid, shared_uid)
+    };
+
+    let store = JmapStore::detached();
+    store.store_connection(sync_against(&server));
+    let flagged = Keywords::from_iter(["$flagged".to_string()]);
+    let change = KeywordChange::between(&Keywords::default(), &flagged);
+    store
+        .set_keywords(&shared_uid, &change, Some(&shared_account_id))
+        .expect("the keyword write to reach the shared mailbox's own account");
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let flagged_in = |account: &Id, uid: &Id| {
+        state
+            .account(account)
+            .unwrap()
+            .emails
+            .get(uid)
+            .and_then(|e| e.keywords.clone())
+            .is_some_and(|k| k.contains_key("$flagged"))
+    };
+    assert!(
+        flagged_in(&shared_account_id, &shared_uid),
+        "the owner's message must be flagged"
+    );
+    assert!(
+        !flagged_in(&server.account_id(), &own_uid),
+        "this account's own message must stay unflagged"
     );
 }
 

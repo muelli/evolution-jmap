@@ -1046,16 +1046,25 @@ impl JmapStore {
     /// protects the *connection*, and a request only uses the connection.
     /// Many folders can synchronise at the same time, as Camel does when
     /// Evolution closes.
-    pub fn set_keywords(&self, uid: &Id, change: &KeywordChange) -> Result<(), StoreError> {
+    ///
+    /// `owner` is the folder's kept owner, as for [`JmapStore::message_source`]:
+    /// a shared mailbox's message id can equal one of this account's own.
+    pub fn set_keywords(
+        &self,
+        uid: &Id,
+        change: &KeywordChange,
+        owner: Option<&Id>,
+    ) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(uid = uid.as_str(), "setting message keywords");
         match retry_once_after(
-            || sync.set_keywords(uid, change),
+            || sync.set_keywords_as(&account, uid, change),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {
