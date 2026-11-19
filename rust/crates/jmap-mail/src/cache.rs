@@ -105,28 +105,39 @@
 //! would also be the bound of its cache, without notice. A setting of our own
 //! needs a field in an account editor, which is not the work of this file.
 //!
-//! ## The atomic write, where EDS has it
+//! ## The write goes through a rename
+//!
+//! An entry becomes visible at its path in one step, never as a part of a
+//! message that grows. A reader that holds the path, "View Source" above all,
+//! opens the complete file or no file.
 //!
 //! EDS 3.62 added `camel_data_cache_add_atomic`/`commit_atomic`/`discard_atomic`.
 //! These write under a temporary name in the same directory, and rename the file
-//! into place only after the full write. This makes a half-written entry
-//! impossible, not only detected. [`store`] uses this path when the installed
-//! EDS has it (the `camel_data_cache_atomic` marker of `eds-sys`, the same probe
-//! style as each other version gap in this tree). On 3.52-3.61, which this
-//! project also builds against, it uses the open-write-close sequence above.
+//! into place only after the full write. [`store`] uses this path when the
+//! installed EDS has it (the `camel_data_cache_atomic` marker of `eds-sys`, the
+//! same probe style as each other version gap in this tree). On 3.52-3.61,
+//! which this project also builds against, `write_through_rename` does the same
+//! two steps in Rust. `camel_data_cache_add` alone is not enough there: it opens
+//! the final path, and GLib writes through a temporary file of its own only when
+//! a file is already at that path. The first write of an entry thus goes
+//! directly to the path.
+//!
 //! The size check stays in both cases. It catches a server that reports an
 //! incorrect `size`, and a rename does not.
 //!
 //! [`store`]: MessageCache::store
 
 use std::ffi::{CStr, CString};
+use std::fs::{DirBuilder, File, OpenOptions};
+use std::hash::{BuildHasher, RandomState};
+use std::io::{ErrorKind, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-#[cfg(not(camel_data_cache_atomic))]
-use eds_sys::camel_data_cache_add;
 use eds_sys::{
     CamelDataCache, CamelFolder, CamelFolderClass, camel_data_cache_clear, camel_data_cache_get,
     camel_data_cache_get_filename, camel_data_cache_new, camel_data_cache_remove,
@@ -136,11 +147,12 @@ use eds_sys::{
 use eds_sys::{
     camel_data_cache_add_atomic, camel_data_cache_commit_atomic, camel_data_cache_discard_atomic,
 };
-use gio_sys::{
-    g_input_stream_read, g_io_stream_close, g_io_stream_get_input_stream,
-    g_io_stream_get_output_stream, g_output_stream_write_all,
-};
-use glib_sys::{GError, GFALSE, GTRUE, g_clear_error, g_free, gchar};
+use gio_sys::{g_input_stream_read, g_io_stream_close, g_io_stream_get_input_stream};
+#[cfg(camel_data_cache_atomic)]
+use gio_sys::{g_io_stream_get_output_stream, g_output_stream_write_all};
+#[cfg(camel_data_cache_atomic)]
+use glib_sys::GFALSE;
+use glib_sys::{GError, GTRUE, g_clear_error, g_free, gchar};
 use jmap_backend_core::error::fail;
 use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::owned::Owned;
@@ -398,9 +410,12 @@ impl MessageCache {
     /// The result lets a test tell a refusal from a success. The caller ignores
     /// it, because the caller does the same in both cases.
     ///
-    /// This function removes an entry that it cannot write fully. A short file
-    /// is not only a failed cache write. It is a message that opens without
-    /// part of its body at each later open.
+    /// This function never leaves an entry that it cannot write fully. A short
+    /// file is not only a failed cache write. It is a message that opens
+    /// without part of its body at each later open. A failed write leaves the
+    /// entry that was there before, which is a complete message: RFC 8621
+    /// §4.1 makes an `Email` immutable, so the bytes under a uid do not
+    /// change.
     ///
     /// [`load`]: MessageCache::load
     pub fn store(&self, uid: &str, source: &[u8], listed: Option<u32>) -> bool {
@@ -475,6 +490,11 @@ impl MessageCache {
     /// through unchecked: no caller reads the path as a promise that the file
     /// exists.
     ///
+    /// The size check runs here, and the caller opens the path later. Only
+    /// the rename of `write_through_rename` closes that gap: it keeps a write
+    /// that starts in between out of the path, where this check cannot see
+    /// it and the caller's own open would find it.
+    ///
     /// `None` for an invalid uid, for the same reason that `Self::key`
     /// refuses: a uid that is not a valid JMAP id is never a file name that
     /// this cache creates. `None` also for a file this check finds damaged.
@@ -483,20 +503,7 @@ impl MessageCache {
     pub fn filename(&self, uid: &str, listed: Option<u32>) -> Option<String> {
         let key = self.key(uid)?;
         let cache = self.lock();
-
-        // SAFETY: a live cache and two NUL-terminated strings that are alive
-        // during the call. The returned pointer is a fresh `g_malloc`'d string
-        // that this call owns.
-        let raw = unsafe {
-            camel_data_cache_get_filename(cache.as_ptr(), MESSAGES.as_ptr(), key.as_ptr())
-        };
-        // SAFETY: `raw` is NULL or the fresh allocation above, read before the
-        // one free below. `read_string` copies it and keeps no borrow.
-        let path = unsafe { read_string(raw) };
-        // SAFETY: `raw` is NULL or a `g_malloc`'d pointer that this function
-        // owns. `g_free` on NULL is a defined no-op.
-        unsafe { g_free(raw.cast()) };
-        let path = path?;
+        let path = entry_path(&cache, MESSAGES, &key)?;
 
         // A path with nothing at it yet is not damage, only an unfetched
         // message; leave the existence test to the caller's own open, as the
@@ -535,6 +542,107 @@ impl MessageCache {
     }
 }
 
+/// Distinguishes the temporary files of two writes that run at once. See
+/// [`write_through_rename`].
+static TEMPORARY_NAMES: AtomicU64 = AtomicU64::new(0);
+
+/// How many names [`write_through_rename`] tries before it gives up. Each one
+/// is already unlikely to exist.
+const TEMPORARY_NAME_TRIES: u32 = 8;
+
+/// The path that `cache` computes for `key` in `subdir`, also when no file is
+/// there yet.
+///
+/// `camel_data_cache_get_filename` computes the path alone, the same path
+/// `camel_data_cache_get` opens. [`MessageCache::filename`] tells what a
+/// caller may expect to find at it.
+fn entry_path(cache: &Owned<CamelDataCache>, subdir: &CStr, key: &CStr) -> Option<String> {
+    // SAFETY: a live cache and two NUL-terminated strings that are alive
+    // during the call. The returned pointer is a fresh `g_malloc`'d string
+    // that this call owns.
+    let raw =
+        unsafe { camel_data_cache_get_filename(cache.as_ptr(), subdir.as_ptr(), key.as_ptr()) };
+    // SAFETY: `raw` is NULL or the fresh allocation above, read before the one
+    // free below. `read_string` copies it and keeps no borrow.
+    let path = unsafe { read_string(raw) };
+    // SAFETY: `raw` is NULL or a `g_malloc`'d pointer that this call owns.
+    // `g_free` on NULL is a defined no-op.
+    unsafe { g_free(raw.cast()) };
+    path
+}
+
+/// Writes `source` under a temporary name in the directory of `path`, then
+/// renames it onto `path`.
+///
+/// [`write_entry`]'s 3.52-3.61 arm uses this instead of
+/// `camel_data_cache_add`, which opens the final path itself. GLib writes
+/// through a temporary file of its own only when a file is already at that
+/// path (`handle_overwrite_open` in `glocalfileoutputstream.c`). The *first*
+/// write of an entry thus goes directly to the path, where a reader that got
+/// the path from [`MessageCache::filename`] can read a part of a message as
+/// if it were the whole one. A rename gives that reader the complete file or
+/// no file.
+///
+/// Plain Rust, kept outside the `camel_data_cache_atomic` gate so it has unit
+/// tests on every installed EDS, the same as [`file_has_len`].
+#[cfg_attr(camel_data_cache_atomic, allow(dead_code))]
+fn write_through_rename(path: &str, source: &[u8]) -> std::io::Result<()> {
+    if let Some(directory) = Path::new(path).parent() {
+        // Camel gives a bucket directory the access of its owner alone.
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(directory)?;
+    }
+    let (temporary, mut file) = create_temporary(path)?;
+    let mut written = file.write_all(source);
+    // The rename takes the file as it is, so close it first.
+    drop(file);
+    if written.is_ok() {
+        written = std::fs::rename(&temporary, path);
+    }
+    if written.is_err() {
+        // Nothing reads a temporary file, and the sweep removes only a file
+        // that is old enough. Remove it here.
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
+}
+
+/// A new, empty file beside `path`, and its name.
+///
+/// The name takes the same six characters of `g_mkstemp`'s alphabet, and thus
+/// the same [`ATOMIC_TEMP_SUFFIX_LEN`] of a file name, that the 3.62+ arm
+/// takes: `valid_key` keeps every key below that margin already. `create_new`
+/// makes the file the writer's own, so two writes at once cannot share it.
+#[cfg_attr(camel_data_cache_atomic, allow(dead_code))]
+fn create_temporary(path: &str) -> std::io::Result<(String, File)> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+    let mut last = None;
+    for _ in 0..TEMPORARY_NAME_TRIES {
+        let mut value =
+            RandomState::new().hash_one(TEMPORARY_NAMES.fetch_add(1, Ordering::Relaxed));
+        let mut name = String::from(".");
+        for _ in 0..(ATOMIC_TEMP_SUFFIX_LEN - 1) {
+            name.push(char::from(ALPHABET[value as usize % ALPHABET.len()]));
+            value /= ALPHABET.len() as u64;
+        }
+        let temporary = format!("{path}{name}");
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+        {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => last = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last.unwrap_or_else(|| ErrorKind::AlreadyExists.into()))
+}
+
 /// Whether the file at `path` holds exactly `expected_len` bytes.
 ///
 /// [`write_entry`]'s 3.62+ arm uses this to tell a cache entry that
@@ -548,10 +656,10 @@ fn file_has_len(path: &str, expected_len: usize) -> bool {
 }
 
 /// Writes `source` under `key` in `subdir` of `cache`, and tells if the write
-/// succeeded. Two implementations of one contract: the 3.52-3.61 arm (see
-/// "The atomic write" in the module docs) writes directly to the final path
-/// and checks the result; the 3.62+ arm writes to a temporary name first.
-/// Both leave nothing under `key` on a failed write, not a short file: on the
+/// succeeded. Two implementations of one contract (see "The write goes
+/// through a rename" in the module docs): the 3.52-3.61 arm renames through
+/// [`write_through_rename`], the 3.62+ arm through `commit_atomic`. Neither
+/// puts a short file under `key` at any moment of a failed write: on the
 /// 3.62+ arm, a `commit_atomic` failure after a successful rename still
 /// counts as success, because the rename already left the full entry at
 /// `key`; see [`file_has_len`].
@@ -569,71 +677,24 @@ pub(crate) fn write_entry(
     uid: &str,
 ) -> bool {
     #[cfg(not(camel_data_cache_atomic))]
-    // SAFETY: `add` replaces an entry that is already under the key. The
-    // returned reference is ours, and `stream` releases it on each exit
-    // from this scope.
-    let stored = unsafe {
-        let mut error: *mut GError = ptr::null_mut();
-        let Some(stream) = Owned::from_raw(camel_data_cache_add(
-            cache.as_ptr(),
-            subdir.as_ptr(),
-            key.as_ptr(),
-            &mut error,
-        )) else {
+    let stored = {
+        let Some(path) = entry_path(cache, subdir, key) else {
             log_critical_for_message(
                 uid,
-                &format!("message {uid} could not be cached: {}", describe(error)),
+                &format!("message {uid} could not be cached: it has no path in this cache"),
             );
-            g_clear_error(&mut error);
             return false;
         };
-
-        // The output stream is borrowed from `stream`, `source` is a live
-        // buffer of the given length, and the two out-parameters are
-        // locals.
-        let mut written: usize = 0;
-        let written_all = g_output_stream_write_all(
-            g_io_stream_get_output_stream(stream.as_ptr()),
-            // gio-sys gives the buffer the type `*mut`, but the C function
-            // takes a `const void *`. The cast agrees with the header.
-            source.as_ptr().cast_mut().cast(),
-            source.len(),
-            &mut written,
-            ptr::null_mut(),
-            &mut error,
-        ) != GFALSE;
-        // The close flushes. Thus a successful write with a failed close
-        // is still an incomplete entry. The close error goes into its own
-        // local, because GLib logs a critical when a second `g_set_error`
-        // writes to an out-parameter that is set. Report the write error
-        // first, because it tells the cause.
-        let mut on_close: *mut GError = ptr::null_mut();
-        let closed = g_io_stream_close(stream.as_ptr(), ptr::null_mut(), &mut on_close) != GFALSE;
-        if error.is_null() {
-            error = on_close;
-        } else {
-            g_clear_error(&mut on_close);
+        match write_through_rename(&path, source) {
+            Ok(()) => true,
+            Err(error) => {
+                log_critical_for_message(
+                    uid,
+                    &format!("message {uid} could not be cached: {error}"),
+                );
+                false
+            }
         }
-        let stored = written_all && closed && written == source.len();
-
-        if !stored {
-            log_critical_for_message(
-                uid,
-                &format!(
-                    "message {uid} was cached incompletely and has been dropped: {}",
-                    describe(error)
-                ),
-            );
-            // This code cannot act on a failure of the removal.
-            camel_data_cache_remove(
-                cache.as_ptr(),
-                subdir.as_ptr(),
-                key.as_ptr(),
-                ptr::null_mut(),
-            );
-        }
-        g_clear_error(&mut error);
-        stored
     };
 
     #[cfg(camel_data_cache_atomic)]
@@ -691,17 +752,9 @@ pub(crate) fn write_entry(
             // that path, so the entry is complete at `key` either way; a
             // file of the written length there is that case, not a dropped
             // write.
-            committed || {
-                let raw =
-                    camel_data_cache_get_filename(cache.as_ptr(), subdir.as_ptr(), key.as_ptr());
-                // SAFETY: `raw` is NULL or a fresh `g_malloc`'d string, read
-                // before the free below.
-                let path = read_string(raw);
-                // SAFETY: `raw` is NULL or a `g_malloc`'d pointer this call
-                // owns. `g_free` on NULL is a defined no-op.
-                g_free(raw.cast());
-                path.is_some_and(|path| file_has_len(&path, source.len()))
-            }
+            committed
+                || entry_path(cache, subdir, key)
+                    .is_some_and(|path| file_has_len(&path, source.len()))
         } else {
             // `discard_atomic` takes ownership of `stream` in the same
             // way, closes it, and removes the temporary file. It gives
@@ -888,7 +941,10 @@ pub(crate) unsafe fn describe(error: *mut GError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_has_len, valid_key};
+    use super::{
+        ATOMIC_TEMP_SUFFIX_LEN, Ordering, TEMPORARY_NAMES, create_temporary, file_has_len,
+        valid_key, write_through_rename,
+    };
 
     /// `255 - ATOMIC_TEMP_SUFFIX_LEN` is the last length a key's temporary
     /// file still fits in a 255-byte file name on EDS 3.62+.
@@ -933,6 +989,76 @@ mod tests {
     #[test]
     fn a_missing_file_does_not_have_the_expected_length() {
         assert!(!file_has_len("/nonexistent/path/for/jmap-mail-tests", 5));
+    }
+
+    /// The first write of an entry makes the directory of its bucket, which
+    /// `camel_data_cache_get_filename` only computes and does not create.
+    #[test]
+    fn a_write_through_rename_makes_the_directory_of_the_path() {
+        let directory = scratch_directory();
+        let path = directory.join("3f").join("M1");
+        let path = path.to_str().unwrap();
+
+        write_through_rename(path, b"a message").unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), b"a message");
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// The temporary file is the writer's own, and the rename consumes it.
+    /// One left behind would become an entry of its own under the sweep.
+    #[test]
+    fn a_write_through_rename_leaves_no_temporary_file() {
+        let directory = scratch_directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("M1");
+
+        write_through_rename(path.to_str().unwrap(), b"a message").unwrap();
+
+        let left: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(left, vec![path], "a temporary file stayed: {left:?}");
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// A write that cannot start leaves nothing at the path. Here the parent
+    /// of the directory is a file, so the directory cannot be made.
+    #[test]
+    fn a_write_through_rename_that_fails_leaves_nothing() {
+        let blocker = tempfile_with(b"not a directory");
+        let path = blocker.join("3f").join("M1");
+
+        let refused = write_through_rename(path.to_str().unwrap(), b"a message");
+
+        assert!(refused.is_err(), "a write into a file succeeded");
+        assert!(!path.exists());
+        std::fs::remove_file(blocker).unwrap();
+    }
+
+    /// The temporary name takes exactly the margin that `valid_key` keeps
+    /// free, so a key this cache accepts always has a name for its write.
+    #[test]
+    fn a_temporary_name_takes_the_margin_of_a_key() {
+        let directory = scratch_directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("M1");
+        let path = path.to_str().unwrap();
+
+        let (temporary, file) = create_temporary(path).unwrap();
+
+        drop(file);
+        assert_eq!(temporary.len(), path.len() + ATOMIC_TEMP_SUFFIX_LEN);
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    fn scratch_directory() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "jmap-mail-cache-unit-{}-{}",
+            std::process::id(),
+            TEMPORARY_NAMES.fetch_add(1, Ordering::Relaxed)
+        ))
     }
 
     fn tempfile_with(bytes: &[u8]) -> std::path::PathBuf {

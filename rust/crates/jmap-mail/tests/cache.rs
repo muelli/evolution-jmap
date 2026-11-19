@@ -279,6 +279,68 @@ fn storing_a_uid_twice_replaces_the_entry() {
     );
 }
 
+/// The whole point of the entry's path: "View Source" asks `filename` for it,
+/// opens it a moment later, and shows the bytes it finds, with no check of
+/// its own. So the path must name a complete message or nothing, never a part
+/// of one. EDS 3.52-3.61 have no atomic cache write, and GLib writes through
+/// a temporary file of its own only when a file is already at the path, so
+/// the first write of an entry used to fill the path in place. This test
+/// watches the path while another thread writes a message big enough to make
+/// the write take a while.
+///
+/// A rename cannot be seen half way, so the loop below cannot see a short
+/// file once the write goes through one. Before that fix, it found tens of
+/// thousands of them.
+#[test]
+fn nothing_shorter_than_the_message_is_ever_at_the_path() {
+    const BIG: usize = 32 << 20;
+
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+    // Another key in the same bucket, so the directory of the path below
+    // already exists and the test watches the write alone.
+    assert!(cache.store("M2", SOURCE, None));
+    let path = PathBuf::from(
+        cache
+            .filename("M1", None)
+            .expect("a path for an unfetched message"),
+    );
+    assert!(!path.exists(), "the message under test is not cached yet");
+
+    let directory = scratch.as_str().to_owned();
+    let writer = std::thread::spawn(move || {
+        let cache = MessageCache::open(&directory).expect("a second cache over one directory");
+        assert!(cache.store("M1", &vec![b'b'; BIG], None));
+    });
+
+    let mut samples = 0_u64;
+    let mut shortest = None;
+    while !writer.is_finished() {
+        samples += 1;
+        if let Ok(found) = fs::metadata(&path) {
+            let length = found.len();
+            if length < BIG as u64 {
+                shortest = Some(shortest.map_or(length, |shortest: u64| shortest.min(length)));
+            }
+        }
+    }
+    writer.join().expect("the writing thread");
+
+    assert!(
+        samples > 0,
+        "the write finished before the first look, so this test proves nothing"
+    );
+    assert_eq!(
+        shortest, None,
+        "a part of the message was at the path, where \"View Source\" reads it as the message"
+    );
+    assert_eq!(
+        fs::metadata(&path).expect("the stored entry").len(),
+        BIG as u64,
+        "the write did not reach the path"
+    );
+}
+
 /// A message with no bytes is not a message. An entry with no bytes is what a
 /// process killed between creating and writing it leaves behind. Both
 /// `store` and `load` refuse this entry. Otherwise, `get_message_sync` would
@@ -638,15 +700,15 @@ fn a_directory_that_cannot_be_created_is_not_a_cache() {
     );
 }
 
-/// On EDS 3.62+, `store` writes under a temporary name, then renames it into
-/// place (`camel_data_cache_add_atomic` and `commit_atomic`, see
-/// `src/cache.rs`'s module docs). EDS 3.52-3.61 instead open a stream
-/// directly on the final path. A round trip cannot detect one specific bug
+/// `store` writes under a temporary name, then renames it into place (on EDS
+/// 3.62+ with `camel_data_cache_add_atomic` and `commit_atomic`, see
+/// `src/cache.rs`'s module docs). A round trip cannot detect one specific bug
 /// in the atomic path: a bug that renames the file into place but also
 /// leaves the temporary file behind (instead of `commit_atomic` consuming
 /// it) would still read back correctly. This test's directory walk catches
-/// that bug, because it leaves a `.`-suffixed file behind.
-#[cfg(camel_data_cache_atomic)]
+/// that bug, because it leaves a `.`-suffixed file behind. EDS 3.52-3.61
+/// write through a temporary name of this crate's own, so the same walk
+/// covers that arm as well.
 #[test]
 fn storing_leaves_no_temporary_file_behind() {
     let scratch = Scratch::new();
