@@ -1324,12 +1324,8 @@ unsafe fn show_selected(cell: &RefCell<UiState>) {
             edit_as_text_visible: is_managed,
             edit_as_text_sensitive: is_managed && can_parse,
             edit_as_text_checked: is_managed && (!can_parse || ui.force_text),
-            status_note: show_external_edit_note(
-                script_changed,
-                is_managed,
-                can_parse,
-                edited_as_text,
-            )
+            status_note: (!ui.offline
+                && show_external_edit_note(script_changed, is_managed, can_parse, edited_as_text))
             .then_some(EXTERNAL_EDIT),
             rule_rows,
             rule_selected,
@@ -3631,14 +3627,13 @@ unsafe extern "C" fn on_external_editor_poll(page: gpointer) -> gboolean {
                     .as_ref()
                     .map(|session| session.row);
                 if let Some(row) = row {
+                    let _ = cell.borrow_mut().form.set_text(row, &new_text);
                     let shown = cell.borrow().showing == Some(row);
                     if shown {
                         let buffer = cell.borrow().buffer;
                         // SAFETY: the buffer is a live child of the page,
                         // and no borrow of `cell` is held across the call.
                         unsafe { set_text(buffer.cast(), &new_text) };
-                    } else {
-                        let _ = cell.borrow_mut().form.set_text(row, &new_text);
                     }
                 }
                 let path = cell
@@ -4112,10 +4107,9 @@ mod tests {
         });
     }
 
-    /// A fresh buffer holding `text`, cursor at its very end. `GtkTextBuffer`
-    /// is a plain GObject, not a widget (as `tests/text_iter.rs` in evo-sys
-    /// notes of its own equivalent helper), so this needs no display: it is
-    /// the one test below that is not display-gated.
+    /// A fresh buffer holding `text`, cursor at its very end. Needs a
+    /// display because `gtk_text_buffer_new` registers rich text
+    /// serialization formats with GDK.
     fn buffer_ending_with(text: &str) -> (*mut GtkTextBuffer, GtkTextIter) {
         // SAFETY: a fresh buffer and a fresh iter, both local to the caller.
         unsafe {
@@ -4132,40 +4126,58 @@ mod tests {
 
     /// Item 171c's own core: replacing the word the cursor sits at the end
     /// of with the chosen candidate, leaving everything before it alone.
+    /// Needs a display; skips without one.
     #[test]
     fn replace_word_at_swaps_only_the_trailing_word() {
-        // SAFETY: a fresh, private buffer; destroyed before returning.
-        unsafe {
-            let (buffer, end) = buffer_ending_with("if header :con");
-            replace_word_at(buffer, &end, ":contains");
-            let mut start = GtkTextIter::default();
-            let mut new_end = GtkTextIter::default();
-            gtk_text_buffer_get_start_iter(buffer, &mut start);
-            gtk_text_buffer_get_end_iter(buffer, &mut new_end);
-            let result = take_string(gtk_text_buffer_get_text(buffer, &start, &new_end, GFALSE))
-                .unwrap_or_default();
-            assert_eq!(result, "if header :contains");
-            g_object_unref(buffer.cast());
-        }
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: a fresh, private buffer; destroyed before returning.
+            unsafe {
+                let (buffer, end) = buffer_ending_with("if header :con");
+                replace_word_at(buffer, &end, ":contains");
+                let mut start = GtkTextIter::default();
+                let mut new_end = GtkTextIter::default();
+                gtk_text_buffer_get_start_iter(buffer, &mut start);
+                gtk_text_buffer_get_end_iter(buffer, &mut new_end);
+                let result =
+                    take_string(gtk_text_buffer_get_text(buffer, &start, &new_end, GFALSE))
+                        .unwrap_or_default();
+                assert_eq!(result, "if header :contains");
+                g_object_unref(buffer.cast());
+            }
+        });
     }
 
     /// A word right after whitespace, with nothing to replace yet: the
     /// candidate is inserted, nothing before the cursor is touched.
+    /// Needs a display; skips without one.
     #[test]
     fn replace_word_at_inserts_after_whitespace_with_no_partial_word() {
-        // SAFETY: as above.
-        unsafe {
-            let (buffer, end) = buffer_ending_with("if ");
-            replace_word_at(buffer, &end, "header");
-            let mut start = GtkTextIter::default();
-            let mut new_end = GtkTextIter::default();
-            gtk_text_buffer_get_start_iter(buffer, &mut start);
-            gtk_text_buffer_get_end_iter(buffer, &mut new_end);
-            let result = take_string(gtk_text_buffer_get_text(buffer, &start, &new_end, GFALSE))
-                .unwrap_or_default();
-            assert_eq!(result, "if header");
-            g_object_unref(buffer.cast());
-        }
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            // SAFETY: as above.
+            unsafe {
+                let (buffer, end) = buffer_ending_with("if ");
+                replace_word_at(buffer, &end, "header");
+                let mut start = GtkTextIter::default();
+                let mut new_end = GtkTextIter::default();
+                gtk_text_buffer_get_start_iter(buffer, &mut start);
+                gtk_text_buffer_get_end_iter(buffer, &mut new_end);
+                let result =
+                    take_string(gtk_text_buffer_get_text(buffer, &start, &new_end, GFALSE))
+                        .unwrap_or_default();
+                assert_eq!(result, "if header");
+                g_object_unref(buffer.cast());
+            }
+        });
     }
 
     /// Item 171c: Ctrl+Space opens a matching list, Up/Down moves the
@@ -4399,7 +4411,7 @@ mod tests {
                     .collect();
                 assert_eq!(
                     texts,
-                    vec!["elsif", "else", "exists"],
+                    vec!["elsif", "else"],
                     "typing \"el\" should auto-open the same matches an explicit trigger would"
                 );
 
@@ -5838,7 +5850,7 @@ time window. Wait for the window to reset, or ask an administrator to raise the 
             // last argument; for `sh -c script arg0`, that path becomes `$0`
             // inside the script.
             let command = external_editor::EditorCommand::Command(format!(
-                "sh -c 'cat {} > \"$0\"'",
+                "sh -c 'sleep 0.05 && cat {} > \"$0\"'",
                 fixture.display()
             ));
 
