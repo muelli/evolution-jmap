@@ -1652,9 +1652,10 @@ fn is_cyrus_server(client: &Client) -> bool {
         .any(|uri| uri.starts_with("https://cyrusimap.org/ns/jmap/"))
 }
 
-/// Deactivate the active Sieve script on `account_id`, handling documented RFC 9661
-/// Section 2.4 deviations on both Stalwart (direct `isActive: false` update, Finding 4a)
-/// and Cyrus (`onSuccessDeactivatescript: true` lowercase-s typo, Cyrus Finding 1).
+/// Deactivate the active Sieve script on `account_id`, handling the Cyrus
+/// `onSuccessDeactivatescript: true` typo (Cyrus Finding 1) or using Stalwart's
+/// deliberate direct `isActive: false` update extension ("Non-standard script
+/// activation handling", Finding 4a).
 fn deactivate_sieve_script_for_cleanup(client: &Client, account_id: &Id, script_id: &Id) {
     if is_cyrus_server(client) {
         client
@@ -1670,7 +1671,7 @@ fn deactivate_sieve_script_for_cleanup(client: &Client, account_id: &Id, script_
     } else {
         client
             .sieve_script_update(account_id, script_id, json!({"isActive": false}))
-            .expect("the direct isActive:false patch workaround was rejected");
+            .expect("the direct isActive:false patch extension was rejected");
     }
 }
 
@@ -1685,8 +1686,9 @@ fn deactivate_sieve_script_for_cleanup(client: &Client, account_id: &Id, script_
 /// Stalwart and Cyrus IMAP:
 ///
 /// - On Stalwart:
-///   - A direct `update: {"isActive": false}` is accepted despite RFC 9661 §2.1
-///     defining `isActive` as server-set (Stalwart Finding 4a).
+///   - A direct `update: {"isActive": false}` is accepted as a deliberate
+///     server extension (upstream calls this "Non-standard script activation
+///     handling" in `set.rs`, Finding 4a).
 ///   - Destroying the active script returns `scriptIsActive` instead of RFC 9661
 ///     §2.4 `sieveIsActive` (Stalwart Finding 4b).
 /// - On Cyrus IMAP:
@@ -1812,6 +1814,12 @@ fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_
             !deactivated.is_active,
             "the script still shows isActive: true after deactivation"
         );
+
+        // Stalwart accepts a direct update of `isActive` as a deliberate extension
+        // ("Non-standard script activation handling" in upstream set.rs, Finding 4a).
+        client
+            .sieve_script_update(&account_id, &id, json!({"isActive": false}))
+            .expect("Stalwart direct isActive:false patch extension was rejected");
     }
 
     client
@@ -1922,7 +1930,7 @@ fn sieve_script_query_filters_by_name_and_is_active_against_the_real_server() {
         "the isActive:true filter did not narrow to exactly the one active script"
     );
 
-    // Cleanup: deactivate using the server-specific workaround, then destroy both scripts.
+    // Cleanup: deactivate using the server-specific method or extension, then destroy both scripts.
     deactivate_sieve_script_for_cleanup(&client, &account_id, &id_b);
     client
         .sieve_script_destroy(&account_id, &id_a)
