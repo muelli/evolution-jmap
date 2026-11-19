@@ -449,18 +449,12 @@ fn sieve_script_set_request_activating_and_deactivating() {
         .deactivating()
         .with_deactivate_script(true);
 
-    assert_eq!(
-        deactivating_req.on_success_activate_script,
-        Some(serde_json::Value::Null)
-    );
+    assert!(deactivating_req.on_success_activate_script.is_none());
     assert_eq!(deactivating_req.on_success_deactivate_script, Some(true));
 
     let val_deact = serde_json::to_value(&deactivating_req)
         .expect("serialize SieveScriptSetRequest deactivating");
-    assert_eq!(
-        val_deact["onSuccessActivateScript"],
-        serde_json::Value::Null
-    );
+    assert!(val_deact.get("onSuccessActivateScript").is_none());
     assert_eq!(val_deact["onSuccessDeactivateScript"], true);
 }
 
