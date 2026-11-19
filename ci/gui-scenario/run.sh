@@ -6,13 +6,17 @@
 # jmap-mockd, driven through AT-SPI. A scenario asserts on the server state
 # and on the log, not on pixels. See docs/gui-scenario-tests.md.
 #
-# Usage: ci/gui-scenario/run.sh [--host] [--live] [--locale LOCALE] [--scale PERCENT] SCENARIO...
+# Usage: ci/gui-scenario/run.sh [--host] [--live] [--locale LOCALE] [--scale PERCENT]
+#   [--geometry WxH] SCENARIO...
 # SCENARIO is a file name in ci/gui-scenario/scenarios/, without ".py".
 #
 # --locale sets LANG and LC_ALL for the Evolution session (default: C).
 # --scale sets org.gnome.desktop.interface text-scaling-factor to PERCENT/100
 # (default: the GNOME default, 100). Both reach the scenario script as
 # GUI_SCENARIO_LOCALE and GUI_SCENARIO_SCALE.
+# --geometry sets the virtual screen size, as WIDTHxHEIGHT (default:
+# 1280x1024). The Evolution window stays maximized, so this is also its own
+# size. Reaches the scenario script as GUI_SCENARIO_GEOMETRY.
 #
 # Without --host, the script runs in a rootless podman container with the
 # Evolution 3.52 of Ubuntu 24.04 (ci/gui-scenario/Containerfile). It installs
@@ -55,13 +59,13 @@ SCENARIOS="$ROOT/ci/gui-scenario/scenarios"
 BUILD="${GUI_SCENARIO_BUILD:-$ROOT/build}"
 ARTIFACTS="${GUI_SCENARIO_ARTIFACTS:-$ROOT/build/gui-scenario}"
 IMAGE="${GUI_SCENARIO_IMAGE:-localhost/evolution-jmap-gui-scenario}"
-COMPONENTS=(book-backend cal-backend camel-provider collection-backend config-module)
+COMPONENTS=(book-backend cal-backend camel-provider collection-backend config-module translations)
 # Must match ci/dovecot-oracle.sh's own default exactly: the whole point is
 # for both containers to land on the one network.
 DOVECOT_ORACLE_NETWORK="${DOVECOT_ORACLE_NETWORK:-evolution-jmap-gui-scenario}"
 
 usage() {
-	echo "usage: ci/gui-scenario/run.sh [--host] [--live] [--locale LOCALE] [--scale PERCENT] SCENARIO..." >&2
+	echo "usage: ci/gui-scenario/run.sh [--host] [--live] [--locale LOCALE] [--scale PERCENT] [--geometry WxH] SCENARIO..." >&2
 	echo "scenarios: $(cd "$SCENARIOS" && find . -name '*.py' -printf '%f ' | sed 's/\.py//g')" >&2
 	exit 2
 }
@@ -70,6 +74,7 @@ host=0
 live=0
 locale=""
 scale=""
+geometry=""
 while :; do
 	case "${1-}" in
 	--host) host=1 ;;
@@ -83,6 +88,14 @@ while :; do
 		shift
 		scale="${1-}"
 		[ -n "$scale" ] || usage
+		;;
+	--geometry)
+		shift
+		geometry="${1-}"
+		case "$geometry" in
+		[0-9]*x[0-9]*) ;;
+		*) usage ;;
+		esac
 		;;
 	*) break ;;
 	esac
@@ -168,6 +181,9 @@ if [ "$host" -eq 0 ]; then
 	fi
 	if [ -n "$scale" ]; then
 		extra_flags+=(--scale "$scale")
+	fi
+	if [ -n "$geometry" ]; then
+		extra_flags+=(--geometry "$geometry")
 	fi
 	# The container runs as root, so that it can install the stage. The trap
 	# gives the artifacts back to the user of the host.
@@ -301,6 +317,7 @@ run_scenario() {
 		PYTHONDONTWRITEBYTECODE=1
 		GUI_SCENARIO_LOCALE="$locale"
 		GUI_SCENARIO_SCALE="$scale"
+		GUI_SCENARIO_GEOMETRY="${geometry:-1280x1024}"
 		GUI_SCENARIO_ARTIFACTS="$out"
 		GUI_SCENARIO_SOURCES="$run_dir/config/evolution/sources"
 		GUI_SCENARIO_MOCK_PORT="$MOCK_PORT"
@@ -327,7 +344,7 @@ run_scenario() {
 		"$MOCK_BIN" --port "$MOCK_PORT" "${config[@]:1}" >"$out/mock.log" 2>&1 &
 	fi
 	PIDS+=($!)
-	Xvfb "$DISPLAY_NUM" -screen 0 1280x1024x24 >"$run_dir/xvfb.log" 2>&1 &
+	Xvfb "$DISPLAY_NUM" -screen 0 "${geometry:-1280x1024}x24" >"$run_dir/xvfb.log" 2>&1 &
 	PIDS+=($!)
 
 	# The setup step writes the sources and the server state before Evolution
@@ -421,7 +438,7 @@ run_scenario() {
 		PIDS+=($!)
 
 		local recording="$run_dir/recording.mp4"
-		ffmpeg -f x11grab -video_size 1280x1024 -framerate 5 -i "$DISPLAY_NUM" \
+		ffmpeg -f x11grab -video_size "${geometry:-1280x1024}" -framerate 5 -i "$DISPLAY_NUM" \
 			-y "$recording" >"$run_dir/ffmpeg.log" 2>&1 &
 		local rec_pid=$!
 

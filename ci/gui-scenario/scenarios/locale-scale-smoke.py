@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Scenario: the --locale and --scale harness itself (item 174), not a
-layout or wording check of any page.
+"""Scenario: the --locale, --scale and --geometry harness itself (item 174),
+not a layout or wording check of any page.
 
 Item 174's open row needs a scenario at 800x600, German and 200% text; no
-harness ran a scenario under another locale or text scale at all before
-this one. This scenario is the proof that ci/gui-scenario/run.sh --locale
-and --scale reach the session Evolution starts in: run it plain for the C
-locale and 100% default, or with `--locale de_DE.UTF-8 --scale 200` for
-the combination item 174 needs.
+harness ran a scenario under another locale, text scale or screen size at
+all before this one. This scenario is the proof that ci/gui-scenario/run.sh
+--locale, --scale and --geometry reach the session Evolution starts in: run
+it plain for the C locale, 100% and 1280x1024 default, or with `--locale
+de_DE.UTF-8 --scale 200 --geometry 800x600` for the combination item 174
+needs.
 
 It does not check a folder or message name: under a real locale, Evolution
 translates its own widget names too (the folder tree becomes
@@ -19,6 +20,7 @@ English name belongs to a page-specific scenario, not this one.
 import os
 import subprocess
 
+import pyatspi
 from scenario import (
     ScenarioFailure,
     evolution,
@@ -68,7 +70,21 @@ def run():
 
     # Evolution itself must still start and show a window under the
     # requested locale and scale: a smoke check, not a layout or wording one.
-    wait_for(lambda: find(evolution(), "frame") is not None, "a top-level Evolution window")
+    frame = wait_for(
+        lambda: find(evolution(), "frame"), "a top-level Evolution window"
+    )
+
+    geometry = os.environ.get("GUI_SCENARIO_GEOMETRY", "")
+    if geometry:
+        expected_width, expected_height = (int(part) for part in geometry.split("x"))
+        extents = frame.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        if (extents.width, extents.height) != (expected_width, expected_height):
+            raise ScenarioFailure(
+                f"the window is {extents.width}x{extents.height}, "
+                f"expected the maximized {expected_width}x{expected_height} screen"
+            )
+        say(f"window geometry reached the session: {extents.width}x{extents.height}")
+
     screenshot("locale-scale-smoke")
     if evolution() is None:
         raise ScenarioFailure("Evolution is not running")
