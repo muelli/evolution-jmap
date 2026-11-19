@@ -28,6 +28,7 @@
 use std::ffi::CStr;
 use std::path::PathBuf;
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use eds_sys::{
@@ -87,7 +88,17 @@ struct Listing {
     /// different generation means that an edit changed the listing, and the
     /// edit stays (`jmap-mail/tests/folder_listing_race.rs` tests this).
     generation: u64,
+    /// The sequence number of the refresh that wrote this listing.
+    ///
+    /// Monotonically allocated when a refresh begins. If two concurrent
+    /// refreshes race on the network, an older refresh that delivers its
+    /// answer last has a lower sequence number than the stored listing.
+    /// The write-back check refuses the older answer so the newer listing
+    /// stays (row A2-3 of the race audit).
+    refresh_id: u64,
 }
+
+static REFRESH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// The instance struct. It is `#[repr(C)]` and starts with the instance
 /// struct of the parent. Thus a `*mut JmapStore` is a valid `CamelStore *`
@@ -114,11 +125,11 @@ pub struct JmapStore {
     ///
     /// This is a separate slot, not a field of the connection, so that a
     /// folder refresh and a reconnect do not wait for each other. An ordering
-    /// rule connects the two: the store writes a listing while it still holds
-    /// the read lock on the connection that read it. A
-    /// [`store_connection`](JmapStore::store_connection) needs that lock
-    /// exclusively. Thus it cannot occur between the request and the write, so
-    /// a tree from the old connection cannot undo its clear.
+    /// rule connects the two: `folders` releases the connection read lock
+    /// before the network request, but checks that the connection is still
+    /// current when writing back. A [`store_connection`](JmapStore::store_connection)
+    /// or `drop_connection` clears this slot and replaces or drops the connection,
+    /// so a stale tree from an old connection cannot undo its clear.
     folders: Slot<RwLock<Option<Listing>>>,
     /// The JMAP Push subscription. It lives for the same time as the
     /// connection. A server that advertises an `eventSourceUrl` can tell the
@@ -485,26 +496,24 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let folders = self.folder_listing().ok_or(StoreError::Disconnected)?;
 
-        // Hold this lock across the request, as the ordering rule of the
-        // `folders` field requires: the connection that read a listing is
-        // still current when the listing is written.
-        let connection = read(connection);
-        let Some(sync) = connection.as_ref() else {
-            // No connection: hydrate once from a previous process's listing
-            // if nothing is held yet, then serve whatever the slot holds
-            // (freshly hydrated, held from earlier in this process, or
-            // still empty). This path alone, not the connected one below:
-            // a reconnect (`store_connection`) deliberately forgets the
-            // listing so the next request refreshes it from the live
-            // server, which can differ from what a stale disk cache says.
-            self.hydrate_folders_from_disk(folders);
-            return read(folders)
-                .as_ref()
-                .map(|listing| Arc::clone(&listing.tree))
-                .ok_or(StoreError::Disconnected);
+        // Clone the connection and drop the read lock before the network
+        // request (the shape of `messages_since`), so disconnect_sync and
+        // drop_connection do not block waiting for the request to complete
+        // (security audit row S6-4).
+        let sync = {
+            let guard = read(connection);
+            match guard.as_ref() {
+                Some(sync) => Arc::clone(sync),
+                None => {
+                    drop(guard);
+                    self.hydrate_folders_from_disk(folders);
+                    return read(folders)
+                        .as_ref()
+                        .map(|listing| Arc::clone(&listing.tree))
+                        .ok_or(StoreError::Disconnected);
+                }
+            }
         };
-
-        tracing::debug!(flags, "fetching folder tree");
 
         let held = read(folders).as_ref().map(|listing| {
             (
@@ -514,19 +523,23 @@ impl JmapStore {
             )
         });
 
-        // `Some(generation)` if a listing exists: the write below replaces it
-        // only if its generation did not change after this request started.
-        // `None` for a first listing. No edit can race it, because the four
-        // edit methods do nothing on an empty slot.
+        if let Some((_, tree, _)) = held.as_ref()
+            && flags & CAMEL_STORE_FOLDER_INFO_REFRESH == 0
+        {
+            return Ok(Arc::clone(tree));
+        }
+
+        tracing::debug!(flags, "fetching folder tree");
+
         let baseline_generation;
+        let my_refresh_id = REFRESH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let listing = match held {
-            Some((_, tree, _)) if flags & CAMEL_STORE_FOLDER_INFO_REFRESH == 0 => return Ok(tree),
             Some((state, tree, generation)) => {
                 baseline_generation = Some(generation);
                 match retry_once_after(
                     || sync.folder_tree_since(&state),
                     SyncError::is_unauthorized,
-                    || self.refresh_credentials(sync),
+                    || self.refresh_credentials(&sync),
                 ) {
                     // Keep the tree, do not make a new equal one. Camel
                     // compares the forests it gets to find created and deleted
@@ -535,11 +548,13 @@ impl JmapStore {
                         state,
                         tree,
                         generation,
+                        refresh_id: my_refresh_id,
                     },
                     Ok(FolderUpdate::Rebuilt { state, tree }) => Listing {
                         state,
                         tree: Arc::new(tree),
                         generation,
+                        refresh_id: my_refresh_id,
                     },
                     Err(failure) => {
                         tracing::debug!(flags, ?failure, "fetching folder tree failed");
@@ -552,12 +567,13 @@ impl JmapStore {
                 match retry_once_after(
                     || sync.folder_tree_with_shared(),
                     SyncError::is_unauthorized,
-                    || self.refresh_credentials(sync),
+                    || self.refresh_credentials(&sync),
                 ) {
                     Ok((state, tree)) => Listing {
                         state,
                         tree: Arc::new(tree),
                         generation: 0,
+                        refresh_id: my_refresh_id,
                     },
                     Err(failure) => {
                         tracing::debug!(flags, ?failure, "fetching folder tree failed");
@@ -574,11 +590,26 @@ impl JmapStore {
             "fetched folder tree"
         );
 
+        // Before writing back, verify that the connection that read this
+        // listing is still current. If disconnect_sync or store_connection
+        // ran while the request was in flight, do not resurrect old data.
+        let connection_guard = read(connection);
+        if !connection_guard
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &sync))
+        {
+            return Err(StoreError::Disconnected);
+        }
+
         let mut guard = write(folders);
         // A concurrent edit (create, delete, rename or subscribe) changed the
         // generation during this request. Its write is more current than this
         // answer, which was correct when asked but is now stale. Keep the
         // edit, and give the caller the tree that the edit wrote.
+        //
+        // Likewise, if a concurrent refresh started after this one and already
+        // wrote its newer tree (my_refresh_id < current.refresh_id), this older
+        // answer must not overwrite it (row A2-3).
         //
         // A `None` baseline (this request started with no listing at all)
         // is stale too if the slot now holds one. Two first listings can
@@ -586,7 +617,9 @@ impl JmapStore {
         // be edited, and the other has no generation to notice that. Its
         // own answer must not overwrite a slot that is no longer empty.
         let stale = match (&*guard, baseline_generation) {
-            (Some(current), Some(baseline)) => current.generation != baseline,
+            (Some(current), Some(baseline)) => {
+                current.generation != baseline || my_refresh_id < current.refresh_id
+            }
             (Some(_), None) => true,
             (None, _) => false,
         };
@@ -602,10 +635,13 @@ impl JmapStore {
             (tree, state)
         };
         drop(guard);
-        drop(connection);
+        drop(connection_guard);
+
         // Outside both locks, like the request above: a slow disk must not
         // make every other caller of `folders` wait for this one.
-        self.persist_folders_to_disk(&persisted_state, &tree);
+        if !stale {
+            self.persist_folders_to_disk(&persisted_state, &tree);
+        }
         Ok(tree)
     }
 
@@ -639,6 +675,7 @@ impl JmapStore {
                 state,
                 tree: Arc::new(tree),
                 generation: 0,
+                refresh_id: 0,
             });
         }
     }
