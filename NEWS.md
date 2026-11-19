@@ -5,6 +5,98 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # NEWS
 
+## 0.7.0 (unreleased)
+
+- Shared mailboxes: a mailbox another user shares with you now appears in
+  the folder tree under a "Shared" folder, with one heading per owner.
+  Reading, searching, moving, copying, deleting, expunging, subscribing,
+  creating, renaming and deleting folders, and saving a message into such
+  a mailbox all go to the owner's account, and a message deleted there
+  lands in the owner's Trash. A read-only share is shown read-only. Shared
+  folders show even when their owner has not subscribed to them. The user
+  guide lists the limits, including the shared read/unread flag.
+- A new Delegates page in the account editor shows who may access your
+  calendars and address books, and lets you grant or revoke access by
+  level (Reviewer, Author, Editor, and free/busy only for calendars). A
+  delegate can be typed as an email address, or picked with Find on a
+  server that offers principal search. The page is read-only while
+  offline.
+- The Server Filters page became a real Sieve editor: syntax highlighting,
+  a local syntax check that underlines the offending line and explains it
+  in a tooltip, and word completion (Ctrl+Space, or automatically while
+  typing). Activate, Deactivate, Rename, Add and Remove, and the script
+  text itself once it validates, are now written to the server at once
+  instead of only on the account editor's OK. An "Edit in External Editor"
+  button opens the script in the editor configured for Evolution's
+  External Editor plugin, or in $VISUAL or $EDITOR. The page is read-only
+  while offline and still shows the last loaded scripts when opened
+  offline. A script the server holds that this page cannot interpret is
+  refused safely instead of aborting Evolution. Tab now moves focus out of
+  the editor.
+- Offline mail changes are queued and replayed: a message moved or copied
+  while offline shows in its new folder at once and disappears from the
+  old one, survives quitting and restarting Evolution, and reaches the
+  server when you are back online. Moving a message again before the first
+  move has landed, copying and then moving, and moving a message with an
+  unsaved flag change all queue correctly. A message saved while offline
+  (for example a draft) is kept in a store that never expires and uploaded
+  on reconnect. A queued change the server refuses for good is undone and
+  the reason shown; a transport failure keeps it queued for the next
+  attempt. See "Working offline" in the user guide.
+- Push notifications now use the JMAP WebSocket channel (RFC 8887) when
+  the server offers push over it, and fall back to the EventSource channel
+  otherwise.
+- The Vacation Responder page is read-only while offline, Tab leaves its
+  message body instead of inserting a tab character, and its date fields
+  work with a screen reader.
+- Snoozing a message on a server that creates the Snoozed mailbox on first
+  use now refreshes the folder list so the new folder shows.
+- A tunnelled, self-hosted account's "rebase URLs" setting now also
+  applies to its address books, calendars and mail, which used to try the
+  real host the tunnel hides. Credentials are now also sent to a server
+  configured with a plain http address on the same origin, such as a local
+  tunnel.
+- Cyrus IMAP interoperability: deleting a calendar works despite Cyrus's
+  non-standard argument name, push stays off because Cyrus's push channel
+  blocks every other request, and a server that answers an anonymous
+  request with success instead of 401 no longer discards a valid OAuth 2.0
+  refresh token.
+- The client now respects the server's limits on concurrent requests and
+  uploads, and refreshes a stale session before a sync pass instead of
+  working from one the server no longer recognises.
+- Mail cache fixes: "View Source" and header fetches could show a
+  truncated message from a cache entry cut short by a crash, or a
+  partially written one on evolution-data-server 3.52 to 3.61; both now
+  fall back to the complete copy. A message whose server id starts with a
+  dash was never cached; it is now. The folder-tree cache is written with
+  private permissions.
+- Labels: a keyword containing a space, a percent sign or a control
+  character now round-trips exactly between the server and Evolution's
+  labels instead of being split or lost. The user guide documents which
+  labels and categories Thunderbird, Apple Mail, Fastmail and Roundcube
+  share with Evolution.
+- A mailbox whose name contains a line break can now be opened, and two
+  mailboxes with empty or colliding names no longer merge into one folder.
+- Push and refresh robustness: push no longer silently stops for an
+  account after the system refuses to start a worker thread; a disconnect
+  no longer waits on a slow server's folder listing; a late folder-listing
+  answer can no longer overwrite a newer one; a message the server refused
+  to update but still lists comes back on the next refresh.
+- Calendar events with ten or more participants, unusual time zone names
+  or odd whitespace no longer change on every sync round trip.
+- Hardening against hostile input: control characters in an envelope
+  address, a cross-origin redirect of a POST, server ids containing a
+  slash, file: and data: URIs in calendar locations and attachments, a
+  carriage return in a filter rule, a bidirectional override in a label,
+  and a folder list thousands of siblings wide are all refused, escaped or
+  capped before they reach Evolution.
+- Fixed memory leaks in the client's session refresh and in the collection
+  backend's source loading.
+- Build and packaging: GtkSourceView 4 is a new build and runtime
+  dependency (for the Sieve editor); the Flatpak extension builds it in.
+  The mock server gained conformance checks for RFC 8984, 9610, 9661 and
+  9670 and the JMAP calendars draft (see its own changelog).
+
 ## 0.6.6 (2026-11-05)
 
 - Fixed a security hole in the address book preview's "Load image" button
