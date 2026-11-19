@@ -69,21 +69,26 @@ deb_components="$(jq '
 # cargo-cyclonedx rejects.
 # The script then runs cargo cyclonedx to generate the CycloneDX files.
 ( cd rust && cargo metadata --locked --format-version 1 >/dev/null )
-# This trap deletes every intermediate *.cdx.json file on exit, success or
-# failure, leaving only the assembled SBOM.
-trap 'find rust -name "*.cdx.json" -delete' EXIT
+# This trap deletes every intermediate *.cdx.json file and the crate
+# component list on exit, success or failure, leaving only the assembled SBOM.
+crate_components_file="$(mktemp)"
+trap 'find rust -name "*.cdx.json" -delete; rm -f "$crate_components_file"' EXIT
 ( cd rust && cargo cyclonedx --format json --spec-version 1.5 )
 
 # This step folds every workspace member's component list into one
 # deduplicated array. It works whether the pinned cargo-cyclonedx version
-# emits one file per crate or a single aggregate file.
-crate_components="$(find rust -name '*.cdx.json' -print0 \
-  | xargs -0 jq -s '[.[].components[]] | unique_by(.purl // .name)')"
+# emits one file per crate or a single aggregate file. The list goes to a
+# file, not a shell variable: the crate graph has grown past 128 KiB, the
+# per-argument limit (MAX_ARG_STRLEN) the kernel enforces on execve, so
+# jq must read it with --slurpfile instead of taking it as a --argjson value.
+find rust -name '*.cdx.json' -print0 \
+  | xargs -0 jq -s '[.[].components[]] | unique_by(.purl // .name)' \
+  > "$crate_components_file"
 
 # Step 3: assemble one deterministic document: a fixed timestamp and a
 # serialNumber derived only from the version string.
 jq -n \
-  --argjson crates "$crate_components" \
+  --slurpfile crates "$crate_components_file" \
   --argjson deb "$deb_components" \
   --arg ts "$ts" \
   --arg ver "$ver" \
@@ -97,7 +102,7 @@ jq -n \
       timestamp: $ts,
       component: { type: "application", name: "evolution-jmap", version: $ver }
     },
-    components: ($crates + $deb)
+    components: ($crates[0] + $deb)
   }' > "$out"
 
 echo "wrote $out"
