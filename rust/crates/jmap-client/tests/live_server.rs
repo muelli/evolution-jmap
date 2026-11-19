@@ -1685,8 +1685,6 @@ fn deactivate_sieve_script_for_cleanup(client: &Client, account_id: &Id, script_
 /// Stalwart and Cyrus IMAP:
 ///
 /// - On Stalwart:
-///   - `SieveScript/set` with `"onSuccessActivateScript": null` is a silent
-///     no-op (`isActive` stays `true`; Stalwart Finding 3).
 ///   - A direct `update: {"isActive": false}` is accepted despite RFC 9661 §2.1
 ///     defining `isActive` as server-set (Stalwart Finding 4a).
 ///   - Destroying the active script returns `scriptIsActive` instead of RFC 9661
@@ -1751,49 +1749,6 @@ fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_
         "the script does not show isActive: true after onSuccessActivateScript"
     );
 
-    if is_cyrus_server(&client) {
-        // Cyrus Finding 1: RFC 9661 section 2.4 `onSuccessDeactivateScript: true` is rejected
-        // as `invalidArguments` because Cyrus spells the property `onSuccessDeactivatescript`
-        // (lowercase `s`).
-        match client.sieve_script_deactivate(&account_id) {
-            Err(jmap_client::Error::Method(method_error)) => {
-                assert_eq!(method_error.error_type, method::INVALID_ARGUMENTS);
-                assert_eq!(
-                    method_error.extra.get("arguments"),
-                    Some(&json!(["onSuccessDeactivateScript"]))
-                );
-            }
-            other => panic!(
-                "Cyrus Finding 1 expects invalidArguments for onSuccessDeactivateScript, got {other:?}"
-            ),
-        }
-    } else {
-        // Stalwart Finding 3: `onSuccessActivateScript: null` alone is a documented no-op.
-        client
-            .single_call(
-                &[CAPABILITY_CORE, CAPABILITY_SIEVE],
-                "SieveScript/set",
-                &json!({
-                    "accountId": account_id,
-                    "onSuccessActivateScript": null,
-                }),
-            )
-            .expect("SieveScript/set with onSuccessActivateScript: null was rejected outright");
-        let still_active_after_null_activate = client
-            .sieve_scripts(&account_id)
-            .unwrap()
-            .into_iter()
-            .find(|script| script.id.as_ref() == Some(&id))
-            .expect("the script does not show up in SieveScript/get afterwards")
-            .is_active;
-        assert!(
-            still_active_after_null_activate,
-            "Stalwart's onSuccessActivateScript: null no-op appears to be fixed: \
-             isActive turned false. If this fails, the divergence this test \
-             documents is gone."
-        );
-    }
-
     // Both Stalwart (Finding 4b) and Cyrus (Cyrus Finding 2) refuse destroying the active
     // script with `scriptIsActive` instead of RFC 9661 section 2.4 `sieveIsActive`.
     match client.sieve_script_destroy(&account_id, &id) {
@@ -1814,21 +1769,50 @@ fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_
                 "expected invalidProperties for direct isActive patch on Cyrus, got {other:?}"
             ),
         }
-    }
 
-    // Deactivate (`Client::sieve_script_deactivate` on Stalwart; `onSuccessDeactivatescript: true`
-    // on Cyrus) and verify `isActive` becomes false.
-    deactivate_sieve_script_for_cleanup(&client, &account_id, &id);
-    let deactivated = client
-        .sieve_scripts(&account_id)
-        .unwrap()
-        .into_iter()
-        .find(|script| script.id.as_ref() == Some(&id))
-        .expect("the deactivated script does not show up in SieveScript/get afterwards");
-    assert!(
-        !deactivated.is_active,
-        "the script still shows isActive: true after deactivation"
-    );
+        // Cyrus Finding 1: RFC 9661 section 2.4 `onSuccessDeactivateScript: true` is rejected
+        // as `invalidArguments` because Cyrus spells the property `onSuccessDeactivatescript`
+        // (lowercase `s`).
+        match client.sieve_script_deactivate(&account_id) {
+            Err(jmap_client::Error::Method(method_error)) => {
+                assert_eq!(method_error.error_type, method::INVALID_ARGUMENTS);
+                assert_eq!(
+                    method_error.extra.get("arguments"),
+                    Some(&json!(["onSuccessDeactivateScript"]))
+                );
+            }
+            other => panic!(
+                "Cyrus Finding 1 expects invalidArguments for onSuccessDeactivateScript, got {other:?}"
+            ),
+        }
+
+        // Deactivate using Cyrus-specific workaround (`onSuccessDeactivatescript: true`).
+        deactivate_sieve_script_for_cleanup(&client, &account_id, &id);
+        let deactivated = client
+            .sieve_scripts(&account_id)
+            .unwrap()
+            .into_iter()
+            .find(|script| script.id.as_ref() == Some(&id))
+            .expect("the deactivated script does not show up in SieveScript/get afterwards");
+        assert!(
+            !deactivated.is_active,
+            "the script still shows isActive: true after Cyrus deactivation"
+        );
+    } else {
+        client
+            .sieve_script_deactivate(&account_id)
+            .expect("SieveScript/set deactivate failed against the real server");
+        let deactivated = client
+            .sieve_scripts(&account_id)
+            .unwrap()
+            .into_iter()
+            .find(|script| script.id.as_ref() == Some(&id))
+            .expect("the deactivated script does not show up in SieveScript/get afterwards");
+        assert!(
+            !deactivated.is_active,
+            "the script still shows isActive: true after deactivation"
+        );
+    }
 
     client
         .sieve_script_destroy(&account_id, &id)
