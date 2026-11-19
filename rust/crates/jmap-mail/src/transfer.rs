@@ -124,6 +124,19 @@
 //! mailbox; only its filing goes, so the next walk sends no request that the
 //! server refuses again.
 //!
+//! ## A filing the server says has no message
+//!
+//! A `notFound` refusal of the `Email/set` means the message is not in this
+//! mailbox either, so the row goes at once, the same as a message another
+//! client destroyed. But a hostile or merely buggy server can answer
+//! `notFound` for an id it still lists everywhere else, and this code cannot
+//! tell that apart from a genuine deletion. Removing the row is still
+//! right for the genuine case, so it also forgets the folder's recorded
+//! state ([`crate::summary::clear_summary_state`]): the next refresh lists
+//! the mailbox in full rather than asking `Email/changes` since a state the
+//! refusal never moved, and a server that still lists the message brings the
+//! row back then (SECURITY-AUDIT-2026-11-01 row S3-3).
+//!
 //! ## Stopping a transfer
 //!
 //! The vfunc [`observe`]s the `cancellable` for the full call. A stop between two
@@ -322,6 +335,15 @@ unsafe extern "C" fn transfer_messages_to_sync(
                     camel_folder_summary_remove_uid(summary, uid.as_ptr());
                     if let Ok(text) = uid.to_str() {
                         changes.remove(text);
+                    }
+                    // A notFound refusal removes this row on this folder's own
+                    // say-so, not on a listing. Forgetting the recorded state
+                    // makes the next refresh list in full instead of asking
+                    // `Email/changes` since a state this refusal never moved,
+                    // so a server that still lists the message brings the row
+                    // back (SECURITY-AUDIT-2026-11-01 row S3-3).
+                    if matches!(filed, Err(StoreError::NoMessage(_))) {
+                        crate::summary::clear_summary_state(summary);
                     }
                 }
                 match filed {

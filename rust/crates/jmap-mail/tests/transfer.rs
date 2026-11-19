@@ -2140,16 +2140,15 @@ fn a_message_another_client_deleted_is_reported_and_leaves_the_folder() {
 /// for a move: a failed `Email/set` never touches the server's own
 /// `mailboxIds` for the message, so the server's data stays correct.
 ///
-/// This does not "self heal" on a later refresh, unlike the audit row's own
-/// first guess. `refresh_info_sync` asks `Email/changes` since the state the
-/// folder already recorded; the failed `Email/set` never moved that state,
-/// so the answer has nothing new to say, and the row stays gone until
-/// something else invalidates the folder's recorded state (`refresh.rs`'s
-/// own module doc: "a folder that has none has never listed this mailbox,
-/// and lists"). A plain reconnect does not do that either: the state lives
-/// in the folder's own summary, not the connection.
+/// The row does not stay gone for good. The failed `Email/set` also clears
+/// the folder's recorded state, so the next refresh cannot ask `Email/changes`
+/// since a state nothing moved; it lists the mailbox in full instead (see
+/// `refresh.rs`'s module doc: "a folder that has none has never listed this
+/// mailbox, and lists"). A listing finds the message still there and brings
+/// the row back. A genuine deletion stays gone, because a full listing does
+/// not name it either.
 #[test]
-fn a_notfound_copy_from_a_server_that_still_lists_the_message_stays_gone() {
+fn a_notfound_copy_from_a_server_that_still_lists_the_message_comes_back_on_refresh() {
     let fixture = Fixture::seeded_with(1, MockServer::builder().email_update_always_not_found());
     let before = fixture.mailboxes_on_server(fixture.uid());
 
@@ -2177,11 +2176,11 @@ fn a_notfound_copy_from_a_server_that_still_lists_the_message_stays_gone() {
             "the inbox would not refresh"
         );
     }
-    assert!(
-        listed(fixture.inbox).is_empty(),
-        "the ordinary incremental refresh, Email/changes since a state the \
-         failed Email/set never moved, has nothing to report, so it does \
-         NOT bring the row back; see this test's module-level note"
+    assert_eq!(
+        listed(fixture.inbox),
+        vec![fixture.uid().to_string()],
+        "a full listing, forced by the cleared state, must bring back a row \
+         the server still lists"
     );
 }
 

@@ -398,6 +398,40 @@ pub unsafe fn set_summary_state(summary: *mut CamelFolderSummary, state: State) 
     unsafe { camel_folder_summary_touch(summary) };
 }
 
+/// Forgets the recorded state of `summary`, the way a change of origin
+/// already does. The next refresh has no state to ask `Email/changes`
+/// since, so it lists the mailbox in full and reconciles the rows against
+/// what the server actually has.
+///
+/// Used after a filing the server refused with `notFound`: the row left is
+/// removed on this folder's own say-so, not on a listing, so a hostile or
+/// buggy server that still lists the message would otherwise leave that row
+/// gone for good (SECURITY-AUDIT-2026-11-01 row S3-3).
+///
+/// # Safety
+///
+/// `summary` must be NULL or point at a live `CamelFolderSummary`.
+pub unsafe fn clear_summary_state(summary: *mut CamelFolderSummary) {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let Some(borrowed) = (unsafe { JmapSummary::borrow(summary) }) else {
+        return;
+    };
+    let Some(slot) = borrowed.state.get() else {
+        return;
+    };
+    {
+        let mut slot = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.state.is_none() {
+            return;
+        }
+        slot.state = None;
+    }
+    // SAFETY: the summary is live and of this type, by the borrow above.
+    unsafe { camel_folder_summary_touch(summary) };
+}
+
 /// `CamelFolderSummaryClass.summary_header_save`, up to EDS 3.52: writes the
 /// state into the record that Camel stores, and returns the record.
 ///
