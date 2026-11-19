@@ -498,6 +498,25 @@ fn fuzz_ical_import_extended_helpers_never_panic() {
         let _ = jmap_ical::event::rrule_to_rule(text, jmap_ical::event::Ends::At(text));
         let _ = jmap_ical::event::make_entry(text, text);
         let _ = jmap_ical::event::make_uri_entry(text, text);
+        let _ = jmap_ical::event::stated_duration(text);
+        let _ = jmap_ical::event::period_length(text, text);
+        let _ = jmap_ical::event::instant(text);
+        let _ = jmap_ical::event::normalize_keyword(text);
+        let _ = jmap_ical::event::utc_offset(text);
+        let _ = jmap_ical::event::to_nday(text);
+        let _ = jmap_ical::event::to_month_day(text);
+        let _ = jmap_ical::event::to_time_of_day(text);
+        let _ = jmap_ical::event::names_a_uri(text);
+        let _ = jmap_ical::event::restricted_name(text);
+        let _ = jmap_ical::event::fetched_locally(text);
+        let _ = jmap_ical::event::is_data_uri(text);
+        let _ = jmap_ical::event::at_midnight(text);
+        let _ = jmap_ical::event::whole_days(text);
+        let _ = jmap_ical::event::is_utc(text);
+        let _ = jmap_ical::event::date_time_digits(text);
+        let _ = jmap_ical::event::moved(text, 0);
+        let _ = jmap_ical::event::moved(text, 3600);
+        let _ = jmap_ical::event::moved(text, -3600);
 
         if let Ok(event) = ical_to_event(text) {
             let ical2 = event_to_ical(&event);
