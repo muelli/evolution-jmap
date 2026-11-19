@@ -948,6 +948,87 @@ fn appending_to_a_shared_mailbox_lands_in_its_owning_account() {
     unsafe { g_object_unref(shared.cast()) };
 }
 
+/// Item 192 row R4: mailbox ids are unique inside one account only, so a
+/// shared account numbers its mailboxes from the same first id as this
+/// store's own account does. `tests/messages.rs`'s
+/// `a_shared_mailbox_lists_its_own_account_when_the_mailbox_ids_collide`
+/// reproduces the read side of the same collision. A rights check that
+/// looks up the mailbox by id alone, with no account to scope it, can then
+/// answer with the *own* account's `myRights` for a mailbox in the *shared*
+/// account.
+///
+/// This store's own mailbox forbids `mayAddItems`; the shared one of the
+/// same id does not restrict it. Appending to the shared one must not be
+/// refused by the unrelated mailbox the id collides with.
+#[test]
+fn appending_to_a_shared_mailbox_is_not_refused_by_an_own_mailboxs_rights_on_a_colliding_id() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+
+    let shared_account_id = Id::new("agent-shared-owner");
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+
+        let own = state.account_mut(&account_id).unwrap();
+        let own_inbox_id = own.seed_mailbox("Inbox", None);
+        own.mailboxes.transaction(|mailboxes| {
+            let mailbox = mailboxes
+                .get(&own_inbox_id)
+                .expect("the seeded mailbox")
+                .clone();
+            let denied = mailbox.with_my_rights(MailboxRights::new().with_may_add_items(false));
+            assert!(
+                mailboxes.update(&own_inbox_id, denied),
+                "the seeded mailbox was not there"
+            );
+        });
+
+        let sharer = state.add_account(shared_account_id.clone(), "Bob");
+        sharer.is_personal = false;
+        let shared_mailbox_id = sharer.seed_mailbox("Projects", None);
+        assert_eq!(
+            own_inbox_id, shared_mailbox_id,
+            "the two accounts must number their mailboxes from the same id"
+        );
+    }
+
+    let account = Account::open();
+    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
+    account.connect(MailSync::new(client, account_id.clone()));
+
+    let shared = open(&account, "Shared/Bob/Projects");
+
+    let mut uid: *mut glib_sys::gchar = ptr::null_mut();
+    let mut error: *mut GError = ptr::null_mut();
+    let message = Message::parsed(MESSAGE);
+    // SAFETY: a live folder of ours, a live message, a NULL row, and
+    // out-parameters that are writable and currently NULL.
+    let ok = unsafe {
+        camel_folder_append_message_sync(
+            shared,
+            message.0,
+            ptr::null_mut(),
+            &mut uid,
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+    let appended = Appended::new(ok, uid, error);
+    appended.expect_ok();
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    assert_eq!(
+        state.account(&shared_account_id).unwrap().emails.len(),
+        1,
+        "the message must land in the shared mailbox the user actually appended to"
+    );
+
+    // SAFETY: the reference this test took from `get_folder_sync`.
+    unsafe { g_object_unref(shared.cast()) };
+}
+
 /// A message larger than the account's `maxSizeUpload` (RFC 8620 §6.1) is
 /// refused before a byte of it is sent. The folder states the reason.
 ///

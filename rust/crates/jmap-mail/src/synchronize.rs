@@ -352,8 +352,10 @@ pub(crate) unsafe fn push_row(
             let mailbox = jmap_folder.and_then(JmapFolder::mailbox);
             let store = parent_store(folder);
             let refused = match (store, mailbox) {
-                (Some(store), Some(mailbox)) => change
-                    .forbidden_by(store.may_set_seen(mailbox), store.may_set_keywords(mailbox)),
+                (Some(store), Some(mailbox)) => change.forbidden_by(
+                    store.may_set_seen(mailbox, owner.as_ref()),
+                    store.may_set_keywords(mailbox, owner.as_ref()),
+                ),
                 _ => false,
             };
             if refused {

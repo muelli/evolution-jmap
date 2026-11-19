@@ -763,25 +763,30 @@ impl JmapStore {
     /// The result is `None` if that fails, if the listing does not have the
     /// mailbox, or if the mailbox has no value. Each other reader of
     /// `myRights` here also treats this as "no reason to refuse".
-    pub fn may_add_items(&self, mailbox: &Id) -> Option<bool> {
+    ///
+    /// `owner` names the mailbox's own account, the way
+    /// [`Self::messages`]'s caller does, so a shared mailbox id that
+    /// collides with one of this store's own does not answer with the wrong
+    /// account's rights (item 192 row R4).
+    pub fn may_add_items(&self, mailbox: &Id, owner: Option<&Id>) -> Option<bool> {
         let tree = self.folders(0).ok()?;
-        tree.by_id(mailbox)?.may_add_items
+        tree.by_id_in_account(mailbox, owner)?.may_add_items
     }
 
     /// Tells if the folder listing lets this mailbox mark a message seen or
     /// unseen ([`FolderInfo::may_set_seen`]), the same way as
     /// [`Self::may_add_items`].
-    pub fn may_set_seen(&self, mailbox: &Id) -> Option<bool> {
+    pub fn may_set_seen(&self, mailbox: &Id, owner: Option<&Id>) -> Option<bool> {
         let tree = self.folders(0).ok()?;
-        tree.by_id(mailbox)?.may_set_seen
+        tree.by_id_in_account(mailbox, owner)?.may_set_seen
     }
 
     /// Tells if the folder listing lets this mailbox set any keyword other
     /// than `$seen` ([`FolderInfo::may_set_keywords`]), the same way as
     /// [`Self::may_add_items`].
-    pub fn may_set_keywords(&self, mailbox: &Id) -> Option<bool> {
+    pub fn may_set_keywords(&self, mailbox: &Id, owner: Option<&Id>) -> Option<bool> {
         let tree = self.folders(0).ok()?;
-        tree.by_id(mailbox)?.may_set_keywords
+        tree.by_id_in_account(mailbox, owner)?.may_set_keywords
     }
 
     /// The Camel path of the folder that shows `mailbox`, from the held
@@ -792,6 +797,12 @@ impl JmapStore {
     /// listing of the last session from disk. The caller is offline, so a
     /// listing that still needs the server gives `None`, and so does a
     /// listing without the mailbox.
+    ///
+    /// Unlike [`Self::may_add_items`], this still looks up by id alone
+    /// ([`FolderTree::by_id`]), so a shared mailbox id that collides with
+    /// one of this store's own can give the wrong path (item 192 row R4,
+    /// open: `crate::transfer`'s queued-filing chain has no owner recorded
+    /// for `origin` to pass in here).
     pub fn folder_path(&self, mailbox: &Id) -> Option<String> {
         let tree = self.folders(0).ok()?;
         Some(tree.by_id(mailbox)?.path.clone())

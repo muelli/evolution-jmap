@@ -465,8 +465,28 @@ impl FolderTree {
     /// By id, not by path. [`set_subscribed`](Self::set_subscribed) uses the
     /// same key for the same reason: the caller names a mailbox, not a place
     /// in the tree.
+    ///
+    /// Mailbox ids are unique inside one account only, so after
+    /// [`Self::merge_shared`] two accounts can share an id and this answers
+    /// with the first match in tree order, which is not always the caller's
+    /// account. [`Self::by_id_in_account`] is the scoped version; use it
+    /// whenever the caller already knows which account it means.
     pub fn by_id(&self, id: &Id) -> Option<&FolderInfo> {
         self.iter().find(|folder| folder.id == *id)
+    }
+
+    /// The folder with a mailbox id, in one account.
+    ///
+    /// `owner` is `None` for the store's own account and `Some` for a shared
+    /// account [`Self::merge_shared`] merged in, matching
+    /// [`FolderInfo::account_id`]. Unlike [`Self::by_id`], an id that exists
+    /// in a different account than `owner` is not a match: a caller that
+    /// already knows the account a mailbox id belongs to (the folder Camel
+    /// opened, which carries its own owner) uses this to avoid answering
+    /// with another account's folder of the same id.
+    pub fn by_id_in_account(&self, id: &Id, owner: Option<&Id>) -> Option<&FolderInfo> {
+        self.iter()
+            .find(|folder| folder.id == *id && folder.account_id.as_ref() == owner)
     }
 
     /// The account that owns the mailbox `id`, if it is not the store's own
