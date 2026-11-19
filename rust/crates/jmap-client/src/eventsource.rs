@@ -504,12 +504,13 @@ fn tls_config() -> &'static Arc<ClientConfig> {
 /// Parsed URL components for opening an event source connection.
 ///
 /// Includes scheme, dial target, authority, host name, and request path.
-struct UrlParts {
-    tls: bool,
-    authority: String,
-    dial: String,
-    host: String,
-    path_and_query: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrlParts {
+    pub tls: bool,
+    pub authority: String,
+    pub dial: String,
+    pub host: String,
+    pub path_and_query: String,
 }
 
 /// Whether `value` can go into a request header without adding a line.
@@ -517,14 +518,14 @@ struct UrlParts {
 /// RFC 9110 Section 5.5 allows a visible character, a space or a horizontal
 /// tab. A control character could end the header and add request lines that
 /// carry the credentials, as a control character in the URL could.
-fn safe_header_value(value: &str) -> bool {
+pub fn safe_header_value(value: &str) -> bool {
     value
         .bytes()
         .all(|byte| byte == b'\t' || (0x20..0x7f).contains(&byte) || byte >= 0x80)
 }
 
 /// Whether `name` is a header name, that is a token of RFC 9110 Section 5.6.2.
-fn safe_header_name(name: &str) -> bool {
+pub fn safe_header_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .bytes()
@@ -536,7 +537,7 @@ fn safe_header_name(name: &str) -> bool {
 /// Returns `None` for another scheme, for a control character or a space anywhere in the URL, and for an authority that is not a plain host and port.
 /// A refused character in the request line could add request lines that carry the credentials.
 /// A refused character in the authority could make the dialed host differ from the host that `url::is_loopback` reads.
-fn parse_url(url: &str) -> Option<UrlParts> {
+pub fn parse_url(url: &str) -> Option<UrlParts> {
     if url.bytes().any(|byte| byte <= b' ' || byte == 0x7f) {
         return None;
     }
@@ -851,6 +852,16 @@ pub fn parse_stream(
     stream_events(&mut reader, cancel, sender, &last_id_slot)
 }
 
+/// Parse a stream of EventSource frames with a tracking slot for the latest event ID.
+pub fn parse_stream_with_last_id(
+    mut reader: impl BufRead,
+    cancel: &CancelFlag,
+    sender: &Sender<EventSourceItem>,
+    last_id_slot: &Arc<Mutex<Option<String>>>,
+) -> io::Result<()> {
+    stream_events(&mut reader, cancel, sender, last_id_slot)
+}
+
 /// Parse a chunked-transfer stream of EventSource frames.
 ///
 /// Decodes chunked encoding and sends parsed state changes to `sender`.
@@ -862,6 +873,17 @@ pub fn parse_chunked_stream(
     let mut body = BufReader::new(ChunkedBody::new(reader));
     let last_id_slot = Arc::new(Mutex::new(None));
     stream_events(&mut body, cancel, sender, &last_id_slot)
+}
+
+/// Parse a chunked-transfer stream of EventSource frames with a tracking slot for the latest event ID.
+pub fn parse_chunked_stream_with_last_id(
+    reader: impl BufRead,
+    cancel: &CancelFlag,
+    sender: &Sender<EventSourceItem>,
+    last_id_slot: &Arc<Mutex<Option<String>>>,
+) -> io::Result<()> {
+    let mut body = BufReader::new(ChunkedBody::new(reader));
+    stream_events(&mut body, cancel, sender, last_id_slot)
 }
 
 #[cfg(test)]

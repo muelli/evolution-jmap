@@ -467,7 +467,8 @@ fn hostile_response_bodies_never_panic() {
 fn hostile_eventsource_streams_never_panic() {
     use jmap_client::eventsource::{
         ALL_TYPES, EventSourceItem, EventSourceTimeouts, SharedHeaders, expand_url,
-        parse_chunked_stream, parse_response_head, parse_stream,
+        parse_chunked_stream, parse_chunked_stream_with_last_id, parse_response_head, parse_stream,
+        parse_stream_with_last_id, parse_url, safe_header_name, safe_header_value,
     };
     use jmap_client::transport::CancelFlag;
     use jmap_client::url::{origin, origin_of, same_origin, split_http_scheme};
@@ -529,6 +530,28 @@ fn hostile_eventsource_streams_never_panic() {
                 }
             }
         }
+
+        let last_id_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (tx_id, rx_id) = std::sync::mpsc::channel();
+        let _ = parse_stream_with_last_id(
+            std::io::BufReader::new(*input),
+            &cancel,
+            &tx_id,
+            &last_id_slot,
+        );
+        while rx_id.try_recv().is_ok() {}
+        let _ = format!("{:?}", *last_id_slot.lock().unwrap());
+
+        let last_id_chunk = std::sync::Arc::new(std::sync::Mutex::new(Some("seed-id".to_string())));
+        let (tx_cid, rx_cid) = std::sync::mpsc::channel();
+        let _ = parse_chunked_stream_with_last_id(
+            std::io::BufReader::new(*input),
+            &cancel,
+            &tx_cid,
+            &last_id_chunk,
+        );
+        while rx_cid.try_recv().is_ok() {}
+        let _ = format!("{:?}", *last_id_chunk.lock().unwrap());
 
         let (tx_small, rx_small) = std::sync::mpsc::channel();
         let _ = parse_stream(
@@ -667,7 +690,33 @@ fn hostile_eventsource_streams_never_panic() {
                 reconnect_count: 0,
             };
             let _ = reconnected == reconnected_none;
+
+            let _ = safe_header_name(s);
+            let _ = safe_header_value(s);
+            if let Some(parts) = parse_url(s) {
+                let _ = format!("{parts:?}");
+                let cloned_parts = parts.clone();
+                assert_eq!(parts, cloned_parts);
+                let _ = parts.tls;
+                let _ = parts.authority.as_str();
+                let _ = parts.dial.as_str();
+                let _ = parts.host.as_str();
+                let _ = parts.path_and_query.as_str();
+            }
+            for url_tmpl in [
+                format!("http://{s}/eventsource"),
+                format!("https://{s}/eventsource"),
+                format!("http://example.com:80/{s}"),
+                format!("https://[::1]:8443/{s}"),
+            ] {
+                let _ = parse_url(&url_tmpl);
+            }
         }
+
+        let lossy = String::from_utf8_lossy(input);
+        let _ = safe_header_name(&lossy);
+        let _ = safe_header_value(&lossy);
+        let _ = parse_url(&lossy);
     }
 }
 
