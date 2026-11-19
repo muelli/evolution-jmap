@@ -285,6 +285,7 @@ pub unsafe fn follow_server(collection: *mut ESource, child: *mut ESource) {
     // `FALSE`.
     // SAFETY: valid sources by the contract of this function, and a header
     // constant.
+    jmap_backend_core::rebase::ensure_registered();
     if let Some(from) =
         unsafe { extension_if_present(collection, jmap_backend_core::rebase::EXTENSION_NAME) }
     {
