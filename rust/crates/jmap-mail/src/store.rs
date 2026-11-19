@@ -768,6 +768,22 @@ impl JmapStore {
         tree.by_id(mailbox)?.may_add_items
     }
 
+    /// Tells if the folder listing lets this mailbox mark a message seen or
+    /// unseen ([`FolderInfo::may_set_seen`]), the same way as
+    /// [`Self::may_add_items`].
+    pub fn may_set_seen(&self, mailbox: &Id) -> Option<bool> {
+        let tree = self.folders(0).ok()?;
+        tree.by_id(mailbox)?.may_set_seen
+    }
+
+    /// Tells if the folder listing lets this mailbox set any keyword other
+    /// than `$seen` ([`FolderInfo::may_set_keywords`]), the same way as
+    /// [`Self::may_add_items`].
+    pub fn may_set_keywords(&self, mailbox: &Id) -> Option<bool> {
+        let tree = self.folders(0).ok()?;
+        tree.by_id(mailbox)?.may_set_keywords
+    }
+
     /// The Camel path of the folder that shows `mailbox`, from the held
     /// listing alone.
     ///

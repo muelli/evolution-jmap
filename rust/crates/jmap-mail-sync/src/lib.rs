@@ -1225,6 +1225,8 @@ impl MailSync {
             // The server was not asked for `myRights` on a create, and the
             // caller who just created the mailbox is its owner.
             may_add_items: None,
+            may_set_seen: None,
+            may_set_keywords: None,
             // `None` when `account` is this `MailSync`'s own account, the
             // common case; `Some` keeps the shared owner so a later lookup
             // by this mailbox's id (`FolderTree::owning_account`) finds it.

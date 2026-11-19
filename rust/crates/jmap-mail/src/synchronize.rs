@@ -347,10 +347,27 @@ pub(crate) unsafe fn push_row(
                 // the row on the work list: do not settle a row with no write.
                 return Ok(());
             };
-            let owner = JmapFolder::borrow(folder).and_then(|f| f.owner().cloned());
-            match parent_store(folder) {
-                Some(store) => store.set_keywords(&Id::new(text), &change, owner.as_ref()),
-                None => Err(StoreError::Disconnected),
+            let jmap_folder = JmapFolder::borrow(folder);
+            let owner = jmap_folder.and_then(|f| f.owner().cloned());
+            let mailbox = jmap_folder.and_then(JmapFolder::mailbox);
+            let store = parent_store(folder);
+            let refused = match (store, mailbox) {
+                (Some(store), Some(mailbox)) => change
+                    .forbidden_by(store.may_set_seen(mailbox), store.may_set_keywords(mailbox)),
+                _ => false,
+            };
+            if refused {
+                // `Mailbox.myRights` (RFC 8621 §2) refuses this change, the
+                // way a read-only IMAP mailbox keeps a local mark unmailed.
+                // Keep the mark; settle the row below with no request and no
+                // error.
+                tracing::debug!(uid = text, "myRights refuses this keyword change");
+                Ok(())
+            } else {
+                match store {
+                    Some(store) => store.set_keywords(&Id::new(text), &change, owner.as_ref()),
+                    None => Err(StoreError::Disconnected),
+                }
             }
         };
         match &result {

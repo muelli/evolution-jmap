@@ -67,6 +67,8 @@ fn open_folder(account: &Account) -> *mut CamelFolder {
         unread: 0,
         subscribed: true,
         may_add_items: None,
+        may_set_seen: None,
+        may_set_keywords: None,
         account_id: None,
         children: Vec::new(),
     };

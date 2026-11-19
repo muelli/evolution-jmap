@@ -51,6 +51,8 @@ fn mailbox(path: &str, display_name: &str, role: Option<FolderRole>) -> FolderIn
         unread: 0,
         subscribed: true,
         may_add_items: None,
+        may_set_seen: None,
+        may_set_keywords: None,
         account_id: None,
         children: Vec::new(),
     }
@@ -239,6 +241,8 @@ fn folder_properties_and_custom_subfolder_nesting() {
         unread: 3,
         subscribed: true,
         may_add_items: None,
+        may_set_seen: None,
+        may_set_keywords: None,
         account_id: None,
         children: Vec::new(),
     };

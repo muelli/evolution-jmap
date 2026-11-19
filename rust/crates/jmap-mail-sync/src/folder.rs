@@ -119,6 +119,16 @@ pub struct FolderInfo {
     /// and reading that silence as a refusal would mark every ordinary
     /// folder of every account read-only.
     pub may_add_items: Option<bool>,
+    /// `Mailbox.myRights.maySetSeen` (RFC 8621 §2): the right to mark a
+    /// message in this mailbox seen or unseen. `None` is read the same as
+    /// for [`Self::may_add_items`].
+    #[serde(default)]
+    pub may_set_seen: Option<bool>,
+    /// `Mailbox.myRights.maySetKeywords` (RFC 8621 §2): the right to set any
+    /// other keyword on a message in this mailbox. `None` is read the same
+    /// as for [`Self::may_add_items`].
+    #[serde(default)]
+    pub may_set_keywords: Option<bool>,
     /// The account this folder belongs to, if not the account that the
     /// enclosing `MailSync`/`CamelJmapStore` is itself configured for.
     ///
@@ -176,6 +186,8 @@ impl FolderInfo {
             unread: self.unread,
             subscribed: self.subscribed,
             may_add_items: self.may_add_items,
+            may_set_seen: self.may_set_seen,
+            may_set_keywords: self.may_set_keywords,
             account_id: self.account_id.clone(),
             children: Vec::new(),
         }
@@ -290,9 +302,10 @@ impl FolderTree {
     /// only for the store's own account, not a shared one.
     ///
     /// An account whose [`SharedMailAccount::read_only`] is true gets
-    /// `may_add_items: Some(false)` on every one of its folders, even one
-    /// whose own `myRights` said otherwise: the account-level restriction
-    /// cannot be looser than the share itself.
+    /// `may_add_items`, `may_set_seen` and `may_set_keywords` all
+    /// `Some(false)` on every one of its folders, even one whose own
+    /// `myRights` said otherwise: the account-level restriction cannot be
+    /// looser than the share itself.
     ///
     /// Every merged folder also gets `subscribed: true`, regardless of
     /// `isSubscribed`. That flag is per grantee and starts false for a new
@@ -348,6 +361,8 @@ impl FolderTree {
                     unread: 0,
                     subscribed: true,
                     may_add_items: Some(false),
+                    may_set_seen: Some(false),
+                    may_set_keywords: Some(false),
                     // Not a real mailbox: no operation can ever address this
                     // synthetic id, so it names no account to route to.
                     account_id: None,
@@ -365,6 +380,8 @@ impl FolderTree {
             unread: 0,
             subscribed: true,
             may_add_items: Some(false),
+            may_set_seen: Some(false),
+            may_set_keywords: Some(false),
             account_id: None,
             children: owners,
         });
@@ -784,6 +801,14 @@ impl FolderTree {
                     .my_rights
                     .as_ref()
                     .and_then(|rights| rights.may_add_items),
+                may_set_seen: mailbox
+                    .my_rights
+                    .as_ref()
+                    .and_then(|rights| rights.may_set_seen),
+                may_set_keywords: mailbox
+                    .my_rights
+                    .as_ref()
+                    .and_then(|rights| rights.may_set_keywords),
                 // This listing came from the account's own `Mailbox/get`;
                 // `merge_shared` is what sets `Some` for a shared account.
                 account_id: None,
@@ -878,12 +903,15 @@ fn repath(folder: &mut FolderInfo, path: String) {
     }
 }
 
-/// Sets `may_add_items` to `Some(false)` on a folder and every folder below
-/// it, for [`FolderTree::merge_shared`]'s read-only accounts.
+/// Sets `may_add_items`, `may_set_seen` and `may_set_keywords` to
+/// `Some(false)` on a folder and every folder below it, for
+/// [`FolderTree::merge_shared`]'s read-only accounts.
 fn lock_read_only(folder: &mut FolderInfo) {
     let mut stack: Vec<&mut FolderInfo> = vec![folder];
     while let Some(folder) = stack.pop() {
         folder.may_add_items = Some(false);
+        folder.may_set_seen = Some(false);
+        folder.may_set_keywords = Some(false);
         stack.extend(folder.children.iter_mut());
     }
 }

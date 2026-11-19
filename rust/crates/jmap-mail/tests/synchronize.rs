@@ -69,6 +69,7 @@ use jmap_mail::message_info::new_message_info;
 use jmap_mail_sync::{MailSync, MessageFlags, MessageSummary};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
+use jmap_proto::mail::MailboxRights;
 use jmap_proto::mail::role;
 
 /// One connected account with one message in its inbox. The inbox is open
@@ -86,6 +87,13 @@ impl Fixture {
     /// The row's remembered set then matches exactly what the server holds.
     /// This is the state a user's next click starts from.
     fn start(keywords: &[&str]) -> Self {
+        Self::start_with_rights(keywords, None)
+    }
+
+    /// [`Self::start`], with `rights` applied to the Inbox before the first
+    /// listing, the shape a share with restricted `myRights` leaves.
+    /// `None` leaves the mailbox with its default (unrestricted) rights.
+    fn start_with_rights(keywords: &[&str], rights: Option<MailboxRights>) -> Self {
         let server = MockServer::builder().start();
         let account_id = server.account_id();
         let uid = {
@@ -93,6 +101,15 @@ impl Fixture {
             let mut state = state.lock().unwrap();
             let account = state.account_mut(&account_id).unwrap();
             let mailbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+            if let Some(rights) = rights {
+                account.mailboxes.transaction(|mailboxes| {
+                    let current = mailboxes.get(&mailbox).expect("the seeded mailbox").clone();
+                    assert!(
+                        mailboxes.update(&mailbox, current.with_my_rights(rights)),
+                        "the seeded mailbox was not there"
+                    );
+                });
+            }
             let mut seed = EmailSeed::new(
                 mailbox,
                 ("Bob", "bob@example.com"),
@@ -371,6 +388,28 @@ fn a_row_that_reached_the_server_leaves_the_work_list() {
     assert!(
         !fixture.is_dirty(),
         "the row is still queued for the server"
+    );
+}
+
+/// A read-only shared mailbox (`myRights.maySetSeen: false`) keeps the
+/// user's local mark, the way a read-only IMAP mailbox does. It never sends
+/// a request the server would refuse as forbidden, and the row still leaves
+/// the work list: nothing could ever make a retry succeed.
+#[test]
+fn a_seen_mark_in_a_mailbox_without_may_set_seen_stays_local_with_no_error() {
+    let fixture =
+        Fixture::start_with_rights(&[], Some(MailboxRights::all().with_may_set_seen(false)));
+    fixture.set_flags(CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+
+    fixture.synchronize().expect_ok();
+
+    assert!(
+        fixture.keywords_on_server().is_empty(),
+        "the write reached a server that myRights said would refuse it"
+    );
+    assert!(
+        !fixture.is_dirty(),
+        "a change myRights refuses stays queued forever"
     );
 }
 
