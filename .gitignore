@@ -1,6 +1,7 @@
 /rust/target/
 /rust/mutants.out/
 /build/
+__pycache__/
 
 # dpkg-buildpackage / debhelper build products (debian/rules, Track C3)
 /obj-debian/

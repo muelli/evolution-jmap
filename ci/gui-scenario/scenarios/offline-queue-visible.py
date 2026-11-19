@@ -12,11 +12,20 @@ the Camel-layer half already covered by `jmap-mail/tests/transfer.rs`. This
 scenario drives the same change through the real Evolution UI: File >
 Work Offline, then Message > Move to Folder.../Copy to Folder... on two
 messages, checking the message list of each folder before reconnecting.
+
+With `--live` (item 181's live verification), the account is the seeded
+live user's own, and the two messages and the `Projects`/`Receipts`
+mailboxes are `harness/stalwart/seed-manual-test.py`'s own fixtures,
+seeded there for this exact check, instead of this scenario's own setup
+step creating them against the mock.
 """
 
 from scenario import (
+    LIVE_PASSWORD,
+    LIVE_USER,
     Jmap,
     ScenarioFailure,
+    authenticate,
     do_action,
     expect_log,
     expect_no_errors,
@@ -39,16 +48,23 @@ from scenario import (
 ACCOUNT = "JMAP scenario mail"
 MOVE_SUBJECT = "Welcome to jmap-mockd"
 COPY_SUBJECT = "Second message"
+# harness/stalwart/seed-manual-test.py's own fixtures for this check.
+LIVE_MOVE_SUBJECT = "Offline test 1: move me to Projects"
+LIVE_COPY_SUBJECT = "Offline test 2: copy me to Receipts"
 PROJECTS = "Projects"
 RECEIPTS = "Receipts"
 
 
 def setup():
-    write_standalone_mail_account(ACCOUNT)
-    server = Jmap()
-    server.create_mailbox(PROJECTS)
-    server.create_mailbox(RECEIPTS)
-    say(f"setup: account with the {PROJECTS!r} and {RECEIPTS!r} mailboxes")
+    if LIVE_USER:
+        write_standalone_mail_account(ACCOUNT, user=LIVE_USER)
+        say("setup: live account source written, seeded fixtures reused")
+    else:
+        write_standalone_mail_account(ACCOUNT)
+        server = Jmap()
+        server.create_mailbox(PROJECTS)
+        server.create_mailbox(RECEIPTS)
+        say(f"setup: account with the {PROJECTS!r} and {RECEIPTS!r} mailboxes")
 
 
 def message_shown(subject):
@@ -89,7 +105,13 @@ def transfer_to_folder(subject, folder, *, move):
 
 
 def run():
-    server = Jmap()
+    move_subject = LIVE_MOVE_SUBJECT if LIVE_USER else MOVE_SUBJECT
+    copy_subject = LIVE_COPY_SUBJECT if LIVE_USER else COPY_SUBJECT
+    if LIVE_USER:
+        authenticate(LIVE_PASSWORD, remember=True, label="authentication-request")
+        server = Jmap(user=LIVE_USER, password=LIVE_PASSWORD, rebase=True)
+    else:
+        server = Jmap()
     mailboxes = server.mailboxes()
     inbox_id = mailboxes["Inbox"]["id"]
     projects_id = mailboxes[PROJECTS]["id"]
@@ -108,24 +130,24 @@ def run():
     menu_item("File/Work Offline")
     say("menu: File > Work Offline")
 
-    transfer_to_folder(MOVE_SUBJECT, PROJECTS, move=True)
-    gone_from(MOVE_SUBJECT, "Inbox")
-    transfer_to_folder(COPY_SUBJECT, RECEIPTS, move=False)
-    shown_in(COPY_SUBJECT, "Inbox")
+    transfer_to_folder(move_subject, PROJECTS, move=True)
+    gone_from(move_subject, "Inbox")
+    transfer_to_folder(copy_subject, RECEIPTS, move=False)
+    shown_in(copy_subject, "Inbox")
     screenshot("02-inbox-after-queue")
 
     select_folder(ACCOUNT, PROJECTS)
-    shown_in(MOVE_SUBJECT, PROJECTS)
+    shown_in(move_subject, PROJECTS)
     screenshot("03-projects-queued-move")
 
     select_folder(ACCOUNT, RECEIPTS)
-    shown_in(COPY_SUBJECT, RECEIPTS)
+    shown_in(copy_subject, RECEIPTS)
     screenshot("04-receipts-queued-copy")
 
-    if server.mailbox_of(MOVE_SUBJECT) != {inbox_id}:
-        raise ScenarioFailure(f"{MOVE_SUBJECT!r} reached the server while offline")
-    if server.mailbox_of(COPY_SUBJECT) != {inbox_id}:
-        raise ScenarioFailure(f"{COPY_SUBJECT!r} reached the server while offline")
+    if server.mailbox_of(move_subject) != {inbox_id}:
+        raise ScenarioFailure(f"{move_subject!r} reached the server while offline")
+    if server.mailbox_of(copy_subject) != {inbox_id}:
+        raise ScenarioFailure(f"{copy_subject!r} reached the server while offline")
     say("server: neither queued filing was sent while offline")
     if log_count(r"queued filing") < 2:
         raise ScenarioFailure("the log does not show both filings queued")
@@ -134,20 +156,20 @@ def run():
     say("menu: File > Work Online")
 
     wait_for(
-        lambda: server.mailbox_of(MOVE_SUBJECT) == {projects_id},
-        f"{MOVE_SUBJECT!r} only in {PROJECTS!r}",
+        lambda: server.mailbox_of(move_subject) == {projects_id},
+        f"{move_subject!r} only in {PROJECTS!r}",
     )
     wait_for(
-        lambda: server.mailbox_of(COPY_SUBJECT) == {inbox_id, receipts_id},
-        f"{COPY_SUBJECT!r} in both {RECEIPTS!r} and Inbox",
+        lambda: server.mailbox_of(copy_subject) == {inbox_id, receipts_id},
+        f"{copy_subject!r} in both {RECEIPTS!r} and Inbox",
     )
     say("server: the move landed alone, the copy landed alongside the original")
     expect_log(r"replayed filing", "a queued filing replayed on reconnect")
     screenshot("05-replayed-online")
 
     select_folder(ACCOUNT, "Inbox")
-    gone_from(MOVE_SUBJECT, "Inbox")
-    shown_in(COPY_SUBJECT, "Inbox")
+    gone_from(move_subject, "Inbox")
+    shown_in(copy_subject, "Inbox")
 
     expect_no_errors()
 
