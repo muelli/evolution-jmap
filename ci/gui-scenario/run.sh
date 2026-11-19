@@ -6,8 +6,13 @@
 # jmap-mockd, driven through AT-SPI. A scenario asserts on the server state
 # and on the log, not on pixels. See docs/gui-scenario-tests.md.
 #
-# Usage: ci/gui-scenario/run.sh [--host] [--live] SCENARIO...
+# Usage: ci/gui-scenario/run.sh [--host] [--live] [--locale LOCALE] [--scale PERCENT] SCENARIO...
 # SCENARIO is a file name in ci/gui-scenario/scenarios/, without ".py".
+#
+# --locale sets LANG and LC_ALL for the Evolution session (default: C).
+# --scale sets org.gnome.desktop.interface text-scaling-factor to PERCENT/100
+# (default: the GNOME default, 100). Both reach the scenario script as
+# GUI_SCENARIO_LOCALE and GUI_SCENARIO_SCALE.
 #
 # Without --host, the script runs in a rootless podman container with the
 # Evolution 3.52 of Ubuntu 24.04 (ci/gui-scenario/Containerfile). It installs
@@ -56,17 +61,30 @@ COMPONENTS=(book-backend cal-backend camel-provider collection-backend config-mo
 DOVECOT_ORACLE_NETWORK="${DOVECOT_ORACLE_NETWORK:-evolution-jmap-gui-scenario}"
 
 usage() {
-	echo "usage: ci/gui-scenario/run.sh [--host] [--live] SCENARIO..." >&2
+	echo "usage: ci/gui-scenario/run.sh [--host] [--live] [--locale LOCALE] [--scale PERCENT] SCENARIO..." >&2
 	echo "scenarios: $(cd "$SCENARIOS" && find . -name '*.py' -printf '%f ' | sed 's/\.py//g')" >&2
 	exit 2
 }
 
 host=0
 live=0
-while [ "${1-}" = "--host" ] || [ "${1-}" = "--live" ]; do
-	case "$1" in
+locale=""
+scale=""
+while :; do
+	case "${1-}" in
 	--host) host=1 ;;
 	--live) live=1 ;;
+	--locale)
+		shift
+		locale="${1-}"
+		[ -n "$locale" ] || usage
+		;;
+	--scale)
+		shift
+		scale="${1-}"
+		[ -n "$scale" ] || usage
+		;;
+	*) break ;;
 	esac
 	shift
 done
@@ -144,6 +162,12 @@ if [ "$host" -eq 0 ]; then
 		if [ -n "${GUI_SCENARIO_STATE_FILE:-}" ]; then
 			live_mount_args=(-v "$GUI_SCENARIO_STATE_FILE:$GUI_SCENARIO_STATE_FILE:ro")
 		fi
+	fi
+	if [ -n "$locale" ]; then
+		extra_flags+=(--locale "$locale")
+	fi
+	if [ -n "$scale" ]; then
+		extra_flags+=(--scale "$scale")
 	fi
 	# The container runs as root, so that it can install the stage. The trap
 	# gives the artifacts back to the user of the host.
@@ -269,12 +293,14 @@ run_scenario() {
 		XDG_CACHE_HOME="$run_dir/cache"
 		XDG_RUNTIME_DIR="$run_dir/runtime"
 		DISPLAY="$DISPLAY_NUM"
-		LANG=C
-		LC_ALL=C
+		LANG="${locale:-C}"
+		LC_ALL="${locale:-C}"
 		NO_AT_BRIDGE=0
 		EVOLUTION_JMAP_LOG=trace
 		PYTHONPATH="$ROOT/ci/gui-scenario"
 		PYTHONDONTWRITEBYTECODE=1
+		GUI_SCENARIO_LOCALE="$locale"
+		GUI_SCENARIO_SCALE="$scale"
 		GUI_SCENARIO_ARTIFACTS="$out"
 		GUI_SCENARIO_SOURCES="$run_dir/config/evolution/sources"
 		GUI_SCENARIO_MOCK_PORT="$MOCK_PORT"
@@ -349,6 +375,10 @@ run_scenario() {
 		fi
 
 		"${session_env[@]}" gsettings set org.gnome.desktop.interface toolkit-accessibility true
+		if [ -n "$scale" ]; then
+			"${session_env[@]}" gsettings set org.gnome.desktop.interface \
+				text-scaling-factor "$(python3 -c "print($scale / 100)")"
+		fi
 		# A maximized window shows the full folder tree and message list on the
 		# screenshots.
 		"${session_env[@]}" gsettings set \
