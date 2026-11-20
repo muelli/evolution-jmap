@@ -195,6 +195,13 @@ pub fn shown_name(name: &str, id: &Id) -> String {
 
 /// The collections of a shared account's listing that get a child, or `None`
 /// with a warning when the listing failed.
+///
+/// `accountNotSupportedByMethod` is not a failure. A server's
+/// `accountCapabilities` names what an account supports on its own, not what
+/// it shares with this login: an account that shares only mail can still list
+/// contacts and calendars there, and then answer this error for both. Read it
+/// as the server's definite "nothing of this kind is shared", the same
+/// conclusion as an empty listing.
 fn shared_resources<C: Collection>(
     account: &ServiceAccount,
     what: &str,
@@ -202,6 +209,11 @@ fn shared_resources<C: Collection>(
 ) -> Option<Vec<Resource>> {
     match listing {
         Ok(listing) => Some(resources(listing, Subscription::Ignored)),
+        Err(jmap_client::Error::Method(error))
+            if error.error_type == jmap_proto::error::method::ACCOUNT_NOT_SUPPORTED_BY_METHOD =>
+        {
+            Some(Vec::new())
+        }
         Err(error) => {
             tracing::warn!(
                 account_id = %account.id,
@@ -547,5 +559,32 @@ mod tests {
         assert!(resources[0].is_default);
         assert_eq!(resources[0].writable, Some(false));
         assert_eq!(resources[0].deletable, Some(false));
+    }
+
+    #[test]
+    fn account_not_supported_by_method_is_an_empty_listing_not_a_kept_failure() {
+        // A shared account can list contacts and calendars in its own
+        // accountCapabilities while sharing only mail: that capability
+        // describes the account, not what this login can see of it. Stalwart
+        // answers accountNotSupportedByMethod for such an account's
+        // AddressBook/get and Calendar/get. This is the server's definite
+        // answer, not a failed request: read it as "nothing to show", so a
+        // withdrawn share still removes the account's old children.
+        let account = ServiceAccount {
+            id: Id::new("mail-only"),
+            name: "owner@example.com".to_owned(),
+            read_only: false,
+        };
+        let error = jmap_client::Error::Method(jmap_proto::error::MethodError::new(
+            jmap_proto::error::method::ACCOUNT_NOT_SUPPORTED_BY_METHOD,
+        ));
+
+        let listing = shared_resources::<AddressBook>(&account, "address books", Err(error));
+
+        assert_eq!(
+            listing,
+            Some(Vec::new()),
+            "accountNotSupportedByMethod must not be read as a failed listing"
+        );
     }
 }
