@@ -613,6 +613,92 @@ fn websocket_request_error_without_request_id_resolves_sole_pending_request() {
 }
 
 #[test]
+fn websocket_limit_request_error_without_request_id_resolves_sole_pending_request() {
+    let ws_server = TestWsServer::start(|mut ws| {
+        let mut first = true;
+        while let Ok(msg) = ws.read() {
+            match msg {
+                Message::Text(text) => {
+                    if first {
+                        first = false;
+                        // Stalwart 1.1.1 omits requestId on RequestError frames when
+                        // maxCallsInRequest is exceeded (STALWART-RFC-FINDINGS.md Finding 29).
+                        let err = json!({
+                            "@type": "RequestError",
+                            "type": "urn:ietf:params:jmap:error:limit",
+                            "status": 400,
+                            "limit": "maxCallsInRequest",
+                            "detail": "The request exceeds the maximum number of calls in a single request"
+                        });
+                        ws.send(Message::Text(serde_json::to_string(&err).unwrap().into()))
+                            .unwrap();
+                    } else {
+                        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+                        let req_id = parsed.get("id").and_then(|v| v.as_str()).unwrap_or("req-1");
+                        let resp = json!({
+                            "@type": "Response",
+                            "requestId": req_id,
+                            "methodResponses": [["Core/echo", {"status": "ok"}, "c1"]]
+                        });
+                        ws.send(Message::Text(serde_json::to_string(&resp).unwrap().into()))
+                            .unwrap();
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    let http_server = start_session_server(ws_server.ws_url(), Some(4));
+    let client = Client::connect(http_server.origin(), Credentials::none()).unwrap();
+    let timeouts = WebSocketTimeouts {
+        connect: Duration::from_secs(5),
+        request: Duration::from_millis(500),
+    };
+    let conn = client
+        .connect_websocket_with_timeouts(timeouts)
+        .expect("websocket connects");
+
+    let mut req =
+        WebSocketRequest::new(["urn:ietf:params:jmap:core"]).with_id("req-limit-missing-id");
+    for i in 0..5 {
+        req = req.call("Core/echo", &json!({}), format!("c{i}")).unwrap();
+    }
+
+    let err = conn.send_request(req).unwrap_err();
+    match err {
+        Error::Http { status, problem } => {
+            assert_eq!(status, 400);
+            let prob = problem.expect("problem details present");
+            assert_eq!(prob.error_type, "urn:ietf:params:jmap:error:limit");
+            assert_eq!(
+                prob.detail.as_deref(),
+                Some("The request exceeds the maximum number of calls in a single request")
+            );
+            assert_eq!(
+                prob.extra.get("limit").and_then(|v| v.as_str()),
+                Some("maxCallsInRequest")
+            );
+        }
+        other => panic!("expected Error::Http, got: {other:?}"),
+    }
+
+    // Connection remains open and subsequent request succeeds.
+    let single = WebSocketRequest::new(["urn:ietf:params:jmap:core"])
+        .with_id("req-valid-after-limit")
+        .call("Core/echo", &json!({"test": true}), "c1")
+        .unwrap();
+    let resp = conn
+        .send_request(single)
+        .expect("subsequent request succeeds");
+    assert_eq!(resp.id.as_deref(), Some("req-valid-after-limit"));
+    assert_eq!(resp.method_responses.len(), 1);
+
+    conn.close().expect("clean close");
+}
+
+#[test]
 fn websocket_close_with_outcome_distinguishes_echoed_close_and_eof() {
     // (a) Server echoes Close(1000) per RFC 6455 Section 5.5.1.
     let echo_server = TestWsServer::start(|mut ws| {

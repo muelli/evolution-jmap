@@ -326,10 +326,9 @@ fn websocket_push_delivers_state_change_from_second_client_through_the_real_api(
 /// RFC 8887 WebSocket RequestError and RFC 6455 close handshake behavior on live servers.
 ///
 /// Pins server-specific differences between Cyrus IMAP and Stalwart 1.1.1:
-/// - Unknown capability in `using`: Cyrus answers `RequestError` with type
-///   `urn:ietf:params:jmap:error:unknownCapability` and matching `requestId`;
-///   Stalwart 1.1.1 answers `urn:ietf:params:jmap:error:notRequest` without `requestId`
-///   (STALWART-RFC-FINDINGS.md Finding 29).
+/// - Unknown capability in `using` and exceeding `maxCallsInRequest`: Cyrus answers `RequestError`
+///   with matching `requestId`; Stalwart 1.1.1 answers without `requestId` (`notRequest` for
+///   unknown capability, `limit` for exceeding method calls limit; STALWART-RFC-FINDINGS.md Finding 29).
 /// - Close handshake (RFC 6455 §5.5.1): Cyrus echoes Close(1000); Stalwart 1.1.1 drops
 ///   the Close frame without echoing one and terminates TCP with clean EOF instead of
 ///   1.0.1's TCP reset (STALWART-RFC-FINDINGS.md Finding 28).
