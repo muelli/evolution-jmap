@@ -13,6 +13,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- RFC 9610 contact query filter properties and sort. (`0230cb2b`)
+- RFC 9670 principals filter properties, `Principal/set`, `ShareNotification/set`
+  and sort; `currentUserPrincipalId` in the capability; the account owner is
+  rejected in a collection's `shareWith`. (`8b778745`)
+- draft-ietf-jmap-calendars-33 filter properties, `calendarAddressInUse`,
+  `start` sort, notification `changes` and `created` sort. (`20253c6c`)
+- RFC 9661 Sieve conformance: server-assigned script names, name validation,
+  activation mutual exclusion, case-insensitive name filter, multi-property
+  sort; `AddressBook` cascade delete and `addressBookHasContents`. (`3796bee5`)
+- RFC 8984 JSCalendar validation on `CalendarEvent/set` create. (`49db6732`)
+- `EmailSeed::raw_source` and `rawSourceBase64` in the `--seed` JSON for a
+  verbatim message/rfc822 blob. (`1bd73c5c`)
+- Faults `email_update_always_not_found` (`f5c92f45`) and
+  `calendar_destroy_rejects_remove_contents` (`3f7ecb06`).
+- Configurable advertised `maxConcurrentRequests` and `maxConcurrentUpload`
+  limits. (`2544d5cc`)
+- The default seed has `bob@example.com` and `carol@example.com` as
+  principals. (`9d56210b`)
 - `EmailSeed::html_body` and `bodyIsHtml` in the `--seed` JSON, so a seeded
   message can carry an HTML body instead of always `text/plain`. (`208b0b74`)
 - Publication metadata in `Cargo.toml`: repository, readme, documentation URL,
