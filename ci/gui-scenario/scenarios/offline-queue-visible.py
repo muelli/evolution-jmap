@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Scenario: a queued move or copy shows at once, offline (ROADMAP item
-181(a), 182(b)'s "offline-queue-visible" row).
+"""Scenario: a queued move, copy or delete shows at once, offline (ROADMAP
+item 181(a), 182(b)'s "offline-queue-visible" row).
 
 The manual test of master `f3a62f4f` (F6) found that moving or copying a
 message while offline left no visible mark: the row stayed in the source
@@ -14,10 +14,14 @@ Work Offline, then Message > Move to Folder.../Copy to Folder... on two
 messages, checking the message list of each folder before reconnecting.
 
 With `--live` (item 181's live verification), the account is the seeded
-live user's own, and the two messages and the `Projects`/`Receipts`
-mailboxes are `harness/stalwart/seed-manual-test.py`'s own fixtures,
-seeded there for this exact check, instead of this scenario's own setup
-step creating them against the mock.
+live user's own, and the messages and the `Projects`/`Receipts` mailboxes
+are `harness/stalwart/seed-manual-test.py`'s own fixtures, seeded there
+for this exact check, instead of this scenario's own setup step creating
+them against the mock. The live run also deletes a third seeded message
+while offline: `jmap-mail/tests/expunge.rs` already covers the Camel-layer
+half (a row marked deleted while disconnected stays in the folder, and the
+server write happens only after reconnect), and this checks the same path
+through the real UI and a real server's trash mailbox.
 """
 
 from scenario import (
@@ -51,6 +55,7 @@ COPY_SUBJECT = "Second message"
 # harness/stalwart/seed-manual-test.py's own fixtures for this check.
 LIVE_MOVE_SUBJECT = "Offline test 1: move me to Projects"
 LIVE_COPY_SUBJECT = "Offline test 2: copy me to Receipts"
+LIVE_DELETE_SUBJECT = "Offline test 3: delete me"
 PROJECTS = "Projects"
 RECEIPTS = "Receipts"
 
@@ -116,6 +121,9 @@ def run():
     inbox_id = mailboxes["Inbox"]["id"]
     projects_id = mailboxes[PROJECTS]["id"]
     receipts_id = mailboxes[RECEIPTS]["id"]
+    if LIVE_USER:
+        trash_id = server.mailbox_id("trash")
+        trash_name = next(name for name, box in mailboxes.items() if box["id"] == trash_id)
 
     # Open every folder once online, so Evolution already has a local
     # summary for the two new ones before going offline: the "no downsync
@@ -124,6 +132,8 @@ def run():
     select_folder(ACCOUNT, "Inbox")
     select_folder(ACCOUNT, PROJECTS)
     select_folder(ACCOUNT, RECEIPTS)
+    if LIVE_USER:
+        select_folder(ACCOUNT, trash_name)
     select_folder(ACCOUNT, "Inbox")
     screenshot("01-online")
 
@@ -152,6 +162,16 @@ def run():
     if log_count(r"queued filing") < 2:
         raise ScenarioFailure("the log does not show both filings queued")
 
+    if LIVE_USER:
+        select_folder(ACCOUNT, "Inbox")
+        select_message(LIVE_DELETE_SUBJECT)
+        menu_item("Edit/Delete Message")
+        say("menu: Edit > Delete Message")
+        screenshot("04b-inbox-after-delete-offline")
+        if server.mailbox_of(LIVE_DELETE_SUBJECT) != {inbox_id}:
+            raise ScenarioFailure(f"{LIVE_DELETE_SUBJECT!r} reached the server while offline")
+        say("server: the delete was not sent while offline")
+
     menu_item("File/Work Online")
     say("menu: File > Work Online")
 
@@ -167,9 +187,19 @@ def run():
     expect_log(r"replayed filing", "a queued filing replayed on reconnect")
     screenshot("05-replayed-online")
 
+    if LIVE_USER:
+        wait_for(
+            lambda: server.mailbox_of(LIVE_DELETE_SUBJECT) == {trash_id},
+            f"{LIVE_DELETE_SUBJECT!r} moved to {trash_name!r}",
+        )
+        say("server: the offline delete reached the trash on reconnect")
+        expect_log(r"trashing message", "the deferred trash move")
+
     select_folder(ACCOUNT, "Inbox")
     gone_from(move_subject, "Inbox")
     shown_in(copy_subject, "Inbox")
+    if LIVE_USER:
+        gone_from(LIVE_DELETE_SUBJECT, "Inbox")
 
     expect_no_errors()
 
