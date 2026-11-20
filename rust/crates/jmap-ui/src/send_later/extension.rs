@@ -115,7 +115,7 @@ const NO_RECIPIENTS: &CStr = N_(c"The message names no recipients.");
 const NO_FROM: &CStr = N_(c"The message has no From address.");
 const TOO_FAR: &CStr = N_(c"The chosen time is further ahead than the server accepts.");
 const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time.");
-const NOT_FUTURE: &CStr = N_(c"That time has already passed — choose one in the future.");
+const NOT_FUTURE: &CStr = N_(c"That time has already passed. Choose one in the future.");
 const SEND_TIME_NAME: &CStr = N_(c"Send time");
 
 /// The action of the submenu, for the compiled menu layer.
@@ -1404,6 +1404,10 @@ mod tests {
         ] {
             let text = message.to_str().unwrap();
             assert!(text.ends_with('.'), "{text:?} should end with a period");
+            assert!(
+                !text.contains('\u{2014}'),
+                "{text:?} should not hold an em dash"
+            );
         }
     }
 

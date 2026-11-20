@@ -50,7 +50,7 @@ pub fn describe(error: &jmap_client::Error) -> String {
     match error {
         // Only after a token refresh failed (see `AccountLink::call`): the user must sign in again.
         jmap_client::Error::Http { status: 401, .. } => translate(
-            c"the server rejected the account's credentials — it may need to be signed in again",
+            c"the server rejected the account's credentials: it may need to be signed in again",
         ),
         jmap_client::Error::Http { status: 403, .. } => {
             translate(c"the server refused: this account is not allowed to do that")
@@ -77,7 +77,7 @@ pub fn describe(error: &jmap_client::Error) -> String {
         jmap_client::Error::RedirectCredentialsWithheld { requested, followed } => translate_with(
             // TRANSLATORS: %1$s and %2$s are the URLs the server redirected
             // between; they differ in host.
-            c"the server at %1$s redirected to %2$s, a different host, so its credentials were not sent there — check the account's host setting",
+            c"the server at %1$s redirected to %2$s, a different host, so its credentials were not sent there: check the account's host setting",
             &[requested, followed],
         ),
         other => other.to_string(),
@@ -390,7 +390,12 @@ mod describe_tests {
             status: 401,
             problem: None,
         };
-        assert!(describe(&error).contains("signed in again"));
+        let text = describe(&error);
+        assert!(text.contains("signed in again"));
+        assert!(
+            !text.contains('\u{2014}'),
+            "{text:?} should not hold an em dash"
+        );
     }
 
     #[test]
@@ -409,6 +414,10 @@ mod describe_tests {
             "expected a redirect explanation, not the raw Display text or a \
              sign-in prompt (signing in again cannot fix a dropped redirect \
              header), got: {message}"
+        );
+        assert!(
+            !message.contains('\u{2014}'),
+            "{message:?} should not hold an em dash"
         );
     }
 

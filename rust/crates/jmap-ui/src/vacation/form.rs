@@ -29,7 +29,7 @@ pub const BAD_DATE: &CStr = N_(c"Dates take the form YYYY-MM-DD; leave one empty
 
 /// The message for a last day that is before the first day.
 pub const BACKWARDS: &CStr =
-    N_(c"The last day is before the first day — swap them, or clear one to leave it open.");
+    N_(c"The last day is before the first day. Swap them, or clear one to leave it open.");
 
 impl VacationForm {
     /// Converts the server object to widget values. A missing date becomes an
@@ -139,6 +139,10 @@ mod tests {
         for error in [BAD_DATE, BACKWARDS] {
             let text = error.to_str().unwrap();
             assert!(text.ends_with('.'), "{text:?} should end with a period");
+            assert!(
+                !text.contains('\u{2014}'),
+                "{text:?} should not hold an em dash"
+            );
         }
     }
 
