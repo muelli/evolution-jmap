@@ -240,6 +240,7 @@ A few actions need the server at once. Evolution shows an "offline" message or a
 - Checking another person's free or busy time does not yet fall back to locally cached calendar data. It can show no information, online or offline.
 - The Delegates page shows a delegate's raw account id instead of its name and email when the server has directory lookups turned off. The server refuses a lookup of another user's principal in that mode.
 - A revoked shared mailbox stays in the folder list until the next refresh of the account. A manual check for new mail does not force this refresh.
+- Some servers keep one active filter script at a time. On such a server, turning on the vacation autoresponder deactivates your other active script. Turning the autoresponder off again does not reactivate it. Open `Server Filters` and use `Activate` on your script again.
 
 ## Logs and debug output
 
