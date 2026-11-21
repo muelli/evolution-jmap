@@ -222,11 +222,17 @@ const EXTENSIONS: &[Candidate] = &[
 /// restricted to RFC 5228 base syntax plus whatever `enabled_extensions`
 /// names. Order follows the internal table; callers that want an
 /// alphabetical popup list sort the result themselves.
+///
+/// A command or test whose name is also its own extension's `require` name
+/// (`fileinto`, `vacation`, and others like them) matches both an `ALL` and
+/// an `EXTENSIONS` entry; the second is dropped; the popup shows one text
+/// label per row, and both would insert the same text anyway.
 pub fn candidates<'a>(
     prefix: &str,
     enabled_extensions: &'a [String],
 ) -> impl Iterator<Item = &'static Candidate> + 'a {
     let prefix = prefix.to_ascii_lowercase();
+    let mut seen = std::collections::HashSet::new();
     ALL.iter()
         .chain(EXTENSIONS.iter())
         .filter(move |candidate| {
@@ -236,6 +242,7 @@ pub fn candidates<'a>(
                     Some(extension) => enabled_extensions.iter().any(|e| e == extension),
                 }
         })
+        .filter(move |candidate| seen.insert(candidate.text))
 }
 
 /// Returns the partial word the user is typing, the run of identifier
@@ -307,6 +314,43 @@ mod tests {
     }
 
     #[test]
+    fn a_command_sharing_its_own_extension_name_is_offered_once() {
+        // "fileinto" is both the RFC 5228 §3.2 command (in `ALL`) and its own
+        // `require` entry (in `EXTENSIONS`). The popup shows one text label
+        // per row, so the same string must not appear twice in the list.
+        let enabled: Vec<String> = vec!["fileinto".to_string()];
+        let text_count = candidates("file", &enabled)
+            .filter(|c| c.text == "fileinto")
+            .count();
+        assert_eq!(
+            text_count, 1,
+            "\"fileinto\" matches both a command and a require candidate, \
+             so it must be offered once, not twice"
+        );
+    }
+
+    #[test]
+    fn every_text_duplicated_between_all_and_extensions_requires_the_same_extension() {
+        // A coincidental duplicate (the same word is both a base candidate
+        // and an extension's own `require` name, e.g. "fileinto") is safe to
+        // collapse into one entry only if both occurrences gate on the same
+        // extension. A future entry that breaks this would silently offer
+        // the wrong candidate, or withhold a supported one.
+        for all_candidate in ALL {
+            if let Some(extension_candidate) =
+                EXTENSIONS.iter().find(|e| e.text == all_candidate.text)
+            {
+                assert_eq!(
+                    all_candidate.requires, extension_candidate.requires,
+                    "{:?} and the require candidate of the same name must gate \
+                     on the same extension",
+                    all_candidate.text
+                );
+            }
+        }
+    }
+
+    #[test]
     fn word_under_cursor_finds_a_plain_identifier() {
         assert_eq!(word_under_cursor("if header :con"), ":con");
         assert_eq!(word_under_cursor("if head"), "head");
@@ -348,11 +392,11 @@ mod tests {
 
     #[test]
     fn a_require_candidate_is_offered_only_once_its_own_extension_is_enabled() {
+        // "vacation" is both the RFC 5230 command and its own `require`
+        // name; the two merge into one candidate (the dedup above), so this
+        // checks presence by text, not which of the two kinds survives.
         let enabled: Vec<String> = vec!["vacation".to_string()];
-        assert!(
-            candidates("vaca", &enabled)
-                .any(|c| c.text == "vacation" && c.kind == CandidateKind::Extension)
-        );
-        assert!(!candidates("vaca", &[]).any(|c| c.kind == CandidateKind::Extension));
+        assert!(candidates("vaca", &enabled).any(|c| c.text == "vacation"));
+        assert!(!candidates("vaca", &[]).any(|c| c.text == "vacation"));
     }
 }
