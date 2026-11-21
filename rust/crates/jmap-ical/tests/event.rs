@@ -49178,3 +49178,17 @@ END:VCALENDAR\r\n";
         "must render DISPLAY=BADGE from legacy scalar string, got: {out_legacy}"
     );
 }
+
+#[test]
+fn days_from_civil_handles_extreme_inputs_without_overflow() {
+    let crash_val = jmap_ical::event::days_from_civil(
+        -44_444_444_000_000_000,
+        -44_444_444_000_000_000,
+        -44_444_444_000_000_000,
+    );
+    assert_eq!(crash_val, i64::MIN);
+    let min_val = jmap_ical::event::days_from_civil(i64::MIN, i64::MIN, i64::MIN);
+    assert_eq!(min_val, i64::MIN);
+    let max_val = jmap_ical::event::days_from_civil(i64::MAX, i64::MAX, i64::MAX);
+    assert_eq!(max_val, i64::MAX);
+}

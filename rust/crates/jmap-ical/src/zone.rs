@@ -264,7 +264,7 @@ fn weekday_named(name: &str) -> Option<i64> {
 ///
 /// The epoch 1970-01-01 was a Thursday (index 3).
 fn weekday(year: i64, month: i64, day: i64) -> i64 {
-    (days_from_civil(year, month, day) + 3).rem_euclid(7)
+    (days_from_civil(year, month, day).rem_euclid(7) + 3).rem_euclid(7)
 }
 
 /// Calls [`days_in_month`] for signed integers. Returns `None` for invalid months.
@@ -295,5 +295,10 @@ fn seconds_at(local: &str) -> Option<i64> {
 fn seconds(year: i64, month: i64, day: i64, of_day: i64) -> Option<i64> {
     (1..=length_of(year, month)?)
         .contains(&day)
-        .then(|| days_from_civil(year, month, day) * 86_400 + of_day)
+        .then(|| {
+            days_from_civil(year, month, day)
+                .checked_mul(86_400)?
+                .checked_add(of_day)
+        })
+        .flatten()
 }

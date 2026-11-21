@@ -3391,7 +3391,11 @@ pub fn instant(value: &str) -> Option<i64> {
     let [year, month, day, hour, minute, second] = fields[..] else {
         return None;
     };
-    Some(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
+    days_from_civil(year, month, day)
+        .checked_mul(86_400)?
+        .checked_add(hour.checked_mul(3_600)?)?
+        .checked_add(minute.checked_mul(60)?)?
+        .checked_add(second)
 }
 
 /// Days from 1970-01-01 to a proleptic Gregorian date, by Howard Hinnant's
@@ -3399,12 +3403,20 @@ pub fn instant(value: &str) -> Option<i64> {
 pub fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     // Count the year as starting in March, which puts a leap day at the end of
     // it and so needs no special case.
-    let year = year - i64::from(month <= 2);
+    let year = year.saturating_sub(i64::from(month <= 2));
     let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+    let year_of_era = year.rem_euclid(400);
+    let shifted_month = if month > 2 {
+        i128::from(month) - 3
+    } else {
+        i128::from(month) + 9
+    };
+    let day_of_year = (153 * shifted_month + 2).div_euclid(5) + i128::from(day) - 1;
+    let day_of_era = i128::from(year_of_era) * 365 + i128::from(year_of_era) / 4
+        - i128::from(year_of_era) / 100
+        + day_of_year;
+    let total_days = i128::from(era) * 146_097 + day_of_era - 719_468;
+    total_days.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
 /// Format non-negative seconds as an ISO 8601 duration string.
@@ -3646,10 +3658,11 @@ pub fn moved(local: &str, seconds: i64) -> Option<String> {
         field(time.get(..2))? * 3600 + field(time.get(3..5))? * 60 + field(time.get(6..8))?;
 
     const DAY: i64 = 24 * 60 * 60;
-    let of_day = match of_day + seconds {
+    let shifted = of_day.checked_add(seconds)?;
+    let of_day = match shifted {
         moved if moved < 0 => {
             (year, month, day) = match (month, day) {
-                (1, 1) => (year - 1, 12, 31),
+                (1, 1) => (year.checked_sub(1)?, 12, 31),
                 (_, 1) => (year, month - 1, days_in_month_of(year, month - 1)?),
                 _ => (year, month, day - 1),
             };
@@ -3658,13 +3671,16 @@ pub fn moved(local: &str, seconds: i64) -> Option<String> {
         moved if moved >= DAY => {
             (year, month, day) = match day == days_in_month_of(year, month)? {
                 false => (year, month, day + 1),
-                true if month == 12 => (year + 1, 1, 1),
+                true if month == 12 => (year.checked_add(1)?, 1, 1),
                 true => (year, month + 1, 1),
             };
             moved - DAY
         }
         moved => moved,
     };
+    if !(0..DAY).contains(&of_day) {
+        return None;
+    }
 
     (0..=9999).contains(&year).then(|| {
         format!(
