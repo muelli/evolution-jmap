@@ -724,8 +724,10 @@ fn hostile_eventsource_streams_never_panic() {
 #[test]
 fn fuzz_websocket_frames_smoke() {
     use jmap_client::websocket::{
-        DEFAULT_MAX_FRAME_SIZE, DEFAULT_MAX_MESSAGE_SIZE, InboundFrameAction, WebSocketLimits,
-        WebSocketPushTimeouts, WebSocketTimeouts, parse_inbound_message, parse_inbound_text,
+        CloseHandshakeOutcome, DEFAULT_MAX_FRAME_SIZE, DEFAULT_MAX_MESSAGE_SIZE,
+        InboundFrameAction, WebSocketLimits, WebSocketPushItem, WebSocketPushTimeouts,
+        WebSocketTimeouts, parse_inbound_message, parse_inbound_text, parse_websocket_url,
+        rebase_websocket_url, to_http_equivalent_url,
     };
     use jmap_proto::websocket::{
         WebSocketPushDisable, WebSocketPushEnable, WebSocketRequest, WebSocketRequestError,
@@ -767,9 +769,69 @@ fn fuzz_websocket_frames_smoke() {
             let _ = serde_json::from_str::<WebSocketRequest>(s);
             let _ = serde_json::from_str::<WebSocketPushEnable>(s);
             let _ = serde_json::from_str::<WebSocketPushDisable>(s);
+
+            if let Ok(parsed_ws) = parse_websocket_url(s) {
+                let _ = format!("{parsed_ws:?}");
+                let cloned_ws = parsed_ws.clone();
+                assert_eq!(parsed_ws, cloned_ws);
+                let _ = parsed_ws.is_tls;
+                let _ = parsed_ws.host.as_str();
+                let _ = parsed_ws.port;
+                let _ = parsed_ws.dial.as_str();
+            }
+            let _ = to_http_equivalent_url(s);
+            let _ = rebase_websocket_url(s, "http://localhost:8080");
+            let _ = rebase_websocket_url(s, "https://secure.example.com:8443");
+
+            for ws_tmpl in [
+                format!("ws://{s}/ws"),
+                format!("wss://{s}/ws"),
+                format!("ws://example.com:80/{s}"),
+                format!("wss://[::1]:8443/{s}"),
+                format!("ws://[{s}]:8080/"),
+            ] {
+                let _ = parse_websocket_url(&ws_tmpl);
+                let _ = to_http_equivalent_url(&ws_tmpl);
+                let _ = rebase_websocket_url(&ws_tmpl, "http://localhost:8080");
+            }
+
+            let reconnected = WebSocketPushItem::Reconnected {
+                push_state: if s.is_empty() {
+                    None
+                } else {
+                    Some(s.to_string())
+                },
+                reconnect_count: input.len() as u64,
+            };
+            let _ = format!("{reconnected:?}");
+            let cloned_reconnected = reconnected.clone();
+            assert_eq!(reconnected, cloned_reconnected);
+
+            let outcome_echo = CloseHandshakeOutcome::EchoedClose {
+                code: Some(1000),
+                reason: if s.is_empty() {
+                    None
+                } else {
+                    Some(s.to_string())
+                },
+            };
+            let _ = format!("{outcome_echo:?}");
+            let cloned_outcome = outcome_echo.clone();
+            assert_eq!(outcome_echo, cloned_outcome);
+
+            let outcome_eof = CloseHandshakeOutcome::EofWithoutCloseFrame;
+            let _ = format!("{outcome_eof:?}");
+            assert_eq!(outcome_eof, outcome_eof.clone());
+
+            let outcome_reset = CloseHandshakeOutcome::ResetWithoutCloseFrame;
+            let _ = format!("{outcome_reset:?}");
+            assert_eq!(outcome_reset, outcome_reset.clone());
         }
 
         let lossy = String::from_utf8_lossy(input);
+        let _ = to_http_equivalent_url(&lossy);
+        let _ = rebase_websocket_url(&lossy, "http://localhost:8080");
+        let _ = parse_websocket_url(&lossy);
         let act_lossy = parse_inbound_text(&lossy);
         let _ = format!("{act_lossy:?}");
 

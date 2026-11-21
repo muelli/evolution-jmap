@@ -432,3 +432,90 @@ fn websocket_limits_enforced_against_oversized_frames() {
 
     server_thread.join().unwrap();
 }
+
+#[test]
+fn websocket_url_parsing_and_rebasing() {
+    use jmap_client::websocket::{
+        ParsedWsUrl, parse_websocket_url, rebase_websocket_url, to_http_equivalent_url,
+    };
+
+    // Standard ws:// and wss://
+    let ws = parse_websocket_url("ws://example.com/ws").expect("parse ws");
+    assert_eq!(
+        ws,
+        ParsedWsUrl {
+            is_tls: false,
+            host: "example.com".into(),
+            port: 80,
+            dial: "example.com:80".into(),
+        }
+    );
+
+    let wss = parse_websocket_url("wss://secure.example.com:8443/jmap/ws?token=abc#hash")
+        .expect("parse wss");
+    assert_eq!(
+        wss,
+        ParsedWsUrl {
+            is_tls: true,
+            host: "secure.example.com".into(),
+            port: 8443,
+            dial: "secure.example.com:8443".into(),
+        }
+    );
+
+    // IPv6 bracketed
+    let ipv6 = parse_websocket_url("ws://[::1]:9999/ws").expect("parse ipv6");
+    assert_eq!(
+        ipv6,
+        ParsedWsUrl {
+            is_tls: false,
+            host: "::1".into(),
+            port: 9999,
+            dial: "[::1]:9999".into(),
+        }
+    );
+
+    let ipv6_default = parse_websocket_url("wss://[2001:db8::1]/ws").expect("parse ipv6 default");
+    assert_eq!(
+        ipv6_default,
+        ParsedWsUrl {
+            is_tls: true,
+            host: "2001:db8::1".into(),
+            port: 443,
+            dial: "[2001:db8::1]:443".into(),
+        }
+    );
+
+    // Invalid scheme
+    assert!(parse_websocket_url("http://example.com/ws").is_err());
+    assert!(parse_websocket_url("ftp://example.com/ws").is_err());
+    assert!(parse_websocket_url("").is_err());
+
+    // Invalid IPv6 brackets or junk after bracket
+    assert!(parse_websocket_url("ws://[::1/ws").is_err());
+    assert!(parse_websocket_url("ws://[::1]junk/ws").is_err());
+
+    // HTTP equivalent conversion
+    assert_eq!(
+        to_http_equivalent_url("ws://example.com/ws"),
+        "http://example.com/ws"
+    );
+    assert_eq!(
+        to_http_equivalent_url("wss://example.com:8443/ws"),
+        "https://example.com:8443/ws"
+    );
+    assert_eq!(to_http_equivalent_url("other://url"), "other://url");
+
+    // Rebasing
+    assert_eq!(
+        rebase_websocket_url("ws://internal.local/ws", "http://gateway.example.com"),
+        "ws://gateway.example.com/ws"
+    );
+    assert_eq!(
+        rebase_websocket_url(
+            "wss://internal.local:9000/ws",
+            "https://gateway.example.com:443"
+        ),
+        "wss://gateway.example.com:443/ws"
+    );
+}

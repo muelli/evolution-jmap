@@ -830,14 +830,21 @@ impl Drop for WebSocketConnection {
     }
 }
 
-struct ParsedWsUrl {
-    is_tls: bool,
-    host: String,
-    port: u16,
-    dial: String,
+/// Parsed URL components for opening an RFC 8887 WebSocket connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedWsUrl {
+    /// Whether the URL specifies TLS (`wss://`).
+    pub is_tls: bool,
+    /// Host name or IP address.
+    pub host: String,
+    /// Resolved or default port number.
+    pub port: u16,
+    /// Target dial string formatted as `host:port` or `[ipv6]:port`.
+    pub dial: String,
 }
 
-fn parse_websocket_url(url: &str) -> Result<ParsedWsUrl, Error> {
+/// Parse a WebSocket URL (`ws://` or `wss://`) into its host, port, TLS mode, and dial string.
+pub fn parse_websocket_url(url: &str) -> Result<ParsedWsUrl, Error> {
     let (is_tls, rest) = if let Some(stripped) = url.strip_prefix("wss://") {
         (true, stripped)
     } else if let Some(stripped) = url.strip_prefix("ws://") {
@@ -858,17 +865,16 @@ fn parse_websocket_url(url: &str) -> Result<ParsedWsUrl, Error> {
             .find(']')
             .ok_or_else(|| Error::Transport("unclosed IPv6 bracket in URL".into()))?;
         let host = &authority[1..closing];
-        let port = match authority[closing + 1..].strip_prefix(':') {
-            Some(p) => p
-                .parse::<u16>()
-                .map_err(|e| Error::Transport(format!("invalid port: {e}")))?,
-            None => {
-                if is_tls {
-                    443
-                } else {
-                    80
-                }
-            }
+        let after_bracket = &authority[closing + 1..];
+        let port = if let Some(p) = after_bracket.strip_prefix(':') {
+            p.parse::<u16>()
+                .map_err(|e| Error::Transport(format!("invalid port: {e}")))?
+        } else if after_bracket.is_empty() {
+            if is_tls { 443 } else { 80 }
+        } else {
+            return Err(Error::Transport(format!(
+                "invalid characters after IPv6 bracket in URL: {url}"
+            )));
         };
         (host.to_owned(), port)
     } else if let Some((h, p)) = authority.split_once(':') {
@@ -901,7 +907,8 @@ fn parse_websocket_url(url: &str) -> Result<ParsedWsUrl, Error> {
     })
 }
 
-fn to_http_equivalent_url(ws_url: &str) -> String {
+/// Convert a WebSocket URL to its HTTP/HTTPS equivalent URL.
+pub fn to_http_equivalent_url(ws_url: &str) -> String {
     if let Some(rest) = ws_url.strip_prefix("wss://") {
         format!("https://{rest}")
     } else if let Some(rest) = ws_url.strip_prefix("ws://") {
@@ -911,7 +918,8 @@ fn to_http_equivalent_url(ws_url: &str) -> String {
     }
 }
 
-fn rebase_websocket_url(url: &str, origin: &str) -> String {
+/// Rebase a WebSocket URL against an origin host/scheme.
+pub fn rebase_websocket_url(url: &str, origin: &str) -> String {
     let http_equiv = to_http_equivalent_url(url);
     let rebased_http = crate::url::rebase_origin(&http_equiv, origin);
     if let Some(rest) = rebased_http.strip_prefix("https://") {
