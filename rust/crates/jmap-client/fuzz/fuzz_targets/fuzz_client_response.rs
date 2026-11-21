@@ -133,7 +133,19 @@ fuzz_target!(|data: &[u8]| {
         let _ = client.contact_create(&account_id, &jmap_proto::contacts::ContactCard::new());
         let _ = client.contact_destroy(&account_id, &Id::new("card1"));
         let _ = client.event_create(&account_id, &jmap_proto::calendars::CalendarEvent::new());
+        let _ = client.event_create_with_scheduling(
+            &account_id,
+            &jmap_proto::calendars::CalendarEvent::new(),
+            true,
+        );
+        let _ = client.event_update_with_scheduling(
+            &account_id,
+            &Id::new("ev1"),
+            serde_json::json!({"title": "updated"}),
+            true,
+        );
         let _ = client.event_destroy(&account_id, &Id::new("ev1"));
+        let _ = client.event_destroy_with_scheduling(&account_id, &Id::new("ev1"), true);
         let _ = client.event_parse(&jmap_proto::calendars::CalendarEventParseRequest::new(
             account_id.clone(),
             [Id::new("b1")],
@@ -186,6 +198,8 @@ fuzz_target!(|data: &[u8]| {
             account_id.clone(),
             jmap_proto::State::new("0"),
         ));
+        let _ =
+            client.event_query_request(&jmap_proto::methods::QueryRequest::new(account_id.clone()));
         let _ = client.calendar_event_notification_query(
             &account_id,
             jmap_proto::calendars::CalendarEventNotificationQueryFilter::new(),
@@ -430,5 +444,15 @@ fuzz_target!(|data: &[u8]| {
         }
         let _ = client.is_session_stale();
         let _ = client.last_session_state();
+
+        if let Ok(text) = std::str::from_utf8(data) {
+            let _ = jmap_client::transport::parse_retry_after(text);
+            let _ = jmap_client::url::origin(text);
+            let _ = jmap_client::url::origin_of(text);
+            let _ = jmap_client::url::split_http_scheme(text);
+            let _ = jmap_client::websocket::parse_inbound_text(text);
+            let _ = jmap_client::websocket::parse_websocket_url(text);
+            let _ = jmap_client::websocket::to_http_equivalent_url(text);
+        }
     }
 });
