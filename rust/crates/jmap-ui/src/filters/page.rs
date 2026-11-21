@@ -333,6 +333,13 @@ struct UiState {
     /// The index into `completion_candidates` Up/Down moves, and Tab/Enter
     /// accepts.
     completion_selected: usize,
+    /// Set by [`accept_completion`], right after it replaces the word under
+    /// the cursor. That replacement is itself a buffer edit, so it arms the
+    /// same debounce typing does; without this flag the debounce's own
+    /// auto-complete step (item 180(e)) would see the word it just
+    /// completed and reopen the popup on it. [`run_pending_validation`]
+    /// clears the flag and skips that one reopen instead.
+    suppress_next_auto_complete: bool,
     /// True once this page is read-only: set either by
     /// [`apply_offline_change`], item 180(c)'s "went offline while the page
     /// was open" half, or by [`apply_outcome`] finding a cold-start cache
@@ -933,6 +940,7 @@ unsafe fn build_widgets(page: *mut GObject) {
                     completion_list,
                     completion_candidates: Vec::new(),
                     completion_selected: 0,
+                    suppress_next_auto_complete: false,
                     offline: false,
                     shell: shell.cast(),
                     shell_online_handler,
@@ -1657,12 +1665,18 @@ unsafe fn run_pending_validation(cell: &RefCell<UiState>, page: *mut GObject) {
     // with no Ctrl+Space needed. `show_completion_for_word` refreshes the
     // popup for the word now under the cursor; if that word is too short or
     // matches nothing, close whatever the last edit left open rather than
-    // show a stale list.
+    // show a stale list. `accept_completion`'s own replacement is a buffer
+    // edit too, and arms this same debounce; its flag skips this one firing
+    // so Tab or Enter does not reopen the popup on the word it just
+    // completed.
     // SAFETY: as `show_completion_for_word`'s and `close_completion`'s own
     // contracts.
-    unsafe {
-        if !show_completion_for_word(cell, AUTO_COMPLETE_MIN_CHARS) {
-            close_completion(cell);
+    let suppress = std::mem::replace(&mut cell.borrow_mut().suppress_next_auto_complete, false);
+    if !suppress {
+        unsafe {
+            if !show_completion_for_word(cell, AUTO_COMPLETE_MIN_CHARS) {
+                close_completion(cell);
+            }
         }
     }
     // Item 180(a)'s last open row: a script that parses locally also gets
@@ -2072,6 +2086,7 @@ unsafe fn accept_completion(cell: &RefCell<UiState>) {
     };
     if let Some((buffer, text)) = accepted {
         tracing::trace!(accepted = text, "sieve completion: candidate accepted");
+        cell.borrow_mut().suppress_next_auto_complete = true;
         // SAFETY: `buffer` is a live child of the page.
         unsafe {
             let mark = gtk_text_buffer_get_insert(buffer);
@@ -4279,6 +4294,62 @@ mod tests {
         });
     }
 
+    /// Item 192 R12: `accept_completion`'s own replacement of the word under
+    /// the cursor is a buffer edit, which arms the same debounce typing
+    /// does. Before this fix, the debounce's own auto-complete step saw the
+    /// word it had just completed, matched it again, and reopened the
+    /// popup; this drives that debounce firing directly, instead of waiting
+    /// on a real timeout, to confirm it now leaves the popup closed. Needs a
+    /// display; skips without one.
+    #[test]
+    fn accepting_a_candidate_does_not_reopen_the_popup_once_the_debounce_fires() {
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: as `completion_opens_navigates_and_accepts_a_candidate`.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
+
+                let cell = state(page.cast()).expect("a freshly built page has state");
+                let buffer = cell.borrow().buffer;
+                let text = cstring_lossy("e");
+                let mut start = GtkTextIter::default();
+                gtk_text_buffer_get_start_iter(buffer, &mut start);
+                gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                gtk_text_buffer_place_cursor(buffer, &end);
+
+                open_completion(cell);
+                assert!(
+                    !cell.borrow().completion_candidates.is_empty(),
+                    "setup: the popup did not open for \"e\""
+                );
+
+                accept_completion(cell);
+                assert!(
+                    cell.borrow().completion_candidates.is_empty(),
+                    "accept did not close the popup"
+                );
+
+                run_pending_validation(cell, page.cast());
+                assert!(
+                    cell.borrow().completion_candidates.is_empty(),
+                    "the debounce reopened the popup on the word accept just completed"
+                );
+
+                gtk_widget_destroy(window);
+            }
+        });
+    }
+
     /// Accessibility (item 174 (d)): the completion popup is its own
     /// top-level AT-SPI window, a sibling of the account editor rather
     /// than a child of it (confirmed live, 2026-11-16: a dump of the
@@ -4611,6 +4682,7 @@ mod tests {
             completion_list: ptr::null_mut(),
             completion_candidates: Vec::new(),
             completion_selected: 0,
+            suppress_next_auto_complete: false,
             offline: false,
             shell: ptr::null_mut(),
             shell_online_handler: 0,
