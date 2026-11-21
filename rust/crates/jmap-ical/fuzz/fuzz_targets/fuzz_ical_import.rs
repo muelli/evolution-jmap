@@ -63,6 +63,16 @@ fuzz_target!(|data: &[u8]| {
         let _ = jmap_ical::event::moved(text, 0);
         let _ = jmap_ical::event::moved(text, 3600);
         let _ = jmap_ical::event::moved(text, -3600);
+        let _ = jmap_ical::event::parse_ical(text);
+        let _ = jmap_ical::event::check_structure(text);
+        let _ = jmap_ical::event::ical_status(text);
+        let _ = jmap_ical::event::known_status(text);
+        let _ = jmap_ical::event::ical_transparency(text);
+        let _ = jmap_ical::event::known_transparency(text);
+        let _ = jmap_ical::event::ical_privacy(text);
+        let _ = jmap_ical::event::known_privacy(text);
+        let _ = jmap_ical::event::strip(text, '-', 4);
+        let _ = jmap_ical::event::exists(text, text);
 
         if let Ok(event) = jmap_ical::ical_to_event(text) {
             let ical2 = jmap_ical::event_to_ical(&event);

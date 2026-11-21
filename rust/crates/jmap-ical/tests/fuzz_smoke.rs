@@ -701,3 +701,13 @@ END:VCALENDAR\r\n";
         "Event_2 and Event_3 must be identical fixed point"
     );
 }
+
+#[test]
+fn exists_rejects_arbitrary_short_or_non_ascii_strings_without_panic() {
+    assert!(!jmap_ical::event::exists("", ""));
+    assert!(!jmap_ical::event::exists("2026", "12"));
+    assert!(!jmap_ical::event::exists("20261121", ""));
+    assert!(!jmap_ical::event::exists("20261121", "1200"));
+    assert!(!jmap_ical::event::exists("🦀🦀🦀🦀", "120000"));
+    assert!(jmap_ical::event::exists("20261121", "120000"));
+}

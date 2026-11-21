@@ -3574,6 +3574,9 @@ pub fn strip(value: &str, separator: char, digits: usize) -> Option<String> {
 
 /// Return true if date and time digit strings represent a valid calendar instant.
 pub fn exists(date: &str, time: &str) -> bool {
+    if date.len() != 8 || time.len() != 6 || !date.is_ascii() || !time.is_ascii() {
+        return false;
+    }
     let field = |value: &str| value.parse::<u32>().unwrap_or(u32::MAX);
     let (year, month, day) = (field(&date[..4]), field(&date[4..6]), field(&date[6..8]));
     let (hour, minute, second) = (field(&time[..2]), field(&time[2..4]), field(&time[4..6]));
