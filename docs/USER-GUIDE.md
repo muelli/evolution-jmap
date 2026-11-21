@@ -236,6 +236,7 @@ A few actions need the server at once. Evolution shows an "offline" message or a
 - If the server advertises an `eventSourceUrl`, mail uses JMAP Push.
   If it does not, new mail arrives at the refresh interval of the account.
 - Checking another person's free or busy time does not yet fall back to locally cached calendar data. It can show no information, online or offline.
+- The Delegates page shows a delegate's raw account id instead of its name and email when the server has directory lookups turned off. The server refuses a lookup of another user's principal in that mode.
 
 ## Logs and debug output
 
