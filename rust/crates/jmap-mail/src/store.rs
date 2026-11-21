@@ -798,14 +798,13 @@ impl JmapStore {
     /// listing that still needs the server gives `None`, and so does a
     /// listing without the mailbox.
     ///
-    /// Unlike [`Self::may_add_items`], this still looks up by id alone
-    /// ([`FolderTree::by_id`]), so a shared mailbox id that collides with
-    /// one of this store's own can give the wrong path (item 192 row R4,
-    /// open: `crate::transfer`'s queued-filing chain has no owner recorded
-    /// for `origin` to pass in here).
-    pub fn folder_path(&self, mailbox: &Id) -> Option<String> {
+    /// `owner` names the mailbox's own account, the same as
+    /// [`Self::may_add_items`] (item 192 row R4): `crate::transfer`'s
+    /// queued-filing rechain carries it on [`Filing::origin_owner`], set
+    /// when the chain's first filing was made.
+    pub fn folder_path(&self, mailbox: &Id, owner: Option<&Id>) -> Option<String> {
         let tree = self.folders(0).ok()?;
-        Some(tree.by_id(mailbox)?.path.clone())
+        Some(tree.by_id_in_account(mailbox, owner)?.path.clone())
     }
 
     /// The folder-list half of a pushed `Mailbox` change. It refreshes the
