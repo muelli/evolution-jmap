@@ -60,6 +60,23 @@ fuzz_target!(|data: &[u8]| {
         let _ = jmap_ical::event::is_data_uri(text);
         let _ = jmap_ical::event::names_a_uri(text);
         let _ = jmap_ical::event::is_utc(text);
+        let _ = jmap_ical::event::utc_offset(text);
+        let _ = jmap_ical::event::date_time_digits(text);
+        let _ = jmap_ical::event::at_midnight(text);
+        let _ = jmap_ical::event::names_map_entry(text);
+        let _ = jmap_ical::event::restricted_name(text);
+        let _ = jmap_ical::event::month_token(text);
+        let _ = jmap_ical::event::weekday_token(text);
+        let _ = jmap_ical::event::strip(text, '-', 4);
+        let _ = jmap_ical::event::strip(text, ':', 2);
+        let _ = jmap_ical::event::to_duration(data.len() as i64);
+        let _ = jmap_ical::event::moved(text, data.len() as i64);
+        if let Ok(num) = text.parse::<i64>() {
+            let _ = jmap_ical::event::to_duration(num);
+            let _ = jmap_ical::event::days_from_civil(num, num, num);
+            let _ = jmap_ical::event::days_in_month_of(num, num);
+            let _ = jmap_ical::event::moved(text, num);
+        }
 
         if let Ok(event1) = jmap_ical::ical_to_event(text) {
             let ical2 = jmap_ical::event_to_ical(&event1);
