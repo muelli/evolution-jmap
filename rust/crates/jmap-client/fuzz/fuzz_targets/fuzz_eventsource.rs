@@ -243,4 +243,16 @@ fuzz_target!(|data: &[u8]| {
     let _ = safe_header_name(&lossy);
     let _ = safe_header_value(&lossy);
     let _ = parse_url(&lossy);
+    let _ = origin(&lossy);
+    let _ = origin_of(&lossy);
+    let _ = split_http_scheme(&lossy);
+    let _ = same_origin(&lossy, &lossy);
+    let _ = same_origin(&lossy, "https://example.com");
+    let _ = same_origin("https://example.com", &lossy);
+    let _ = expand_url(&lossy, &[], false, 0);
+    let _ = expand_url(&lossy, &[&lossy], true, 60);
+
+    let builder = jmap_client::Client::builder();
+    let _ = format!("{builder:?}");
+    let _ = builder.rebase_urls_to_origin(data.len() % 2 == 0);
 });
