@@ -708,6 +708,16 @@ fn oauth2_group_follows_before_any_registration() {
         let path = CString::new(keyfile.clone().into_os_string().into_encoded_bytes())
             .expect("no NUL in a temp path");
         let mut error = ptr::null_mut();
+        // The server's constructed() loads every module under
+        // `EDS_REGISTRY_MODULES`. An installed `module-jmap-backend.so` would
+        // register `[JMAP OAuth2]` there too, and the guard below would pass
+        // for the wrong reason. An empty directory keeps the result the same
+        // on every host.
+        let empty_modules_dir =
+            std::env::temp_dir().join(format!("jmap-child-added-modules-{}", std::process::id()));
+        std::fs::create_dir_all(&empty_modules_dir).expect("create an empty modules directory");
+        // SAFETY: no other thread in this process touches the environment.
+        unsafe { std::env::set_var("EDS_REGISTRY_MODULES", &empty_modules_dir) };
         // SAFETY: the constructor takes no arguments. The path is NUL-terminated
         // and the callee copies it. This code releases the GFile.
         let (server, account) = unsafe {
@@ -737,6 +747,7 @@ fn oauth2_group_follows_before_any_registration() {
         let carried = unsafe { jmap_config::oauth2::read(child.0) };
 
         let _ = std::fs::remove_file(&keyfile);
+        let _ = std::fs::remove_dir(&empty_modules_dir);
         // SAFETY: this code holds the only reference to each object. The source
         // goes first, because it holds a weak reference to the server.
         unsafe {
