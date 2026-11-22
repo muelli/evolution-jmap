@@ -109,9 +109,10 @@ to the server. Run only one `--live` scenario at a time.
 Use a test account made for this purpose, never a real user's account. The
 test account and its mail, contacts and calendars change with every run.
 
-Three scenarios run this way today: `live-smoke` (checks the path itself,
-with no mock equivalent), `work-offline` and `delegates`. Other scenarios
-still run only against `jmap-mockd`.
+Four scenarios run this way today: `live-smoke` (checks the path itself,
+with no mock equivalent), `work-offline`, `delegates` and
+`offline-queue-visible`. Other scenarios still run only against
+`jmap-mockd`.
 
 `delegates` looks up principals on the server. Turn its directory service on
 before the run and off after, even if the run fails: the server may serve

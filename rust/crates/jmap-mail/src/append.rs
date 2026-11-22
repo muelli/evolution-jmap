@@ -147,7 +147,7 @@ unsafe extern "C" fn append_message_sync(
 
             // Refuse from the last listing. Otherwise a read-only shared mailbox
             // accepts the upload, and RFC 8621 §4.8 `Email/import` then rejects it.
-            if store.may_add_items(mailbox) == Some(false) {
+            if store.may_add_items(mailbox, owner) == Some(false) {
                 return fail_bool(
                     error,
                     &StoreError::NoPermission(name_of(folder)),

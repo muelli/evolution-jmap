@@ -544,13 +544,24 @@ impl MailSync {
     /// message in the account. The patch changes only the named keywords, so
     /// concurrent changes to different keywords do not conflict.
     pub fn set_keywords(&self, uid: &Id, change: &KeywordChange) -> Result<(), SyncError> {
+        self.set_keywords_as(&self.account_id, uid, change)
+    }
+
+    /// [`Self::set_keywords`], against `account` instead of this sync's own
+    /// account: a message id is unique in one account only.
+    pub fn set_keywords_as(
+        &self,
+        account: &Id,
+        uid: &Id,
+        change: &KeywordChange,
+    ) -> Result<(), SyncError> {
         if change.is_empty() {
             return Ok(());
         }
-        let account_id = self.account_id().to_string();
+        let account_id = account.to_string();
         let message_uid = uid.to_string();
         tracing::debug!(account_id, uid = message_uid, "setting message keywords");
-        self.update_email(uid, change.patch()).map_err(|error| {
+        self.update_email_as(account, uid, change.patch()).map_err(|error| {
             tracing::warn!(account_id, uid = message_uid, %error, "message keyword change failed");
             error
         })
@@ -1214,6 +1225,8 @@ impl MailSync {
             // The server was not asked for `myRights` on a create, and the
             // caller who just created the mailbox is its owner.
             may_add_items: None,
+            may_set_seen: None,
+            may_set_keywords: None,
             // `None` when `account` is this `MailSync`'s own account, the
             // common case; `Some` keeps the shared owner so a later lookup
             // by this mailbox's id (`FolderTree::owning_account`) finds it.
@@ -1343,15 +1356,8 @@ impl MailSync {
         ))
     }
 
-    /// One `Email/set` update, against this sync's own account. A `notFound`
-    /// refusal gives [`SyncError::NoSuchMessage`], because the message is
-    /// gone.
-    fn update_email(&self, uid: &Id, patch: serde_json::Value) -> Result<(), SyncError> {
-        self.update_email_as(&self.account_id, uid, patch)
-    }
-
-    /// [`Self::update_email`], against `account` instead of this sync's own
-    /// account.
+    /// One `Email/set` update against `account`. A `notFound` refusal gives
+    /// [`SyncError::NoSuchMessage`], because the message is gone.
     fn update_email_as(
         &self,
         account: &Id,

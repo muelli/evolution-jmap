@@ -333,6 +333,13 @@ struct UiState {
     /// The index into `completion_candidates` Up/Down moves, and Tab/Enter
     /// accepts.
     completion_selected: usize,
+    /// Set by [`accept_completion`], right after it replaces the word under
+    /// the cursor. That replacement is itself a buffer edit, so it arms the
+    /// same debounce typing does; without this flag the debounce's own
+    /// auto-complete step (item 180(e)) would see the word it just
+    /// completed and reopen the popup on it. [`run_pending_validation`]
+    /// clears the flag and skips that one reopen instead.
+    suppress_next_auto_complete: bool,
     /// True once this page is read-only: set either by
     /// [`apply_offline_change`], item 180(c)'s "went offline while the page
     /// was open" half, or by [`apply_outcome`] finding a cold-start cache
@@ -933,6 +940,7 @@ unsafe fn build_widgets(page: *mut GObject) {
                     completion_list,
                     completion_candidates: Vec::new(),
                     completion_selected: 0,
+                    suppress_next_auto_complete: false,
                     offline: false,
                     shell: shell.cast(),
                     shell_online_handler,
@@ -1608,58 +1616,78 @@ unsafe extern "C" fn on_validate_timeout(page: gpointer) -> gboolean {
         };
         // The timeout fired: it is no longer pending.
         cell.borrow_mut().validate_timeout = 0;
-        let (buffer, source_view, error_tag) = {
-            let ui = cell.borrow();
-            (ui.buffer, ui.source_view, ui.error_tag)
-        };
-        // SAFETY: every widget is a live child of the page, and no borrow of
-        // `cell` is held across these calls.
-        let problem = unsafe {
-            let text = get_text(buffer.cast());
-            let mut start = GtkTextIter::default();
-            let mut end = GtkTextIter::default();
-            gtk_text_buffer_get_start_iter(buffer, &mut start);
-            gtk_text_buffer_get_end_iter(buffer, &mut end);
-            gtk_text_buffer_remove_tag(buffer, error_tag, &start, &end);
-            let problem = validate::find_problem(&text);
-            match &problem {
-                Some(problem) => {
-                    let line = problem.line.saturating_sub(1) as c_int;
-                    let mut line_start = GtkTextIter::default();
-                    gtk_text_buffer_get_iter_at_line(buffer, &mut line_start, line);
-                    let mut line_end = line_start;
-                    gtk_text_iter_forward_to_line_end(&mut line_end);
-                    gtk_text_buffer_apply_tag(buffer, error_tag, &line_start, &line_end);
-                    let message = cstring_lossy(&problem.message);
-                    gtk_widget_set_tooltip_text(source_view.cast(), message.as_ptr());
-                }
-                None => gtk_widget_set_tooltip_text(source_view.cast(), ptr::null()),
+        // SAFETY: as `run_pending_validation`.
+        unsafe { run_pending_validation(cell, page) };
+        G_SOURCE_REMOVE
+    })
+}
+
+/// The local Sieve parse and, on a clean script, instant-apply save (item
+/// 180(a)) that a fired debounce timeout runs. `on_check` (item 192 R7)
+/// shares this: a Check click cancels the pending debounce timer, but runs
+/// this at once instead of only dropping it, so the edit is not lost until
+/// the next keystroke re-arms the debounce.
+///
+/// # Safety
+///
+/// `cell` is the state of the live page `page` points to.
+unsafe fn run_pending_validation(cell: &RefCell<UiState>, page: *mut GObject) {
+    let (buffer, source_view, error_tag) = {
+        let ui = cell.borrow();
+        (ui.buffer, ui.source_view, ui.error_tag)
+    };
+    // SAFETY: every widget is a live child of the page, and no borrow of
+    // `cell` is held across these calls.
+    let problem = unsafe {
+        let text = get_text(buffer.cast());
+        let mut start = GtkTextIter::default();
+        let mut end = GtkTextIter::default();
+        gtk_text_buffer_get_start_iter(buffer, &mut start);
+        gtk_text_buffer_get_end_iter(buffer, &mut end);
+        gtk_text_buffer_remove_tag(buffer, error_tag, &start, &end);
+        let problem = validate::find_problem(&text);
+        match &problem {
+            Some(problem) => {
+                let line = problem.line.saturating_sub(1) as c_int;
+                let mut line_start = GtkTextIter::default();
+                gtk_text_buffer_get_iter_at_line(buffer, &mut line_start, line);
+                let mut line_end = line_start;
+                gtk_text_iter_forward_to_line_end(&mut line_end);
+                gtk_text_buffer_apply_tag(buffer, error_tag, &line_start, &line_end);
+                let message = cstring_lossy(&problem.message);
+                gtk_widget_set_tooltip_text(source_view.cast(), message.as_ptr());
             }
-            problem
-        };
-        // Item 180(e): the same debounce also drives completion while
-        // typing, with no Ctrl+Space needed. `show_completion_for_word`
-        // refreshes the popup for the word now under the cursor; if that
-        // word is too short or matches nothing, close whatever the last
-        // edit left open rather than show a stale list.
-        // SAFETY: as `show_completion_for_word`'s and `close_completion`'s
-        // own contracts.
+            None => gtk_widget_set_tooltip_text(source_view.cast(), ptr::null()),
+        }
+        problem
+    };
+    // Item 180(e): the same debounce also drives completion while typing,
+    // with no Ctrl+Space needed. `show_completion_for_word` refreshes the
+    // popup for the word now under the cursor; if that word is too short or
+    // matches nothing, close whatever the last edit left open rather than
+    // show a stale list. `accept_completion`'s own replacement is a buffer
+    // edit too, and arms this same debounce; its flag skips this one firing
+    // so Tab or Enter does not reopen the popup on the word it just
+    // completed.
+    // SAFETY: as `show_completion_for_word`'s and `close_completion`'s own
+    // contracts.
+    let suppress = std::mem::replace(&mut cell.borrow_mut().suppress_next_auto_complete, false);
+    if !suppress {
         unsafe {
             if !show_completion_for_word(cell, AUTO_COMPLETE_MIN_CHARS) {
                 close_completion(cell);
             }
         }
-        // Item 180(a)'s last open row: a script that parses locally also
-        // gets its text saved now, instead of only on the account editor's
-        // OK. The debounce is the chosen trigger over "leaving the script":
-        // it needs no new signal connection and already fires on every
-        // pause in typing, so a script left open and untouched still saves.
-        // SAFETY: as `maybe_save_text`.
-        if problem.is_none() {
-            unsafe { maybe_save_text(cell, page) };
-        }
-        G_SOURCE_REMOVE
-    })
+    }
+    // Item 180(a)'s last open row: a script that parses locally also gets
+    // its text saved now, instead of only on the account editor's OK. The
+    // debounce is the chosen trigger over "leaving the script": it needs no
+    // new signal connection and already fires on every pause in typing, so
+    // a script left open and untouched still saves.
+    // SAFETY: as `maybe_save_text`.
+    if problem.is_none() {
+        unsafe { maybe_save_text(cell, page) };
+    }
 }
 
 /// Saves the script text at the earliest safe point (item 180(a)) instead of
@@ -2058,6 +2086,7 @@ unsafe fn accept_completion(cell: &RefCell<UiState>) {
     };
     if let Some((buffer, text)) = accepted {
         tracing::trace!(accepted = text, "sieve completion: candidate accepted");
+        cell.borrow_mut().suppress_next_auto_complete = true;
         // SAFETY: `buffer` is a live child of the page.
         unsafe {
             let mark = gtk_text_buffer_get_insert(buffer);
@@ -3402,6 +3431,13 @@ unsafe extern "C" fn on_check(_button: *mut GObject, page: gpointer) {
             // SAFETY: a source id this page added, not yet fired (it would
             // have cleared the field itself).
             unsafe { g_source_remove(pending) };
+            // Item 192 R7: cancelling the timer must not drop the edit it
+            // would have saved. Running the debounce's own logic now, before
+            // `begin_check` below takes the newer generation, so any save it
+            // starts is older than this Check and its own reply cannot win
+            // the status label over Check's answer.
+            // SAFETY: as `run_pending_validation`.
+            unsafe { run_pending_validation(cell, page.cast()) };
         }
         let job = {
             let ui = cell.borrow();
@@ -4258,6 +4294,62 @@ mod tests {
         });
     }
 
+    /// Item 192 R12: `accept_completion`'s own replacement of the word under
+    /// the cursor is a buffer edit, which arms the same debounce typing
+    /// does. Before this fix, the debounce's own auto-complete step saw the
+    /// word it had just completed, matched it again, and reopened the
+    /// popup; this drives that debounce firing directly, instead of waiting
+    /// on a real timeout, to confirm it now leaves the popup closed. Needs a
+    /// display; skips without one.
+    #[test]
+    fn accepting_a_candidate_does_not_reopen_the_popup_once_the_debounce_fires() {
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: as `completion_opens_navigates_and_accepts_a_candidate`.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
+
+                let cell = state(page.cast()).expect("a freshly built page has state");
+                let buffer = cell.borrow().buffer;
+                let text = cstring_lossy("e");
+                let mut start = GtkTextIter::default();
+                gtk_text_buffer_get_start_iter(buffer, &mut start);
+                gtk_text_buffer_insert(buffer, &mut start, text.as_ptr(), -1);
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                gtk_text_buffer_place_cursor(buffer, &end);
+
+                open_completion(cell);
+                assert!(
+                    !cell.borrow().completion_candidates.is_empty(),
+                    "setup: the popup did not open for \"e\""
+                );
+
+                accept_completion(cell);
+                assert!(
+                    cell.borrow().completion_candidates.is_empty(),
+                    "accept did not close the popup"
+                );
+
+                run_pending_validation(cell, page.cast());
+                assert!(
+                    cell.borrow().completion_candidates.is_empty(),
+                    "the debounce reopened the popup on the word accept just completed"
+                );
+
+                gtk_widget_destroy(window);
+            }
+        });
+    }
+
     /// Accessibility (item 174 (d)): the completion popup is its own
     /// top-level AT-SPI window, a sibling of the account editor rather
     /// than a child of it (confirmed live, 2026-11-16: a dump of the
@@ -4590,6 +4682,7 @@ mod tests {
             completion_list: ptr::null_mut(),
             completion_candidates: Vec::new(),
             completion_selected: 0,
+            suppress_next_auto_complete: false,
             offline: false,
             shell: ptr::null_mut(),
             shell_online_handler: 0,
@@ -5602,6 +5695,130 @@ time window. Wait for the window to reset, or ask an administrator to raise the 
 
                 gtk_widget_destroy(window);
             }
+        });
+    }
+
+    /// A Check click inside the debounce window (item 192 R7) must not lose
+    /// the edit it preempts. `on_check` cancels the pending debounce timer
+    /// before it fires; this verifies the save it would have made still
+    /// happens, through a second, independent connection, and that Check's
+    /// own answer still reaches the status label. Needs a display; skips
+    /// without one.
+    #[test]
+    fn a_check_click_inside_the_debounce_window_still_saves_the_edit() {
+        use jmap_client::{Client, Credentials};
+        use jmap_mock::MockServer;
+
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
+            let link = AccountLink::without_refresh(client, features);
+
+            // Seeds one inactive script under a name other than
+            // `MANAGED_SCRIPT_NAME`, so the page stays in text mode, as
+            // `editing_the_script_text_saves_it_once_the_debounce_fires` does.
+            let loaded = match io::activate_now(
+                &link,
+                &SavePlan {
+                    writes: vec![io::ScriptWrite::Create {
+                        key: "new".to_owned(),
+                        name: "custom".to_owned(),
+                        text: "keep;\n".to_owned(),
+                    }],
+                    destroys: Vec::new(),
+                    activation: io::ActivationChange::Keep,
+                    deactivate_first: false,
+                    if_in_state: None,
+                    baseline: io::Baseline::default(),
+                },
+            )
+            .unwrap()
+            {
+                ActivateOutcome::Reloaded(loaded) => loaded,
+                ActivateOutcome::WrittenReloadFailed(reason) => {
+                    panic!("seeding the script failed: {reason}")
+                }
+            };
+
+            let gtype = register_static::<FiltersPage>();
+            // SAFETY: the type is registered; `instance_init` runs `build_widgets`.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = g_object_new_with_properties(gtype, 0, ptr::null_mut(), ptr::null());
+                gtk_container_add(window.cast(), page.cast());
+                gtk_widget_show_all(window);
+
+                apply_outcome(page, LoadOutcome::Loaded((Arc::new(link), loaded)), None);
+
+                let cell = state(page.cast()).expect("a loaded page has state");
+                let buffer = cell.borrow().buffer;
+                let status = cell.borrow().status;
+
+                let view = cell.borrow().view;
+                let path = gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                gtk_tree_path_free(path);
+
+                let mut end = GtkTextIter::default();
+                gtk_text_buffer_get_end_iter(buffer, &mut end);
+                let added = cstring_lossy("stop;\n");
+                gtk_text_buffer_insert(buffer, &mut end, added.as_ptr(), -1);
+
+                // The edit above armed the debounce timer but the main loop
+                // has not iterated, so it has not fired yet: Check races it
+                // on purpose, inside the window `on_script_changed` opens.
+                assert_ne!(
+                    cell.borrow().validate_timeout,
+                    0,
+                    "the edit did not arm the debounce"
+                );
+                on_check(ptr::null_mut(), page.cast());
+
+                pump_until(
+                    || {
+                        let text =
+                            read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                        text != translate(CHECKING) && !cell.borrow().saving_text
+                    },
+                    Duration::from_secs(5),
+                );
+
+                let text = read_string(gtk_label_get_text(status.cast())).unwrap_or_default();
+                assert_eq!(
+                    text,
+                    translate(SCRIPT_VALID),
+                    "Check's own answer must still reach the status label"
+                );
+
+                gtk_widget_destroy(window);
+            }
+
+            // A second, independent connection: the save the debounce would
+            // have made must have reached the server, not only Check's own
+            // read-only validation.
+            let verify_client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let verify_features =
+                crate::session_cache::AccountFeatures::from_session(&verify_client.session())
+                    .unwrap();
+            let verify_link = AccountLink::without_refresh(verify_client, verify_features);
+            let reloaded =
+                io::load(&verify_link).expect("the server still answers SieveScript/get");
+            let saved = reloaded
+                .scripts
+                .iter()
+                .find(|script| script.script.name == "custom")
+                .expect("the seeded script is still there");
+            assert_eq!(
+                saved.text, "keep;\nstop;\n",
+                "a Check click inside the debounce window must not lose the edit"
+            );
         });
     }
 

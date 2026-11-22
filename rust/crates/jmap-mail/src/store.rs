@@ -763,9 +763,30 @@ impl JmapStore {
     /// The result is `None` if that fails, if the listing does not have the
     /// mailbox, or if the mailbox has no value. Each other reader of
     /// `myRights` here also treats this as "no reason to refuse".
-    pub fn may_add_items(&self, mailbox: &Id) -> Option<bool> {
+    ///
+    /// `owner` names the mailbox's own account, the way
+    /// [`Self::messages`]'s caller does, so a shared mailbox id that
+    /// collides with one of this store's own does not answer with the wrong
+    /// account's rights (item 192 row R4).
+    pub fn may_add_items(&self, mailbox: &Id, owner: Option<&Id>) -> Option<bool> {
         let tree = self.folders(0).ok()?;
-        tree.by_id(mailbox)?.may_add_items
+        tree.by_id_in_account(mailbox, owner)?.may_add_items
+    }
+
+    /// Tells if the folder listing lets this mailbox mark a message seen or
+    /// unseen ([`FolderInfo::may_set_seen`]), the same way as
+    /// [`Self::may_add_items`].
+    pub fn may_set_seen(&self, mailbox: &Id, owner: Option<&Id>) -> Option<bool> {
+        let tree = self.folders(0).ok()?;
+        tree.by_id_in_account(mailbox, owner)?.may_set_seen
+    }
+
+    /// Tells if the folder listing lets this mailbox set any keyword other
+    /// than `$seen` ([`FolderInfo::may_set_keywords`]), the same way as
+    /// [`Self::may_add_items`].
+    pub fn may_set_keywords(&self, mailbox: &Id, owner: Option<&Id>) -> Option<bool> {
+        let tree = self.folders(0).ok()?;
+        tree.by_id_in_account(mailbox, owner)?.may_set_keywords
     }
 
     /// The Camel path of the folder that shows `mailbox`, from the held
@@ -776,9 +797,14 @@ impl JmapStore {
     /// listing of the last session from disk. The caller is offline, so a
     /// listing that still needs the server gives `None`, and so does a
     /// listing without the mailbox.
-    pub fn folder_path(&self, mailbox: &Id) -> Option<String> {
+    ///
+    /// `owner` names the mailbox's own account, the same as
+    /// [`Self::may_add_items`] (item 192 row R4): `crate::transfer`'s
+    /// queued-filing rechain carries it on [`Filing::origin_owner`], set
+    /// when the chain's first filing was made.
+    pub fn folder_path(&self, mailbox: &Id, owner: Option<&Id>) -> Option<String> {
         let tree = self.folders(0).ok()?;
-        Some(tree.by_id(mailbox)?.path.clone())
+        Some(tree.by_id_in_account(mailbox, owner)?.path.clone())
     }
 
     /// The folder-list half of a pushed `Mailbox` change. It refreshes the
@@ -1046,16 +1072,25 @@ impl JmapStore {
     /// protects the *connection*, and a request only uses the connection.
     /// Many folders can synchronise at the same time, as Camel does when
     /// Evolution closes.
-    pub fn set_keywords(&self, uid: &Id, change: &KeywordChange) -> Result<(), StoreError> {
+    ///
+    /// `owner` is the folder's kept owner, as for [`JmapStore::message_source`]:
+    /// a shared mailbox's message id can equal one of this account's own.
+    pub fn set_keywords(
+        &self,
+        uid: &Id,
+        change: &KeywordChange,
+        owner: Option<&Id>,
+    ) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let sync = {
             let guard = read(connection);
             let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
             Arc::clone(sync)
         };
+        let account = owner.cloned().unwrap_or_else(|| sync.account_id().clone());
         tracing::debug!(uid = uid.as_str(), "setting message keywords");
         match retry_once_after(
-            || sync.set_keywords(uid, change),
+            || sync.set_keywords_as(&account, uid, change),
             SyncError::is_unauthorized,
             || self.refresh_credentials(&sync),
         ) {

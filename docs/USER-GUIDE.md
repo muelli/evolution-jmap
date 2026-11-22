@@ -171,6 +171,8 @@ A read mark (`$seen`) on a shared message is shared state on the message, not a 
 
 A share does not carry over to a child mailbox you create inside it. It grants only the mailbox itself. A share also does not let you send mail as the owner.
 
+When the owner revokes your access, the shared branch can stay in the folder list until the refresh interval of the account, not sooner. The server already refuses every request for the revoked mailbox; see Known limits.
+
 ## Stars, labels and categories
 
 Use the star to flag a message. Use a label to put a message in a category, such as Work or Personal. Evolution offers five built-in labels: Important, Work, Personal, To Do, and Later. You can also add a label with your own name.
@@ -236,6 +238,9 @@ A few actions need the server at once. Evolution shows an "offline" message or a
 - If the server advertises an `eventSourceUrl`, mail uses JMAP Push.
   If it does not, new mail arrives at the refresh interval of the account.
 - Checking another person's free or busy time does not yet fall back to locally cached calendar data. It can show no information, online or offline.
+- The Delegates page shows a delegate's raw account id instead of its name and email when the server has directory lookups turned off. The server refuses a lookup of another user's principal in that mode.
+- A revoked shared mailbox stays in the folder list until the next refresh of the account. A manual check for new mail does not force this refresh.
+- Some servers keep one active filter script at a time. On such a server, turning on the vacation autoresponder deactivates your other active script. Turning the autoresponder off again does not reactivate it. Open `Server Filters` and use `Activate` on your script again.
 
 ## Logs and debug output
 

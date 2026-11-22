@@ -77,6 +77,15 @@ pub struct Filing {
     /// case) must not carry that other row's mailbox here, because that
     /// row keeps its own filing, not this one.
     copy_source: Option<Id>,
+    /// The account that owns `out_of` or `copy_source`, `None` for the
+    /// store's own account. `out_of` and `copy_source` never both hold a
+    /// value, so one field names the owner of whichever is set.
+    ///
+    /// A queued-filing rechain (`transfer::queue_filing`) opens the folder
+    /// of `out_of`/`copy_source` by mailbox id alone unless it has this: a
+    /// shared mailbox id that collides with one of the store's own account
+    /// then opens the wrong folder (item 192 row R4).
+    origin_owner: Option<Id>,
 }
 
 impl Filing {
@@ -89,21 +98,40 @@ impl Filing {
             into,
             out_of: None,
             copy_source: None,
+            origin_owner: None,
         }
     }
 
     /// Like [`Filing::copied_into`], but remembers `source`, so
     /// `transfer::rechain` can find and rewrite that row if a later move
-    /// takes the message out of `into` before this copy lands.
+    /// takes the message out of `into` before this copy lands. The source
+    /// is in the store's own account; use [`Filing::copied_from_account`]
+    /// when it is in a shared account instead.
     pub fn copied_from(source: Id, into: Id) -> Self {
         Self {
             into,
             out_of: None,
             copy_source: Some(source),
+            origin_owner: None,
         }
     }
 
-    /// The message gains `into` and loses `out_of`, in one change.
+    /// Like [`Filing::copied_from`], but also names the account that owns
+    /// `source`, `None` for the store's own account. A later queued-filing
+    /// rechain (item 192 row R4) needs this to open the right folder when a
+    /// shared mailbox id collides with one of the store's own.
+    pub fn copied_from_account(source: Id, owner: Option<Id>, into: Id) -> Self {
+        Self {
+            into,
+            out_of: None,
+            copy_source: Some(source),
+            origin_owner: owner,
+        }
+    }
+
+    /// The message gains `into` and loses `out_of`, in one change. `out_of`
+    /// is in the store's own account; use [`Filing::moved_from_account`]
+    /// when it is in a shared account instead.
     ///
     /// A move into the source mailbox is empty; see [`Filing::is_empty`].
     pub fn moved(out_of: Id, into: Id) -> Self {
@@ -111,6 +139,20 @@ impl Filing {
             into,
             out_of: Some(out_of),
             copy_source: None,
+            origin_owner: None,
+        }
+    }
+
+    /// Like [`Filing::moved`], but also names the account that owns
+    /// `out_of`, `None` for the store's own account. A later queued-filing
+    /// rechain (item 192 row R4) needs this to open the right folder when a
+    /// shared mailbox id collides with one of the store's own.
+    pub fn moved_from_account(out_of: Id, owner: Option<Id>, into: Id) -> Self {
+        Self {
+            into,
+            out_of: Some(out_of),
+            copy_source: None,
+            origin_owner: owner,
         }
     }
 
@@ -143,6 +185,12 @@ impl Filing {
     /// `None` for a move: use [`Filing::out_of_mailbox`] instead.
     pub fn copy_source(&self) -> Option<&Id> {
         self.copy_source.as_ref()
+    }
+
+    /// The account that owns [`Filing::out_of_mailbox`] or
+    /// [`Filing::copy_source`], `None` for the store's own account.
+    pub fn origin_owner(&self) -> Option<&Id> {
+        self.origin_owner.as_ref()
     }
 
     /// The filing as the `PatchObject` an `Email/set` update takes.

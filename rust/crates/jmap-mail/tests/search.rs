@@ -77,6 +77,8 @@ fn mailbox() -> FolderInfo {
         unread: 0,
         subscribed: true,
         may_add_items: None,
+        may_set_seen: None,
+        may_set_keywords: None,
         account_id: None,
         children: Vec::new(),
     }
@@ -384,6 +386,8 @@ unsafe fn connected_folder_with_two_subjects() -> (MockServer, Account, *mut Cam
         unread: 0,
         subscribed: true,
         may_add_items: None,
+        may_set_seen: None,
+        may_set_keywords: None,
         account_id: None,
         children: Vec::new(),
     };

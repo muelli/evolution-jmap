@@ -242,7 +242,97 @@ impl KeywordChange {
         }
         Value::Object(patch)
     }
+
+    /// Whether `Mailbox.myRights` (RFC 8621 §2) refuses to let this change
+    /// reach the server.
+    ///
+    /// `$seen` has its own right, `maySetSeen`, separate from every other
+    /// keyword's `maySetKeywords`. A change touching only `$seen` is refused
+    /// by `may_set_seen` alone; a change touching any other keyword is
+    /// refused by `may_set_keywords` alone, even if it also touches `$seen`.
+    /// `None` is read as allowed, the same as every other reader of
+    /// `myRights` in this crate: a server that sends no `myRights` for a
+    /// mailbox the caller owns gives no reason to refuse.
+    pub fn forbidden_by(&self, may_set_seen: Option<bool>, may_set_keywords: Option<bool>) -> bool {
+        let mut touches_seen = false;
+        let mut touches_other = false;
+        for name in self.set.iter().chain(&self.cleared) {
+            if name.eq_ignore_ascii_case(keyword::SEEN) {
+                touches_seen = true;
+            } else {
+                touches_other = true;
+            }
+        }
+        (touches_seen && may_set_seen == Some(false))
+            || (touches_other && may_set_keywords == Some(false))
+    }
 }
 
 /// The property a keyword change patches.
 const KEYWORDS: &str = "keywords";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seen_change() -> KeywordChange {
+        KeywordChange {
+            set: vec![keyword::SEEN.to_owned()],
+            cleared: Vec::new(),
+        }
+    }
+
+    fn label_change() -> KeywordChange {
+        KeywordChange {
+            set: vec!["Work".to_owned()],
+            cleared: Vec::new(),
+        }
+    }
+
+    /// `maySetSeen: false` refuses a change that only touches `$seen`.
+    #[test]
+    fn maysetseen_false_refuses_a_seen_only_change() {
+        assert!(seen_change().forbidden_by(Some(false), None));
+    }
+
+    /// `maySetKeywords: false` does not refuse a change that only touches
+    /// `$seen`: that keyword has its own right.
+    #[test]
+    fn maysetkeywords_false_does_not_refuse_a_seen_only_change() {
+        assert!(!seen_change().forbidden_by(None, Some(false)));
+    }
+
+    /// `maySetKeywords: false` refuses a change to any other keyword.
+    #[test]
+    fn maysetkeywords_false_refuses_a_label_change() {
+        assert!(label_change().forbidden_by(None, Some(false)));
+    }
+
+    /// `maySetSeen: false` does not refuse a change to a keyword that is not
+    /// `$seen`.
+    #[test]
+    fn maysetseen_false_does_not_refuse_a_label_change() {
+        assert!(!label_change().forbidden_by(Some(false), None));
+    }
+
+    /// No `myRights` at all is read as allowed, like every other reader of
+    /// `myRights` in this crate.
+    #[test]
+    fn no_rights_named_is_allowed() {
+        assert!(!seen_change().forbidden_by(None, None));
+        assert!(!label_change().forbidden_by(None, None));
+    }
+
+    /// A change naming both `$seen` and another keyword is refused if either
+    /// right is missing, even though the other right is granted.
+    #[test]
+    fn a_mixed_change_is_refused_if_either_right_is_missing() {
+        let change = KeywordChange {
+            set: vec![keyword::SEEN.to_owned(), "Work".to_owned()],
+            cleared: Vec::new(),
+        };
+        assert!(change.forbidden_by(Some(false), Some(true)));
+        assert!(change.forbidden_by(Some(true), Some(false)));
+        assert!(!change.forbidden_by(Some(true), Some(true)));
+    }
+}

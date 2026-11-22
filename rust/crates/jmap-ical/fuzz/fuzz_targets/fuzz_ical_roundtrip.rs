@@ -30,6 +30,54 @@ fuzz_target!(|data: &[u8]| {
         let _ = jmap_ical::maps_keyword(text, &false_val);
         let _ = jmap_ical::maps_keyword(text, &str_val);
 
+        // Exercise iCalendar and date-time utility functions with arbitrary text.
+        let _ = jmap_ical::event::rrule_entry(text);
+        let _ = jmap_ical::event::rrule_to_rule(text, jmap_ical::event::Ends::At(text));
+        let _ = jmap_ical::event::parse_ical(text);
+        let _ = jmap_ical::event::check_structure(text);
+        let _ = jmap_ical::event::normalize_keyword(text);
+        let _ = jmap_ical::event::stated_duration(text);
+        let _ = jmap_ical::event::period_length(text, text);
+        let _ = jmap_ical::event::instant(text);
+        let _ = jmap_ical::event::whole_days(text);
+        let _ = jmap_ical::event::to_utc_date_time(text);
+        let _ = jmap_ical::event::from_utc_date_time(text);
+        let _ = jmap_ical::event::to_ical_date_time(text);
+        let _ = jmap_ical::event::to_local_date_time(text);
+        let _ = jmap_ical::event::offset_seconds(text);
+        let _ = jmap_ical::event::at_offset(text, text);
+        let _ = jmap_ical::event::from_offset(text, text);
+        let _ = jmap_ical::event::to_nday(text);
+        let _ = jmap_ical::event::to_month_day(text);
+        let _ = jmap_ical::event::to_time_of_day(text);
+        let _ = jmap_ical::event::ical_status(text);
+        let _ = jmap_ical::event::known_status(text);
+        let _ = jmap_ical::event::ical_transparency(text);
+        let _ = jmap_ical::event::known_transparency(text);
+        let _ = jmap_ical::event::ical_privacy(text);
+        let _ = jmap_ical::event::known_privacy(text);
+        let _ = jmap_ical::event::fetched_locally(text);
+        let _ = jmap_ical::event::is_data_uri(text);
+        let _ = jmap_ical::event::names_a_uri(text);
+        let _ = jmap_ical::event::is_utc(text);
+        let _ = jmap_ical::event::utc_offset(text);
+        let _ = jmap_ical::event::date_time_digits(text);
+        let _ = jmap_ical::event::at_midnight(text);
+        let _ = jmap_ical::event::names_map_entry(text);
+        let _ = jmap_ical::event::restricted_name(text);
+        let _ = jmap_ical::event::month_token(text);
+        let _ = jmap_ical::event::weekday_token(text);
+        let _ = jmap_ical::event::strip(text, '-', 4);
+        let _ = jmap_ical::event::strip(text, ':', 2);
+        let _ = jmap_ical::event::to_duration(data.len() as i64);
+        let _ = jmap_ical::event::moved(text, data.len() as i64);
+        if let Ok(num) = text.parse::<i64>() {
+            let _ = jmap_ical::event::to_duration(num);
+            let _ = jmap_ical::event::days_from_civil(num, num, num);
+            let _ = jmap_ical::event::days_in_month_of(num, num);
+            let _ = jmap_ical::event::moved(text, num);
+        }
+
         if let Ok(event1) = jmap_ical::ical_to_event(text) {
             let ical2 = jmap_ical::event_to_ical(&event1);
             if let Ok(event2) = jmap_ical::ical_to_event(&ical2) {

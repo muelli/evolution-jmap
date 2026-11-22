@@ -212,7 +212,6 @@ impl SieveScriptSetRequest {
 
     /// Deactivate the account's active script once the `/set` succeeds.
     pub fn deactivating(mut self) -> Self {
-        self.on_success_activate_script = Some(Value::Null);
         self.on_success_deactivate_script = Some(true);
         self
     }

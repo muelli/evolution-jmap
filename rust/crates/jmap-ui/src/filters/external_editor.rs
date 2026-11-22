@@ -17,12 +17,12 @@ use std::process::Child;
 use std::ptr;
 
 use gio_sys::{
-    g_settings_get_string, g_settings_new_full, g_settings_schema_has_key,
+    g_settings_get_user_value, g_settings_new_full, g_settings_schema_has_key,
     g_settings_schema_source_get_default, g_settings_schema_source_lookup, g_settings_schema_unref,
 };
-use glib_sys::GTRUE;
+use glib_sys::{GTRUE, g_variant_get_string, g_variant_unref};
 use gobject_sys::g_object_unref;
-use jmap_backend_core::marshal::take_string;
+use jmap_backend_core::marshal::read_string;
 
 /// The external editor command to run, or [`EditorCommand::Default`] to
 /// hand the file to the desktop's default handler for text instead of
@@ -58,14 +58,21 @@ pub fn choose_command(
 /// Reads the External Editor plugin's own `command` GSettings key
 /// (`org.gnome.evolution.plugin.external-editor`), for [`choose_command`]'s
 /// first precedence source. `None` when the plugin's schema is not
-/// installed, has no such key, or the key holds an empty string.
+/// installed, has no such key, the user never set it, or it holds an
+/// empty string.
 pub fn gsettings_command() -> Option<String> {
     gsettings_string(c"org.gnome.evolution.plugin.external-editor", c"command")
 }
 
-/// Reads a string key from an installed GSettings schema, or `None` when
-/// the schema is not installed, has no such key, or the key holds an
-/// empty string.
+/// Reads a string key's user-set value from an installed GSettings schema,
+/// or `None` when the schema is not installed, has no such key, the user
+/// never set it, or it holds an empty string.
+///
+/// This reads the user's own value, not the schema's compiled-in default:
+/// the External Editor plugin's schema defaults `command` to `gedit`, a
+/// program this host may not have, and a user who never touched the key
+/// must read as "no editor configured", not as a silent choice of that
+/// default.
 ///
 /// `g_settings_new` aborts the whole process when `schema_id` names a
 /// schema GLib has not registered, so this looks `schema_id` up through
@@ -98,13 +105,23 @@ fn gsettings_string(schema_id: &CStr, key: &CStr) -> Option<String> {
                 return None;
             }
             // SAFETY: `settings` is non-null; `key` was just confirmed
-            // present on its schema.
-            let raw = unsafe { g_settings_get_string(settings, key.as_ptr()) };
+            // present on its schema. Transfer full: null when the user
+            // never set the key, otherwise a floating reference this call
+            // owns until the unref below.
+            let variant = unsafe { g_settings_get_user_value(settings, key.as_ptr()) };
+            let value = if variant.is_null() {
+                None
+            } else {
+                // SAFETY: `variant` is non-null; its string is borrowed
+                // for the variant's lifetime, read here before the unref.
+                let text = unsafe { read_string(g_variant_get_string(variant, ptr::null_mut())) };
+                // SAFETY: `variant` is owned by this call.
+                unsafe { g_variant_unref(variant) };
+                text
+            };
             // SAFETY: `settings` is a GObject this call owns.
             unsafe { g_object_unref(settings.cast()) };
-            // SAFETY: `raw` is NULL or a GLib-owned string this call takes
-            // ownership of.
-            unsafe { take_string(raw) }
+            value
         })
         .flatten();
     // SAFETY: `schema` is owned by this call; every path above returns
@@ -258,6 +275,15 @@ mod tests {
         if let Some(value) = gsettings_command() {
             assert!(!value.is_empty());
         }
+    }
+
+    #[test]
+    fn an_untouched_schema_default_reads_as_absent() {
+        // The External Editor plugin's own schema defaults `command` to
+        // `gedit`, a program this host may not have. A user who never set
+        // the key must read as "no editor configured", not as a silent
+        // choice of a program that may not exist.
+        assert_eq!(gsettings_command(), None);
     }
 
     #[test]

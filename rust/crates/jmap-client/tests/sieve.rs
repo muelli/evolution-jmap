@@ -11,8 +11,11 @@ use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::blob::{BlobUploadRequest, UploadBlob};
 use jmap_proto::error::{SetError, method, set};
+use jmap_proto::methods::SetRequest;
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
-use jmap_proto::sieve::{SieveScript, SieveScriptQueryFilter, sieve_set_error};
+use jmap_proto::sieve::{
+    SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest, sieve_set_error,
+};
 use serde_json::json;
 
 /// Verifies that the server advertises `urn:ietf:params:jmap:sieve` with mandatory `maxSizeScript`.
@@ -85,8 +88,8 @@ fn sieve_script_create_stores_an_inactive_script() {
 }
 
 /// Verifies that `sieve_script_create` omits server-set `isActive` from the wire create object
-/// per RFC 9661 section 2.1, and `sieve_script_deactivate` omits `onSuccessActivateScript`
-/// when `onSuccessDeactivateScript` is sent per RFC 9661 section 2.4.
+/// per RFC 9661 section 2.1, and `sieve_script_deactivate` sends `onSuccessDeactivateScript: true`
+/// without `onSuccessActivateScript` per RFC 9661 section 2.4.
 #[test]
 fn sieve_script_create_and_deactivate_emit_rfc_9661_wire_shapes() {
     use std::io::{BufRead, BufReader, Read, Write};
@@ -227,7 +230,20 @@ fn sieve_script_create_and_deactivate_emit_rfc_9661_wire_shapes() {
     assert_eq!(deactivate_args["onSuccessDeactivateScript"], true);
     assert!(
         deactivate_args.get("onSuccessActivateScript").is_none(),
-        "sieve_script_deactivate must not send both onSuccessActivateScript and onSuccessDeactivateScript (RFC 9661 section 2.4), got {deactivate_args}"
+        "sieve_script_deactivate wire request sends onSuccessDeactivateScript without onSuccessActivateScript, got {deactivate_args}"
+    );
+}
+
+/// Verifies that `SieveScriptSetRequest::deactivating()` wire serialization omits `onSuccessActivateScript`.
+#[test]
+fn sieve_script_set_request_deactivating_wire_shape_omits_activate_script() {
+    let req = SieveScriptSetRequest::new(SetRequest::new(Id::from("acc-1"))).deactivating();
+    let val = serde_json::to_value(&req).expect("serialize deactivating request");
+    assert_eq!(val["accountId"], "acc-1");
+    assert_eq!(val["onSuccessDeactivateScript"], true);
+    assert!(
+        val.get("onSuccessActivateScript").is_none(),
+        "wire request for deactivating() must omit onSuccessActivateScript, got {val}"
     );
 }
 

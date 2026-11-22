@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Scenario: a queued move or copy shows at once, offline (ROADMAP item
-181(a), 182(b)'s "offline-queue-visible" row).
+"""Scenario: a queued move, copy or delete shows at once, offline (ROADMAP
+item 181(a), 182(b)'s "offline-queue-visible" row).
 
 The manual test of master `f3a62f4f` (F6) found that moving or copying a
 message while offline left no visible mark: the row stayed in the source
@@ -12,11 +12,24 @@ the Camel-layer half already covered by `jmap-mail/tests/transfer.rs`. This
 scenario drives the same change through the real Evolution UI: File >
 Work Offline, then Message > Move to Folder.../Copy to Folder... on two
 messages, checking the message list of each folder before reconnecting.
+
+With `--live` (item 181's live verification), the account is the seeded
+live user's own, and the messages and the `Projects`/`Receipts` mailboxes
+are `harness/stalwart/seed-manual-test.py`'s own fixtures, seeded there
+for this exact check, instead of this scenario's own setup step creating
+them against the mock. The live run also deletes a third seeded message
+while offline: `jmap-mail/tests/expunge.rs` already covers the Camel-layer
+half (a row marked deleted while disconnected stays in the folder, and the
+server write happens only after reconnect), and this checks the same path
+through the real UI and a real server's trash mailbox.
 """
 
 from scenario import (
+    LIVE_PASSWORD,
+    LIVE_USER,
     Jmap,
     ScenarioFailure,
+    authenticate,
     do_action,
     expect_log,
     expect_no_errors,
@@ -39,16 +52,24 @@ from scenario import (
 ACCOUNT = "JMAP scenario mail"
 MOVE_SUBJECT = "Welcome to jmap-mockd"
 COPY_SUBJECT = "Second message"
+# harness/stalwart/seed-manual-test.py's own fixtures for this check.
+LIVE_MOVE_SUBJECT = "Offline test 1: move me to Projects"
+LIVE_COPY_SUBJECT = "Offline test 2: copy me to Receipts"
+LIVE_DELETE_SUBJECT = "Offline test 3: delete me"
 PROJECTS = "Projects"
 RECEIPTS = "Receipts"
 
 
 def setup():
-    write_standalone_mail_account(ACCOUNT)
-    server = Jmap()
-    server.create_mailbox(PROJECTS)
-    server.create_mailbox(RECEIPTS)
-    say(f"setup: account with the {PROJECTS!r} and {RECEIPTS!r} mailboxes")
+    if LIVE_USER:
+        write_standalone_mail_account(ACCOUNT, user=LIVE_USER)
+        say("setup: live account source written, seeded fixtures reused")
+    else:
+        write_standalone_mail_account(ACCOUNT)
+        server = Jmap()
+        server.create_mailbox(PROJECTS)
+        server.create_mailbox(RECEIPTS)
+        say(f"setup: account with the {PROJECTS!r} and {RECEIPTS!r} mailboxes")
 
 
 def message_shown(subject):
@@ -89,11 +110,20 @@ def transfer_to_folder(subject, folder, *, move):
 
 
 def run():
-    server = Jmap()
+    move_subject = LIVE_MOVE_SUBJECT if LIVE_USER else MOVE_SUBJECT
+    copy_subject = LIVE_COPY_SUBJECT if LIVE_USER else COPY_SUBJECT
+    if LIVE_USER:
+        authenticate(LIVE_PASSWORD, remember=True, label="authentication-request")
+        server = Jmap(user=LIVE_USER, password=LIVE_PASSWORD, rebase=True)
+    else:
+        server = Jmap()
     mailboxes = server.mailboxes()
     inbox_id = mailboxes["Inbox"]["id"]
     projects_id = mailboxes[PROJECTS]["id"]
     receipts_id = mailboxes[RECEIPTS]["id"]
+    if LIVE_USER:
+        trash_id = server.mailbox_id("trash")
+        trash_name = next(name for name, box in mailboxes.items() if box["id"] == trash_id)
 
     # Open every folder once online, so Evolution already has a local
     # summary for the two new ones before going offline: the "no downsync
@@ -102,52 +132,74 @@ def run():
     select_folder(ACCOUNT, "Inbox")
     select_folder(ACCOUNT, PROJECTS)
     select_folder(ACCOUNT, RECEIPTS)
+    if LIVE_USER:
+        select_folder(ACCOUNT, trash_name)
     select_folder(ACCOUNT, "Inbox")
     screenshot("01-online")
 
     menu_item("File/Work Offline")
     say("menu: File > Work Offline")
 
-    transfer_to_folder(MOVE_SUBJECT, PROJECTS, move=True)
-    gone_from(MOVE_SUBJECT, "Inbox")
-    transfer_to_folder(COPY_SUBJECT, RECEIPTS, move=False)
-    shown_in(COPY_SUBJECT, "Inbox")
+    transfer_to_folder(move_subject, PROJECTS, move=True)
+    gone_from(move_subject, "Inbox")
+    transfer_to_folder(copy_subject, RECEIPTS, move=False)
+    shown_in(copy_subject, "Inbox")
     screenshot("02-inbox-after-queue")
 
     select_folder(ACCOUNT, PROJECTS)
-    shown_in(MOVE_SUBJECT, PROJECTS)
+    shown_in(move_subject, PROJECTS)
     screenshot("03-projects-queued-move")
 
     select_folder(ACCOUNT, RECEIPTS)
-    shown_in(COPY_SUBJECT, RECEIPTS)
+    shown_in(copy_subject, RECEIPTS)
     screenshot("04-receipts-queued-copy")
 
-    if server.mailbox_of(MOVE_SUBJECT) != {inbox_id}:
-        raise ScenarioFailure(f"{MOVE_SUBJECT!r} reached the server while offline")
-    if server.mailbox_of(COPY_SUBJECT) != {inbox_id}:
-        raise ScenarioFailure(f"{COPY_SUBJECT!r} reached the server while offline")
+    if server.mailbox_of(move_subject) != {inbox_id}:
+        raise ScenarioFailure(f"{move_subject!r} reached the server while offline")
+    if server.mailbox_of(copy_subject) != {inbox_id}:
+        raise ScenarioFailure(f"{copy_subject!r} reached the server while offline")
     say("server: neither queued filing was sent while offline")
     if log_count(r"queued filing") < 2:
         raise ScenarioFailure("the log does not show both filings queued")
+
+    if LIVE_USER:
+        select_folder(ACCOUNT, "Inbox")
+        select_message(LIVE_DELETE_SUBJECT)
+        menu_item("Edit/Delete Message")
+        say("menu: Edit > Delete Message")
+        screenshot("04b-inbox-after-delete-offline")
+        if server.mailbox_of(LIVE_DELETE_SUBJECT) != {inbox_id}:
+            raise ScenarioFailure(f"{LIVE_DELETE_SUBJECT!r} reached the server while offline")
+        say("server: the delete was not sent while offline")
 
     menu_item("File/Work Online")
     say("menu: File > Work Online")
 
     wait_for(
-        lambda: server.mailbox_of(MOVE_SUBJECT) == {projects_id},
-        f"{MOVE_SUBJECT!r} only in {PROJECTS!r}",
+        lambda: server.mailbox_of(move_subject) == {projects_id},
+        f"{move_subject!r} only in {PROJECTS!r}",
     )
     wait_for(
-        lambda: server.mailbox_of(COPY_SUBJECT) == {inbox_id, receipts_id},
-        f"{COPY_SUBJECT!r} in both {RECEIPTS!r} and Inbox",
+        lambda: server.mailbox_of(copy_subject) == {inbox_id, receipts_id},
+        f"{copy_subject!r} in both {RECEIPTS!r} and Inbox",
     )
     say("server: the move landed alone, the copy landed alongside the original")
     expect_log(r"replayed filing", "a queued filing replayed on reconnect")
     screenshot("05-replayed-online")
 
+    if LIVE_USER:
+        wait_for(
+            lambda: server.mailbox_of(LIVE_DELETE_SUBJECT) == {trash_id},
+            f"{LIVE_DELETE_SUBJECT!r} moved to {trash_name!r}",
+        )
+        say("server: the offline delete reached the trash on reconnect")
+        expect_log(r"trashing message", "the deferred trash move")
+
     select_folder(ACCOUNT, "Inbox")
-    gone_from(MOVE_SUBJECT, "Inbox")
-    shown_in(COPY_SUBJECT, "Inbox")
+    gone_from(move_subject, "Inbox")
+    shown_in(copy_subject, "Inbox")
+    if LIVE_USER:
+        gone_from(LIVE_DELETE_SUBJECT, "Inbox")
 
     expect_no_errors()
 

@@ -284,10 +284,13 @@ unsafe extern "C" fn transfer_messages_to_sync(
                 );
             }
 
+            let owner = JmapFolder::borrow(source)
+                .and_then(JmapFolder::owner)
+                .cloned();
             let moving = delete_originals != GFALSE;
             let filing = match moving {
-                true => Filing::moved(out_of.clone(), into.clone()),
-                false => Filing::copied_from(out_of.clone(), into.clone()),
+                true => Filing::moved_from_account(out_of.clone(), owner, into.clone()),
+                false => Filing::copied_from_account(out_of.clone(), owner, into.clone()),
             };
             // A move into the current mailbox has no patch, so it must not
             // remove the rows. Camel's wrapper catches the same `CamelFolder`
@@ -558,7 +561,11 @@ unsafe fn queue_filing(
             return Err(StoreError::Disconnected);
         }
         if let Some(origin) = waiting.out_of_mailbox() {
-            let joined = Filing::moved(origin.clone(), filing.into_mailbox().clone());
+            let joined = Filing::moved_from_account(
+                origin.clone(),
+                waiting.origin_owner().cloned(),
+                filing.into_mailbox().clone(),
+            );
             // SAFETY: the contract above.
             return Ok(unsafe { rechain(folder, uid, origin, joined) });
         }
@@ -566,7 +573,11 @@ unsafe fn queue_filing(
         // it now must take the message out of its *source*, not out of
         // this row's own mailbox, which the message never stayed in.
         if let Some(source) = waiting.copy_source() {
-            let joined = Filing::copied_from(source.clone(), filing.into_mailbox().clone());
+            let joined = Filing::copied_from_account(
+                source.clone(),
+                waiting.origin_owner().cloned(),
+                filing.into_mailbox().clone(),
+            );
             // SAFETY: the contract above.
             return Ok(unsafe { rechain(folder, uid, source, joined) });
         }
@@ -643,7 +654,8 @@ unsafe fn rechain(folder: *mut CamelFolder, uid: &CStr, origin: &Id, joined: Fil
 /// `folder` must point at a live `JmapFolder`.
 unsafe fn rewrite_origin_row(folder: *mut CamelFolder, uid: &CStr, origin: &Id, joined: &Filing) {
     // SAFETY: the contract above. The store outlives this vfunc call.
-    let Some(path) = (unsafe { parent_store(folder) }).and_then(|store| store.folder_path(origin))
+    let Some(path) = (unsafe { parent_store(folder) })
+        .and_then(|store| store.folder_path(origin, joined.origin_owner()))
     else {
         return;
     };
@@ -887,7 +899,7 @@ pub(crate) unsafe fn replay_filing(
     match result {
         Ok(()) => {
             // SAFETY: `info` is still the live row.
-            if !unsafe { settle_sent_filing(info.as_ptr(), &filing) } {
+            if !unsafe { settle_sent_filing(info.as_ptr(), &filing, owner) } {
                 // The row still has a filing to send. Keep it on the work
                 // list: an empty join cleared the mark with the filing it
                 // took away, and `push_row` cleared it before the request.
@@ -1007,25 +1019,38 @@ pub(crate) unsafe fn replay_filing(
 /// replaces a filing it has read. A write that loses to yet another thread
 /// reads that thread's filing and answers for it instead.
 ///
+/// `owner` names the account of the mailbox this row lives in, the one
+/// [`Filing::into_mailbox`] of `sent` names, so an amendment this call builds
+/// can open the right folder on a later rechain (item 192 row R4).
+///
 /// # Safety
 ///
 /// `info` must point at a live `CamelMessageInfo`.
-unsafe fn settle_sent_filing(info: *mut CamelMessageInfo, sent: &Filing) -> bool {
+unsafe fn settle_sent_filing(
+    info: *mut CamelMessageInfo,
+    sent: &Filing,
+    owner: Option<&Id>,
+) -> bool {
     let mut held = Some(sent.clone());
     loop {
         let next = match &held {
             // The filing this call sent, and the server has it now.
             Some(filing) if filing == sent => None,
-            Some(filing) if rechained_from(sent, filing) => Some(Filing::moved(
+            Some(filing) if rechained_from(sent, filing) => Some(Filing::moved_from_account(
                 sent.into_mailbox().clone(),
+                owner.cloned(),
                 filing.into_mailbox().clone(),
             )),
             Some(filing) => Some(filing.clone()),
             // An empty join: the chain goes back to the mailbox it started
             // in, which a move out of this call's destination reaches now.
-            None => sent
-                .out_of_mailbox()
-                .map(|origin| Filing::moved(sent.into_mailbox().clone(), origin.clone())),
+            None => sent.out_of_mailbox().map(|origin| {
+                Filing::moved_from_account(
+                    sent.into_mailbox().clone(),
+                    owner.cloned(),
+                    origin.clone(),
+                )
+            }),
         };
         let next = next.filter(|filing| !filing.is_empty());
         let settled = next.is_none();

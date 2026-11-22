@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-18 04:19+0000\n"
+"POT-Creation-Date: 2026-11-20 18:30+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -557,8 +557,8 @@ msgid "Se_lect"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:150
-#: rust/crates/jmap-ui/src/filters/page.rs:656
-#: rust/crates/jmap-ui/src/filters/page.rs:756
+#: rust/crates/jmap-ui/src/filters/page.rs:688
+#: rust/crates/jmap-ui/src/filters/page.rs:788
 msgid "Name"
 msgstr ""
 
@@ -615,7 +615,7 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/delegates/page.rs:865
 #: rust/crates/jmap-ui/src/delegates/page.rs:996
-#: rust/crates/jmap-ui/src/filters/page.rs:3285
+#: rust/crates/jmap-ui/src/filters/page.rs:3342
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:455
 #: rust/crates/jmap-ui/src/send_later/extension.rs:906
 msgid "_Cancel"
@@ -906,47 +906,47 @@ msgstr ""
 msgid "C_heck"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:578
+#: rust/crates/jmap-ui/src/filters/page.rs:610
 msgid "Server Filters"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:657
+#: rust/crates/jmap-ui/src/filters/page.rs:689
 msgid "Active"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:671
+#: rust/crates/jmap-ui/src/filters/page.rs:703
 msgid "Re_move"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:692
+#: rust/crates/jmap-ui/src/filters/page.rs:724
 msgid "_Script:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:755
+#: rust/crates/jmap-ui/src/filters/page.rs:787
 msgid "Enabled"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:769
+#: rust/crates/jmap-ui/src/filters/page.rs:801
 msgid "Rem_ove"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:770
+#: rust/crates/jmap-ui/src/filters/page.rs:802
 msgid "Move _Up"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:771
+#: rust/crates/jmap-ui/src/filters/page.rs:803
 msgid "Move Do_wn"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:772
+#: rust/crates/jmap-ui/src/filters/page.rs:804
 msgid "E_nable"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:773
+#: rust/crates/jmap-ui/src/filters/page.rs:805
 msgid "Disa_ble"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/filters/page.rs:3288
+#: rust/crates/jmap-ui/src/filters/page.rs:3345
 #: rust/crates/jmap-ui/src/filters/rule_dialog.rs:458
 msgid "_OK"
 msgstr ""
@@ -1161,7 +1161,7 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/link.rs:53
 msgid ""
-"the server rejected the account's credentials — it may need to be signed in "
+"the server rejected the account's credentials: it may need to be signed in "
 "again"
 msgstr ""
 
@@ -1187,7 +1187,7 @@ msgstr ""
 #, c-format
 msgid ""
 "the server at %1$s redirected to %2$s, a different host, so its credentials "
-"were not sent there — check the account's host setting"
+"were not sent there: check the account's host setting"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the number of seconds to wait; %2$s is what the mail server said.
@@ -1258,7 +1258,7 @@ msgid "The local calendar could not name the chosen time."
 msgstr ""
 
 #: rust/crates/jmap-ui/src/send_later/extension.rs:118
-msgid "That time has already passed — choose one in the future."
+msgid "That time has already passed. Choose one in the future."
 msgstr ""
 
 #: rust/crates/jmap-ui/src/send_later/extension.rs:119
@@ -1421,7 +1421,7 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/vacation/form.rs:32
 msgid ""
-"The last day is before the first day — swap them, or clear one to leave it "
+"The last day is before the first day. Swap them, or clear one to leave it "
 "open."
 msgstr ""
 

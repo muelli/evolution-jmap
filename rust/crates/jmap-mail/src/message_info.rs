@@ -665,8 +665,10 @@ unsafe extern "C" fn save(
         // `bdata` is the same live GString that has the keywords and the
         // thread id. A presence flag, the destination mailbox id, then a
         // second presence flag and the source mailbox id, present only for
-        // a move (`Filing::out_of_mailbox`). [`read_pending_filing`] reads
-        // this back in the same order.
+        // a move (`Filing::out_of_mailbox`), then a third presence flag and
+        // the owner account id, present only alongside the source mailbox
+        // id and only for a shared account (`Filing::origin_owner`).
+        // [`read_pending_filing`] reads this back in the same order.
         unsafe {
             match &filing {
                 Some(filing) => {
@@ -679,6 +681,16 @@ unsafe extern "C" fn save(
                         Some(out_of) => {
                             camel_util_bdata_put_number(bdata, 1);
                             camel_util_bdata_put_string(bdata, c_string(out_of.as_str()).as_ptr());
+                            match filing.origin_owner() {
+                                Some(owner) => {
+                                    camel_util_bdata_put_number(bdata, 1);
+                                    camel_util_bdata_put_string(
+                                        bdata,
+                                        c_string(owner.as_str()).as_ptr(),
+                                    );
+                                }
+                                None => camel_util_bdata_put_number(bdata, 0),
+                            }
                         }
                         None => camel_util_bdata_put_number(bdata, 0),
                     }
@@ -708,13 +720,26 @@ unsafe extern "C" fn save(
         // SAFETY: `info` is a row of this type, so the field is there.
         // `bdata` is the same live GString that has the four columns above.
         // A presence flag and the source mailbox id, present only for a
-        // pending filing that is a copy with a known source.
-        // [`read_pending_copy_source`] reads this back in the same order.
+        // pending filing that is a copy with a known source, then a second
+        // presence flag and the owner account id, present only alongside
+        // the source mailbox id and only for a shared account
+        // (`Filing::origin_owner`). [`read_pending_copy_source`] reads this
+        // back in the same order.
         unsafe {
-            match filing.and_then(|filing| filing.copy_source().cloned()) {
-                Some(source) => {
+            match filing
+                .as_ref()
+                .and_then(|filing| filing.copy_source().map(|source| (source, filing)))
+            {
+                Some((source, filing)) => {
                     camel_util_bdata_put_number(bdata, 1);
                     camel_util_bdata_put_string(bdata, c_string(source.as_str()).as_ptr());
+                    match filing.origin_owner() {
+                        Some(owner) => {
+                            camel_util_bdata_put_number(bdata, 1);
+                            camel_util_bdata_put_string(bdata, c_string(owner.as_str()).as_ptr());
+                        }
+                        None => camel_util_bdata_put_number(bdata, 0),
+                    }
                 }
                 None => camel_util_bdata_put_number(bdata, 0),
             }
@@ -804,9 +829,9 @@ unsafe extern "C" fn load(
         // `save` wrote the pending-copy-source column at that position.
         let copy_source = unsafe { read_pending_copy_source(cursor) };
         let filing = match (filing, copy_source) {
-            (Some(filing), Some(source)) if filing.out_of_mailbox().is_none() => {
-                Some(Filing::copied_from(source, filing.into_mailbox().clone()))
-            }
+            (Some(filing), Some((source, owner))) if filing.out_of_mailbox().is_none() => Some(
+                Filing::copied_from_account(source, owner, filing.into_mailbox().clone()),
+            ),
             (filing, _) => filing,
         };
         // SAFETY: `info` is a row of this type, because of the guard above.
@@ -815,22 +840,47 @@ unsafe extern "C" fn load(
     })
 }
 
-/// Reads the pending-filing column that [`save`] writes after the thread id:
-/// a presence flag, the destination mailbox id, then a second presence flag
-/// and the source mailbox id, present only for a move.
+/// Reads a presence flag and, if set, an id: the shape every optional
+/// mailbox or account column after the keywords shares.
 ///
-/// If the record is truncated or older than this column, the first presence
-/// flag defaults to 0 (`camel_util_bdata_get_number`'s own fallback for a
-/// cursor with no data left), so this returns `None`: the same safe
-/// degradation [`load`]'s keyword count already relies on.
+/// If the record is truncated or older than this column, the presence flag
+/// defaults to 0 (`camel_util_bdata_get_number`'s own fallback for a cursor
+/// with no data left), so this returns `None`, the same safe degradation
+/// [`load`]'s keyword count already relies on.
+///
+/// # Safety
+///
+/// `cursor` must be the cursor [`load`] receives, already advanced past
+/// every column before this one.
+unsafe fn read_id_column(cursor: *mut *mut gchar) -> Option<Id> {
+    // SAFETY: the contract above. `get_string` moves the cursor and returns a
+    // `g_malloc`ed string, or NULL when no data remains.
+    unsafe {
+        if camel_util_bdata_get_number(cursor, 0) == 0 {
+            return None;
+        }
+        let raw = camel_util_bdata_get_string(cursor, ptr::null());
+        if raw.is_null() {
+            return None;
+        }
+        let text = CStr::from_ptr(raw).to_string_lossy().into_owned();
+        g_free(raw.cast());
+        Some(Id::new(text))
+    }
+}
+
+/// Reads the pending-filing column that [`save`] writes after the thread id:
+/// a presence flag, the destination mailbox id, then [`read_id_column`] for
+/// the source mailbox id (present only for a move) and, right after it,
+/// again for the owner account id (present only alongside the source
+/// mailbox id, and only for a shared account).
 ///
 /// # Safety
 ///
 /// `cursor` must be the cursor [`load`] receives, already advanced past the
 /// keyword and thread-id columns.
 unsafe fn read_pending_filing(cursor: *mut *mut gchar) -> Option<Filing> {
-    // SAFETY: the contract above. `get_string` moves the cursor and returns a
-    // `g_malloc`ed string, or NULL when no data remains.
+    // SAFETY: the contract above.
     unsafe {
         if camel_util_bdata_get_number(cursor, 0) == 0 {
             return None;
@@ -842,79 +892,47 @@ unsafe fn read_pending_filing(cursor: *mut *mut gchar) -> Option<Filing> {
         let into = Id::new(CStr::from_ptr(into_raw).to_string_lossy().into_owned());
         g_free(into_raw.cast());
 
-        let out_of = if camel_util_bdata_get_number(cursor, 0) != 0 {
-            let raw = camel_util_bdata_get_string(cursor, ptr::null());
-            if raw.is_null() {
-                None
-            } else {
-                let text = CStr::from_ptr(raw).to_string_lossy().into_owned();
-                g_free(raw.cast());
-                Some(Id::new(text))
-            }
+        let out_of = read_id_column(cursor);
+        let origin_owner = if out_of.is_some() {
+            read_id_column(cursor)
         } else {
             None
         };
 
         Some(match out_of {
-            Some(out_of) => Filing::moved(out_of, into),
+            Some(out_of) => Filing::moved_from_account(out_of, origin_owner, into),
             None => Filing::copied_into(into),
         })
     }
 }
 
 /// Reads the pending-append column that [`save`] writes after the
-/// pending-filing column: a presence flag, then the destination mailbox id.
-///
-/// If the record is truncated or older than this column, the presence flag
-/// defaults to 0, so this returns `None`: the same safe degradation
-/// [`read_pending_filing`] already relies on.
+/// pending-filing column: [`read_id_column`] for the destination mailbox id.
 ///
 /// # Safety
 ///
 /// `cursor` must be the cursor [`load`] receives, already advanced past the
 /// keyword, thread-id and pending-filing columns.
 unsafe fn read_pending_append(cursor: *mut *mut gchar) -> Option<PendingAppend> {
-    // SAFETY: the contract above. `get_string` moves the cursor and returns a
-    // `g_malloc`ed string, or NULL when no data remains.
-    unsafe {
-        if camel_util_bdata_get_number(cursor, 0) == 0 {
-            return None;
-        }
-        let raw = camel_util_bdata_get_string(cursor, ptr::null());
-        if raw.is_null() {
-            return None;
-        }
-        let mailbox = Id::new(CStr::from_ptr(raw).to_string_lossy().into_owned());
-        g_free(raw.cast());
-        Some(PendingAppend::into_mailbox(mailbox))
-    }
+    // SAFETY: the contract above.
+    unsafe { read_id_column(cursor).map(PendingAppend::into_mailbox) }
 }
 
 /// Reads the pending-copy-source column that [`save`] writes after the
-/// pending-append column: a presence flag, then the source mailbox id.
-///
-/// If the record is truncated or older than this column, the presence flag
-/// defaults to 0, so this returns `None`: the same safe degradation
-/// [`read_pending_append`] already relies on.
+/// pending-append column: [`read_id_column`] for the source mailbox id,
+/// then, if present, again right after it for the owner account id
+/// (present only for a shared account).
 ///
 /// # Safety
 ///
 /// `cursor` must be the cursor [`load`] receives, already advanced past the
 /// keyword, thread-id, pending-filing and pending-append columns.
-unsafe fn read_pending_copy_source(cursor: *mut *mut gchar) -> Option<Id> {
-    // SAFETY: the contract above. `get_string` moves the cursor and returns a
-    // `g_malloc`ed string, or NULL when no data remains.
+unsafe fn read_pending_copy_source(cursor: *mut *mut gchar) -> Option<(Id, Option<Id>)> {
+    // SAFETY: the contract above.
     unsafe {
-        if camel_util_bdata_get_number(cursor, 0) == 0 {
-            return None;
-        }
-        let raw = camel_util_bdata_get_string(cursor, ptr::null());
-        if raw.is_null() {
-            return None;
-        }
-        let source = Id::new(CStr::from_ptr(raw).to_string_lossy().into_owned());
-        g_free(raw.cast());
-        Some(source)
+        let source = read_id_column(cursor)?;
+        let owner = read_id_column(cursor);
+        Some((source, owner))
     }
 }
 
@@ -1785,6 +1803,50 @@ mod pending_filing_tests {
         let restored = unsafe { new_message_info(ptr::null_mut(), &row("Em0105")) };
         assert!(!info.is_null() && !restored.is_null());
         let filing = Filing::copied_from(Id::new("Inbox"), Id::new("Archive"));
+
+        // SAFETY: as the move test above.
+        unsafe {
+            set_pending_filing(info, Some(filing.clone()));
+
+            let mut record: CamelSummaryMessageRecord = std::mem::zeroed();
+            let bdata = g_string_new(ptr::null());
+            assert_ne!(
+                camel_message_info_save(info, ptr::addr_of_mut!(record), bdata),
+                GFALSE,
+                "the row would not save"
+            );
+
+            record.bdata = (*bdata).str;
+            let mut cursor = record.bdata;
+            assert_ne!(
+                camel_message_info_load(restored, ptr::addr_of!(record), ptr::addr_of_mut!(cursor)),
+                GFALSE,
+                "the row would not load"
+            );
+
+            assert_eq!(pending_filing(restored), Some(filing));
+            free_saved_strings(&mut record);
+            g_string_free(bdata, GTRUE);
+            g_object_unref(restored.cast());
+            g_object_unref(info.cast());
+        }
+    }
+
+    /// A move's origin owner (item 192 row R4: the account a shared mailbox
+    /// id might collide with one of this store's own) survives the same
+    /// trip, so a queued-filing rechain after a restart still opens the
+    /// right folder, not the first match of a colliding id.
+    #[test]
+    fn a_pending_moves_origin_owner_survives_a_trip_through_the_summary_database() {
+        // SAFETY: NULL is a valid summary; `new_message_info` tolerates it.
+        let info = unsafe { new_message_info(ptr::null_mut(), &row("Em0106")) };
+        let restored = unsafe { new_message_info(ptr::null_mut(), &row("Em0106")) };
+        assert!(!info.is_null() && !restored.is_null());
+        let filing = Filing::moved_from_account(
+            Id::new("Inbox"),
+            Some(Id::new("agent-shared-owner")),
+            Id::new("Archive"),
+        );
 
         // SAFETY: as the move test above.
         unsafe {

@@ -399,15 +399,9 @@ impl Client {
                     }
                 }
             }
-            // RFC 9661 Section 2.4 forbids sending both `onSuccessActivateScript` and
-            // `onSuccessDeactivateScript` in the same request. When deactivating via
-            // `SieveScriptSetRequest::deactivating()`, omit the redundant null key.
-            if chunk_req.on_success_deactivate_script == Some(true)
-                && chunk_req.on_success_activate_script == Some(Value::Null)
-                && let Some(obj) = wire_req.as_object_mut()
-            {
-                obj.remove("onSuccessActivateScript");
-            }
+            // RFC 9661 Section 2.4 does not forbid sending both `onSuccessActivateScript`
+            // and `onSuccessDeactivateScript`: when both are present, the deactivation
+            // MUST be processed first.
             if cyrus_deactivate
                 && chunk_req.on_success_deactivate_script == Some(true)
                 && let Some(obj) = wire_req.as_object_mut()
