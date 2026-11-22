@@ -40,7 +40,7 @@ jobs:
   package:
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/muelli/evolution-jmap/ci-image@sha256:7a398bc3f6086e64c4d9bbfa80e21b515029f17086e9d47fa93c11c2dcea9f55
+      image: ghcr.io/muelli/evolution-jmap/ci-image@sha256:45706c13ccb1b5123ed81959de5d9c1c0dde9669d2e268e8b46688118695bfae
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
