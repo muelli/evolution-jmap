@@ -46,6 +46,11 @@ RUN apt-get update -q && apt-get install -y --no-install-recommends \
         libecal2.0-dev \
         libedata-cal2.0-dev \
         evolution-dev \
+        # The Sieve editor needs GtkSourceView 4. Without this line, the
+        # stock-runner CI build job still succeeds (install-deps.sh adds it
+        # fresh each run), but the pinned release image does not have it,
+        # so only a real tag push shows the gap (v0.7.0, 2026-11-22).
+        libgtksourceview-4-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Rust, pinned to the same version as rust/rust-toolchain.toml.
