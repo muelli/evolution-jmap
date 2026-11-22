@@ -6,6 +6,9 @@
 # It installs a full Evolution, Xvfb, D-Bus, AT-SPI, and openbox.
 # It installs the screenshot and recording tools that ci/gui-smoke.sh keeps
 # on failure.
+# It installs gnome-keyring: the secret store every account password lookup
+# needs. Ubuntu's evolution-data-server package depends on it already; the
+# Fedora package does not, so this script names it on its own.
 # These packages are additional, not a replacement, for the build
 # dependencies in ci/install-deps-rpm.sh.
 # ci/gui-smoke-fedora.sh uses this script inside the pinned Fedora image.
@@ -22,6 +25,7 @@ $SUDO dnf -y install \
 	xorg-x11-server-Xvfb \
 	dbus-daemon \
 	dconf \
+	gnome-keyring \
 	at-spi2-core \
 	python3-pyatspi \
 	openbox \
