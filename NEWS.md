@@ -13,8 +13,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
   creating, renaming and deleting folders, and saving a message into such
   a mailbox all go to the owner's account, and a message deleted there
   lands in the owner's Trash. A read-only share is shown read-only. Shared
-  folders show even when their owner has not subscribed to them. The user
-  guide lists the limits, including the shared read/unread flag.
+  folders show even when their owner has not subscribed to them. Marking a
+  message seen or applying a label in a shared mailbox now updates the
+  owner's message, not a different message of the same id in your own
+  account; a mailbox that refuses the change keeps the mark local instead
+  of erroring. The user guide lists the limits, including the shared
+  read/unread flag.
 - A new Delegates page in the account editor shows who may access your
   calendars and address books, and lets you grant or revoke access by
   level (Reviewer, Author, Editor, and free/busy only for calendars). A
@@ -24,15 +28,18 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - The Server Filters page became a real Sieve editor: syntax highlighting,
   a local syntax check that underlines the offending line and explains it
   in a tooltip, and word completion (Ctrl+Space, or automatically while
-  typing). Activate, Deactivate, Rename, Add and Remove, and the script
+  typing, with no duplicate entry for a command that shares its own
+  extension's name, and no reopening the list right after Tab accepts a
+  word). Activate, Deactivate, Rename, Add and Remove, and the script
   text itself once it validates, are now written to the server at once
-  instead of only on the account editor's OK. An "Edit in External Editor"
-  button opens the script in the editor configured for Evolution's
-  External Editor plugin, or in $VISUAL or $EDITOR. The page is read-only
-  while offline and still shows the last loaded scripts when opened
-  offline. A script the server holds that this page cannot interpret is
-  refused safely instead of aborting Evolution. Tab now moves focus out of
-  the editor.
+  instead of only on the account editor's OK, and an edit made while a
+  background check is still running is no longer lost. An "Edit in
+  External Editor" button opens the script in the editor configured for
+  Evolution's External Editor plugin, or in $VISUAL or $EDITOR if none is
+  configured. The page is read-only while offline and still shows the
+  last loaded scripts when opened offline. A script the server holds that
+  this page cannot interpret is refused safely instead of aborting
+  Evolution. Tab now moves focus out of the editor.
 - Offline mail changes are queued and replayed: a message moved or copied
   while offline shows in its new folder at once and disappears from the
   old one, survives quitting and restarting Evolution, and reaches the
@@ -83,7 +90,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
   answer can no longer overwrite a newer one; a message the server refused
   to update but still lists comes back on the next refresh.
 - Calendar events with ten or more participants, unusual time zone names
-  or odd whitespace no longer change on every sync round trip.
+  or odd whitespace no longer change on every sync round trip. A calendar
+  event with a date far in the past or future no longer risks a crash
+  from an internal overflow.
 - Hardening against hostile input: control characters in an envelope
   address, a cross-origin redirect of a POST, server ids containing a
   slash, file: and data: URIs in calendar locations and attachments, a
@@ -96,6 +105,26 @@ SPDX-License-Identifier: GPL-3.0-or-later
   dependency (for the Sieve editor); the Flatpak extension builds it in.
   The mock server gained conformance checks for RFC 8984, 9610, 9661 and
   9670 and the JMAP calendars draft (see its own changelog).
+
+### Known issues
+
+- Double-clicking a contact card can lose the click during an address
+  book refresh (upstream Evolution bug, evolution#3436).
+- On Stalwart 1.1.1, activating or deactivating a Sieve script from
+  another client does not change the state JMAP reports, so the Server
+  Filters page can silently undo that change on its next save. Reload
+  the page after a change made elsewhere.
+- Some strings are not yet translated into German.
+- Snoozing a message needs a server that supports the snooze capability.
+- The Delegates page shows a raw account id, instead of a name, for a
+  delegate when the server has directory lookups turned off.
+- A mailbox another user has unshared with you can stay in the folder
+  list until the next periodic refresh, up to ten minutes later.
+- Turning on the Vacation Responder on a server that allows only one
+  active Sieve script at a time deactivates your own filter script, and
+  turning Vacation off again does not restore it.
+- The "Edit in External Editor" button on the Server Filters page can
+  sit below the visible area of a small account editor window.
 
 ## 0.6.6 (2026-11-05)
 
