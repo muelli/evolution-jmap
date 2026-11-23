@@ -75,7 +75,8 @@ use jmap_proto::Id;
 
 use crate::delegates::io::{self, Loaded};
 use crate::delegation::{
-    AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, PrincipalSearch,
+    AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, MailDelegationLevel,
+    PrincipalSearch,
 };
 use crate::dispatch;
 use crate::link::{self, AccountLink, LoadOutcome, SendSource};
@@ -87,8 +88,12 @@ const BROWSE_STATE: ObjectData<(Arc<AccountLink>, *mut GtkWidget)> =
     ObjectData::new(c"jmap-delegates-add-browse-state");
 /// The Add dialog's own principal entry and level combos, read back by
 /// [`on_add_field_changed`] on each of their `changed` signals (item 179(e)).
-const ADD_FIELDS: ObjectData<(*mut GtkWidget, *mut GtkWidget, *mut GtkWidget)> =
-    ObjectData::new(c"jmap-delegates-add-fields");
+const ADD_FIELDS: ObjectData<(
+    *mut GtkWidget,
+    *mut GtkWidget,
+    *mut GtkWidget,
+    *mut GtkWidget,
+)> = ObjectData::new(c"jmap-delegates-add-fields");
 const PICKER_STATE: ObjectData<RefCell<PickerState>> =
     ObjectData::new(c"jmap-delegates-picker-state");
 
@@ -109,6 +114,7 @@ const TEXT_COLUMN_WIDTH: c_int = 160;
 const COLUMN_PRINCIPAL: c_int = 0;
 const COLUMN_CALENDAR: c_int = 1;
 const COLUMN_BOOK: c_int = 2;
+const COLUMN_MAIL: c_int = 3;
 
 const PICKER_COLUMN_NAME: c_int = 0;
 const PICKER_COLUMN_EMAIL: c_int = 1;
@@ -133,6 +139,7 @@ const GRANT_FAILED: &CStr = N_(c"The delegate could not be added: %1$s");
 const DELEGATE_COLUMN_TITLE: &CStr = N_(c"Delegate");
 const CALENDAR_COLUMN_TITLE: &CStr = N_(c"Calendars");
 const BOOK_COLUMN_TITLE: &CStr = N_(c"Address Books");
+const MAIL_COLUMN_TITLE: &CStr = N_(c"Mail");
 
 const REVOKE_LABEL: &CStr = N_(c"Re_voke");
 const ADD_LABEL: &CStr = N_(c"_Add…");
@@ -153,6 +160,7 @@ const CHANGE_FAILED: &CStr = N_(c"The delegate could not be changed: %1$s");
 const PRINCIPAL_LABEL: &CStr = N_(c"_Delegate:");
 const CALENDAR_LEVEL_LABEL: &CStr = N_(c"Ca_lendar access:");
 const BOOK_LEVEL_LABEL: &CStr = N_(c"Address _book access:");
+const MAIL_LEVEL_LABEL: &CStr = N_(c"_Mail access:");
 
 const FIND_LABEL: &CStr = N_(c"_Find…");
 const PICKER_DIALOG_TITLE: &CStr = N_(c"Find Delegate");
@@ -182,6 +190,14 @@ const BOOK_LEVELS: [AddressBookDelegationLevel; 3] = [
     AddressBookDelegationLevel::None,
     AddressBookDelegationLevel::Reviewer,
     AddressBookDelegationLevel::Author,
+];
+
+/// The mail level combo's items, in the order it offers them.
+const MAIL_LEVELS: [MailDelegationLevel; 4] = [
+    MailDelegationLevel::None,
+    MailDelegationLevel::Reviewer,
+    MailDelegationLevel::Author,
+    MailDelegationLevel::Editor,
 ];
 
 /// The item of `items` a combo's active index names. `gtk_combo_box_get_active`
@@ -217,17 +233,19 @@ struct GrantDraft {
     principal_editable: bool,
     calendar: CalendarDelegationLevel,
     book: AddressBookDelegationLevel,
+    mail: MailDelegationLevel,
 }
 
 impl GrantDraft {
     /// The Add dialog's starting point: an empty, editable principal field
-    /// and "No access" for both levels.
+    /// and "No access" for all three levels.
     fn new_delegate() -> Self {
         GrantDraft {
             principal: String::new(),
             principal_editable: true,
             calendar: CalendarDelegationLevel::None,
             book: AddressBookDelegationLevel::None,
+            mail: MailDelegationLevel::None,
         }
     }
 
@@ -237,12 +255,14 @@ impl GrantDraft {
         principal_display: &str,
         calendar: CalendarDelegationLevel,
         book: AddressBookDelegationLevel,
+        mail: MailDelegationLevel,
     ) -> Self {
         GrantDraft {
             principal: principal_display.to_owned(),
             principal_editable: false,
             calendar,
             book,
+            mail,
         }
     }
 }
@@ -417,24 +437,36 @@ unsafe fn add_text_column(view: *mut GtkWidget, title: &'static CStr, column: c_
     }
 }
 
-/// Appends one row of three string columns to the list store.
+/// Appends one row of four string columns to the list store.
 ///
 /// # Safety
 ///
-/// `store` must be the live three-string-column store of a live page.
-unsafe fn append_row(store: *mut GtkListStore, principal: &str, calendar: &str, book: &str) {
+/// `store` must be the live four-string-column store of a live page.
+unsafe fn append_row(
+    store: *mut GtkListStore,
+    principal: &str,
+    calendar: &str,
+    book: &str,
+    mail: &str,
+) {
     let principal = cstring_lossy(principal);
     let calendar = cstring_lossy(calendar);
     let book = cstring_lossy(book);
-    let mut columns = [COLUMN_PRINCIPAL, COLUMN_CALENDAR, COLUMN_BOOK];
+    let mail = cstring_lossy(mail);
+    let mut columns = [COLUMN_PRINCIPAL, COLUMN_CALENDAR, COLUMN_BOOK, COLUMN_MAIL];
     // SAFETY: a zeroed GValue is `G_VALUE_INIT`, the state `g_value_init`
-    // requires. All three values are strings, which the store's three
-    // columns hold, and all three are released below. NULL as the iterator
+    // requires. All four values are strings, which the store's four
+    // columns hold, and all four are released below. NULL as the iterator
     // means "do not report the new row back", which this caller does not
     // need.
     unsafe {
-        let mut values: [GValue; 3] = [std::mem::zeroed(), std::mem::zeroed(), std::mem::zeroed()];
-        for (value, text) in values.iter_mut().zip([&principal, &calendar, &book]) {
+        let mut values: [GValue; 4] = [
+            std::mem::zeroed(),
+            std::mem::zeroed(),
+            std::mem::zeroed(),
+            std::mem::zeroed(),
+        ];
+        for (value, text) in values.iter_mut().zip([&principal, &calendar, &book, &mail]) {
             g_value_init(value, G_TYPE_STRING);
             g_value_set_string(value, text.as_ptr());
         }
@@ -444,7 +476,7 @@ unsafe fn append_row(store: *mut GtkListStore, principal: &str, calendar: &str, 
             -1,
             columns.as_mut_ptr(),
             values.as_mut_ptr(),
-            3,
+            4,
         );
         for value in values.iter_mut() {
             g_value_unset(value);
@@ -513,6 +545,7 @@ unsafe fn fill_list(cell: &RefCell<UiState>, loaded: &Loaded) {
                 principal_text,
                 &calendar_level_label(delegate.calendar_level),
                 &address_book_level_label(delegate.address_book_level),
+                &mail_level_label(delegate.mail_level),
             );
         }
         let text = if loaded.delegates.is_empty() {
@@ -551,6 +584,16 @@ fn address_book_level_label(level: AddressBookDelegationLevel) -> String {
     })
 }
 
+/// The text a mail delegation level shows in its column.
+fn mail_level_label(level: MailDelegationLevel) -> String {
+    translate(match level {
+        MailDelegationLevel::None => N_(c"No access"),
+        MailDelegationLevel::Reviewer => N_(c"Reviewer"),
+        MailDelegationLevel::Author => N_(c"Author"),
+        MailDelegationLevel::Editor => N_(c"Editor"),
+    })
+}
+
 /// Builds the only child of the page (a vertical box with the widgets) and
 /// stores the [`UiState`]. The list starts insensitive and empty. The load
 /// fills it, or shows why not in the status label.
@@ -579,8 +622,8 @@ unsafe fn build_widgets(page: *mut GObject) {
         let contacting = cstring_lossy(&translate(CONTACTING));
         gtk_label_set_text(status.cast(), contacting.as_ptr());
 
-        let mut column_types = [G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING];
-        let store = gtk_list_store_newv(3, column_types.as_mut_ptr());
+        let mut column_types = [G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING];
+        let store = gtk_list_store_newv(4, column_types.as_mut_ptr());
         let view = gtk_tree_view_new_with_model(store.cast::<GtkTreeModel>());
         // SAFETY: the view owns the only remaining reference once this one
         // is released, the same pattern as the filters page's script list.
@@ -590,6 +633,7 @@ unsafe fn build_widgets(page: *mut GObject) {
         add_text_column(view, DELEGATE_COLUMN_TITLE, COLUMN_PRINCIPAL, true);
         add_text_column(view, CALENDAR_COLUMN_TITLE, COLUMN_CALENDAR, false);
         add_text_column(view, BOOK_COLUMN_TITLE, COLUMN_BOOK, false);
+        add_text_column(view, MAIL_COLUMN_TITLE, COLUMN_MAIL, false);
         gtk_widget_set_hexpand(view, GTRUE);
         gtk_widget_set_vexpand(view, GTRUE);
         gtk_widget_set_sensitive(view, GFALSE);
@@ -969,6 +1013,7 @@ unsafe fn build_add_dialog(
     *mut GtkWidget,
     *mut GtkWidget,
     *mut GtkWidget,
+    *mut GtkWidget,
 ) {
     // SAFETY: the page is live, per the contract. Every widget is new, and
     // the caller owns the returned dialog.
@@ -1071,12 +1116,29 @@ unsafe fn build_add_dialog(
         gtk_box_pack_start(book_row.cast(), book_combo, GTRUE, GTRUE, 0);
         gtk_box_pack_start(content.cast(), book_row, GFALSE, GFALSE, 0);
 
+        let mail_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        let mail_label = gtk_label_new_with_mnemonic(translate_static(MAIL_LEVEL_LABEL));
+        let mail_combo = gtk_combo_box_text_new();
+        for level in MAIL_LEVELS {
+            let text = cstring_lossy(&mail_level_label(level));
+            gtk_combo_box_text_append(mail_combo.cast(), ptr::null(), text.as_ptr());
+        }
+        gtk_combo_box_set_active(mail_combo.cast(), combo_index_of(&MAIL_LEVELS, draft.mail));
+        gtk_label_set_mnemonic_widget(mail_label.cast(), mail_combo);
+        gtk_box_pack_start(mail_row.cast(), mail_label, GFALSE, GFALSE, 0);
+        gtk_widget_set_hexpand(mail_combo, GTRUE);
+        gtk_box_pack_start(mail_row.cast(), mail_combo, GTRUE, GTRUE, 0);
+        gtk_box_pack_start(content.cast(), mail_row, GFALSE, GFALSE, 0);
+
         // 179(e): OK must not close the dialog on an empty or no-access
         // delegate. Each field's own `changed` keeps the response's
         // sensitivity at `add_is_valid`'s answer, read back by its key on
-        // the dialog rather than captured, so one handler serves all three.
-        ADD_FIELDS.set(dialog.cast(), (principal_entry, calendar_combo, book_combo));
-        for field in [principal_entry, calendar_combo, book_combo] {
+        // the dialog rather than captured, so one handler serves all four.
+        ADD_FIELDS.set(
+            dialog.cast(),
+            (principal_entry, calendar_combo, book_combo, mail_combo),
+        );
+        for field in [principal_entry, calendar_combo, book_combo, mail_combo] {
             g_signal_connect_data(
                 field.cast(),
                 c"changed".as_ptr(),
@@ -1089,14 +1151,21 @@ unsafe fn build_add_dialog(
         gtk_dialog_set_response_sensitive(
             dialog.cast(),
             GTK_RESPONSE_OK,
-            if add_is_valid(principal_entry, calendar_combo, book_combo) {
+            if add_is_valid(principal_entry, calendar_combo, book_combo, mail_combo) {
                 GTRUE
             } else {
                 GFALSE
             },
         );
 
-        (dialog, principal_entry, calendar_combo, book_combo, find)
+        (
+            dialog,
+            principal_entry,
+            calendar_combo,
+            book_combo,
+            mail_combo,
+            find,
+        )
     }
 }
 
@@ -1289,17 +1358,18 @@ unsafe extern "C" fn on_browse(_button: *mut GObject, dialog: gpointer) {
 
 /// Whether the Add dialog's current fields grant anything: a non-empty,
 /// non-whitespace principal, and at least one level above "No access"
-/// (179(e)). A grant of neither level would write nothing, so it is
-/// treated the same as an empty principal.
+/// (179(e)). A grant of no level would write nothing, so it is treated the
+/// same as an empty principal.
 ///
 /// # Safety
 ///
-/// `entry`, `calendar_combo` and `book_combo` must be live children of an
-/// open Add dialog.
+/// `entry`, `calendar_combo`, `book_combo` and `mail_combo` must be live
+/// children of an open Add dialog.
 unsafe fn add_is_valid(
     entry: *mut GtkWidget,
     calendar_combo: *mut GtkWidget,
     book_combo: *mut GtkWidget,
+    mail_combo: *mut GtkWidget,
 ) -> bool {
     // SAFETY: per the contract.
     unsafe {
@@ -1313,12 +1383,15 @@ unsafe fn add_is_valid(
         .unwrap_or(CalendarDelegationLevel::None);
         let book_level = level_at(&BOOK_LEVELS, gtk_combo_box_get_active(book_combo.cast()))
             .unwrap_or(AddressBookDelegationLevel::None);
+        let mail_level = level_at(&MAIL_LEVELS, gtk_combo_box_get_active(mail_combo.cast()))
+            .unwrap_or(MailDelegationLevel::None);
         calendar_level != CalendarDelegationLevel::None
             || book_level != AddressBookDelegationLevel::None
+            || mail_level != MailDelegationLevel::None
     }
 }
 
-/// The `changed` handler of the Add dialog's principal entry and its two
+/// The `changed` handler of the Add dialog's principal entry and its three
 /// level combos: keeps the OK response's sensitivity at [`add_is_valid`]'s
 /// answer, so Enter and the button cannot close the dialog on a delegate
 /// that grants nothing (179(e)).
@@ -1331,13 +1404,13 @@ unsafe extern "C" fn on_add_field_changed(_widget: *mut GObject, dialog: gpointe
     guard("JmapDelegatesPage::add_field_changed", (), || {
         // SAFETY: the Add dialog is live, because one of its own fields
         // just emitted.
-        let Some(&(entry, calendar_combo, book_combo)) =
+        let Some(&(entry, calendar_combo, book_combo, mail_combo)) =
             (unsafe { ADD_FIELDS.get(dialog.cast::<GObject>()) })
         else {
             return;
         };
         // SAFETY: as above.
-        let valid = unsafe { add_is_valid(entry, calendar_combo, book_combo) };
+        let valid = unsafe { add_is_valid(entry, calendar_combo, book_combo, mail_combo) };
         // SAFETY: `dialog` is the live Add dialog.
         unsafe {
             gtk_dialog_set_response_sensitive(
@@ -1492,7 +1565,7 @@ unsafe fn ask_for_grant(
     // SAFETY: the page is live, per the contract. The dialog owns its
     // children, and this function destroys the dialog.
     unsafe {
-        let (dialog, entry, calendar_combo, book_combo, _find) =
+        let (dialog, entry, calendar_combo, book_combo, mail_combo, _find) =
             build_add_dialog(page, title, confirm_label, draft);
         gtk_widget_show_all(dialog);
 
@@ -1508,11 +1581,14 @@ unsafe fn ask_for_grant(
                 .unwrap_or(CalendarDelegationLevel::None);
                 let book = level_at(&BOOK_LEVELS, gtk_combo_box_get_active(book_combo.cast()))
                     .unwrap_or(AddressBookDelegationLevel::None);
+                let mail = level_at(&MAIL_LEVELS, gtk_combo_box_get_active(mail_combo.cast()))
+                    .unwrap_or(MailDelegationLevel::None);
                 GrantDraft {
                     principal,
                     principal_editable: draft.principal_editable,
                     calendar,
                     book,
+                    mail,
                 }
             });
         gtk_widget_destroy(dialog);
@@ -1565,7 +1641,13 @@ unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
         tracing::trace!(action = "grant", "delegates: action started");
         let work = move || {
             let principal_id = io::resolve_principal(&link, &result.principal)?;
-            io::grant(&link, &principal_id, result.calendar, result.book)
+            io::grant(
+                &link,
+                &principal_id,
+                result.calendar,
+                result.book,
+                result.mail,
+            )
         };
         let finish = |page: *mut GObject, outcome: Result<Loaded, String>| {
             // SAFETY: `with_strong` gives the live page.
@@ -1672,7 +1754,7 @@ unsafe fn act_change(page: *mut GObject) {
     let Some(cell) = (unsafe { state(page) }) else {
         return;
     };
-    let (link, principal_id, principal_display, calendar, book) = {
+    let (link, principal_id, principal_display, calendar, book, mail) = {
         let ui = cell.borrow();
         let Some(link) = ui.link.clone() else {
             return;
@@ -1696,9 +1778,10 @@ unsafe fn act_change(page: *mut GObject) {
             principal_display,
             delegate.calendar_level,
             delegate.address_book_level,
+            delegate.mail_level,
         )
     };
-    let draft = GrantDraft::existing(&principal_display, calendar, book);
+    let draft = GrantDraft::existing(&principal_display, calendar, book, mail);
     // SAFETY: the page is live, and this runs on the main thread, per the
     // signal handler contract.
     let Some(result) =
@@ -1718,7 +1801,15 @@ unsafe fn act_change(page: *mut GObject) {
         gtk_widget_set_sensitive(change, GFALSE);
     }
     tracing::trace!(action = "change", "delegates: action started");
-    let work = move || io::grant(&link, &principal_id, result.calendar, result.book);
+    let work = move || {
+        io::grant(
+            &link,
+            &principal_id,
+            result.calendar,
+            result.book,
+            result.mail,
+        )
+    };
     let finish = |page: *mut GObject, outcome: Result<Loaded, String>| {
         // SAFETY: `with_strong` gives the live page.
         unsafe { apply_write_outcome(page, outcome, CHANGE_FAILED, "change") };
@@ -1937,6 +2028,14 @@ mod tests {
                 "{level:?} does not round-trip through its combo index"
             );
         }
+        for level in MAIL_LEVELS {
+            let index = combo_index_of(&MAIL_LEVELS, level);
+            assert_eq!(
+                level_at(&MAIL_LEVELS, index),
+                Some(level),
+                "{level:?} does not round-trip through its combo index"
+            );
+        }
     }
 
     #[test]
@@ -1967,6 +2066,15 @@ mod tests {
         .into_iter()
         .map(address_book_level_label)
         .collect();
+        let mut unique = labels.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), labels.len(), "every level needs its own text");
+    }
+
+    #[test]
+    fn mail_levels_each_have_their_own_label() {
+        let labels: Vec<String> = MAIL_LEVELS.into_iter().map(mail_level_label).collect();
         let mut unique = labels.clone();
         unique.sort();
         unique.dedup();
@@ -2090,11 +2198,11 @@ mod tests {
     }
 
     /// Layout and accessibility: the list starts insensitive, contacting
-    /// status shown, three named columns, no sideways scrolling, the same
+    /// status shown, four named columns, no sideways scrolling, the same
     /// shape `crate::vacation::page`'s own first test checks. Needs a
     /// display; skips without one.
     #[test]
-    fn the_list_starts_insensitive_with_three_named_columns() {
+    fn the_list_starts_insensitive_with_four_named_columns() {
         crate::gtk_test_main::run(|| {
             // SAFETY: no arguments. GTK stays on this thread for the whole test.
             if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
@@ -2129,9 +2237,10 @@ mod tests {
                 assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 0).is_null());
                 assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 1).is_null());
                 assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 2).is_null());
+                assert!(!evo_sys::gtk_tree_view_get_column(ui.view.cast(), 3).is_null());
                 assert!(
-                    evo_sys::gtk_tree_view_get_column(ui.view.cast(), 3).is_null(),
-                    "the list has more than three columns"
+                    evo_sys::gtk_tree_view_get_column(ui.view.cast(), 4).is_null(),
+                    "the list has more than four columns"
                 );
                 assert_eq!(
                     widget::get_accessible_name(ui.view.cast()),
@@ -2687,12 +2796,13 @@ mod tests {
             // source of `gtk_widget_get_toplevel`.
             unsafe {
                 let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-                let (dialog, entry, calendar_combo, book_combo, find) = build_add_dialog(
-                    page.cast(),
-                    ADD_DIALOG_TITLE,
-                    ADD_CONFIRM_LABEL,
-                    &GrantDraft::new_delegate(),
-                );
+                let (dialog, entry, calendar_combo, book_combo, mail_combo, find) =
+                    build_add_dialog(
+                        page.cast(),
+                        ADD_DIALOG_TITLE,
+                        ADD_CONFIRM_LABEL,
+                        &GrantDraft::new_delegate(),
+                    );
 
                 assert!(
                     !get_sensitive(find),
@@ -2723,6 +2833,11 @@ mod tests {
                     gtk_combo_box_get_active(book_combo.cast()),
                     0,
                     "the address book level combo does not default to No access"
+                );
+                assert_eq!(
+                    gtk_combo_box_get_active(mail_combo.cast()),
+                    0,
+                    "the mail level combo does not default to No access"
                 );
 
                 gtk_widget_destroy(dialog);
@@ -2770,9 +2885,11 @@ mod tests {
     }
 
     /// 179(e): the Add dialog's OK response stays insensitive while the
-    /// principal is empty, whitespace-only, or both levels are "No
+    /// principal is empty, whitespace-only, or every level is "No
     /// access", so Enter and the button cannot close it on a delegate
-    /// that grants nothing. Needs a display; skips without one.
+    /// that grants nothing. A mail-only grant counts the same as a
+    /// calendar-only or address-book-only one. Needs a display; skips
+    /// without one.
     #[test]
     fn the_add_dialog_refuses_an_empty_or_no_access_delegate() {
         use evo_sys::gtk_dialog_get_widget_for_response;
@@ -2786,12 +2903,13 @@ mod tests {
             // SAFETY: as `the_add_dialog_defaults_to_no_access_for_both_levels`.
             unsafe {
                 let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-                let (dialog, entry, calendar_combo, _book_combo, _find) = build_add_dialog(
-                    page.cast(),
-                    ADD_DIALOG_TITLE,
-                    ADD_CONFIRM_LABEL,
-                    &GrantDraft::new_delegate(),
-                );
+                let (dialog, entry, calendar_combo, _book_combo, mail_combo, _find) =
+                    build_add_dialog(
+                        page.cast(),
+                        ADD_DIALOG_TITLE,
+                        ADD_CONFIRM_LABEL,
+                        &GrantDraft::new_delegate(),
+                    );
                 let ok = gtk_dialog_get_widget_for_response(dialog.cast(), GTK_RESPONSE_OK);
 
                 assert!(
@@ -2809,6 +2927,18 @@ mod tests {
                 assert!(
                     get_sensitive(ok),
                     "OK stays insensitive once a principal and a level are set"
+                );
+
+                gtk_combo_box_set_active(calendar_combo.cast(), 0);
+                assert!(
+                    !get_sensitive(ok),
+                    "OK is usable once the only level set is cleared again"
+                );
+
+                gtk_combo_box_set_active(mail_combo.cast(), 1);
+                assert!(
+                    get_sensitive(ok),
+                    "OK stays insensitive on a mail-only grant"
                 );
 
                 widget::set_text(entry.cast(), "  ");
@@ -2848,12 +2978,13 @@ mod tests {
                 let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
                 build_widgets(page.cast());
 
-                let (dialog, _entry, _calendar_combo, _book_combo, find) = build_add_dialog(
-                    page.cast(),
-                    ADD_DIALOG_TITLE,
-                    ADD_CONFIRM_LABEL,
-                    &GrantDraft::new_delegate(),
-                );
+                let (dialog, _entry, _calendar_combo, _book_combo, _mail_combo, find) =
+                    build_add_dialog(
+                        page.cast(),
+                        ADD_DIALOG_TITLE,
+                        ADD_CONFIRM_LABEL,
+                        &GrantDraft::new_delegate(),
+                    );
                 assert!(
                     !get_sensitive(find),
                     "Find is usable before the page has a link"
@@ -2867,12 +2998,13 @@ mod tests {
                 };
                 apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 
-                let (dialog, _entry, _calendar_combo, _book_combo, find) = build_add_dialog(
-                    page.cast(),
-                    ADD_DIALOG_TITLE,
-                    ADD_CONFIRM_LABEL,
-                    &GrantDraft::new_delegate(),
-                );
+                let (dialog, _entry, _calendar_combo, _book_combo, _mail_combo, find) =
+                    build_add_dialog(
+                        page.cast(),
+                        ADD_DIALOG_TITLE,
+                        ADD_CONFIRM_LABEL,
+                        &GrantDraft::new_delegate(),
+                    );
                 assert!(
                     get_sensitive(find),
                     "Find stays insensitive once the page has a link"
@@ -2903,16 +3035,18 @@ mod tests {
                 "Bob <bob@example.com>",
                 CalendarDelegationLevel::Author,
                 AddressBookDelegationLevel::Reviewer,
+                MailDelegationLevel::Editor,
             );
             // SAFETY: as `the_add_dialog_defaults_to_no_access_for_both_levels`.
             unsafe {
                 let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-                let (dialog, entry, calendar_combo, book_combo, find) = build_add_dialog(
-                    page.cast(),
-                    CHANGE_DIALOG_TITLE,
-                    CHANGE_CONFIRM_LABEL,
-                    &draft,
-                );
+                let (dialog, entry, calendar_combo, book_combo, mail_combo, find) =
+                    build_add_dialog(
+                        page.cast(),
+                        CHANGE_DIALOG_TITLE,
+                        CHANGE_CONFIRM_LABEL,
+                        &draft,
+                    );
 
                 assert_eq!(
                     widget::get_text(entry.cast()),
@@ -2936,6 +3070,11 @@ mod tests {
                     gtk_combo_box_get_active(book_combo.cast()),
                     combo_index_of(&BOOK_LEVELS, AddressBookDelegationLevel::Reviewer),
                     "the address book level combo does not start at the delegate's own level"
+                );
+                assert_eq!(
+                    gtk_combo_box_get_active(mail_combo.cast()),
+                    combo_index_of(&MAIL_LEVELS, MailDelegationLevel::Editor),
+                    "the mail level combo does not start at the delegate's own level"
                 );
 
                 let ok = gtk_dialog_get_widget_for_response(dialog.cast(), GTK_RESPONSE_OK);

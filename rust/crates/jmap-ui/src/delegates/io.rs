@@ -17,7 +17,8 @@ use jmap_proto::session::{
 };
 
 use crate::delegation::{
-    self, AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, PrincipalSearch,
+    self, AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, MailDelegationLevel,
+    PrincipalSearch,
 };
 use crate::link::{self, AccountLink};
 
@@ -104,22 +105,18 @@ pub fn load(link: &AccountLink) -> Result<Loaded, String> {
     .map_err(|error| link::describe(&error))
 }
 
-/// Sets `principal_id`'s calendar and address book access to `calendar_level`
-/// and `address_book_level` (on every one of the account's own calendars and
-/// address books, the write side of [`crate::delegation::list_delegates`]'s
-/// per-type highest-level read), then lists again so the page shows the
-/// result without a second round trip.
-///
-/// Does not yet write a mail share: `page.rs` has no Mail control for this
-/// dialog yet (ROADMAP item 193(b)'s open `page.rs` wiring step), so a
-/// mail share an account already has stays untouched by this call. The
-/// listed result still reflects it, resolved here the same as the other
-/// two capabilities, so the page can show it.
+/// Sets `principal_id`'s calendar, address book and mail access to
+/// `calendar_level`, `address_book_level` and `mail_level` (on every one of
+/// the account's own calendars and address books, and the Inbox subtree for
+/// mail, the write side of [`crate::delegation::list_delegates`]'s per-type
+/// highest-level read), then lists again so the page shows the result
+/// without a second round trip.
 pub fn grant(
     link: &AccountLink,
     principal_id: &Id,
     calendar_level: CalendarDelegationLevel,
     address_book_level: AddressBookDelegationLevel,
+    mail_level: MailDelegationLevel,
 ) -> Result<Loaded, String> {
     link.call(|client| {
         let session = client.session();
@@ -146,6 +143,9 @@ pub fn grant(
                 address_book_level,
             )?;
         }
+        if let Some(account_id) = &mail_account {
+            delegation::commit_mail_delegation(client, account_id, principal_id, mail_level)?;
+        }
         let offered =
             calendars_account.is_some() || contacts_account.is_some() || mail_account.is_some();
         let delegates = list(client, &calendars_account, &contacts_account, &mail_account)?;
@@ -159,14 +159,15 @@ pub fn grant(
     .map_err(|error| link::describe(&error))
 }
 
-/// Clears `principal_id`'s calendar and address book access. [`grant`] with
-/// both levels at `None`.
+/// Clears `principal_id`'s calendar, address book and mail access. [`grant`]
+/// with every level at `None`.
 pub fn revoke(link: &AccountLink, principal_id: &Id) -> Result<Loaded, String> {
     grant(
         link,
         principal_id,
         CalendarDelegationLevel::None,
         AddressBookDelegationLevel::None,
+        MailDelegationLevel::None,
     )
 }
 
@@ -436,6 +437,7 @@ mod tests {
             &bob,
             CalendarDelegationLevel::Reviewer,
             AddressBookDelegationLevel::Author,
+            MailDelegationLevel::None,
         )
         .unwrap();
 
@@ -450,6 +452,39 @@ mod tests {
             AddressBookDelegationLevel::Author
         );
         assert_eq!(load(&link_to(&server)).unwrap().delegates.len(), 1);
+    }
+
+    #[test]
+    fn grant_writes_a_mail_share_on_the_inbox_subtree() {
+        let bob = Id::new("P-bob");
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            state
+                .account_mut(&account_id)
+                .unwrap()
+                .seed_mailbox("Inbox", Some(jmap_proto::mail::role::INBOX));
+        }
+        assert_eq!(load(&link_to(&server)).unwrap().delegates, vec![]);
+
+        let loaded = grant(
+            &link_to(&server),
+            &bob,
+            CalendarDelegationLevel::None,
+            AddressBookDelegationLevel::None,
+            MailDelegationLevel::Author,
+        )
+        .unwrap();
+
+        assert_eq!(loaded.delegates.len(), 1);
+        assert_eq!(loaded.delegates[0].principal_id, bob);
+        assert_eq!(loaded.delegates[0].mail_level, MailDelegationLevel::Author);
+        assert_eq!(
+            load(&link_to(&server)).unwrap().delegates[0].mail_level,
+            MailDelegationLevel::Author
+        );
     }
 
     #[test]
@@ -472,6 +507,7 @@ mod tests {
             &bob,
             CalendarDelegationLevel::Editor,
             AddressBookDelegationLevel::None,
+            MailDelegationLevel::None,
         )
         .unwrap();
 
