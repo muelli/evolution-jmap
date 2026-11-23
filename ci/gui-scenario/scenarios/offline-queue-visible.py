@@ -22,11 +22,33 @@ while offline: `jmap-mail/tests/expunge.rs` already covers the Camel-layer
 half (a row marked deleted while disconnected stays in the folder, and the
 server write happens only after reconnect), and this checks the same path
 through the real UI and a real server's trash mailbox.
+
+With `--live`, this scenario also breaks the connection at replay time, for
+the move row (item 181's open "connection broken at replay time" check).
+The account goes through its own `live_proxy.py`, on a port apart from
+`run.sh --live`'s own proxy. This scenario stops that proxy right before
+clicking Work Online, a full outage, not one failed request:
+`jmap_mail::service` retries its own reconnect and fails to authenticate,
+so the retry loop never reaches a session to send the filing's replay
+call on. The queued move stays unsent, the same as while offline. This
+scenario then restarts the proxy and checks the move still lands, once
+the retry loop's own next attempt succeeds. `offline-replay-transport-
+error.py` checks a narrower failure already, one reset request mid-replay
+through `fault_proxy.py`, with a session already open.
 """
 
+import os
+import signal
+import subprocess
+import sys
+import urllib.parse
+
 from scenario import (
+    ARTIFACTS,
+    JMAP_URL,
     LIVE_PASSWORD,
     LIVE_USER,
+    MOCK_PORT,
     Jmap,
     ScenarioFailure,
     authenticate,
@@ -58,11 +80,54 @@ LIVE_COPY_SUBJECT = "Offline test 2: copy me to Receipts"
 LIVE_DELETE_SUBJECT = "Offline test 3: delete me"
 PROJECTS = "Projects"
 RECEIPTS = "Receipts"
+# A second live proxy, apart from `run.sh --live`'s own on `MOCK_PORT`, so
+# this scenario can stop and restart the connection on its own.
+PROXY_PORT = int(MOCK_PORT) + 1
+PID_FILE = os.path.join(ARTIFACTS, "live-proxy.pid")
+
+
+def _live_target():
+    """Return the real server's (host, port) named by `GUI_SCENARIO_JMAP_URL`."""
+    parsed = urllib.parse.urlsplit(JMAP_URL)
+    return parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+
+
+def start_live_proxy():
+    """Start a `live_proxy.py` on `PROXY_PORT`, in front of the real server.
+
+    Its pid goes to `PID_FILE`; `stop_live_proxy` reads it back. Called
+    twice in a live run: once in "setup", once more to restore the
+    connection after "run" stops it.
+    """
+    host, port = _live_target()
+    log_path = os.path.join(ARTIFACTS, "live-proxy.log")
+    with open(log_path, "a", encoding="utf-8") as log:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "live_proxy", str(PROXY_PORT), host, str(port)],
+            stdout=log,
+            stderr=log,
+        )
+    with open(PID_FILE, "w", encoding="utf-8") as pid_file:
+        pid_file.write(str(proc.pid))
+
+
+def stop_live_proxy():
+    """Stop the `live_proxy.py` named by `PID_FILE`, a real connection break."""
+    try:
+        with open(PID_FILE, encoding="utf-8") as pid_file:
+            pid = int(pid_file.read().strip())
+    except (FileNotFoundError, ValueError):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
 
 
 def setup():
     if LIVE_USER:
-        write_standalone_mail_account(ACCOUNT, user=LIVE_USER)
+        start_live_proxy()
+        write_standalone_mail_account(ACCOUNT, port=PROXY_PORT, user=LIVE_USER)
         say("setup: live account source written, seeded fixtures reused")
     else:
         write_standalone_mail_account(ACCOUNT)
@@ -110,6 +175,14 @@ def transfer_to_folder(subject, folder, *, move):
 
 
 def run():
+    try:
+        _run()
+    finally:
+        if LIVE_USER:
+            stop_live_proxy()
+
+
+def _run():
     move_subject = LIVE_MOVE_SUBJECT if LIVE_USER else MOVE_SUBJECT
     copy_subject = LIVE_COPY_SUBJECT if LIVE_USER else COPY_SUBJECT
     if LIVE_USER:
@@ -172,16 +245,51 @@ def run():
             raise ScenarioFailure(f"{LIVE_DELETE_SUBJECT!r} reached the server while offline")
         say("server: the delete was not sent while offline")
 
+    if LIVE_USER:
+        stop_live_proxy()
+        say("stopped the live proxy: the connection breaks now")
+
     menu_item("File/Work Online")
     say("menu: File > Work Online")
 
+    if LIVE_USER:
+        # A full outage fails at reconnect, before a session exists to send
+        # the filing's replay call on: `jmap_mail::service` retries the
+        # authentication itself, never reaching `replay_filing`.
+        expect_log(
+            r"mail service authentication failed",
+            "the broken connection fails to reconnect",
+        )
+        if server.mailbox_of(move_subject) != {inbox_id}:
+            raise ScenarioFailure(
+                f"{move_subject!r} reached the server despite the broken connection"
+            )
+        say("server: the move did not land while the connection was broken")
+        screenshot("04c-kept-pending-broken-connection")
+        start_live_proxy()
+        say("restarted the live proxy: the connection is back")
+        # The failed attempts above do not retry on their own within a
+        # normal wait: the toggle itself is what starts a reconnect, proven
+        # by every "File/Work Online" click so far, so repeat it to prompt
+        # one more against the now-restored connection.
+        menu_item("File/Work Offline")
+        menu_item("File/Work Online")
+        say("menu: File > Work Offline, then Work Online again")
+
+    # A broken connection backs off to a slow retry (about 60s seen here),
+    # once its first fast burst of attempts fails: a longer timeout than
+    # the default only matters for the `LIVE_USER` connection-break check
+    # above; an unbroken mock or live connection meets this long before.
+    landing_timeout = 150 if LIVE_USER else 60
     wait_for(
         lambda: server.mailbox_of(move_subject) == {projects_id},
         f"{move_subject!r} only in {PROJECTS!r}",
+        timeout=landing_timeout,
     )
     wait_for(
         lambda: server.mailbox_of(copy_subject) == {inbox_id, receipts_id},
         f"{copy_subject!r} in both {RECEIPTS!r} and Inbox",
+        timeout=landing_timeout,
     )
     say("server: the move landed alone, the copy landed alongside the original")
     expect_log(r"replayed filing", "a queued filing replayed on reconnect")
