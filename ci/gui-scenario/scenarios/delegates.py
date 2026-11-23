@@ -3,16 +3,20 @@
 """Scenario: the Delegates page of the account editor (ROADMAP item 164).
 
 1. The page loads with no delegate: the status bar says so.
-2. Alice clicks Add, fills the principal id and the two level combos, and
-   confirms. The server's calendar and address book both carry the chosen
-   rights for that principal, and the page lists the new row.
+2. Alice clicks Add, fills the principal id and the three level combos, and
+   confirms. The server's calendar, address book and Inbox all carry the
+   chosen rights for that principal, and the page lists the new row.
 3. Alice selects the row and clicks Change (item 193(a)). The dialog opens
    prefilled with the row's principal (fixed, not editable) and its current
-   levels. She raises both levels and confirms; the server's shares and the
-   page's row both show the new levels.
+   levels. She changes all three levels and confirms; the server's shares
+   and the page's row both show the new levels.
 4. Alice selects the row and clicks Revoke. The server no longer shares
-   either collection with that principal, and the page shows the empty
-   status bar again.
+   the calendar, the address book or the Inbox with that principal, and the
+   page shows the empty status bar again.
+
+Step 2 and 3 also cover the Mail row (item 193(b)): the mail level combo
+grants and changes a share of the account's Inbox, the subtree
+`commit_mail_delegation` writes to.
 
 The Add dialog's field takes a principal id or an address (ROADMAP item
 185(b)): the mock seeds "bob@example.com" as a real principal so this
@@ -60,16 +64,20 @@ NO_DELEGATES = "No delegates yet."
 PRINCIPAL = "bob@example.com"
 ADD_DIALOG = "Add Delegate"
 CHANGE_DIALOG = "Change Delegate"
-# In document order: [calendar level, address book level].
+# In document order: [calendar level, address book level, mail level].
 CALENDAR_LEVEL_ROW = 3  # CalendarDelegationLevel::Author
 BOOK_LEVEL_ROW = 1  # AddressBookDelegationLevel::Reviewer
+MAIL_LEVEL_ROW = 3  # MailDelegationLevel::Editor
 CALENDAR_LEVEL_NAME = "Author"
 BOOK_LEVEL_NAME = "Reviewer"
-# Item 193(a): the Change dialog raises both levels further.
+MAIL_LEVEL_NAME = "Editor"
+# Item 193(a): the Change dialog changes every level further.
 NEW_CALENDAR_LEVEL_ROW = 4  # CalendarDelegationLevel::Editor
 NEW_BOOK_LEVEL_ROW = 2  # AddressBookDelegationLevel::Author
+NEW_MAIL_LEVEL_ROW = 1  # MailDelegationLevel::Reviewer
 NEW_CALENDAR_LEVEL_NAME = "Editor"
 NEW_BOOK_LEVEL_NAME = "Author"
+NEW_MAIL_LEVEL_NAME = "Reviewer"
 
 
 def _server():
@@ -166,6 +174,7 @@ def run():
     books = server.names("AddressBook")
     calendar_id = next(iter(calendars))
     book_id = next(iter(books))
+    inbox_id = server.mailbox_id("inbox")
 
     # 1. The page loads with no delegate.
     editor = open_page()
@@ -181,8 +190,8 @@ def run():
     entry = wait_for(lambda: find(dialog, "text"), "the principal entry")
     set_text(entry, principal)
     combos = list(descendants(dialog, "combo box"))
-    if len(combos) != 2:
-        raise ScenarioFailure(f"the Add dialog has {len(combos)} combo boxes, not 2")
+    if len(combos) != 3:
+        raise ScenarioFailure(f"the Add dialog has {len(combos)} combo boxes, not 3")
     combos[0].querySelection().selectChild(CALENDAR_LEVEL_ROW)
     wait_for(
         lambda: selected_item_name(combos[0]) == CALENDAR_LEVEL_NAME,
@@ -193,13 +202,22 @@ def run():
         lambda: selected_item_name(combos[1]) == BOOK_LEVEL_NAME,
         f"the address book level combo shows {BOOK_LEVEL_NAME!r}",
     )
+    combos[2].querySelection().selectChild(MAIL_LEVEL_ROW)
+    wait_for(
+        lambda: selected_item_name(combos[2]) == MAIL_LEVEL_NAME,
+        f"the mail level combo shows {MAIL_LEVEL_NAME!r}",
+    )
     screenshot("delegates-add-filled")
     click_button(dialog, "Add")
     wait_for(lambda: window(ADD_DIALOG) is None, "the Add Delegate dialog closes")
     wait_for(lambda: find(editor, "table cell", principal_display), f"{principal_display!r} listed")
     wait_for(lambda: find(editor, "table cell", CALENDAR_LEVEL_NAME), "its calendar level listed")
     wait_for(lambda: find(editor, "table cell", BOOK_LEVEL_NAME), "its address book level listed")
-    say(f"page: {principal_display!r} listed with {CALENDAR_LEVEL_NAME!r}/{BOOK_LEVEL_NAME!r}")
+    wait_for(lambda: find(editor, "table cell", MAIL_LEVEL_NAME), "its mail level listed")
+    say(
+        f"page: {principal_display!r} listed with "
+        f"{CALENDAR_LEVEL_NAME!r}/{BOOK_LEVEL_NAME!r}/{MAIL_LEVEL_NAME!r}"
+    )
     screenshot("delegates-added")
 
     calendar_rights = wait_for(
@@ -214,9 +232,15 @@ def run():
     )
     if not book_rights.get("mayRead") or book_rights.get("mayWrite"):
         raise ScenarioFailure(f"the address book share is not Reviewer: {book_rights}")
-    say("server: both collections share with the principal at the chosen levels")
+    mail_rights = wait_for(
+        lambda: shared_with(server, "Mailbox", inbox_id, principal_id),
+        f"{principal_id!r} in the Inbox's shareWith",
+    )
+    if not mail_rights.get("mayRemoveItems"):
+        raise ScenarioFailure(f"the mail share is not Editor: {mail_rights}")
+    say("server: the calendar, the address book and the Inbox share at the chosen levels")
 
-    # 3. Change raises both levels (item 193(a)).
+    # 3. Change changes every level (item 193(a)).
     row = wait_for(lambda: find(editor, "table cell", principal_display), f"{principal_display!r} listed")
     row.queryComponent().grabFocus()
     change = wait_for(
@@ -233,8 +257,8 @@ def run():
     if entry.getState().contains(pyatspi.STATE_SENSITIVE):
         raise ScenarioFailure("the Change dialog's principal entry accepts editing")
     combos = list(descendants(dialog, "combo box"))
-    if len(combos) != 2:
-        raise ScenarioFailure(f"the Change dialog has {len(combos)} combo boxes, not 2")
+    if len(combos) != 3:
+        raise ScenarioFailure(f"the Change dialog has {len(combos)} combo boxes, not 3")
     wait_for(
         lambda: selected_item_name(combos[0]) == CALENDAR_LEVEL_NAME,
         f"the calendar level combo starts at {CALENDAR_LEVEL_NAME!r}",
@@ -243,7 +267,14 @@ def run():
         lambda: selected_item_name(combos[1]) == BOOK_LEVEL_NAME,
         f"the address book level combo starts at {BOOK_LEVEL_NAME!r}",
     )
-    say(f"dialog: prefilled with {principal_display!r}, {CALENDAR_LEVEL_NAME!r}/{BOOK_LEVEL_NAME!r}")
+    wait_for(
+        lambda: selected_item_name(combos[2]) == MAIL_LEVEL_NAME,
+        f"the mail level combo starts at {MAIL_LEVEL_NAME!r}",
+    )
+    say(
+        f"dialog: prefilled with {principal_display!r}, "
+        f"{CALENDAR_LEVEL_NAME!r}/{BOOK_LEVEL_NAME!r}/{MAIL_LEVEL_NAME!r}"
+    )
     combos[0].querySelection().selectChild(NEW_CALENDAR_LEVEL_ROW)
     wait_for(
         lambda: selected_item_name(combos[0]) == NEW_CALENDAR_LEVEL_NAME,
@@ -253,6 +284,11 @@ def run():
     wait_for(
         lambda: selected_item_name(combos[1]) == NEW_BOOK_LEVEL_NAME,
         f"the address book level combo shows {NEW_BOOK_LEVEL_NAME!r}",
+    )
+    combos[2].querySelection().selectChild(NEW_MAIL_LEVEL_ROW)
+    wait_for(
+        lambda: selected_item_name(combos[2]) == NEW_MAIL_LEVEL_NAME,
+        f"the mail level combo shows {NEW_MAIL_LEVEL_NAME!r}",
     )
     screenshot("delegates-change-filled")
     click_button(dialog, "Change")
@@ -264,7 +300,11 @@ def run():
     wait_for(
         lambda: find(editor, "table cell", NEW_BOOK_LEVEL_NAME), "its new address book level listed"
     )
-    say(f"page: {principal_display!r} listed with {NEW_CALENDAR_LEVEL_NAME!r}/{NEW_BOOK_LEVEL_NAME!r}")
+    wait_for(lambda: find(editor, "table cell", NEW_MAIL_LEVEL_NAME), "its new mail level listed")
+    say(
+        f"page: {principal_display!r} listed with "
+        f"{NEW_CALENDAR_LEVEL_NAME!r}/{NEW_BOOK_LEVEL_NAME!r}/{NEW_MAIL_LEVEL_NAME!r}"
+    )
     screenshot("delegates-changed")
 
     calendar_rights = wait_for(
@@ -279,9 +319,15 @@ def run():
     )
     if not book_rights.get("mayWrite"):
         raise ScenarioFailure(f"the address book share is not Author: {book_rights}")
-    say("server: both collections carry the raised levels")
+    mail_rights = wait_for(
+        lambda: shared_with(server, "Mailbox", inbox_id, principal_id),
+        f"{principal_id!r} in the Inbox's shareWith",
+    )
+    if not mail_rights.get("mayReadItems") or mail_rights.get("mayAddItems"):
+        raise ScenarioFailure(f"the mail share is not Reviewer: {mail_rights}")
+    say("server: the calendar and the address book carry the raised levels, the mail share the new one")
 
-    # 4. Revoke clears both shares.
+    # 4. Revoke clears every share.
     row = wait_for(lambda: find(editor, "table cell", principal_display), f"{principal_display!r} listed")
     row.queryComponent().grabFocus()
     revoke = wait_for(
@@ -301,7 +347,11 @@ def run():
         lambda: shared_with(server, "AddressBook", book_id, principal_id) is None,
         "the principal gone from the address book's shareWith",
     )
-    say("server: both collections no longer share with the principal")
+    wait_for(
+        lambda: shared_with(server, "Mailbox", inbox_id, principal_id) is None,
+        "the principal gone from the Inbox's shareWith",
+    )
+    say("server: the calendar, the address book and the Inbox no longer share with the principal")
 
     close_with_cancel(editor)
     expect_no_errors()
