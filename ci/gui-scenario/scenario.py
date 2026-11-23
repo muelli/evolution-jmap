@@ -125,6 +125,7 @@ def write_standalone_mail_account(
     identity=("Alice", "alice@example.com"),
     port=None,
     user=None,
+    drafts_folder=False,
 ):
     """Write a standalone mail account, its identity and its transport.
 
@@ -137,6 +138,13 @@ def write_standalone_mail_account(
     gives the account a user name, so that Evolution asks for a password
     and sends Basic authentication; the mock then needs `--basic`. Return
     the display name.
+
+    `drafts_folder` points the identity's Drafts folder at the account's
+    own Drafts mailbox, the same as `jmap-mail`'s `initial_setup_sync`
+    gives the real account wizard after a new account's first connection.
+    Writing the source directly skips that wizard step, so a scenario that
+    saves a draft needs this to land it in the account instead of the
+    local "On This Computer" store.
     """
     credential = f"User={user}\n" if user else ""
     connection = f"""[Authentication]
@@ -159,6 +167,7 @@ IdentityUid={key}-identity
 {connection}""",
     )
     sender, address = identity
+    composition = f"\n[Mail Composition]\nDraftsFolder=folder://{key}-mail/Drafts\n" if drafts_folder else ""
     write_source(
         f"{key}-identity",
         f"""[Data Source]
@@ -171,7 +180,7 @@ Address={address}
 
 [Mail Submission]
 TransportUid={key}-transport
-""",
+{composition}""",
     )
     write_source(
         f"{key}-transport",
@@ -1007,7 +1016,7 @@ def _activate_menu_item(path, window_prefix):
     do_action(_menu_entry(root, path))
 
 
-def restart_evolution(component="mail", timeout=DEFAULT_TIMEOUT):
+def restart_evolution(component="mail", timeout=DEFAULT_TIMEOUT, online=True):
     """Quit Evolution through File/Quit and start it again.
 
     The only helper here that starts a process. The new process gets this
@@ -1016,11 +1025,16 @@ def restart_evolution(component="mail", timeout=DEFAULT_TIMEOUT):
     cached data intact. Appends to the existing "evolution.log" so
     expect_log/expect_no_errors keep seeing the whole run. Waits for the
     application to leave, then to reappear in the AT-SPI tree.
+
+    `online=False` starts the new process with `--offline` instead of
+    `--force-online`: it begins already offline, with no reconnect attempt,
+    instead of ignoring network availability and coming up online.
     """
     menu_item("File/Quit")
     wait_for(lambda: evolution() is None, "Evolution quit", timeout)
+    flag = "--force-online" if online else "--offline"
     with open(os.path.join(ARTIFACTS, "evolution.log"), "a", encoding="utf-8") as log:
-        subprocess.Popen(["evolution", "-c", component, "--force-online"], stdout=log, stderr=log)
+        subprocess.Popen(["evolution", "-c", component, flag], stdout=log, stderr=log)
     wait_for(lambda: evolution() is not None, "Evolution restarted", timeout)
     say("evolution: restarted")
 
