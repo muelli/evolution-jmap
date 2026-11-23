@@ -16,7 +16,7 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -117,6 +117,7 @@ pub struct EventSourceSubscription {
     receiver: Receiver<EventSourceItem>,
     cancel: CancelFlag,
     socket: Arc<Mutex<Option<TcpStream>>>,
+    drop_pending: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     headers: SharedHeaders,
     last_event_id: Arc<Mutex<Option<String>>>,
@@ -142,6 +143,7 @@ impl EventSourceSubscription {
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let socket = Arc::new(Mutex::new(None));
+        let drop_pending = Arc::new(AtomicBool::new(false));
         let last_event_id = Arc::new(Mutex::new(None));
         let reconnect_count = Arc::new(AtomicU64::new(0));
         let handle = {
@@ -149,6 +151,7 @@ impl EventSourceSubscription {
             let headers = headers.clone();
             let ctx = ConnectionContext {
                 socket: Arc::clone(&socket),
+                drop_pending: Arc::clone(&drop_pending),
                 last_id_slot: Arc::clone(&last_event_id),
                 reconnect_count: Arc::clone(&reconnect_count),
             };
@@ -158,6 +161,7 @@ impl EventSourceSubscription {
             receiver,
             cancel,
             socket,
+            drop_pending,
             handle: Some(handle),
             headers,
             last_event_id,
@@ -216,8 +220,11 @@ impl EventSourceSubscription {
     /// Drop the active TCP connection from the client side by shutting down
     /// the socket, without cancelling the subscription.
     pub fn drop_connection(&self) {
-        if let Some(stream) = self.socket.lock().expect("socket lock poisoned").as_ref() {
+        let sock = self.socket.lock().expect("socket lock poisoned");
+        if let Some(stream) = sock.as_ref() {
             let _ = stream.shutdown(Shutdown::Both);
+        } else {
+            self.drop_pending.store(true, Ordering::SeqCst);
         }
     }
 
@@ -225,9 +232,13 @@ impl EventSourceSubscription {
     /// cancelling the subscription.
     pub fn connection_dropper(&self) -> impl Fn() + Send + Sync + 'static {
         let socket = Arc::clone(&self.socket);
+        let drop_pending = Arc::clone(&self.drop_pending);
         move || {
-            if let Some(stream) = socket.lock().expect("socket lock poisoned").as_ref() {
+            let sock = socket.lock().expect("socket lock poisoned");
+            if let Some(stream) = sock.as_ref() {
                 let _ = stream.shutdown(Shutdown::Both);
+            } else {
+                drop_pending.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -246,6 +257,7 @@ impl EventSourceSubscription {
     /// Idempotent. Also called automatically on [`Drop`].
     pub fn stop(&mut self) {
         self.cancel.cancel();
+        self.drop_pending.store(false, Ordering::SeqCst);
         if let Some(stream) = self.socket.lock().expect("socket lock poisoned").take() {
             let _ = stream.shutdown(Shutdown::Both);
         }
@@ -264,6 +276,7 @@ impl Drop for EventSourceSubscription {
 /// Internal handles bundled together across reconnect attempts.
 struct ConnectionContext {
     socket: Arc<Mutex<Option<TcpStream>>>,
+    drop_pending: Arc<AtomicBool>,
     last_id_slot: Arc<Mutex<Option<String>>>,
     reconnect_count: Arc<AtomicU64>,
 }
@@ -372,7 +385,17 @@ fn connect_and_stream(
 
     // Store a socket handle before starting the TLS handshake.
     // Calling `shutdown()` on this clone aborts pending I/O operations.
-    *ctx.socket.lock().expect("socket lock poisoned") = Some(stream.try_clone()?);
+    {
+        let mut sock = ctx.socket.lock().expect("socket lock poisoned");
+        if ctx.drop_pending.swap(false, Ordering::SeqCst) {
+            let _ = stream.shutdown(Shutdown::Both);
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "connection dropped by client",
+            ));
+        }
+        *sock = Some(stream.try_clone()?);
+    }
     if cancel.is_cancelled() {
         return Ok(());
     }

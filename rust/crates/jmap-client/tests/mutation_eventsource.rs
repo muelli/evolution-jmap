@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -335,12 +335,21 @@ fn eventsource_last_event_id_header_handling_and_no_duplicate() {
 fn eventsource_stop_and_drop_cleanly_terminate_thread() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
     let addr = listener.local_addr().expect("local addr");
+    let connected = Arc::new(AtomicBool::new(false));
+    let conn_clone = Arc::clone(&connected);
 
     let server_handle = thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 && line != "\r\n" {
+                line.clear();
+            }
+
             let resp = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
             let _ = stream.write_all(resp.as_bytes());
             let _ = stream.flush();
+            conn_clone.store(true, Ordering::SeqCst);
             let mut buf = [0u8; 1];
             let _ = stream.read(&mut buf);
         }
@@ -351,7 +360,14 @@ fn eventsource_stop_and_drop_cleanly_terminate_thread() {
     let mut subscription =
         EventSourceSubscription::start(url, SharedHeaders::new(Vec::new()), cancel.clone());
 
-    thread::sleep(Duration::from_millis(50));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !connected.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "connection established"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
     assert!(!cancel.is_cancelled());
 
     subscription.stop();
@@ -607,13 +623,12 @@ fn eventsource_stream_events_frame_parsing_and_resets() {
 fn eventsource_drop_connection_shuts_down_socket_and_reconnects() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
     let addr = listener.local_addr().expect("local addr");
-    let accepted = Arc::new(AtomicUsize::new(0));
-    let acc_clone = Arc::clone(&accepted);
+    let established = Arc::new(AtomicBool::new(false));
+    let est_clone = Arc::clone(&established);
 
     let server_handle = thread::spawn(move || {
-        for _ in 0..2 {
+        for conn_idx in 0..2 {
             if let Ok((mut stream, _)) = listener.accept() {
-                acc_clone.fetch_add(1, Ordering::SeqCst);
                 let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
                 let mut line = String::new();
                 while reader.read_line(&mut line).unwrap_or(0) > 0 && line != "\r\n" {
@@ -624,7 +639,11 @@ fn eventsource_drop_connection_shuts_down_socket_and_reconnects() {
                 let _ = stream.write_all(resp.as_bytes());
                 let _ = stream.flush();
 
-                // Drained all request headers. Now blocks until client shuts down socket.
+                if conn_idx == 0 {
+                    est_clone.store(true, Ordering::SeqCst);
+                }
+
+                // Drained all request headers and wrote response head. Now blocks until client shuts down socket.
                 let mut buf = [0u8; 1];
                 let _ = stream.read(&mut buf);
             }
@@ -636,9 +655,12 @@ fn eventsource_drop_connection_shuts_down_socket_and_reconnects() {
         EventSourceSubscription::start(url, SharedHeaders::new(Vec::new()), CancelFlag::new());
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while accepted.load(Ordering::SeqCst) < 1 {
-        assert!(std::time::Instant::now() < deadline, "connection 1");
-        thread::sleep(Duration::from_millis(10));
+    while !established.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "connection 1 established"
+        );
+        thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(subscription.reconnect_count(), 0);
 
@@ -656,6 +678,53 @@ fn eventsource_drop_connection_shuts_down_socket_and_reconnects() {
         }
     );
     assert_eq!(subscription.reconnect_count(), 1);
+
+    drop(subscription);
+    let _ = server_handle.join();
+}
+
+#[test]
+fn eventsource_drop_connection_before_socket_stored_triggers_reconnect() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+    let addr = listener.local_addr().expect("local addr");
+
+    let server_handle = thread::spawn(move || {
+        for _ in 0..2 {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 && line != "\r\n" {
+                    line.clear();
+                }
+
+                let resp = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+
+                let mut buf = [0u8; 1];
+                let _ = stream.read(&mut buf);
+            }
+        }
+    });
+
+    let url = format!("http://{addr}/eventsource?types=*&closeafter=no&ping=0");
+    let subscription =
+        EventSourceSubscription::start(url, SharedHeaders::new(Vec::new()), CancelFlag::new());
+
+    // Calling drop_connection immediately must not be silently dropped if the
+    // socket has not been stored yet.
+    subscription.drop_connection();
+
+    let item = subscription
+        .recv_item_timeout(Duration::from_secs(3))
+        .expect("reconnect notification");
+    assert_eq!(
+        item,
+        EventSourceItem::Reconnected {
+            last_event_id: None,
+            reconnect_count: 1,
+        }
+    );
 
     drop(subscription);
     let _ = server_handle.join();

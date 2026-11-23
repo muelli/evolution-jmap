@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -145,16 +145,26 @@ fn eventsource_resumes_with_last_event_id_and_delivers_missed_changes() {
 fn drop_connection_triggers_reconnect_and_increments_reconnect_count() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
     let addr = listener.local_addr().expect("local addr");
-    let connection_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = Arc::clone(&connection_count);
+    let established = Arc::new(AtomicBool::new(false));
+    let est_clone = Arc::clone(&established);
 
     let server_handle = thread::spawn(move || {
-        for _ in 0..2 {
+        for conn_idx in 0..2 {
             if let Ok((mut stream, _)) = listener.accept() {
-                count_clone.fetch_add(1, Ordering::SeqCst);
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 && line != "\r\n" {
+                    line.clear();
+                }
+
                 let resp = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
                 let _ = stream.write_all(resp.as_bytes());
                 let _ = stream.flush();
+
+                if conn_idx == 0 {
+                    est_clone.store(true, Ordering::SeqCst);
+                }
+
                 let mut buf = [0u8; 1];
                 let _ = stream.read(&mut buf);
             }
@@ -165,11 +175,11 @@ fn drop_connection_triggers_reconnect_and_increments_reconnect_count() {
     let subscription =
         EventSourceSubscription::start(url, SharedHeaders::new(Vec::new()), CancelFlag::new());
 
-    // Wait for first connection
+    // Wait for first connection to be fully established and head sent
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while connection_count.load(Ordering::SeqCst) < 1 {
+    while !established.load(Ordering::SeqCst) {
         assert!(std::time::Instant::now() < deadline, "connection 1 timeout");
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(subscription.reconnect_count(), 0);
 
