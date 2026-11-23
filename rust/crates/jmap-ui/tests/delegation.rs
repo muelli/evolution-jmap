@@ -9,11 +9,13 @@
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
+use jmap_proto::mail::role;
 use jmap_proto::principals::Principal;
 use jmap_ui::delegation::{
-    AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, PrincipalSearch,
-    account_delegates, apply_address_book_delegation, apply_calendar_delegation,
-    commit_address_book_delegation, commit_calendar_delegation, search_principals,
+    AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, MailDelegationLevel,
+    PrincipalSearch, account_delegates, apply_address_book_delegation, apply_calendar_delegation,
+    commit_address_book_delegation, commit_calendar_delegation, commit_mail_delegation,
+    search_principals,
 };
 
 #[test]
@@ -309,6 +311,54 @@ fn committing_an_address_book_level_grants_it_on_every_own_book() {
         .unwrap();
 
     match bob_client.address_books(&account_id) {
+        Err(Error::Method(method_error)) => assert_eq!(method_error.error_type, "forbidden"),
+        other => panic!("expected forbidden after revoke, got {other:?}"),
+    }
+}
+
+#[test]
+fn committing_a_mail_level_grants_it_on_the_inbox_subtree_only() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .bearer_token("alice-token")
+        .bearer_token_as("bob-token", bob.clone())
+        .start();
+    let account_id = server.account_id();
+    let outside_inbox = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+        account.seed_child_mailbox("Work", None, &inbox);
+        account.seed_mailbox("Lists", None)
+    };
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+    let bob_client = Client::connect(server.origin(), Credentials::bearer("bob-token")).unwrap();
+
+    commit_mail_delegation(&alice, &account_id, &bob, MailDelegationLevel::Author).unwrap();
+
+    let bob_mailboxes = bob_client.mailbox_get(&account_id).unwrap().list;
+    assert_eq!(
+        bob_mailboxes.len(),
+        2,
+        "the Inbox and its subfolder must be shared, not Lists"
+    );
+    assert!(
+        bob_mailboxes
+            .iter()
+            .all(|mailbox| mailbox.id.as_ref() != Some(&outside_inbox)),
+        "Lists sits outside the Inbox subtree and must stay unshared"
+    );
+    for mailbox in &bob_mailboxes {
+        let rights = mailbox.my_rights.clone().unwrap();
+        assert_eq!(rights.may_add_items, Some(true));
+        assert_ne!(rights.may_remove_items, Some(true), "Author, not Editor");
+    }
+
+    commit_mail_delegation(&alice, &account_id, &bob, MailDelegationLevel::None).unwrap();
+
+    match bob_client.mailbox_get(&account_id) {
         Err(Error::Method(method_error)) => assert_eq!(method_error.error_type, "forbidden"),
         other => panic!("expected forbidden after revoke, got {other:?}"),
     }

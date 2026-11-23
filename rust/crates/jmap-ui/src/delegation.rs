@@ -20,7 +20,7 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{Calendar, CalendarRights};
 use jmap_proto::contacts::{AddressBook, AddressBookRights};
 use jmap_proto::error::method::{FORBIDDEN, UNKNOWN_METHOD};
-use jmap_proto::mail::MailboxRights;
+use jmap_proto::mail::{Mailbox, MailboxRights, role};
 use jmap_proto::principals::{Principal, PrincipalQueryFilter};
 use jmap_proto::text::escape_pointer_segment;
 use serde_json::{Value, json};
@@ -280,6 +280,80 @@ impl MailDelegationLevel {
             Self::None
         }
     }
+}
+
+/// The ids of the Inbox and every mailbox whose `parentId` chain reaches it
+/// (design note `notes/DELEGATES-MAIL-ROW-DESIGN-2026-11-23.md` section 1:
+/// "Inbox with its subfolders", not every mailbox of the account). Empty
+/// when `mailboxes` has no mailbox with `role == "inbox"`.
+fn inbox_subtree_ids(mailboxes: &[Mailbox]) -> BTreeSet<Id> {
+    let Some(inbox_id) = mailboxes
+        .iter()
+        .find(|mailbox| mailbox.role.as_deref() == Some(role::INBOX))
+        .and_then(|mailbox| mailbox.id.clone())
+    else {
+        return BTreeSet::new();
+    };
+    let by_id: BTreeMap<&Id, &Mailbox> = mailboxes
+        .iter()
+        .filter_map(|mailbox| mailbox.id.as_ref().map(|id| (id, mailbox)))
+        .collect();
+    mailboxes
+        .iter()
+        .filter_map(|mailbox| mailbox.id.clone())
+        .filter(|id| *id == inbox_id || chain_reaches(&by_id, id, &inbox_id))
+        .collect()
+}
+
+/// Whether `id`'s `parentId` chain reaches `target`, walking at most
+/// [`jmap_mail_sync::folder::MAX_DEPTH`] ancestors so a `parentId` loop a
+/// buggy server sends cannot hang this walk (same bound `FolderTree`
+/// already uses for the same reason).
+fn chain_reaches(by_id: &BTreeMap<&Id, &Mailbox>, id: &Id, target: &Id) -> bool {
+    let mut current = by_id.get(id).and_then(|mailbox| mailbox.parent_id.clone());
+    for _ in 0..jmap_mail_sync::folder::MAX_DEPTH {
+        match current {
+            Some(parent_id) if parent_id == *target => return true,
+            Some(parent_id) => {
+                current = by_id
+                    .get(&parent_id)
+                    .and_then(|mailbox| mailbox.parent_id.clone());
+            }
+            None => return false,
+        }
+    }
+    false
+}
+
+/// Apply `level` to `principal_id` on mailbox `mailbox_id` (`Mailbox/set`
+/// with a `shareWith` patch, draft-ietf-jmap-mail-sharing §2).
+pub fn apply_mail_delegation(
+    client: &Client,
+    account_id: &Id,
+    mailbox_id: &Id,
+    principal_id: &Id,
+    level: MailDelegationLevel,
+) -> Result<(), Error> {
+    client.mailbox_update(account_id, mailbox_id, level.share_with_patch(principal_id))
+}
+
+/// Apply `level` to `principal_id` on the Inbox and every mailbox whose
+/// `parentId` chain reaches it (`Mailbox/get`, then one `Mailbox/set` update
+/// per mailbox in that subtree). Unlike [`commit_calendar_delegation`] and
+/// [`commit_address_book_delegation`], this does not grant on every mailbox
+/// of the account: design note section 1 picks the Inbox subtree as the
+/// default scope for "share my mail".
+pub fn commit_mail_delegation(
+    client: &Client,
+    account_id: &Id,
+    principal_id: &Id,
+    level: MailDelegationLevel,
+) -> Result<(), Error> {
+    let mailboxes = client.mailbox_get(account_id)?.list;
+    for mailbox_id in inbox_subtree_ids(&mailboxes) {
+        apply_mail_delegation(client, account_id, &mailbox_id, principal_id, level)?;
+    }
+    Ok(())
 }
 
 /// One principal's calendar and address book access, read back from
@@ -722,6 +796,58 @@ mod tests {
             MailDelegationLevel::from_rights(&MailboxRights::default()),
             MailDelegationLevel::None
         );
+    }
+
+    #[test]
+    fn inbox_subtree_includes_the_inbox_and_its_descendants() {
+        let inbox = Mailbox::new("Inbox")
+            .with_id("M-inbox")
+            .with_role(role::INBOX);
+        let child = Mailbox::new("Work")
+            .with_id("M-child")
+            .with_parent_id("M-inbox");
+        let grandchild = Mailbox::new("Urgent")
+            .with_id("M-grandchild")
+            .with_parent_id("M-child");
+        let ids = inbox_subtree_ids(&[inbox, child, grandchild]);
+        assert_eq!(
+            ids,
+            BTreeSet::from([
+                Id::new("M-inbox"),
+                Id::new("M-child"),
+                Id::new("M-grandchild"),
+            ])
+        );
+    }
+
+    #[test]
+    fn inbox_subtree_excludes_mailboxes_outside_it() {
+        let inbox = Mailbox::new("Inbox")
+            .with_id("M-inbox")
+            .with_role(role::INBOX);
+        let sent = Mailbox::new("Sent").with_id("M-sent").with_role(role::SENT);
+        let other_top_level = Mailbox::new("Lists").with_id("M-lists");
+        let ids = inbox_subtree_ids(&[inbox, sent, other_top_level]);
+        assert_eq!(ids, BTreeSet::from([Id::new("M-inbox")]));
+    }
+
+    #[test]
+    fn inbox_subtree_is_empty_with_no_inbox() {
+        let sent = Mailbox::new("Sent").with_id("M-sent").with_role(role::SENT);
+        assert_eq!(inbox_subtree_ids(&[sent]), BTreeSet::new());
+    }
+
+    #[test]
+    fn inbox_subtree_walk_does_not_hang_on_a_parent_id_loop() {
+        // A buggy server's parentId cycle: M-a's parent is M-b, M-b's parent
+        // is M-a. Neither reaches the real inbox, so neither is included.
+        let inbox = Mailbox::new("Inbox")
+            .with_id("M-inbox")
+            .with_role(role::INBOX);
+        let a = Mailbox::new("A").with_id("M-a").with_parent_id("M-b");
+        let b = Mailbox::new("B").with_id("M-b").with_parent_id("M-a");
+        let ids = inbox_subtree_ids(&[inbox, a, b]);
+        assert_eq!(ids, BTreeSet::from([Id::new("M-inbox")]));
     }
 
     /// `Calendar` and `AddressBook` are `#[non_exhaustive]`, so a fixture
