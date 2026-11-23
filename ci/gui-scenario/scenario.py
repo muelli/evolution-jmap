@@ -559,9 +559,19 @@ def _name(node):
         return ""
 
 
+# at-spi2 of Ubuntu 26.04 names a GtkButton "button", older versions name it
+# "push button". Give both spellings one name, so a scenario matches on either.
+ROLE_ALIASES = {"push button": "button"}
+
+
+def canonical_role(role):
+    """Return the one name this harness uses for `role`."""
+    return ROLE_ALIASES.get(role, role)
+
+
 def _role(node):
     try:
-        return node.getRoleName()
+        return canonical_role(node.getRoleName())
     except Exception:  # noqa: BLE001
         return ""
 
@@ -570,7 +580,7 @@ def descendants(node, role=None, max_depth=30):
     """Yield the descendants of `node` (itself first), depth first."""
     if node is None or max_depth < 0:
         return
-    if role is None or _role(node) == role:
+    if role is None or _role(node) == canonical_role(role):
         yield node
     try:
         count = node.childCount
@@ -613,7 +623,7 @@ def is_showing(node):
 # Server Filters page), not "tree table". "menu item" is a leaf of an open
 # menu; the menu itself (role "menu") is not in this set, since arrow-key
 # navigation lands on its items, not on the menu container.
-FOCUSABLE_ROLES = {"push button", "check box", "text", "combo box", "table", "menu item"}
+FOCUSABLE_ROLES = {"button", "check box", "text", "combo box", "table", "menu item"}
 
 
 def labelled_by_name(node):
@@ -735,7 +745,7 @@ TAB_KEY = 0xFF09
 # is intact and ATK simply never surfaces it. "menu item" is excluded for
 # the same reason FOCUSABLE_ROLES documents it stays out of the mnemonic
 # walk: it is a popup leaf, not a window-level Tab stop.
-TAB_OBSERVABLE_ROLES = {"push button", "check box", "text", "table"}
+TAB_OBSERVABLE_ROLES = {"button", "check box", "text", "table"}
 
 
 def focused_node(root):
