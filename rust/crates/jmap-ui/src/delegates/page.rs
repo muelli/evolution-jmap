@@ -27,6 +27,7 @@
 //! to the store's rows, not from the store itself.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::ffi::{CStr, c_int, c_ulong};
 use std::ptr;
 use std::sync::Arc;
@@ -73,7 +74,9 @@ use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_proto::Id;
 
 use crate::delegates::io::{self, Loaded};
-use crate::delegation::{AddressBookDelegationLevel, CalendarDelegationLevel, PrincipalSearch};
+use crate::delegation::{
+    AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, PrincipalSearch,
+};
 use crate::dispatch;
 use crate::link::{self, AccountLink, LoadOutcome, SendSource};
 use crate::widget;
@@ -138,6 +141,15 @@ const ADD_LABEL: &CStr = N_(c"_Add…");
 // button that opens this dialog.
 const ADD_CONFIRM_LABEL: &CStr = N_(c"_Add");
 const ADD_DIALOG_TITLE: &CStr = N_(c"Add Delegate");
+// Item 193(a): the page button that opens the same dialog prefilled with
+// the selected row's principal and levels, to change them. Mnemonic "h",
+// distinct from Add's "a" and Revoke's "v".
+const CHANGE_LABEL: &CStr = N_(c"C_hange…");
+// As `ADD_CONFIRM_LABEL`: the dialog's own OK button needs no ellipsis.
+const CHANGE_CONFIRM_LABEL: &CStr = N_(c"_Change");
+const CHANGE_DIALOG_TITLE: &CStr = N_(c"Change Delegate");
+// TRANSLATORS: %1$s is the reason the mail server gave.
+const CHANGE_FAILED: &CStr = N_(c"The delegate could not be changed: %1$s");
 const PRINCIPAL_LABEL: &CStr = N_(c"_Delegate:");
 const CALENDAR_LEVEL_LABEL: &CStr = N_(c"Ca_lendar access:");
 const BOOK_LEVEL_LABEL: &CStr = N_(c"Address _book access:");
@@ -182,6 +194,59 @@ fn level_at<T: Copy>(items: &[T], index: c_int) -> Option<T> {
         .copied()
 }
 
+/// `level_at`'s inverse: the combo index `value` sits at in `items`. Falls
+/// back to index 0 ("No access") if `value` is somehow not one of `items`,
+/// which would mean [`CALENDAR_LEVELS`] or [`BOOK_LEVELS`] no longer lists
+/// every value of its enum; `tests::every_level_round_trips_through_its_combo`
+/// pins that this does not happen.
+fn combo_index_of<T: Copy + PartialEq>(items: &[T], value: T) -> c_int {
+    items
+        .iter()
+        .position(|item| *item == value)
+        .and_then(|index| c_int::try_from(index).ok())
+        .unwrap_or(0)
+}
+
+/// What the Add/Change dialog ([`build_add_dialog`]) asks for: a principal
+/// and the two access levels to grant it. For an existing delegate (item
+/// 193(a), [`act_change`]), the principal is fixed and shown read-only:
+/// changing which principal a row names is Revoke then Add, not an edit of
+/// the row's levels.
+struct GrantDraft {
+    principal: String,
+    principal_editable: bool,
+    calendar: CalendarDelegationLevel,
+    book: AddressBookDelegationLevel,
+}
+
+impl GrantDraft {
+    /// The Add dialog's starting point: an empty, editable principal field
+    /// and "No access" for both levels.
+    fn new_delegate() -> Self {
+        GrantDraft {
+            principal: String::new(),
+            principal_editable: true,
+            calendar: CalendarDelegationLevel::None,
+            book: AddressBookDelegationLevel::None,
+        }
+    }
+
+    /// The Change dialog's starting point: a fixed principal and its
+    /// current levels.
+    fn existing(
+        principal_display: &str,
+        calendar: CalendarDelegationLevel,
+        book: AddressBookDelegationLevel,
+    ) -> Self {
+        GrantDraft {
+            principal: principal_display.to_owned(),
+            principal_editable: false,
+            calendar,
+            book,
+        }
+    }
+}
+
 /// All page state, in a box as qdata.
 struct UiState {
     link: Option<Arc<AccountLink>>,
@@ -190,11 +255,18 @@ struct UiState {
     store: *mut GtkListStore,
     revoke: *mut GtkWidget,
     add: *mut GtkWidget,
-    /// Parallel to the store's rows: row `i`'s principal id. The selected
-    /// row's id comes from here, not from reading the store back, the same
-    /// division [`crate::filters::page`]'s own form keeps between the
-    /// widgets and the data they show.
-    delegates: Vec<Id>,
+    /// Item 193(a): a "Change…" button, next to Add and Revoke. Sensitive
+    /// under the same condition as Revoke ([`update_row_action_sensitivity`]).
+    change: *mut GtkWidget,
+    /// Parallel to the store's rows: row `i`'s delegate. The selected row's
+    /// principal and levels come from here, not from reading the store
+    /// back, the same division [`crate::filters::page`]'s own form keeps
+    /// between the widgets and the data they show.
+    delegates: Vec<Delegate>,
+    /// The best-effort name/email labels [`fill_list`] drew the rows from
+    /// (item 179(f)), kept so [`act_change`] can show the same text in the
+    /// Change dialog's read-only principal field instead of the raw id.
+    labels: BTreeMap<Id, String>,
     /// Item 180(c)'s "went offline while the page was open" half: true once
     /// [`apply_offline_change`] has made this page read-only. A page whose
     /// initial load never finished (`link` is still `None`) never sets this:
@@ -411,10 +483,11 @@ unsafe fn append_picker_row(store: *mut GtkListStore, name: &str, email: &str) {
     }
 }
 
-/// Rewrites the list from `loaded`, including the parallel `delegates`
-/// principal-id vector [`on_revoke`] reads the selected row from, and sets
-/// the status label and the list's sensitivity. Used both after the initial
-/// load and after a successful [`on_revoke`] round trip.
+/// Rewrites the list from `loaded`, including the parallel `delegates` and
+/// `labels` [`on_revoke`] and [`act_change`] read the selected row from, and
+/// sets the status label and the list's sensitivity. Used both after the
+/// initial load and after a successful [`on_revoke`]/[`act_change`] round
+/// trip.
 ///
 /// # Safety
 ///
@@ -451,11 +524,11 @@ unsafe fn fill_list(cell: &RefCell<UiState>, loaded: &Loaded) {
         gtk_widget_set_sensitive(view, GTRUE);
         gtk_widget_set_sensitive(add, GTRUE);
     }
-    cell.borrow_mut().delegates = loaded
-        .delegates
-        .iter()
-        .map(|delegate| delegate.principal_id.clone())
-        .collect();
+    {
+        let mut ui = cell.borrow_mut();
+        ui.delegates = loaded.delegates.clone();
+        ui.labels = loaded.labels.clone();
+    }
 }
 
 /// The text a calendar delegation level shows in its column.
@@ -532,6 +605,10 @@ unsafe fn build_widgets(page: *mut GObject) {
         gtk_box_pack_start(buttons.cast(), add, GFALSE, GFALSE, 0);
         gtk_widget_set_sensitive(add, GFALSE);
 
+        let change = gtk_button_new_with_mnemonic(translate_static(CHANGE_LABEL));
+        gtk_box_pack_start(buttons.cast(), change, GFALSE, GFALSE, 0);
+        gtk_widget_set_sensitive(change, GFALSE);
+
         let revoke = gtk_button_new_with_mnemonic(translate_static(REVOKE_LABEL));
         gtk_box_pack_start(buttons.cast(), revoke, GFALSE, GFALSE, 0);
         gtk_widget_set_sensitive(revoke, GFALSE);
@@ -582,7 +659,9 @@ unsafe fn build_widgets(page: *mut GObject) {
                 store,
                 revoke,
                 add,
+                change,
                 delegates: Vec::new(),
+                labels: BTreeMap::new(),
                 offline: false,
                 shell: shell.cast(),
                 shell_online_handler,
@@ -610,6 +689,32 @@ unsafe fn build_widgets(page: *mut GObject) {
             add.cast(),
             c"clicked".as_ptr(),
             gcallback(on_add as unsafe extern "C" fn(*mut GObject, gpointer)),
+            page.cast(),
+            None,
+            0,
+        );
+        g_signal_connect_data(
+            change.cast(),
+            c"clicked".as_ptr(),
+            gcallback(on_change as unsafe extern "C" fn(*mut GObject, gpointer)),
+            page.cast(),
+            None,
+            0,
+        );
+        // Item 193(a): a double-click or Enter on a row opens the same
+        // Change dialog as the button, the usual GTK list-editing shape.
+        g_signal_connect_data(
+            view.cast(),
+            c"row-activated".as_ptr(),
+            gcallback(
+                on_row_activated
+                    as unsafe extern "C" fn(
+                        *mut GObject,
+                        *mut GtkTreePath,
+                        *mut evo_sys::GtkTreeViewColumn,
+                        gpointer,
+                    ),
+            ),
             page.cast(),
             None,
             0,
@@ -668,23 +773,28 @@ unsafe fn selected_row(selection: *mut GtkTreeSelection) -> Option<usize> {
     }
 }
 
-/// Sets the Revoke button's sensitivity from whether a row is selected and
-/// the account is reachable (a live `link`, the same gate every write in
-/// this crate uses).
+/// Sets the Revoke and Change buttons' sensitivity from whether a row is
+/// selected and the account is reachable (a live `link`, the same gate
+/// every write in this crate uses). Both depend on exactly the same
+/// condition: a row to act on.
 ///
 /// # Safety
 ///
 /// `cell` must be the state of a live page, on the main thread. No borrow
 /// of it may be held.
-unsafe fn update_revoke_sensitivity(cell: &RefCell<UiState>) {
-    let (revoke, selected, has_link) = {
+unsafe fn update_row_action_sensitivity(cell: &RefCell<UiState>) {
+    let (revoke, change, selected, has_link) = {
         let ui = cell.borrow();
         // SAFETY: the view is a live child of the page.
         let selected = unsafe { selected_row(gtk_tree_view_get_selection(ui.view.cast())) };
-        (ui.revoke, selected, ui.link.is_some())
+        (ui.revoke, ui.change, selected, ui.link.is_some())
     };
-    // SAFETY: the button is a live child of the page.
-    unsafe { gtk_widget_set_sensitive(revoke, flag(selected.is_some() && has_link)) };
+    let sensitive = flag(selected.is_some() && has_link);
+    // SAFETY: both buttons are live children of the page.
+    unsafe {
+        gtk_widget_set_sensitive(revoke, sensitive);
+        gtk_widget_set_sensitive(change, sensitive);
+    }
 }
 
 /// `GFALSE`/`GTRUE` for a `bool`.
@@ -694,10 +804,10 @@ fn flag(value: bool) -> glib_sys::gboolean {
 
 /// Item 180(c)'s "went offline while the page was open" half. Leaves the
 /// loaded list and the parallel `delegates` vector untouched: only the
-/// list's, Add's and Revoke's sensitivity, and the status note, change. A
-/// page whose initial load never finished, or did not offer the feature
-/// (`link` is `None`), ignores this: it already shows its own offline or
-/// "not offered" message.
+/// list's, Add's, Change's and Revoke's sensitivity, and the status note,
+/// change. A page whose initial load never finished, or did not offer the
+/// feature (`link` is `None`), ignores this: it already shows its own
+/// offline or "not offered" message.
 ///
 /// # Safety
 ///
@@ -711,9 +821,9 @@ unsafe fn apply_offline_change(cell: &RefCell<UiState>, offline: bool) {
         ui.offline = offline;
     }
     tracing::trace!(offline, "delegates: page offline state changed");
-    let (view, add, revoke, status) = {
+    let (view, add, revoke, change, status) = {
         let ui = cell.borrow();
-        (ui.view, ui.add, ui.revoke, ui.status)
+        (ui.view, ui.add, ui.revoke, ui.change, ui.status)
     };
     // SAFETY: these are live children of the page. No borrow of `cell` is
     // held during these calls.
@@ -722,6 +832,7 @@ unsafe fn apply_offline_change(cell: &RefCell<UiState>, offline: bool) {
             gtk_widget_set_sensitive(view, GFALSE);
             gtk_widget_set_sensitive(add, GFALSE);
             gtk_widget_set_sensitive(revoke, GFALSE);
+            gtk_widget_set_sensitive(change, GFALSE);
             let text = cstring_lossy(&translate(OFFLINE));
             gtk_label_set_text(status.cast(), text.as_ptr());
         } else {
@@ -731,9 +842,9 @@ unsafe fn apply_offline_change(cell: &RefCell<UiState>, offline: bool) {
         }
     }
     if !offline {
-        // SAFETY: as above; Revoke's sensitivity also depends on the
-        // selection, which going offline never changed.
-        unsafe { update_revoke_sensitivity(cell) };
+        // SAFETY: as above; Revoke's and Change's sensitivity also depends
+        // on the selection, which going offline never changed.
+        unsafe { update_row_action_sensitivity(cell) };
     }
 }
 
@@ -763,8 +874,8 @@ unsafe extern "C" fn on_shell_online_changed(
     });
 }
 
-/// The `changed` handler of the list selection: only the Revoke button's
-/// sensitivity depends on it, so this never touches the store.
+/// The `changed` handler of the list selection: only the Revoke and Change
+/// buttons' sensitivity depends on it, so this never touches the store.
 ///
 /// # Safety
 ///
@@ -777,7 +888,7 @@ unsafe extern "C" fn on_selection_changed(_selection: *mut GObject, page: gpoint
             return;
         };
         // SAFETY: as above.
-        unsafe { update_revoke_sensitivity(cell) };
+        unsafe { update_row_action_sensitivity(cell) };
     });
 }
 
@@ -795,7 +906,7 @@ unsafe extern "C" fn on_revoke(_button: *mut GObject, page: gpointer) {
         let Some(cell) = (unsafe { state(page.cast()) }) else {
             return;
         };
-        let (link, principal_id, view, revoke, add) = {
+        let (link, principal_id, view, revoke, add, change) = {
             let ui = cell.borrow();
             let Some(link) = ui.link.clone() else {
                 return;
@@ -805,16 +916,24 @@ unsafe extern "C" fn on_revoke(_button: *mut GObject, page: gpointer) {
             else {
                 return;
             };
-            let Some(principal_id) = ui.delegates.get(row).cloned() else {
+            let Some(delegate) = ui.delegates.get(row).cloned() else {
                 return;
             };
-            (link, principal_id, ui.view, ui.revoke, ui.add)
+            (
+                link,
+                delegate.principal_id,
+                ui.view,
+                ui.revoke,
+                ui.add,
+                ui.change,
+            )
         };
-        // SAFETY: all three are live children of the page.
+        // SAFETY: all four are live children of the page.
         unsafe {
             gtk_widget_set_sensitive(view, GFALSE);
             gtk_widget_set_sensitive(revoke, GFALSE);
             gtk_widget_set_sensitive(add, GFALSE);
+            gtk_widget_set_sensitive(change, GFALSE);
         }
         tracing::trace!(action = "revoke", "delegates: action started");
         let work = move || io::revoke(&link, &principal_id);
@@ -827,9 +946,11 @@ unsafe extern "C" fn on_revoke(_button: *mut GObject, page: gpointer) {
     });
 }
 
-/// Builds the Add dialog, unshown and not yet run. Returns the dialog, the
-/// principal entry, the calendar and address book level combo boxes, and
-/// the Find button that opens the principal picker.
+/// Builds the Add/Change dialog, unshown and not yet run, from `draft`
+/// (item 193(a): [`GrantDraft::new_delegate`] for Add,
+/// [`GrantDraft::existing`] for Change). Returns the dialog, the principal
+/// entry, the calendar and address book level combo boxes, and the Find
+/// button that opens the principal picker.
 /// Split out from [`ask_for_grant`] so a test can check the dialog's
 /// keyboard behaviour without running its nested main loop, the same split
 /// `crate::filters::page::build_name_dialog`/`ask_for_name` uses.
@@ -839,6 +960,9 @@ unsafe extern "C" fn on_revoke(_button: *mut GObject, page: gpointer) {
 /// `page` must be the live page, on the main thread.
 unsafe fn build_add_dialog(
     page: *mut GObject,
+    title: &'static CStr,
+    confirm_label: &'static CStr,
+    draft: &GrantDraft,
 ) -> (
     *mut GtkWidget,
     *mut GtkWidget,
@@ -850,7 +974,7 @@ unsafe fn build_add_dialog(
     // the caller owns the returned dialog.
     unsafe {
         let dialog = gtk_dialog_new();
-        gtk_window_set_title(dialog.cast(), translate_static(ADD_DIALOG_TITLE));
+        gtk_window_set_title(dialog.cast(), translate_static(title));
         let toplevel = gtk_widget_get_toplevel(page.cast());
         // As `build_name_dialog`: before the editor packs the page, its
         // toplevel is the page itself, which is no window.
@@ -867,7 +991,7 @@ unsafe fn build_add_dialog(
         );
         gtk_dialog_add_button(
             dialog.cast(),
-            translate_static(ADD_CONFIRM_LABEL),
+            translate_static(confirm_label),
             GTK_RESPONSE_OK,
         );
         gtk_dialog_set_default_response(dialog.cast(), GTK_RESPONSE_OK);
@@ -882,6 +1006,7 @@ unsafe fn build_add_dialog(
         let principal_label = gtk_label_new_with_mnemonic(translate_static(PRINCIPAL_LABEL));
         let principal_entry = gtk_entry_new();
         gtk_entry_set_activates_default(principal_entry.cast(), GTRUE);
+        widget::set_text(principal_entry.cast(), &draft.principal);
         gtk_label_set_mnemonic_widget(principal_label.cast(), principal_entry);
         gtk_box_pack_start(principal_row.cast(), principal_label, GFALSE, GFALSE, 0);
         gtk_widget_set_hexpand(principal_entry, GTRUE);
@@ -889,11 +1014,17 @@ unsafe fn build_add_dialog(
 
         let find = gtk_button_new_with_mnemonic(translate_static(FIND_LABEL));
         gtk_box_pack_start(principal_row.cast(), find, GFALSE, GFALSE, 0);
-        // The picker needs a live link to query with. The Add button itself
-        // is only ever sensitive once the page has one (`fill_list`), so
-        // `None` here only happens in a test building this dialog on a bare
-        // page; disable Find rather than wire a click that can never answer.
-        if let Some(link) = state(page).and_then(|cell| cell.borrow().link.clone()) {
+        if !draft.principal_editable {
+            // Change (193(a)): the principal is fixed, so the entry neither
+            // takes input nor offers Find to replace it.
+            gtk_widget_set_sensitive(principal_entry, GFALSE);
+            gtk_widget_set_sensitive(find, GFALSE);
+        } else if let Some(link) = state(page).and_then(|cell| cell.borrow().link.clone()) {
+            // The picker needs a live link to query with. The Add button
+            // itself is only ever sensitive once the page has one
+            // (`fill_list`), so `None` here only happens in a test building
+            // this dialog on a bare page; disable Find rather than wire a
+            // click that can never answer.
             BROWSE_STATE.set(dialog.cast(), (link, principal_entry));
             g_signal_connect_data(
                 find.cast(),
@@ -916,7 +1047,10 @@ unsafe fn build_add_dialog(
             let text = cstring_lossy(&calendar_level_label(level));
             gtk_combo_box_text_append(calendar_combo.cast(), ptr::null(), text.as_ptr());
         }
-        gtk_combo_box_set_active(calendar_combo.cast(), 0);
+        gtk_combo_box_set_active(
+            calendar_combo.cast(),
+            combo_index_of(&CALENDAR_LEVELS, draft.calendar),
+        );
         gtk_label_set_mnemonic_widget(calendar_label.cast(), calendar_combo);
         gtk_box_pack_start(calendar_row.cast(), calendar_label, GFALSE, GFALSE, 0);
         gtk_widget_set_hexpand(calendar_combo, GTRUE);
@@ -930,7 +1064,7 @@ unsafe fn build_add_dialog(
             let text = cstring_lossy(&address_book_level_label(level));
             gtk_combo_box_text_append(book_combo.cast(), ptr::null(), text.as_ptr());
         }
-        gtk_combo_box_set_active(book_combo.cast(), 0);
+        gtk_combo_box_set_active(book_combo.cast(), combo_index_of(&BOOK_LEVELS, draft.book));
         gtk_label_set_mnemonic_widget(book_label.cast(), book_combo);
         gtk_box_pack_start(book_row.cast(), book_label, GFALSE, GFALSE, 0);
         gtk_widget_set_hexpand(book_combo, GTRUE);
@@ -1351,28 +1485,35 @@ unsafe extern "C" fn on_picker_selection_changed(_selection: *mut GObject, dialo
 /// `page` must be the live page, on the main thread.
 unsafe fn ask_for_grant(
     page: *mut GObject,
-) -> Option<(String, CalendarDelegationLevel, AddressBookDelegationLevel)> {
+    title: &'static CStr,
+    confirm_label: &'static CStr,
+    draft: &GrantDraft,
+) -> Option<GrantDraft> {
     // SAFETY: the page is live, per the contract. The dialog owns its
     // children, and this function destroys the dialog.
     unsafe {
-        let (dialog, entry, calendar_combo, book_combo, _find) = build_add_dialog(page);
+        let (dialog, entry, calendar_combo, book_combo, _find) =
+            build_add_dialog(page, title, confirm_label, draft);
         gtk_widget_show_all(dialog);
 
         let response = gtk_dialog_run(dialog.cast());
         let result = (response == GTK_RESPONSE_OK)
-            .then(|| widget::get_text(entry.cast()))
-            .map(|text| text.trim().to_owned())
+            .then(|| widget::get_text(entry.cast()).trim().to_owned())
             .filter(|text| !text.is_empty())
             .map(|principal| {
-                let calendar_level = level_at(
+                let calendar = level_at(
                     &CALENDAR_LEVELS,
                     gtk_combo_box_get_active(calendar_combo.cast()),
                 )
                 .unwrap_or(CalendarDelegationLevel::None);
-                let book_level =
-                    level_at(&BOOK_LEVELS, gtk_combo_box_get_active(book_combo.cast()))
-                        .unwrap_or(AddressBookDelegationLevel::None);
-                (principal, calendar_level, book_level)
+                let book = level_at(&BOOK_LEVELS, gtk_combo_box_get_active(book_combo.cast()))
+                    .unwrap_or(AddressBookDelegationLevel::None);
+                GrantDraft {
+                    principal,
+                    principal_editable: draft.principal_editable,
+                    calendar,
+                    book,
+                }
             });
         gtk_widget_destroy(dialog);
         result
@@ -1400,25 +1541,31 @@ unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
         };
         // SAFETY: the page is live, and this runs on the main thread, per
         // the signal handler contract.
-        let Some((principal_text, calendar_level, book_level)) =
-            (unsafe { ask_for_grant(page.cast()) })
-        else {
+        let Some(result) = (unsafe {
+            ask_for_grant(
+                page.cast(),
+                ADD_DIALOG_TITLE,
+                ADD_CONFIRM_LABEL,
+                &GrantDraft::new_delegate(),
+            )
+        }) else {
             return;
         };
-        let (view, revoke, add) = {
+        let (view, revoke, add, change) = {
             let ui = cell.borrow();
-            (ui.view, ui.revoke, ui.add)
+            (ui.view, ui.revoke, ui.add, ui.change)
         };
-        // SAFETY: all three are live children of the page.
+        // SAFETY: all four are live children of the page.
         unsafe {
             gtk_widget_set_sensitive(view, GFALSE);
             gtk_widget_set_sensitive(revoke, GFALSE);
             gtk_widget_set_sensitive(add, GFALSE);
+            gtk_widget_set_sensitive(change, GFALSE);
         }
         tracing::trace!(action = "grant", "delegates: action started");
         let work = move || {
-            let principal_id = io::resolve_principal(&link, &principal_text)?;
-            io::grant(&link, &principal_id, calendar_level, book_level)
+            let principal_id = io::resolve_principal(&link, &result.principal)?;
+            io::grant(&link, &principal_id, result.calendar, result.book)
         };
         let finish = |page: *mut GObject, outcome: Result<Loaded, String>| {
             // SAFETY: `with_strong` gives the live page.
@@ -1429,12 +1576,12 @@ unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
     });
 }
 
-/// Applies the result of [`on_revoke`]'s or [`on_add`]'s round trip: the
-/// fresh list on success, or `failed` (with the server's reason) on the
-/// status label otherwise. Either way, the view, Add and Revoke become
-/// usable again. `action` is `"grant"` or `"revoke"`, for the item 182(c)
-/// trace line only; it never carries the principal id or the server's
-/// reason text.
+/// Applies the result of [`on_revoke`]'s, [`on_add`]'s or [`act_change`]'s
+/// round trip: the fresh list on success, or `failed` (with the server's
+/// reason) on the status label otherwise. Either way, the view, Add,
+/// Change and Revoke become usable again. `action` is `"grant"`,
+/// `"revoke"` or `"change"`, for the item 182(c) trace line only; it never
+/// carries the principal id or the server's reason text.
 ///
 /// # Safety
 ///
@@ -1472,8 +1619,112 @@ unsafe fn apply_write_outcome(
     unsafe {
         gtk_widget_set_sensitive(view, GTRUE);
         gtk_widget_set_sensitive(add, GTRUE);
-        update_revoke_sensitivity(cell);
+        update_row_action_sensitivity(cell);
     }
+}
+
+/// The `clicked` handler of the Change button: opens the Add dialog
+/// prefilled with the selected row (item 193(a)).
+///
+/// # Safety
+///
+/// The GLib signal system calls this. `page` is the data pointer of the
+/// connection: the page the button belongs to.
+unsafe extern "C" fn on_change(_button: *mut GObject, page: gpointer) {
+    guard("JmapDelegatesPage::change", (), || {
+        // SAFETY: the page is live, because its descendant emitted.
+        unsafe { act_change(page.cast()) };
+    });
+}
+
+/// The `row-activated` handler of the delegate list: a double-click or
+/// Enter on a row does the same as the Change button (item 193(a)).
+///
+/// # Safety
+///
+/// The GLib signal system calls this. `page` is the data pointer of the
+/// connection: the page the view belongs to.
+unsafe extern "C" fn on_row_activated(
+    _view: *mut GObject,
+    _path: *mut GtkTreePath,
+    _column: *mut evo_sys::GtkTreeViewColumn,
+    page: gpointer,
+) {
+    guard("JmapDelegatesPage::row-activated", (), || {
+        // SAFETY: the page is live, because its descendant emitted.
+        unsafe { act_change(page.cast()) };
+    });
+}
+
+/// Opens the Add dialog prefilled with the selected row's principal and
+/// levels, and writes the result the same worker shape [`on_revoke`] uses.
+/// Does nothing without a reachable account or a selected row: the Change
+/// button is insensitive then, and a double-click or Enter on an empty
+/// list has no row to activate. Asking is a nested main loop; nothing here
+/// disables a widget until the user confirms, so Cancel leaves the page
+/// exactly as it was.
+///
+/// # Safety
+///
+/// `page` must be the live page, on the main thread.
+unsafe fn act_change(page: *mut GObject) {
+    // SAFETY: the page is live, per the contract.
+    let Some(cell) = (unsafe { state(page) }) else {
+        return;
+    };
+    let (link, principal_id, principal_display, calendar, book) = {
+        let ui = cell.borrow();
+        let Some(link) = ui.link.clone() else {
+            return;
+        };
+        // SAFETY: the view is a live child of the page.
+        let Some(row) = (unsafe { selected_row(gtk_tree_view_get_selection(ui.view.cast())) })
+        else {
+            return;
+        };
+        let Some(delegate) = ui.delegates.get(row).cloned() else {
+            return;
+        };
+        let principal_display = ui
+            .labels
+            .get(&delegate.principal_id)
+            .cloned()
+            .unwrap_or_else(|| delegate.principal_id.as_str().to_owned());
+        (
+            link,
+            delegate.principal_id,
+            principal_display,
+            delegate.calendar_level,
+            delegate.address_book_level,
+        )
+    };
+    let draft = GrantDraft::existing(&principal_display, calendar, book);
+    // SAFETY: the page is live, and this runs on the main thread, per the
+    // signal handler contract.
+    let Some(result) =
+        (unsafe { ask_for_grant(page, CHANGE_DIALOG_TITLE, CHANGE_CONFIRM_LABEL, &draft) })
+    else {
+        return;
+    };
+    let (view, revoke, add, change) = {
+        let ui = cell.borrow();
+        (ui.view, ui.revoke, ui.add, ui.change)
+    };
+    // SAFETY: all four are live children of the page.
+    unsafe {
+        gtk_widget_set_sensitive(view, GFALSE);
+        gtk_widget_set_sensitive(revoke, GFALSE);
+        gtk_widget_set_sensitive(add, GFALSE);
+        gtk_widget_set_sensitive(change, GFALSE);
+    }
+    tracing::trace!(action = "change", "delegates: action started");
+    let work = move || io::grant(&link, &principal_id, result.calendar, result.book);
+    let finish = |page: *mut GObject, outcome: Result<Loaded, String>| {
+        // SAFETY: `with_strong` gives the live page.
+        unsafe { apply_write_outcome(page, outcome, CHANGE_FAILED, "change") };
+    };
+    // SAFETY: `page` is the live page handling this click.
+    unsafe { dispatch::spawn_for(page, work, finish) };
 }
 
 /// Makes the registered page for the account of `connect_source` and starts
@@ -1661,6 +1912,31 @@ mod tests {
             None,
             "one past the end"
         );
+    }
+
+    /// Item 193(a): the Change dialog starts each combo at the delegate's
+    /// current level, [`combo_index_of`]'s job. Every level must round-trip
+    /// through it and back through [`level_at`], or a future variant added
+    /// to one enum with no matching combo entry would silently prefill the
+    /// wrong level.
+    #[test]
+    fn every_level_round_trips_through_its_combo_index() {
+        for level in CALENDAR_LEVELS {
+            let index = combo_index_of(&CALENDAR_LEVELS, level);
+            assert_eq!(
+                level_at(&CALENDAR_LEVELS, index),
+                Some(level),
+                "{level:?} does not round-trip through its combo index"
+            );
+        }
+        for level in BOOK_LEVELS {
+            let index = combo_index_of(&BOOK_LEVELS, level);
+            assert_eq!(
+                level_at(&BOOK_LEVELS, index),
+                Some(level),
+                "{level:?} does not round-trip through its combo index"
+            );
+        }
     }
 
     #[test]
@@ -1940,11 +2216,12 @@ mod tests {
         });
     }
 
-    /// Selecting a delegate's row makes Revoke usable; the button is
+    /// Selecting a delegate's row makes Revoke and Change usable (item
+    /// 193(a): both depend on the same selection); the buttons are
     /// insensitive again as soon as the list starts a fresh load, before
     /// anything is selected in it. Needs a display; skips without one.
     #[test]
-    fn selecting_a_delegate_enables_revoke() {
+    fn selecting_a_delegate_enables_revoke_and_change() {
         use jmap_client::{Client, Credentials};
         use jmap_mock::MockServer;
 
@@ -1977,13 +2254,17 @@ mod tests {
 
                 apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 
-                let (view, revoke) = {
+                let (view, revoke, change) = {
                     let ui = state(page.cast()).unwrap().borrow();
-                    (ui.view, ui.revoke)
+                    (ui.view, ui.revoke, ui.change)
                 };
                 assert!(
                     !get_sensitive(revoke),
                     "Revoke is usable before any row is selected"
+                );
+                assert!(
+                    !get_sensitive(change),
+                    "Change is usable before any row is selected"
                 );
 
                 // Moving the list's cursor to row 0 also selects it (single
@@ -1996,6 +2277,10 @@ mod tests {
                 assert!(
                     get_sensitive(revoke),
                     "Revoke stays insensitive after a row is selected"
+                );
+                assert!(
+                    get_sensitive(change),
+                    "Change stays insensitive after a row is selected"
                 );
 
                 gtk_widget_destroy(page);
@@ -2049,9 +2334,9 @@ mod tests {
     }
 
     /// Item 180(c)'s "went offline while the page was open" half: going
-    /// offline leaves the list, Add and Revoke insensitive, with the
+    /// offline leaves the list, Add, Change and Revoke insensitive, with the
     /// offline note, and does not drop the loaded rows or the selection;
-    /// coming back online restores all three. Needs a display; skips
+    /// coming back online restores all four. Needs a display; skips
     /// without one.
     #[test]
     fn going_offline_locks_the_page_without_losing_the_loaded_rows() {
@@ -2086,15 +2371,16 @@ mod tests {
 
                 apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 
-                let (view, add, revoke, status) = {
+                let (view, add, revoke, change, status) = {
                     let ui = state(page.cast()).unwrap().borrow();
-                    (ui.view, ui.add, ui.revoke, ui.status)
+                    (ui.view, ui.add, ui.revoke, ui.change, ui.status)
                 };
 
                 let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
                 evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
                 evo_sys::gtk_tree_path_free(path);
                 assert!(get_sensitive(revoke), "Revoke did not enable on selection");
+                assert!(get_sensitive(change), "Change did not enable on selection");
 
                 let cell = state(page.cast()).unwrap();
                 apply_offline_change(cell, true);
@@ -2102,6 +2388,7 @@ mod tests {
                 assert!(!get_sensitive(view), "the list stayed usable while offline");
                 assert!(!get_sensitive(add), "Add stayed usable while offline");
                 assert!(!get_sensitive(revoke), "Revoke stayed usable while offline");
+                assert!(!get_sensitive(change), "Change stayed usable while offline");
                 let offline_text =
                     read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
                 assert_eq!(
@@ -2127,6 +2414,10 @@ mod tests {
                 assert!(
                     get_sensitive(revoke),
                     "Revoke did not restore after reconnecting with a row still selected"
+                );
+                assert!(
+                    get_sensitive(change),
+                    "Change did not restore after reconnecting with a row still selected"
                 );
                 let online_text =
                     read_string(evo_sys::gtk_label_get_text(status.cast())).unwrap_or_default();
@@ -2393,8 +2684,12 @@ mod tests {
             // source of `gtk_widget_get_toplevel`.
             unsafe {
                 let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-                let (dialog, entry, calendar_combo, book_combo, find) =
-                    build_add_dialog(page.cast());
+                let (dialog, entry, calendar_combo, book_combo, find) = build_add_dialog(
+                    page.cast(),
+                    ADD_DIALOG_TITLE,
+                    ADD_CONFIRM_LABEL,
+                    &GrantDraft::new_delegate(),
+                );
 
                 assert!(
                     !get_sensitive(find),
@@ -2451,7 +2746,12 @@ mod tests {
             // SAFETY: as `the_add_dialog_defaults_to_no_access_for_both_levels`.
             unsafe {
                 let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-                let (dialog, ..) = build_add_dialog(page.cast());
+                let (dialog, ..) = build_add_dialog(
+                    page.cast(),
+                    ADD_DIALOG_TITLE,
+                    ADD_CONFIRM_LABEL,
+                    &GrantDraft::new_delegate(),
+                );
                 let ok = gtk_dialog_get_widget_for_response(dialog.cast(), GTK_RESPONSE_OK);
 
                 let label = read_string(gtk_button_get_label(ok.cast())).unwrap_or_default();
@@ -2483,8 +2783,12 @@ mod tests {
             // SAFETY: as `the_add_dialog_defaults_to_no_access_for_both_levels`.
             unsafe {
                 let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
-                let (dialog, entry, calendar_combo, _book_combo, _find) =
-                    build_add_dialog(page.cast());
+                let (dialog, entry, calendar_combo, _book_combo, _find) = build_add_dialog(
+                    page.cast(),
+                    ADD_DIALOG_TITLE,
+                    ADD_CONFIRM_LABEL,
+                    &GrantDraft::new_delegate(),
+                );
                 let ok = gtk_dialog_get_widget_for_response(dialog.cast(), GTK_RESPONSE_OK);
 
                 assert!(
@@ -2541,8 +2845,12 @@ mod tests {
                 let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
                 build_widgets(page.cast());
 
-                let (dialog, _entry, _calendar_combo, _book_combo, find) =
-                    build_add_dialog(page.cast());
+                let (dialog, _entry, _calendar_combo, _book_combo, find) = build_add_dialog(
+                    page.cast(),
+                    ADD_DIALOG_TITLE,
+                    ADD_CONFIRM_LABEL,
+                    &GrantDraft::new_delegate(),
+                );
                 assert!(
                     !get_sensitive(find),
                     "Find is usable before the page has a link"
@@ -2556,8 +2864,12 @@ mod tests {
                 };
                 apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
 
-                let (dialog, _entry, _calendar_combo, _book_combo, find) =
-                    build_add_dialog(page.cast());
+                let (dialog, _entry, _calendar_combo, _book_combo, find) = build_add_dialog(
+                    page.cast(),
+                    ADD_DIALOG_TITLE,
+                    ADD_CONFIRM_LABEL,
+                    &GrantDraft::new_delegate(),
+                );
                 assert!(
                     get_sensitive(find),
                     "Find stays insensitive once the page has a link"
@@ -2567,5 +2879,104 @@ mod tests {
                 gtk_widget_destroy(page);
             }
         });
+    }
+
+    /// Item 193(a): the Change dialog shows the delegate's current
+    /// principal and levels, with the principal field and Find fixed (not
+    /// this feature: changing a row's principal is Revoke then Add), and
+    /// reads "Change Delegate"/"_Change" rather than Add's own wording.
+    /// Needs a display; skips without one.
+    #[test]
+    fn the_change_dialog_prefills_the_selected_delegate_and_fixes_its_principal() {
+        use evo_sys::{gtk_button_get_label, gtk_dialog_get_widget_for_response};
+
+        crate::gtk_test_main::run(|| {
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return;
+            }
+            let draft = GrantDraft::existing(
+                "Bob <bob@example.com>",
+                CalendarDelegationLevel::Author,
+                AddressBookDelegationLevel::Reviewer,
+            );
+            // SAFETY: as `the_add_dialog_defaults_to_no_access_for_both_levels`.
+            unsafe {
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                let (dialog, entry, calendar_combo, book_combo, find) = build_add_dialog(
+                    page.cast(),
+                    CHANGE_DIALOG_TITLE,
+                    CHANGE_CONFIRM_LABEL,
+                    &draft,
+                );
+
+                assert_eq!(
+                    widget::get_text(entry.cast()),
+                    "Bob <bob@example.com>",
+                    "the principal entry does not show the selected delegate"
+                );
+                assert!(
+                    !get_sensitive(entry),
+                    "the principal entry is editable in the Change dialog"
+                );
+                assert!(
+                    !get_sensitive(find),
+                    "Find offers to replace the principal in the Change dialog"
+                );
+                assert_eq!(
+                    gtk_combo_box_get_active(calendar_combo.cast()),
+                    combo_index_of(&CALENDAR_LEVELS, CalendarDelegationLevel::Author),
+                    "the calendar level combo does not start at the delegate's own level"
+                );
+                assert_eq!(
+                    gtk_combo_box_get_active(book_combo.cast()),
+                    combo_index_of(&BOOK_LEVELS, AddressBookDelegationLevel::Reviewer),
+                    "the address book level combo does not start at the delegate's own level"
+                );
+
+                let ok = gtk_dialog_get_widget_for_response(dialog.cast(), GTK_RESPONSE_OK);
+                assert!(
+                    get_sensitive(ok),
+                    "OK stays insensitive on a delegate that already grants access"
+                );
+                let label = read_string(gtk_button_get_label(ok.cast())).unwrap_or_default();
+                assert_eq!(
+                    label, "_Change",
+                    "the Change dialog's OK button does not read \"_Change\""
+                );
+
+                gtk_widget_destroy(dialog);
+                gtk_widget_destroy(page);
+            }
+        });
+    }
+
+    /// Two buttons in the same row cannot share a mnemonic letter, or
+    /// Alt+<letter> opens only one of them and the other needs a mouse
+    /// (the same rule `crate::filters::page` tests for its own rows).
+    /// Item 193(a) added Change between Add and Revoke.
+    #[test]
+    fn add_change_and_revoke_keep_different_mnemonics() {
+        fn mnemonic(label: &CStr) -> char {
+            let text = label.to_str().unwrap();
+            let mut chars = text.chars();
+            while let Some(c) = chars.next() {
+                if c == '_' {
+                    return chars.next().unwrap().to_ascii_lowercase();
+                }
+            }
+            panic!("no mnemonic in {text:?}");
+        }
+
+        let letters = [ADD_LABEL, CHANGE_LABEL, REVOKE_LABEL].map(mnemonic);
+        let mut unique = letters.to_vec();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            letters.len(),
+            "Add, Change and Revoke do not each have their own mnemonic: {letters:?}"
+        );
     }
 }

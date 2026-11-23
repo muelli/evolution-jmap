@@ -6,7 +6,11 @@
 2. Alice clicks Add, fills the principal id and the two level combos, and
    confirms. The server's calendar and address book both carry the chosen
    rights for that principal, and the page lists the new row.
-3. Alice selects the row and clicks Revoke. The server no longer shares
+3. Alice selects the row and clicks Change (item 193(a)). The dialog opens
+   prefilled with the row's principal (fixed, not editable) and its current
+   levels. She raises both levels and confirms; the server's shares and the
+   page's row both show the new levels.
+4. Alice selects the row and clicks Revoke. The server no longer shares
    either collection with that principal, and the page shows the empty
    status bar again.
 
@@ -40,6 +44,7 @@ from scenario import (
     screenshot,
     select_folder,
     set_text,
+    text_of,
     wait_for,
     window,
     write_collection_mail_account,
@@ -54,11 +59,17 @@ MENU_KEY = 0xFF67
 NO_DELEGATES = "No delegates yet."
 PRINCIPAL = "bob@example.com"
 ADD_DIALOG = "Add Delegate"
+CHANGE_DIALOG = "Change Delegate"
 # In document order: [calendar level, address book level].
 CALENDAR_LEVEL_ROW = 3  # CalendarDelegationLevel::Author
 BOOK_LEVEL_ROW = 1  # AddressBookDelegationLevel::Reviewer
 CALENDAR_LEVEL_NAME = "Author"
 BOOK_LEVEL_NAME = "Reviewer"
+# Item 193(a): the Change dialog raises both levels further.
+NEW_CALENDAR_LEVEL_ROW = 4  # CalendarDelegationLevel::Editor
+NEW_BOOK_LEVEL_ROW = 2  # AddressBookDelegationLevel::Author
+NEW_CALENDAR_LEVEL_NAME = "Editor"
+NEW_BOOK_LEVEL_NAME = "Author"
 
 
 def _server():
@@ -205,7 +216,72 @@ def run():
         raise ScenarioFailure(f"the address book share is not Reviewer: {book_rights}")
     say("server: both collections share with the principal at the chosen levels")
 
-    # 3. Revoke clears both shares.
+    # 3. Change raises both levels (item 193(a)).
+    row = wait_for(lambda: find(editor, "table cell", principal_display), f"{principal_display!r} listed")
+    row.queryComponent().grabFocus()
+    change = wait_for(
+        lambda: find(editor, "push button", "Change…", showing=True), "the Change button"
+    )
+    wait_for(lambda: change.getState().contains(pyatspi.STATE_SENSITIVE), "Change sensitive")
+    click_at(change)
+    dialog = wait_for(lambda: window(CHANGE_DIALOG), "the Change Delegate dialog")
+    entry = wait_for(lambda: find(dialog, "text"), "the principal entry")
+    if text_of(entry) != principal_display:
+        raise ScenarioFailure(
+            f"the Change dialog's principal entry shows {text_of(entry)!r}, not {principal_display!r}"
+        )
+    if entry.getState().contains(pyatspi.STATE_SENSITIVE):
+        raise ScenarioFailure("the Change dialog's principal entry accepts editing")
+    combos = list(descendants(dialog, "combo box"))
+    if len(combos) != 2:
+        raise ScenarioFailure(f"the Change dialog has {len(combos)} combo boxes, not 2")
+    wait_for(
+        lambda: selected_item_name(combos[0]) == CALENDAR_LEVEL_NAME,
+        f"the calendar level combo starts at {CALENDAR_LEVEL_NAME!r}",
+    )
+    wait_for(
+        lambda: selected_item_name(combos[1]) == BOOK_LEVEL_NAME,
+        f"the address book level combo starts at {BOOK_LEVEL_NAME!r}",
+    )
+    say(f"dialog: prefilled with {principal_display!r}, {CALENDAR_LEVEL_NAME!r}/{BOOK_LEVEL_NAME!r}")
+    combos[0].querySelection().selectChild(NEW_CALENDAR_LEVEL_ROW)
+    wait_for(
+        lambda: selected_item_name(combos[0]) == NEW_CALENDAR_LEVEL_NAME,
+        f"the calendar level combo shows {NEW_CALENDAR_LEVEL_NAME!r}",
+    )
+    combos[1].querySelection().selectChild(NEW_BOOK_LEVEL_ROW)
+    wait_for(
+        lambda: selected_item_name(combos[1]) == NEW_BOOK_LEVEL_NAME,
+        f"the address book level combo shows {NEW_BOOK_LEVEL_NAME!r}",
+    )
+    screenshot("delegates-change-filled")
+    click_button(dialog, "Change")
+    wait_for(lambda: window(CHANGE_DIALOG) is None, "the Change Delegate dialog closes")
+    wait_for(
+        lambda: find(editor, "table cell", NEW_CALENDAR_LEVEL_NAME),
+        "its new calendar level listed",
+    )
+    wait_for(
+        lambda: find(editor, "table cell", NEW_BOOK_LEVEL_NAME), "its new address book level listed"
+    )
+    say(f"page: {principal_display!r} listed with {NEW_CALENDAR_LEVEL_NAME!r}/{NEW_BOOK_LEVEL_NAME!r}")
+    screenshot("delegates-changed")
+
+    calendar_rights = wait_for(
+        lambda: shared_with(server, "Calendar", calendar_id, principal_id),
+        f"{principal_id!r} in the calendar's shareWith",
+    )
+    if not calendar_rights.get("mayWriteAll"):
+        raise ScenarioFailure(f"the calendar share is not Editor: {calendar_rights}")
+    book_rights = wait_for(
+        lambda: shared_with(server, "AddressBook", book_id, principal_id),
+        f"{principal_id!r} in the address book's shareWith",
+    )
+    if not book_rights.get("mayWrite"):
+        raise ScenarioFailure(f"the address book share is not Author: {book_rights}")
+    say("server: both collections carry the raised levels")
+
+    # 4. Revoke clears both shares.
     row = wait_for(lambda: find(editor, "table cell", principal_display), f"{principal_display!r} listed")
     row.queryComponent().grabFocus()
     revoke = wait_for(
