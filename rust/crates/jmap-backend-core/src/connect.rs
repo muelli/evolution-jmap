@@ -277,8 +277,11 @@ pub fn is_wrong_password(error: &Error) -> bool {
 /// user fails with [`ConnectError::CredentialsRequired`] and does not try
 /// the server anonymously. Thus the prompt occurs before anything is sent. A
 /// source that names no user is intentionally anonymous: this is `jmap-mockd`
-/// and a development Stalwart. A real server answers it with a 401, which
-/// also becomes a prompt.
+/// and a development Stalwart. Stalwart (since 0.12.5, on purpose) answers an
+/// unauthenticated session fetch with 200 and an empty session, not a 401;
+/// only a later API call gets a 401. `jmap_client::Client::primary_account`
+/// then fails with [`Error::Protocol`], which [`ConnectError::auth_result`]
+/// classifies as `ERROR`: a clear message, not a re-prompt.
 pub fn credentials(
     user: Option<&str>,
     password: Option<&str>,
@@ -765,6 +768,12 @@ mod tests {
             ConnectError::NoSuchCollection(Collection::AddressBook, "Ab1".to_owned()),
             ConnectError::SecretStore("the login keyring is locked".to_owned()),
             ConnectError::ServiceGone("the name :1.4 has no owner".to_owned()),
+            // A user-less account against Stalwart: the session fetch gets
+            // 200 with no accounts, so `primary_account` fails with
+            // `Error::Protocol`, not a 401. This must stay `ERROR`, never
+            // `REQUIRED`: a re-prompt for a password the source does not
+            // name would just open consent again on the same empty session.
+            ConnectError::Client(Error::Protocol("no primary account for urn:x".to_owned())),
         ] {
             assert_eq!(
                 error.auth_result(),
@@ -868,6 +877,10 @@ mod tests {
                     problem: None,
                 }),
                 eds_sys::E_CLIENT_ERROR_PERMISSION_DENIED,
+            ),
+            (
+                ConnectError::Client(Error::Protocol("no primary account for urn:x".into())),
+                eds_sys::E_CLIENT_ERROR_OTHER_ERROR,
             ),
         ] {
             let gerror = error.to_gerror();
