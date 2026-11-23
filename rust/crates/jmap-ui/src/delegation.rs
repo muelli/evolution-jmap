@@ -20,6 +20,7 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{Calendar, CalendarRights};
 use jmap_proto::contacts::{AddressBook, AddressBookRights};
 use jmap_proto::error::method::{FORBIDDEN, UNKNOWN_METHOD};
+use jmap_proto::mail::MailboxRights;
 use jmap_proto::principals::{Principal, PrincipalQueryFilter};
 use jmap_proto::text::escape_pointer_segment;
 use serde_json::{Value, json};
@@ -216,6 +217,69 @@ pub fn commit_address_book_delegation(
         apply_address_book_delegation(client, account_id, &book_id, principal_id, level)?;
     }
     Ok(())
+}
+
+/// A delegation level offered for mail: the Inbox and its subfolders, see
+/// `notes/DELEGATES-MAIL-ROW-DESIGN-2026-11-23.md` section 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MailDelegationLevel {
+    /// No access. Removes an existing share.
+    None,
+    /// Full read access to messages.
+    Reviewer,
+    /// Reviewer, plus add messages and set seen and other keywords.
+    Author,
+    /// Author, plus remove messages.
+    Editor,
+}
+
+impl MailDelegationLevel {
+    /// The `shareWith` entry for this level, or `None` to remove the share.
+    pub fn to_rights(self) -> Option<MailboxRights> {
+        match self {
+            Self::None => None,
+            Self::Reviewer => Some(MailboxRights::read_only()),
+            Self::Author => Some(
+                MailboxRights::read_only()
+                    .with_may_add_items(true)
+                    .with_may_set_seen(true)
+                    .with_may_set_keywords(true),
+            ),
+            Self::Editor => Some(
+                MailboxRights::read_only()
+                    .with_may_add_items(true)
+                    .with_may_set_seen(true)
+                    .with_may_set_keywords(true)
+                    .with_may_remove_items(true),
+            ),
+        }
+    }
+
+    /// Build the `shareWith` patch that applies this level to `principal_id`.
+    pub fn share_with_patch(self, principal_id: &Id) -> Value {
+        share_with_patch(
+            principal_id,
+            self.to_rights()
+                .map(|rights| serde_json::to_value(rights).unwrap()),
+        )
+    }
+
+    /// The level for an existing grant of `rights`, for showing a delegate
+    /// this page did not necessarily create itself. Each level's rights are a
+    /// superset of the one below it, so this reads the highest-ranked level
+    /// whose defining right `rights` already has; a grant with no matching
+    /// right at all reads as `None`.
+    pub fn from_rights(rights: &MailboxRights) -> Self {
+        if rights.may_remove_items == Some(true) {
+            Self::Editor
+        } else if rights.may_add_items == Some(true) {
+            Self::Author
+        } else if rights.may_read_items == Some(true) {
+            Self::Reviewer
+        } else {
+            Self::None
+        }
+    }
 }
 
 /// One principal's calendar and address book access, read back from
@@ -471,6 +535,72 @@ mod tests {
     }
 
     #[test]
+    fn mail_none_removes_the_share() {
+        assert_eq!(MailDelegationLevel::None.to_rights(), None);
+    }
+
+    #[test]
+    fn mail_reviewer_is_read_only() {
+        let rights = MailDelegationLevel::Reviewer.to_rights().unwrap();
+        assert_eq!(rights.may_read_items, Some(true));
+        assert_eq!(rights.may_add_items, None);
+        assert_eq!(rights.may_set_seen, None);
+        assert_eq!(rights.may_set_keywords, None);
+        assert_eq!(rights.may_remove_items, None);
+    }
+
+    #[test]
+    fn mail_author_can_add_and_flag_but_not_remove() {
+        let rights = MailDelegationLevel::Author.to_rights().unwrap();
+        assert_eq!(rights.may_read_items, Some(true));
+        assert_eq!(rights.may_add_items, Some(true));
+        assert_eq!(rights.may_set_seen, Some(true));
+        assert_eq!(rights.may_set_keywords, Some(true));
+        assert_eq!(rights.may_remove_items, None);
+    }
+
+    #[test]
+    fn mail_editor_can_remove() {
+        let rights = MailDelegationLevel::Editor.to_rights().unwrap();
+        assert_eq!(rights.may_add_items, Some(true));
+        assert_eq!(rights.may_remove_items, Some(true));
+    }
+
+    #[test]
+    fn every_two_mail_levels_grant_different_rights() {
+        let levels = [
+            MailDelegationLevel::Reviewer,
+            MailDelegationLevel::Author,
+            MailDelegationLevel::Editor,
+        ];
+        for (at, a) in levels.iter().enumerate() {
+            for b in &levels[at + 1..] {
+                assert_ne!(
+                    a.to_rights(),
+                    b.to_rights(),
+                    "{a:?} and {b:?} grant the same rights"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mail_levels_never_grant_create_rename_delete_share_or_submit() {
+        for level in [
+            MailDelegationLevel::Reviewer,
+            MailDelegationLevel::Author,
+            MailDelegationLevel::Editor,
+        ] {
+            let rights = level.to_rights().unwrap();
+            assert_eq!(rights.may_create_child, None);
+            assert_eq!(rights.may_rename, None);
+            assert_eq!(rights.may_delete, None);
+            assert_eq!(rights.may_share, None);
+            assert_eq!(rights.may_submit, None);
+        }
+    }
+
+    #[test]
     fn calendar_none_patch_removes_the_share() {
         let principal = Id::new("P-bob");
         let patch = CalendarDelegationLevel::None.share_with_patch(&principal);
@@ -501,6 +631,28 @@ mod tests {
         assert_eq!(
             patch,
             json!({"shareWith/P-bob": {"mayRead": true, "mayWrite": true}})
+        );
+    }
+
+    #[test]
+    fn mail_none_patch_removes_the_share() {
+        let principal = Id::new("P-bob");
+        let patch = MailDelegationLevel::None.share_with_patch(&principal);
+        assert_eq!(patch, json!({"shareWith/P-bob": null}));
+    }
+
+    #[test]
+    fn mail_author_patch_sets_read_add_seen_and_keywords() {
+        let principal = Id::new("P-bob");
+        let patch = MailDelegationLevel::Author.share_with_patch(&principal);
+        assert_eq!(
+            patch,
+            json!({"shareWith/P-bob": {
+                "mayReadItems": true,
+                "mayAddItems": true,
+                "maySetSeen": true,
+                "maySetKeywords": true
+            }})
         );
     }
 
@@ -549,6 +701,26 @@ mod tests {
         assert_eq!(
             AddressBookDelegationLevel::from_rights(&AddressBookRights::default()),
             AddressBookDelegationLevel::None
+        );
+    }
+
+    #[test]
+    fn every_mail_level_reads_back_from_its_own_rights() {
+        for level in [
+            MailDelegationLevel::Reviewer,
+            MailDelegationLevel::Author,
+            MailDelegationLevel::Editor,
+        ] {
+            let rights = level.to_rights().unwrap();
+            assert_eq!(MailDelegationLevel::from_rights(&rights), level);
+        }
+    }
+
+    #[test]
+    fn no_mail_right_at_all_reads_back_as_none() {
+        assert_eq!(
+            MailDelegationLevel::from_rights(&MailboxRights::default()),
+            MailDelegationLevel::None
         );
     }
 
