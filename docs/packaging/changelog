@@ -1,4 +1,4 @@
-evolution-jmap (0.7.0) unstable; urgency=medium
+evolution-jmap (0.7.1) unstable; urgency=medium
 
   * Shared mailboxes: a mailbox another user shares with you now
     appears in the folder tree under a "Shared" folder, with one
@@ -104,7 +104,9 @@ evolution-jmap (0.7.0) unstable; urgency=medium
     dependency (for the Sieve editor); the Flatpak extension builds it
     in. The mock server gained conformance checks for RFC 8984, 9610,
     9661 and 9670 and the JMAP calendars draft (see its own
-    changelog).
+    changelog). The release pipeline's own build image was missing
+    the GtkSourceView 4 headers, which held up this release by one
+    point version; it now carries them.
   * Known issues: double-clicking a contact card can lose the click
     during an address book refresh (upstream Evolution bug,
     evolution#3436); on Stalwart 1.1.1, activating or deactivating a
@@ -122,7 +124,7 @@ evolution-jmap (0.7.0) unstable; urgency=medium
     the "Edit in External Editor" button on the Server Filters page
     can sit below the visible area of a small account editor window.
 
- -- Tobias Mueller <muelli@cryptobitch.de>  Thu, 19 Nov 2026 09:05:51 -0800
+ -- Tobias Mueller <muelli@cryptobitch.de>  Mon, 23 Nov 2026 01:09:02 +0000
 
 evolution-jmap (0.6.6) unstable; urgency=medium
 

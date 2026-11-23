@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # NEWS
 
-## 0.7.0 (unreleased)
+## 0.7.1 (2026-11-23)
 
 - Shared mailboxes: a mailbox another user shares with you now appears in
   the folder tree under a "Shared" folder, with one heading per owner.
@@ -104,7 +104,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - Build and packaging: GtkSourceView 4 is a new build and runtime
   dependency (for the Sieve editor); the Flatpak extension builds it in.
   The mock server gained conformance checks for RFC 8984, 9610, 9661 and
-  9670 and the JMAP calendars draft (see its own changelog).
+  9670 and the JMAP calendars draft (see its own changelog). The release
+  pipeline's own build image was missing the GtkSourceView 4 headers,
+  which held up this release by one point version; it now carries them.
 
 ### Known issues
 
