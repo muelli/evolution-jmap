@@ -166,6 +166,7 @@ fn account_delegates_reads_back_grants_on_a_calendar_and_a_book() {
             principal_id: bob.clone(),
             calendar_level: CalendarDelegationLevel::Reviewer,
             address_book_level: AddressBookDelegationLevel::Author,
+            mail_level: MailDelegationLevel::None,
         }]
     );
 
@@ -184,6 +185,37 @@ fn account_delegates_reads_back_grants_on_a_calendar_and_a_book() {
             principal_id: bob,
             calendar_level: CalendarDelegationLevel::None,
             address_book_level: AddressBookDelegationLevel::Author,
+            mail_level: MailDelegationLevel::None,
+        }]
+    );
+}
+
+#[test]
+fn account_delegates_reads_back_a_grant_on_the_inbox_subtree() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder().bearer_token("alice-token").start();
+    let account_id = server.account_id();
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_mailbox("Inbox", Some(role::INBOX));
+    }
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+
+    assert_eq!(account_delegates(&alice, &account_id).unwrap(), vec![]);
+
+    commit_mail_delegation(&alice, &account_id, &bob, MailDelegationLevel::Reviewer).unwrap();
+
+    assert_eq!(
+        account_delegates(&alice, &account_id).unwrap(),
+        vec![Delegate {
+            principal_id: bob,
+            calendar_level: CalendarDelegationLevel::None,
+            address_book_level: AddressBookDelegationLevel::None,
+            mail_level: MailDelegationLevel::Reviewer,
         }]
     );
 }

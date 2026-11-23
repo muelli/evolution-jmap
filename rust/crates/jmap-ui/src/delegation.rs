@@ -356,24 +356,32 @@ pub fn commit_mail_delegation(
     Ok(())
 }
 
-/// One principal's calendar and address book access, read back from
+/// One principal's calendar, address book and mail access, read back from
 /// `shareWith`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Delegate {
     pub principal_id: Id,
     pub calendar_level: CalendarDelegationLevel,
     pub address_book_level: AddressBookDelegationLevel,
+    pub mail_level: MailDelegationLevel,
 }
 
 /// Every principal named in any of `calendars`' or `address_books`'
-/// `shareWith`, each with the highest level found for its type.
+/// `shareWith`, or in the Inbox subtree of `mailboxes` (design note section
+/// 1), each with the highest level found for its type.
 ///
 /// Section 5.5 of the design note grants a level across the account's own
 /// collections, not one calendar or book at a time, so a principal shared on
 /// more than one calendar (or book) shows the highest level found on any of
-/// them, not a list of them. A principal shared on a calendar only, or a
-/// book only, gets `None` for the other type.
-pub fn list_delegates(calendars: &[Calendar], address_books: &[AddressBook]) -> Vec<Delegate> {
+/// them, not a list of them. The Mail row (section 3) extends this the same
+/// way, restricted to the Inbox and its subfolders: a mailbox outside that
+/// subtree is not counted even if its own `shareWith` names a principal. A
+/// principal shared on only one type gets `None` for the others.
+pub fn list_delegates(
+    calendars: &[Calendar],
+    address_books: &[AddressBook],
+    mailboxes: &[Mailbox],
+) -> Vec<Delegate> {
     let mut calendar_levels: BTreeMap<Id, CalendarDelegationLevel> = BTreeMap::new();
     for calendar in calendars {
         for (principal_id, rights) in calendar.share_with.iter().flatten() {
@@ -394,9 +402,27 @@ pub fn list_delegates(calendars: &[Calendar], address_books: &[AddressBook]) -> 
                 .or_insert(level);
         }
     }
+    let inbox_subtree = inbox_subtree_ids(mailboxes);
+    let mut mail_levels: BTreeMap<Id, MailDelegationLevel> = BTreeMap::new();
+    for mailbox in mailboxes {
+        let Some(mailbox_id) = &mailbox.id else {
+            continue;
+        };
+        if !inbox_subtree.contains(mailbox_id) {
+            continue;
+        }
+        for (principal_id, rights) in mailbox.share_with.iter().flatten() {
+            let level = MailDelegationLevel::from_rights(rights);
+            mail_levels
+                .entry(principal_id.clone())
+                .and_modify(|current| *current = (*current).max(level))
+                .or_insert(level);
+        }
+    }
     let principals: BTreeSet<Id> = calendar_levels
         .keys()
         .chain(book_levels.keys())
+        .chain(mail_levels.keys())
         .cloned()
         .collect();
     principals
@@ -410,17 +436,23 @@ pub fn list_delegates(calendars: &[Calendar], address_books: &[AddressBook]) -> 
                 .get(&principal_id)
                 .copied()
                 .unwrap_or(AddressBookDelegationLevel::None),
+            mail_level: mail_levels
+                .get(&principal_id)
+                .copied()
+                .unwrap_or(MailDelegationLevel::None),
             principal_id,
         })
         .collect()
 }
 
-/// Fetch every calendar and address book of `account_id` and list their
-/// delegates (`Calendar/get` and `AddressBook/get`, `ids: null`).
+/// Fetch every calendar, address book and mailbox of `account_id` and list
+/// their delegates (`Calendar/get`, `AddressBook/get` and `Mailbox/get`,
+/// `ids: null`).
 pub fn account_delegates(client: &Client, account_id: &Id) -> Result<Vec<Delegate>, Error> {
     let calendars = client.calendars(account_id)?;
     let address_books = client.address_books(account_id)?;
-    Ok(list_delegates(&calendars, &address_books))
+    let mailboxes = client.mailbox_get(account_id)?.list;
+    Ok(list_delegates(&calendars, &address_books, &mailboxes))
 }
 
 /// A display label for a principal, built from its `name` and `email`
@@ -864,15 +896,32 @@ mod tests {
         serde_json::from_value(json!({"name": name, "shareWith": share_with})).unwrap()
     }
 
-    #[test]
-    fn no_shared_calendars_or_books_list_no_delegates() {
-        let calendar = Calendar::new("Work");
-        let book = AddressBook::new("Contacts");
-        assert_eq!(list_delegates(&[calendar], &[book]), vec![]);
+    /// A mailbox with `role` (`None` for an ordinary folder) and `shareWith`.
+    fn mailbox_with_share(
+        id: &str,
+        role: Option<&str>,
+        parent_id: Option<&str>,
+        share_with: BTreeMap<Id, MailboxRights>,
+    ) -> Mailbox {
+        serde_json::from_value(json!({
+            "id": id,
+            "name": id,
+            "role": role,
+            "parentId": parent_id,
+            "shareWith": share_with,
+        }))
+        .unwrap()
     }
 
     #[test]
-    fn a_delegate_shared_on_only_one_type_gets_none_for_the_other() {
+    fn no_shared_calendars_books_or_mailboxes_list_no_delegates() {
+        let calendar = Calendar::new("Work");
+        let book = AddressBook::new("Contacts");
+        assert_eq!(list_delegates(&[calendar], &[book], &[]), vec![]);
+    }
+
+    #[test]
+    fn a_delegate_shared_on_only_one_type_gets_none_for_the_others() {
         let bob = Id::new("P-bob");
         let calendar = calendar_with_share(
             "Work",
@@ -881,13 +930,14 @@ mod tests {
                 CalendarDelegationLevel::Reviewer.to_rights().unwrap(),
             )]),
         );
-        let delegates = list_delegates(&[calendar], &[]);
+        let delegates = list_delegates(&[calendar], &[], &[]);
         assert_eq!(
             delegates,
             vec![Delegate {
                 principal_id: bob,
                 calendar_level: CalendarDelegationLevel::Reviewer,
                 address_book_level: AddressBookDelegationLevel::None,
+                mail_level: MailDelegationLevel::None,
             }]
         );
     }
@@ -906,13 +956,13 @@ mod tests {
             "Home",
             BTreeMap::from([(bob, CalendarDelegationLevel::Editor.to_rights().unwrap())]),
         );
-        let delegates = list_delegates(&[reviewed, edited], &[]);
+        let delegates = list_delegates(&[reviewed, edited], &[], &[]);
         assert_eq!(delegates.len(), 1);
         assert_eq!(delegates[0].calendar_level, CalendarDelegationLevel::Editor);
     }
 
     #[test]
-    fn delegates_from_calendars_and_books_merge_by_principal() {
+    fn delegates_from_calendars_books_and_mail_merge_by_principal() {
         let bob = Id::new("P-bob");
         let carol = Id::new("P-carol");
         let calendar = calendar_with_share(
@@ -935,7 +985,16 @@ mod tests {
                 ),
             ]),
         );
-        let delegates = list_delegates(&[calendar], &[book]);
+        let inbox = mailbox_with_share(
+            "M-inbox",
+            Some(role::INBOX),
+            None,
+            BTreeMap::from([(
+                carol.clone(),
+                MailDelegationLevel::Editor.to_rights().unwrap(),
+            )]),
+        );
+        let delegates = list_delegates(&[calendar], &[book], &[inbox]);
         assert_eq!(
             delegates,
             vec![
@@ -943,14 +1002,53 @@ mod tests {
                     principal_id: bob,
                     calendar_level: CalendarDelegationLevel::Author,
                     address_book_level: AddressBookDelegationLevel::Reviewer,
+                    mail_level: MailDelegationLevel::None,
                 },
                 Delegate {
                     principal_id: carol,
                     calendar_level: CalendarDelegationLevel::None,
                     address_book_level: AddressBookDelegationLevel::Author,
+                    mail_level: MailDelegationLevel::Editor,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_delegate_shared_on_two_mail_folders_in_the_inbox_subtree_shows_the_higher_level() {
+        let bob = Id::new("P-bob");
+        let inbox = mailbox_with_share(
+            "M-inbox",
+            Some(role::INBOX),
+            None,
+            BTreeMap::from([(
+                bob.clone(),
+                MailDelegationLevel::Reviewer.to_rights().unwrap(),
+            )]),
+        );
+        let child = mailbox_with_share(
+            "M-child",
+            None,
+            Some("M-inbox"),
+            BTreeMap::from([(bob, MailDelegationLevel::Editor.to_rights().unwrap())]),
+        );
+        let delegates = list_delegates(&[], &[], &[inbox, child]);
+        assert_eq!(delegates.len(), 1);
+        assert_eq!(delegates[0].mail_level, MailDelegationLevel::Editor);
+    }
+
+    #[test]
+    fn a_mail_share_outside_the_inbox_subtree_is_not_counted() {
+        let bob = Id::new("P-bob");
+        let inbox = mailbox_with_share("M-inbox", Some(role::INBOX), None, BTreeMap::new());
+        let lists = mailbox_with_share(
+            "M-lists",
+            None,
+            None,
+            BTreeMap::from([(bob, MailDelegationLevel::Editor.to_rights().unwrap())]),
+        );
+        let delegates = list_delegates(&[], &[], &[inbox, lists]);
+        assert_eq!(delegates, vec![], "Lists sits outside the Inbox subtree");
     }
 
     #[test]

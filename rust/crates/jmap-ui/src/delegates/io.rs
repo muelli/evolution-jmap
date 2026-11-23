@@ -12,7 +12,9 @@ use std::collections::BTreeMap;
 use jmap_backend_core::i18n::translate;
 use jmap_client::Client;
 use jmap_proto::Id;
-use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_PRINCIPALS};
+use jmap_proto::session::{
+    CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_MAIL, CAPABILITY_PRINCIPALS,
+};
 
 use crate::delegation::{
     self, AddressBookDelegationLevel, CalendarDelegationLevel, Delegate, PrincipalSearch,
@@ -54,6 +56,7 @@ fn list(
     client: &Client,
     calendars_account: &Option<Id>,
     contacts_account: &Option<Id>,
+    mail_account: &Option<Id>,
 ) -> Result<Vec<Delegate>, jmap_client::Error> {
     let calendars = match calendars_account {
         Some(account_id) => client.calendars(account_id)?,
@@ -63,13 +66,21 @@ fn list(
         Some(account_id) => client.address_books(account_id)?,
         None => Vec::new(),
     };
-    Ok(delegation::list_delegates(&calendars, &address_books))
+    let mailboxes = match mail_account {
+        Some(account_id) => client.mailbox_get(account_id)?.list,
+        None => Vec::new(),
+    };
+    Ok(delegation::list_delegates(
+        &calendars,
+        &address_books,
+        &mailboxes,
+    ))
 }
 
-/// Lists every delegate the account's own calendars and address books name
-/// in `shareWith` (`Calendar/get` and `AddressBook/get`, `ids: null`, on
-/// whichever of the two capability accounts the session resolves; usually
-/// the same account for both).
+/// Lists every delegate the account's own calendars, address books and
+/// Inbox subtree name in `shareWith` (`Calendar/get`, `AddressBook/get` and
+/// `Mailbox/get`, `ids: null`, on whichever of the three capability
+/// accounts the session resolves; usually the same account for all three).
 pub fn load(link: &AccountLink) -> Result<Loaded, String> {
     link.call(|client| {
         let session = client.session();
@@ -79,8 +90,10 @@ pub fn load(link: &AccountLink) -> Result<Loaded, String> {
         let contacts_account = session
             .resolve_primary_account(CAPABILITY_CONTACTS)
             .cloned();
-        let offered = calendars_account.is_some() || contacts_account.is_some();
-        let delegates = list(client, &calendars_account, &contacts_account)?;
+        let mail_account = session.resolve_primary_account(CAPABILITY_MAIL).cloned();
+        let offered =
+            calendars_account.is_some() || contacts_account.is_some() || mail_account.is_some();
+        let delegates = list(client, &calendars_account, &contacts_account, &mail_account)?;
         let labels = resolve_labels(client, &delegates);
         Ok(Loaded {
             delegates,
@@ -96,6 +109,12 @@ pub fn load(link: &AccountLink) -> Result<Loaded, String> {
 /// address books, the write side of [`crate::delegation::list_delegates`]'s
 /// per-type highest-level read), then lists again so the page shows the
 /// result without a second round trip.
+///
+/// Does not yet write a mail share: `page.rs` has no Mail control for this
+/// dialog yet (ROADMAP item 193(b)'s open `page.rs` wiring step), so a
+/// mail share an account already has stays untouched by this call. The
+/// listed result still reflects it, resolved here the same as the other
+/// two capabilities, so the page can show it.
 pub fn grant(
     link: &AccountLink,
     principal_id: &Id,
@@ -110,6 +129,7 @@ pub fn grant(
         let contacts_account = session
             .resolve_primary_account(CAPABILITY_CONTACTS)
             .cloned();
+        let mail_account = session.resolve_primary_account(CAPABILITY_MAIL).cloned();
         if let Some(account_id) = &calendars_account {
             delegation::commit_calendar_delegation(
                 client,
@@ -126,8 +146,9 @@ pub fn grant(
                 address_book_level,
             )?;
         }
-        let offered = calendars_account.is_some() || contacts_account.is_some();
-        let delegates = list(client, &calendars_account, &contacts_account)?;
+        let offered =
+            calendars_account.is_some() || contacts_account.is_some() || mail_account.is_some();
+        let delegates = list(client, &calendars_account, &contacts_account, &mail_account)?;
         let labels = resolve_labels(client, &delegates);
         Ok(Loaded {
             delegates,
@@ -223,8 +244,8 @@ mod tests {
 
     use super::{grant, load, resolve_principal, revoke, search};
     use crate::delegation::{
-        AddressBookDelegationLevel, CalendarDelegationLevel, PrincipalSearch,
-        commit_address_book_delegation, commit_calendar_delegation,
+        AddressBookDelegationLevel, CalendarDelegationLevel, MailDelegationLevel, PrincipalSearch,
+        commit_address_book_delegation, commit_calendar_delegation, commit_mail_delegation,
     };
     use crate::link::AccountLink;
     use crate::session_cache::AccountFeatures;
@@ -325,6 +346,45 @@ mod tests {
             !loaded.labels.contains_key(&bob),
             "no principal record exists for this id, so no label"
         );
+    }
+
+    #[test]
+    fn load_resolves_a_mail_share_on_the_inbox_subtree() {
+        let bob = Id::new("P-bob");
+        let server = MockServer::builder().start();
+        let account_id = server.account_id();
+        {
+            let state = server.state();
+            let mut state = state.lock().unwrap();
+            state
+                .account_mut(&account_id)
+                .unwrap()
+                .seed_mailbox("Inbox", Some(jmap_proto::mail::role::INBOX));
+        }
+        let alice = Client::connect(server.origin(), Credentials::none()).unwrap();
+        commit_mail_delegation(&alice, &account_id, &bob, MailDelegationLevel::Author).unwrap();
+
+        let loaded = load(&link_to(&server)).unwrap();
+
+        assert_eq!(loaded.delegates.len(), 1);
+        assert_eq!(loaded.delegates[0].principal_id, bob);
+        assert_eq!(loaded.delegates[0].mail_level, MailDelegationLevel::Author);
+    }
+
+    #[test]
+    fn load_is_offered_from_mail_alone_with_neither_calendars_nor_contacts() {
+        let server = MockServer::builder()
+            .without_capability(jmap_proto::session::CAPABILITY_CALENDARS)
+            .without_capability(jmap_proto::session::CAPABILITY_CONTACTS)
+            .start();
+
+        let loaded = load(&link_to(&server)).unwrap();
+
+        assert!(
+            loaded.offered,
+            "mail delegation alone still offers the page"
+        );
+        assert_eq!(loaded.delegates, vec![]);
     }
 
     #[test]
