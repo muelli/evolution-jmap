@@ -276,6 +276,18 @@ pub fn save(link: &AccountLink, plan: &SavePlan) -> Result<(), String> {
         blob_ids.push(uploaded.blob_id);
     }
 
+    // Stalwart does not change the script state for an activation-only
+    // change (RFC 9661 Section 2.4), so `ifInState` cannot catch another
+    // client's activation change here. Check the active script against the
+    // load's baseline directly before writing, when a known state means
+    // this save has a baseline worth protecting.
+    if plan.if_in_state.is_some() && touches_activation(plan) {
+        let Some(state) = rebase(link, plan).map_err(|error| link::describe(&error))? else {
+            return Err(translate(SCRIPTS_CHANGED));
+        };
+        return write(link, plan, &blob_ids, Some(state)).map_err(|error| refused(&error));
+    }
+
     match write(link, plan, &blob_ids, plan.if_in_state.clone()) {
         Err(error) if error.is_state_mismatch() => {
             let state = rebase(link, plan).map_err(|error| link::describe(&error))?;
@@ -430,11 +442,14 @@ fn rebase(link: &AccountLink, plan: &SavePlan) -> Result<Option<State>, jmap_cli
     let account = &link.features.account_id;
     let (scripts, state) = link.call(|client| client.sieve_scripts_with_state(account))?;
     let now = Baseline::of(&scripts);
-    let touches_activation =
-        plan.deactivate_first || !matches!(plan.activation, ActivationChange::Keep);
     let valid = now.scripts == plan.baseline.scripts
-        && (now.active == plan.baseline.active || !touches_activation);
+        && (now.active == plan.baseline.active || !touches_activation(plan));
     Ok(valid.then_some(state))
+}
+
+/// Whether `plan` changes which script is active.
+fn touches_activation(plan: &SavePlan) -> bool {
+    plan.deactivate_first || !matches!(plan.activation, ActivationChange::Keep)
 }
 
 /// Adds `ifInState` to `set` when the save knows the state.
@@ -773,6 +788,26 @@ mod tests {
         load(link).unwrap().scripts[0].script.id.clone().unwrap()
     }
 
+    /// Flips which script is active directly in the mock's store, with no
+    /// state bump: Stalwart does not change the script state when only
+    /// `isActive` changes (RFC 9661 Section 2.4), so this is what a second
+    /// client's activation change looks like on the wire.
+    fn activate_elsewhere_without_a_state_bump(
+        server: &MockServer,
+        activate: &Id,
+        deactivate: &Id,
+    ) {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&server.account_id()).unwrap();
+        if let Some(script) = account.sieve_scripts.get_mut(deactivate) {
+            script.is_active = false;
+        }
+        if let Some(script) = account.sieve_scripts.get_mut(activate) {
+            script.is_active = true;
+        }
+    }
+
     /// Writes `text` into script `id` without a state check, as a second
     /// client (another mail program, the server's web interface) does.
     fn edit_elsewhere(link: &AccountLink, id: &Id, text: &str) {
@@ -980,6 +1015,65 @@ mod tests {
             .collect();
         assert_eq!(active, ["vacation"]);
         assert_eq!(after.scripts.len(), 2, "nothing is destroyed");
+    }
+
+    #[test]
+    fn an_undetected_activation_change_elsewhere_still_refuses_the_stale_save() {
+        let server = MockServer::builder().start();
+        let link = link_to(&server);
+        let id_a = seed_script(&link, "keep;\n", true);
+        let id_b = {
+            let plan = SavePlan {
+                writes: vec![ScriptWrite::Create {
+                    key: "second".to_owned(),
+                    name: "second".to_owned(),
+                    text: "keep;\n".to_owned(),
+                }],
+                ..SavePlan::default()
+            };
+            save(&link, &plan).unwrap();
+            load(&link)
+                .unwrap()
+                .scripts
+                .iter()
+                .find(|script| script.script.name == "second")
+                .unwrap()
+                .script
+                .id
+                .clone()
+                .unwrap()
+        };
+        let loaded = load(&link).unwrap();
+        assert_eq!(loaded.baseline().active, Some(id_a.clone()));
+
+        // A second client activates `id_b` instead. Stalwart's `SieveScript/set`
+        // does not change the script state for an activation-only change (RFC
+        // 9661 Section 2.4), so this page's `ifInState` still matches.
+        activate_elsewhere_without_a_state_bump(&server, &id_b, &id_a);
+
+        let error = save(
+            &link,
+            &SavePlan {
+                activation: ActivationChange::Deactivate,
+                if_in_state: Some(loaded.state.clone()),
+                baseline: loaded.baseline(),
+                ..SavePlan::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, translate(SCRIPTS_CHANGED));
+        let after = load(&link).unwrap();
+        assert!(
+            after
+                .scripts
+                .iter()
+                .find(|script| script.script.id.as_ref() == Some(&id_b))
+                .unwrap()
+                .script
+                .is_active,
+            "must not silently deactivate the other client's active script"
+        );
     }
 
     #[test]
