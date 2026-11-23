@@ -38,7 +38,9 @@ use eds_sys::{
     camel_folder_summary_get_saved_count, camel_folder_summary_get_visible_count,
     camel_store_get_folder_sync,
 };
-use glib_sys::{GError, GFALSE, GPtrArray, g_clear_error, gboolean};
+#[cfg(camel_folder_get_uids)]
+use glib_sys::g_free;
+use glib_sys::{GError, GFALSE, GPtrArray, GTRUE, g_clear_error, g_ptr_array_free, gboolean};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
@@ -124,6 +126,17 @@ fn move_straight(source: *mut CamelFolder, destination: *mut CamelFolder, uids: 
             &mut error,
         );
         g_type_class_unref(class.cast());
+        // Before EDS 3.58, Camel's own callers free the members with
+        // `g_free`, then the array; from 3.58, the array carries its own
+        // `g_free` and one call frees everything (see
+        // `jmap_mail::transfer::Reported`'s own doc).
+        if !transferred.is_null() {
+            #[cfg(camel_folder_get_uids)]
+            for index in 0..(*transferred).len {
+                g_free(*(*transferred).pdata.add(index as usize));
+            }
+            g_ptr_array_free(transferred, GTRUE);
+        }
         g_clear_error(&mut error);
         ok
     };
