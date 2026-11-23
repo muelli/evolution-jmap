@@ -24,17 +24,17 @@ server write happens only after reconnect), and this checks the same path
 through the real UI and a real server's trash mailbox.
 
 With `--live`, this scenario also breaks the connection at replay time, for
-the move row (item 181's open "connection broken at replay time" check).
-The account goes through its own `live_proxy.py`, on a port apart from
-`run.sh --live`'s own proxy. This scenario stops that proxy right before
-clicking Work Online, a full outage, not one failed request:
+the move, copy and delete rows (item 181's "connection broken at replay
+time" check). The account goes through its own `live_proxy.py`, on a port
+apart from `run.sh --live`'s own proxy. This scenario stops that proxy
+right before clicking Work Online, a full outage, not one failed request:
 `jmap_mail::service` retries its own reconnect and fails to authenticate,
-so the retry loop never reaches a session to send the filing's replay
-call on. The queued move stays unsent, the same as while offline. This
-scenario then restarts the proxy and checks the move still lands, once
-the retry loop's own next attempt succeeds. `offline-replay-transport-
-error.py` checks a narrower failure already, one reset request mid-replay
-through `fault_proxy.py`, with a session already open.
+so the retry loop never reaches a session to send any filing's replay call
+on. The queued move, copy and delete all stay unsent, the same as while
+offline. This scenario then restarts the proxy and checks all three land,
+once the retry loop's own next attempt succeeds. `offline-replay-
+transport-error.py` checks a narrower failure already, one reset request
+mid-replay through `fault_proxy.py`, with a session already open.
 """
 
 import os
@@ -265,6 +265,16 @@ def _run():
                 f"{move_subject!r} reached the server despite the broken connection"
             )
         say("server: the move did not land while the connection was broken")
+        if server.mailbox_of(copy_subject) != {inbox_id}:
+            raise ScenarioFailure(
+                f"{copy_subject!r} reached the server despite the broken connection"
+            )
+        say("server: the copy did not land while the connection was broken")
+        if server.mailbox_of(LIVE_DELETE_SUBJECT) != {inbox_id}:
+            raise ScenarioFailure(
+                f"{LIVE_DELETE_SUBJECT!r} reached the server despite the broken connection"
+            )
+        say("server: the delete did not land while the connection was broken")
         screenshot("04c-kept-pending-broken-connection")
         start_live_proxy()
         say("restarted the live proxy: the connection is back")
