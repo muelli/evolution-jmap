@@ -6,6 +6,15 @@
 # Each entry names a function of GLib or EDS, never a function of this
 # project. Give the reason for each entry.
 
+# `e_source_registry_new_sync` builds a real D-Bus client once per process
+# and never frees it: a test that reaches the OAuth2 code path holds it in a
+# process-wide `Forever` on purpose (see `oauth2.rs`'s `credentials_provider`
+# doc), because EDS keeps only a weak reference from the credentials
+# provider it feeds. In a sandbox with a session bus, the one-time
+# GDBusObjectManagerClient this builds caches its initial properties in a
+# way LeakSanitizer cannot trace back to that holder.
+leak:e_source_registry_set_default_for_extension_name
+
 # EDS 3.52 computes this directory name once, without a lock. Two threads
 # that call it at the same time both allocate the name, and one copy leaks.
 # The backend tests construct ESourceServerSide objects in parallel threads.
