@@ -242,7 +242,8 @@ if [ "$host" -eq 0 ]; then
 		"$IMAGE" \
 		bash -c '
 			trap '\''chown -R "$HOST_UID:$HOST_GID" "$GUI_SCENARIO_ARTIFACTS"'\'' EXIT
-			cp -a /stage/. /
+			# A preserved mode and owner on / makes the bwrap of the glycin image loader fail: its user namespace cannot map them.
+			cp -a --no-preserve=ownership,mode /stage/. /
 			ci/gui-scenario/run.sh --host "$@"
 		' run.sh "${extra_flags[@]}" "$@"
 	exit $?
