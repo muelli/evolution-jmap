@@ -446,9 +446,20 @@ class Jmap:
         if object_id not in (updated.get("updated") or {}):
             raise ScenarioFailure(f"{type_name}/set did not update {object_id}: {updated}")
 
-    def get(self, type_name, object_id):
-        """Return one object of `type_name`, or None if the server has no such object."""
-        found = self.call(f"{type_name}/get", {"ids": [object_id]})["list"]
+    def get(self, type_name, object_id, properties=None):
+        """Return one object of `type_name`, or None if the server has no such object.
+
+        `properties`, given, asks for those properties by name (RFC 8620
+        S5.1 "If null, all properties are returned"). Name a property a
+        server is known to omit from its own "all properties" default
+        (ROADMAP item 193: Stalwart's `Mailbox/get` omits `shareWith`
+        unless asked by name, while its `Calendar/get` and
+        `AddressBook/get` do not).
+        """
+        arguments = {"ids": [object_id]}
+        if properties is not None:
+            arguments["properties"] = properties
+        found = self.call(f"{type_name}/get", arguments)["list"]
         return found[0] if found else None
 
     def names(self, type_name):
