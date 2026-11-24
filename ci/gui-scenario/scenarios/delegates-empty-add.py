@@ -121,13 +121,13 @@ def run():
     dialog = wait_for(lambda: window(ADD_DIALOG), "the Add Delegate dialog")
     entry = wait_for(lambda: find(dialog, "text"), "the principal entry")
     combos = list(descendants(dialog, "combo box"))
-    if len(combos) != 2:
-        raise ScenarioFailure(f"the Add dialog has {len(combos)} combo boxes, not 2")
+    if len(combos) != 3:
+        raise ScenarioFailure(f"the Add dialog has {len(combos)} combo boxes, not 3")
     calendar_combo = combos[0]
     ok = ok_button(dialog)
 
     wait_for(lambda: not is_sensitive(ok), f"{OK_LABEL!r} insensitive with an empty principal")
-    say(f"dialog: {OK_LABEL!r} insensitive, empty principal, both levels No access")
+    say(f"dialog: {OK_LABEL!r} insensitive, empty principal, all levels No access")
     screenshot("empty-principal")
 
     set_text(entry, WHITESPACE_PRINCIPAL)
