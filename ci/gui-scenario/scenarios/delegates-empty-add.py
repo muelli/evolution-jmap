@@ -105,7 +105,7 @@ def is_sensitive(node):
 
 def shared_with(server, type_name, object_id, principal):
     # Ask for shareWith by name: Stalwart's Mailbox/get omits it from the
-    # "all properties" default (ROADMAP item 193, STALWART-RFC-FINDINGS 30).
+    # "all properties" default, unlike Calendar/get and AddressBook/get.
     found = server.get(type_name, object_id, properties=["shareWith"])
     if found is None:
         raise ScenarioFailure(f"the server has no {type_name} {object_id}")

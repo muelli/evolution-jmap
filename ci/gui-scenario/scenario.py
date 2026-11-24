@@ -452,9 +452,8 @@ class Jmap:
         `properties`, given, asks for those properties by name (RFC 8620
         S5.1 "If null, all properties are returned"). Name a property a
         server is known to omit from its own "all properties" default
-        (ROADMAP item 193: Stalwart's `Mailbox/get` omits `shareWith`
-        unless asked by name, while its `Calendar/get` and
-        `AddressBook/get` do not).
+        (Stalwart's `Mailbox/get` omits `shareWith` unless asked by
+        name, while its `Calendar/get` and `AddressBook/get` do not).
         """
         arguments = {"ids": [object_id]}
         if properties is not None:
