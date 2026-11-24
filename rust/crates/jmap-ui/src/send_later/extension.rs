@@ -750,7 +750,11 @@ unsafe fn set_menu_sensitive(
     if action_group.is_null() {
         return;
     }
-    let mut names: Vec<CString> = schedule::offered().iter().copied().map(action_name).collect();
+    let mut names: Vec<CString> = schedule::offered()
+        .iter()
+        .copied()
+        .map(action_name)
+        .collect();
     names.push(CString::new("jmap-send-later-custom").unwrap_or_default());
     for name in &names {
         // SAFETY: the contract makes the group live; it owns its actions.
