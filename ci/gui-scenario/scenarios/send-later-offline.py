@@ -73,8 +73,13 @@ def run():
     send_later = wait_for(
         lambda: find(title, "menu", "Send Later"), "the Send Later submenu"
     )
+    # Evolution 3.55+ keeps a submenu row sensitive whatever its action says,
+    # so the items carry the gate.
+    in_one_hour = wait_for(
+        lambda: find(send_later, "menu item", "In One Hour"), "the In One Hour item"
+    )
     time.sleep(SETTLE_SECONDS)
-    if send_later.getState().contains(pyatspi.STATE_SENSITIVE):
+    if in_one_hour.getState().contains(pyatspi.STATE_SENSITIVE):
         raise ScenarioFailure(
             "Send Later is sensitive while offline: the gate reached the server"
         )

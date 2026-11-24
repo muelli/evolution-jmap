@@ -440,7 +440,7 @@ unsafe fn build_menu(
         return None;
     }
     // SAFETY: the action is live; the code found it immediately before.
-    unsafe { set_action_sensitive(menu_action, false) };
+    unsafe { set_menu_sensitive(menu_action, action_group, false) };
     // SAFETY: the group is live; the code found it immediately before.
     unsafe { refresh_labels(action_group) };
     Some((menu_action, action_group))
@@ -522,7 +522,7 @@ unsafe fn refuse_menu(composer: *mut GObject, why: &CStr) {
     // SAFETY: the group owns the action, which lives as long as the composer.
     // A tooltip is a plain property.
     unsafe {
-        set_action_sensitive(state.menu_action, false);
+        set_menu_sensitive(state.menu_action, state.action_group, false);
         set_tooltip(state.menu_action, translate(why));
     }
 }
@@ -594,7 +594,7 @@ unsafe fn gate(composer: *mut GObject) {
         state.generation = generation;
         // SAFETY: the action and the group live as long as the composer.
         unsafe {
-            set_action_sensitive(state.menu_action, false);
+            set_menu_sensitive(state.menu_action, state.action_group, false);
             set_tooltip(
                 state.menu_action,
                 translate(if offline { OFFLINE } else { CHECKING }),
@@ -733,6 +733,49 @@ unsafe fn transport_of(
 ///
 /// # Safety
 ///
+/// Sets the sensitivity of the submenu and of each of its items. On 3.55+ a
+/// submenu row ignores its own action, so only the items can stop a click.
+///
+/// # Safety
+///
+/// `menu_action` and `action_group` must be the live menu action and group
+/// of one composer, on the main loop.
+unsafe fn set_menu_sensitive(
+    menu_action: MenuAction,
+    action_group: MenuActionGroup,
+    sensitive: bool,
+) {
+    // SAFETY: the contract makes the menu action live.
+    unsafe { set_action_sensitive(menu_action, sensitive) };
+    if action_group.is_null() {
+        return;
+    }
+    let mut names: Vec<CString> = schedule::offered().iter().copied().map(action_name).collect();
+    names.push(CString::new("jmap-send-later-custom").unwrap_or_default());
+    for name in &names {
+        // SAFETY: the contract makes the group live; it owns its actions.
+        let action = unsafe { group_action(action_group, name) };
+        if !action.is_null() {
+            // SAFETY: a live action of the group, checked non-null above.
+            unsafe { set_action_sensitive(action, sensitive) };
+        }
+    }
+}
+
+/// # Safety
+///
+/// `action_group` must be a live group.
+#[cfg(not(evolution_eui_manager))]
+unsafe fn group_action(action_group: MenuActionGroup, name: &CStr) -> MenuAction {
+    // SAFETY: the contract makes the group live.
+    unsafe { gtk_action_group_get_action(action_group, name.as_ptr()) }
+}
+#[cfg(evolution_eui_manager)]
+unsafe fn group_action(action_group: MenuActionGroup, name: &CStr) -> MenuAction {
+    // SAFETY: the contract makes the group live.
+    unsafe { e_ui_action_group_get_action(action_group, name.as_ptr()) }
+}
+
 /// `composer` must be the live composer for which the gate ran, on the main
 /// loop.
 unsafe fn apply_gate(
@@ -756,7 +799,7 @@ unsafe fn apply_gate(
         Ok(link) if link.features.max_hold.is_some() => {
             // SAFETY: the action lives as long as the composer.
             unsafe {
-                set_action_sensitive(state.menu_action, true);
+                set_menu_sensitive(state.menu_action, state.action_group, true);
                 set_tooltip(state.menu_action, translate(OFFERED));
             }
             state.link = Some(Arc::new(link));
@@ -764,14 +807,14 @@ unsafe fn apply_gate(
         Ok(_) => {
             // SAFETY: as above.
             unsafe {
-                set_action_sensitive(state.menu_action, false);
+                set_menu_sensitive(state.menu_action, state.action_group, false);
                 set_tooltip(state.menu_action, translate(NOT_OFFERED));
             }
         }
         Err(message) => {
             // SAFETY: as above.
             unsafe {
-                set_action_sensitive(state.menu_action, false);
+                set_menu_sensitive(state.menu_action, state.action_group, false);
                 set_tooltip(state.menu_action, translate_with(NOT_REACHED, &[&message]));
             }
         }
