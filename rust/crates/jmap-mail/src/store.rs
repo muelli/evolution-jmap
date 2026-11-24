@@ -98,8 +98,6 @@ struct Listing {
     refresh_id: u64,
 }
 
-static REFRESH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
 /// The instance struct. It is `#[repr(C)]` and starts with the instance
 /// struct of the parent. Thus a `*mut JmapStore` is a valid `CamelStore *`
 /// for each Camel function.
@@ -149,6 +147,11 @@ pub struct JmapStore {
     /// that are taken in sequence and never nested cannot make a cycle. One
     /// lock can.
     refresher: Slot<Mutex<Option<FolderRefresh>>>,
+    /// The last [`Listing::refresh_id`] handed out. It lives on the instance,
+    /// not in a static: the UI plugin links its own copy of this crate, and a
+    /// second counter there would make its refreshes look older than they are.
+    /// GObject zeroes the instance, which is a valid `AtomicU64`.
+    refresh_sequence: AtomicU64,
 }
 
 impl JmapStore {
@@ -532,7 +535,7 @@ impl JmapStore {
         tracing::debug!(flags, "fetching folder tree");
 
         let baseline_generation;
-        let my_refresh_id = REFRESH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let my_refresh_id = self.refresh_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         let listing = match held {
             Some((state, tree, generation)) => {
                 baseline_generation = Some(generation);
