@@ -710,6 +710,11 @@ unsafe fn build_widgets(page: *mut GObject) {
         let remove = add_button(page, buttons, N_(c"Re_move"), on_remove);
         let activate = add_button(page, buttons, ACTIVATE_LABEL, on_activate);
         let deactivate = add_button(page, buttons, DEACTIVATE_LABEL, on_deactivate);
+        // Item 198: Check and Edit in External Editor sit in this column,
+        // not after the rules list, so a short window still shows them
+        // without scrolling (GNOME HIG: keep primary actions visible).
+        let check = add_button(page, buttons, CHECK_LABEL, on_check);
+        let external_edit = add_button(page, buttons, EXTERNAL_EDITOR_LABEL, on_external_edit);
 
         // Only the managed script offers rules mode; every other script
         // shows this unchecked and insensitive.
@@ -810,9 +815,6 @@ unsafe fn build_widgets(page: *mut GObject) {
         let rule_down = add_button(page, rule_buttons, N_(c"Move Do_wn"), on_rule_down);
         let rule_enable = add_button(page, rule_buttons, N_(c"E_nable"), on_rule_enable);
         let rule_disable = add_button(page, rule_buttons, N_(c"Disa_ble"), on_rule_disable);
-
-        let check = add_button(page, content, CHECK_LABEL, on_check);
-        let external_edit = add_button(page, content, EXTERNAL_EDITOR_LABEL, on_external_edit);
 
         for control in [
             add,

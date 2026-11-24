@@ -299,9 +299,9 @@ def close_with_ok(editor):
 def assert_inside(node, container, label):
     """Raise unless `node`'s on-screen extents sit fully inside `container`'s.
 
-    A button scrolled off the side of a `GtkScrolledWindow` is still
-    `STATE_SHOWING` over AT-SPI (it is mapped, just not in view), so this
-    checks the actual screen position instead.
+    A button scrolled off the side or the bottom of a `GtkScrolledWindow`
+    is still `STATE_SHOWING` over AT-SPI (it is mapped, just not in view),
+    so this checks the actual screen position instead.
     """
     inner = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
     outer = container.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
@@ -309,6 +309,11 @@ def assert_inside(node, container, label):
         raise ScenarioFailure(
             f"{label} is outside the dialog: button x {inner.x}..{inner.x + inner.width}, "
             f"dialog x {outer.x}..{outer.x + outer.width}"
+        )
+    if inner.y < outer.y or inner.y + inner.height > outer.y + outer.height:
+        raise ScenarioFailure(
+            f"{label} is outside the dialog: button y {inner.y}..{inner.y + inner.height}, "
+            f"dialog y {outer.y}..{outer.y + outer.height}"
         )
 
 
@@ -567,6 +572,21 @@ def run():
         lambda: text_of(source_view) == COMPLETION_WORD, f"the text view shows {COMPLETION_WORD!r}"
     )
     say("page: a real Right arrow key press accepts the candidate")
+    close_with_cancel(editor)
+
+    # 8. The "Edit in External Editor" button stays on screen without
+    # scrolling, at every screen size this project supports (item 198).
+    # Item 174's check above only ever ran at 800x600.
+    editor = open_page()
+    loaded(editor)
+    select_script(editor, MANAGED_NAME)
+    external_editor = wait_for(
+        lambda: find(editor, "push button", "Edit in External Editor", showing=True),
+        "the 'Edit in External Editor' button",
+    )
+    assert_inside(external_editor, editor, "the 'Edit in External Editor' button")
+    screenshot("external-editor-button-visible")
+    say("page: the External Editor button stays inside the dialog")
     close_with_cancel(editor)
 
     if any(is_showing(node) for node in descendants(evolution(), "alert", max_depth=2)):
