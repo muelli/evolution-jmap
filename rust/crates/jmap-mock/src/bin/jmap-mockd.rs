@@ -224,6 +224,9 @@ fn main() {
             "--email-get-includes-unrequested" => {
                 builder = builder.email_get_includes_unrequested();
             }
+            "--mailbox-get-omits-unnamed-share-with" => {
+                builder = builder.mailbox_get_omits_unnamed_share_with();
+            }
             "--contact-photo-uses-file-uri" => {
                 builder = builder.contact_photo_uses_file_uri();
             }
@@ -695,7 +698,8 @@ fn usage(error: &str) -> ! {
          [--changes-page-size N] [--changes-never-terminates] [--stalwart-shaped-unrecognized-changes-state] \
          [--objects-in-get N] [--query-page-size N] [--query-never-terminates] [--query-hides-limit] \
          [--size-request N] [--no-size-request] [--size-upload N] [--no-size-upload] [--sieve-extensions A,B,C] \
-         [--email-get-includes-unrequested] [--contact-photo-uses-file-uri] [--contact-photo-data-uri-as-blob-id] \
+         [--email-get-includes-unrequested] [--mailbox-get-omits-unnamed-share-with] \
+         [--contact-photo-uses-file-uri] [--contact-photo-data-uri-as-blob-id] \
          [--contact-create-omits-uid] [--calendar-event-link-uses-file-uri] \
          [--session-via-redirect] [--well-known-redirect-to ORIGIN] [--advertise-origin ORIGIN] \
          [--shared-account-name-copies-user] [--download-via-redirect-to ORIGIN] [--reject-download-accept-json] \

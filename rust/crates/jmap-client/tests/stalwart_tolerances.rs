@@ -1016,3 +1016,102 @@ fn get_availability_declares_principals_availability_capability_in_using() {
 
     assert!(periods.is_empty());
 }
+
+/// Stalwart 1.1.1 omits `shareWith` from `Mailbox/get` when `properties` is null
+/// (finding 30). When `urn:ietf:params:jmap:principals` is advertised,
+/// `Client::mailbox_get` must ask for Mailbox properties and `shareWith` by name.
+#[test]
+fn finding_30_mailbox_get_receives_share_with_when_sharing_capability_present() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .mailbox_get_omits_unnamed_share_with()
+        .bearer_token("alice-token")
+        .start();
+    let account_id = server.account_id();
+    let archive_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_mailbox("Archive", None)
+    };
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+
+    alice
+        .mailbox_update(
+            &account_id,
+            &archive_id,
+            serde_json::json!({
+                "shareWith": {
+                    bob.as_str(): {
+                        "mayReadItems": true
+                    }
+                }
+            }),
+        )
+        .unwrap();
+
+    let response = alice.mailbox_get(&account_id).unwrap();
+    let archive = response
+        .list
+        .into_iter()
+        .find(|m| m.id.as_ref() == Some(&archive_id))
+        .expect("archive mailbox found");
+
+    let share_map = archive
+        .share_with
+        .as_ref()
+        .expect("shareWith must be returned when principals capability is present");
+    assert_eq!(
+        share_map.get(&bob).and_then(|r| r.may_read_items),
+        Some(true)
+    );
+}
+
+struct MockMailboxGetNoPrincipalsTransport;
+
+impl Transport for MockMailboxGetNoPrincipalsTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => {
+                r#"{"capabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:mail":{}},"accounts":{"u1":{"name":"u1","accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:mail":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"u1"},"username":"u1","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#.as_bytes().to_vec()
+            }
+            HttpMethod::Post => {
+                let json: serde_json::Value =
+                    serde_json::from_slice(request.body.unwrap_or_default())
+                        .expect("valid JSON request body");
+                let calls = json["methodCalls"].as_array().expect("methodCalls");
+                let args = &calls[0][1];
+                assert!(
+                    args.get("properties").is_none() || args["properties"].is_null(),
+                    "properties must be omitted or null when principals capability is absent, got: {args}"
+                );
+                r#"{"methodResponses":[["Mailbox/get",{"accountId":"u1","state":"s1","list":[],"notFound":[]},"c0"]],"sessionState":"0"}"#.as_bytes().to_vec()
+            }
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+/// When the server does not advertise `urn:ietf:params:jmap:principals`,
+/// `Client::mailbox_get` keeps `properties: null` so servers like Fastmail
+/// do not reject the request with `invalidArguments` (RFC 8620 Section 5.1).
+#[test]
+fn finding_30_mailbox_get_omits_properties_when_sharing_capability_absent() {
+    let client = Client::builder()
+        .transport(MockMailboxGetNoPrincipalsTransport)
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+    let account_id = Id::new("u1");
+    let response = client
+        .mailbox_get(&account_id)
+        .expect("mailbox_get succeeds");
+    assert!(response.list.is_empty());
+}

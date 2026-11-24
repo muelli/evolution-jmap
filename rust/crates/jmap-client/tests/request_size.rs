@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 /// Small request limit that forces request splitting for seeded messages.
 ///
 /// Leaves room for several identifiers per request while forcing multiple batches.
-const SMALL_REQUEST: u64 = 220;
+const SMALL_REQUEST: u64 = 300;
 
 /// Number of seeded messages in the mailbox, exceeding [`SMALL_REQUEST`].
 const SEEDED: usize = 40;

@@ -40,6 +40,8 @@ pub struct ServerState {
     pub objects_in_get: Option<u64>,
     /// Whether `Email/get` appends objects the client did not request.
     pub email_get_includes_unrequested: bool,
+    /// Whether `Mailbox/get` omits `shareWith` unless named in `properties`.
+    pub mailbox_get_omits_unnamed_share_with: bool,
     /// Whether `ContactCard/get` rewrites photo media URIs to a local `file:` URI.
     pub contact_photo_uses_file_uri: bool,
     /// Whether `ContactCard` photo `data:` URIs are served as `blobId` plus `mediaType`.
@@ -168,6 +170,7 @@ impl ServerState {
             stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
             email_get_includes_unrequested: false,
+            mailbox_get_omits_unnamed_share_with: false,
             contact_photo_uses_file_uri: false,
             contact_photo_data_uri_as_blob_id: false,
             contact_create_omits_uid: false,

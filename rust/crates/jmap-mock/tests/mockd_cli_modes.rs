@@ -45,6 +45,7 @@ fn help_lists_the_expanded_builder_mode_flags() {
         "--size-upload",
         "--no-size-upload",
         "--sieve-extensions",
+        "--mailbox-get-omits-unnamed-share-with",
         "--contact-photo-data-uri-as-blob-id",
         "--contact-create-omits-uid",
         "--session-via-redirect",

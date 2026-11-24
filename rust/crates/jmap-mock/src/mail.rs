@@ -36,6 +36,7 @@ pub fn mailbox_get(
     caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
+    let omit_unnamed_share_with = state.mailbox_get_omits_unnamed_share_with;
     let account = account_mut(state, &request.account_id)?;
 
     let is_owner =
@@ -108,9 +109,25 @@ pub fn mailbox_get(
         }
     };
 
+    let names_share_with = request
+        .properties
+        .as_ref()
+        .is_some_and(|props| props.iter().any(|p| p == "shareWith"));
+    let mut projected_list = Vec::with_capacity(list.len());
+    for mut mailbox in list {
+        if omit_unnamed_share_with && !names_share_with {
+            mailbox.share_with = None;
+        }
+        projected_list.push(project_properties(&mailbox, request.properties.as_deref())?);
+    }
+
     to_result(
-        &GetResponse::new(request.account_id, account.mailboxes.state(), list)
-            .with_not_found(not_found),
+        &GetResponse::new(
+            request.account_id,
+            account.mailboxes.state(),
+            projected_list,
+        )
+        .with_not_found(not_found),
     )
 }
 

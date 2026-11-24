@@ -398,3 +398,61 @@ fn grantee_mail_methods_follow_shared_mailbox_rights() {
         json!(true)
     );
 }
+
+#[test]
+fn mailbox_get_omits_unnamed_share_with_when_configured() {
+    let server = MockServer::builder()
+        .mailbox_get_omits_unnamed_share_with()
+        .bearer_token("owner-token")
+        .start();
+    let account_id = server.account_id();
+    let bob = Id::new("bob");
+    server.with_account_mut(account_id.clone(), |account| {
+        let mailbox = account.seed_mailbox("Shared", None);
+        let mut rights = BTreeMap::new();
+        let mut bob_rights = MailboxRights::default();
+        bob_rights.may_read_items = Some(true);
+        rights.insert(bob.clone(), bob_rights);
+        if let Some(m) = account.mailboxes.get_mut(&mailbox) {
+            m.share_with = Some(rights);
+        }
+    });
+
+    // 1. With properties null (omitted), shareWith is omitted.
+    let response_null = api(
+        &server,
+        Some("Bearer owner-token"),
+        json!({
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [[
+                "Mailbox/get",
+                {"accountId": account_id},
+                "c1"
+            ]]
+        }),
+    );
+    let list_null = response_null["methodResponses"][0][1]["list"]
+        .as_array()
+        .expect("mailbox list");
+    assert!(!list_null.is_empty());
+    assert!(list_null[0].get("shareWith").is_none());
+
+    // 2. With properties explicitly naming shareWith, shareWith is returned.
+    let response_named = api(
+        &server,
+        Some("Bearer owner-token"),
+        json!({
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [[
+                "Mailbox/get",
+                {"accountId": account_id, "properties": ["id", "name", "shareWith"]},
+                "c2"
+            ]]
+        }),
+    );
+    let list_named = response_named["methodResponses"][0][1]["list"]
+        .as_array()
+        .expect("mailbox list");
+    assert!(!list_named.is_empty());
+    assert!(list_named[0].get("shareWith").is_some());
+}

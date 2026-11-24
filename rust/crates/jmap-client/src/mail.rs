@@ -18,7 +18,8 @@ use jmap_proto::methods::{
 };
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
-    CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
+    CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_PRINCIPALS, CAPABILITY_SUBMISSION,
+    CAPABILITY_VACATION_RESPONSE,
 };
 use jmap_proto::{Id, State};
 use serde_json::Value;
@@ -136,17 +137,43 @@ fn submission_request(
     request
 }
 
+/// Mailbox properties defined in RFC 8621 Section 2 plus `shareWith`.
+const MAILBOX_PROPERTIES_WITH_SHARING: &[&str] = &[
+    "id",
+    "name",
+    "parentId",
+    "role",
+    "sortOrder",
+    "totalEmails",
+    "unreadEmails",
+    "totalThreads",
+    "unreadThreads",
+    "myRights",
+    "isSubscribed",
+    "shareWith",
+];
+
 impl Client {
     /// Fetch all mailboxes for an account (`Mailbox/get` with `ids: null`).
     ///
     /// Returns the full response containing the mailbox list and state string.
     /// The state string is required for incremental sync via `Mailbox/changes`.
     pub fn mailbox_get(&self, account_id: &Id) -> Result<GetResponse<Mailbox>, Error> {
-        let arguments = self.single_call(
-            &[CAPABILITY_CORE, CAPABILITY_MAIL],
-            "Mailbox/get",
-            &GetRequest::all(account_id.clone()),
-        )?;
+        let mut request = GetRequest::all(account_id.clone());
+        if self
+            .session()
+            .capabilities
+            .contains_key(CAPABILITY_PRINCIPALS)
+        {
+            request = request.properties(
+                MAILBOX_PROPERTIES_WITH_SHARING
+                    .iter()
+                    .copied()
+                    .map(String::from),
+            );
+        }
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Mailbox/get", &request)?;
         Ok(serde_json::from_value(arguments)?)
     }
 

@@ -67,6 +67,8 @@ pub struct Faults {
     pub stalwart_shaped_unrecognized_changes_state: bool,
     /// Include unrequested objects in `Email/get` responses.
     pub email_get_includes_unrequested: bool,
+    /// Omit `shareWith` from `Mailbox/get` unless named in `properties`.
+    pub mailbox_get_omits_unnamed_share_with: bool,
     /// Rewrite `ContactCard/get` photo media URIs to a local `file:` URI.
     pub contact_photo_uses_file_uri: bool,
     /// Serve `ContactCard` photo `data:` URIs as `blobId` plus `mediaType`.
@@ -229,6 +231,12 @@ impl MockServerBuilder {
     /// Include unrequested objects in `Email/get` responses.
     pub fn email_get_includes_unrequested(mut self) -> Self {
         self.faults.email_get_includes_unrequested = true;
+        self
+    }
+
+    /// Omit `shareWith` from `Mailbox/get` unless named in `properties`.
+    pub fn mailbox_get_omits_unnamed_share_with(mut self) -> Self {
+        self.faults.mailbox_get_omits_unnamed_share_with = true;
         self
     }
 
@@ -541,6 +549,8 @@ impl MockServerBuilder {
             self.faults.stalwart_shaped_unrecognized_changes_state;
         state.objects_in_get = self.objects_in_get;
         state.email_get_includes_unrequested = self.faults.email_get_includes_unrequested;
+        state.mailbox_get_omits_unnamed_share_with =
+            self.faults.mailbox_get_omits_unnamed_share_with;
         state.contact_photo_uses_file_uri = self.faults.contact_photo_uses_file_uri;
         state.contact_photo_data_uri_as_blob_id = self.faults.contact_photo_data_uri_as_blob_id;
         state.contact_create_omits_uid = self.faults.contact_create_omits_uid;
