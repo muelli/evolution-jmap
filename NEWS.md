@@ -5,6 +5,46 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # NEWS
 
+## 0.7.2 (2026-11-24)
+
+- The Delegates page's Mail column, and granting, changing or revoking a
+  mailbox-level delegate, now work against Stalwart. The gap was
+  server-side: unlike Calendar/get and AddressBook/get, Stalwart's
+  Mailbox/get leaves out a mailbox's sharing information unless a caller
+  names it explicitly, so the page always read a real mail share as
+  empty; the client now asks for it by name whenever the server offers
+  sharing. A mail share still applies to the whole Inbox subtree, not
+  one mailbox at a time.
+- Activating or deactivating a Sieve script from another client is no
+  longer silently undone by your own next save. Stalwart does not change
+  a script's reported state for an activation-only change, so a save
+  that also flips activation now compares against what was last loaded
+  instead of trusting the server's unchanged state.
+- Snoozing a message could leave the Snoozed folder unlisted after the
+  first snooze on an account, because the folder refresh read from a
+  second, internal counter that could look older than the listing
+  already held. Fixed.
+- The Send Later menu items could still be used offline, or on a server
+  without scheduled send, because Evolution 3.55 and later keeps a
+  main-menu submenu sensitive regardless of its own action's state. Each
+  item is now gated directly.
+- The "Edit in External Editor" button on the Server Filters page no
+  longer sits below the visible area of a small account editor window.
+
+### Known issues
+
+- Double-clicking a contact card can lose the click during an address
+  book refresh (upstream Evolution bug, evolution#3436).
+- Some strings are not yet translated into German.
+- Snoozing a message needs a server that supports the snooze capability.
+- The Delegates page shows a raw account id, instead of a name, for a
+  delegate when the server has directory lookups turned off.
+- A mailbox another user has unshared with you can stay in the folder
+  list until the next periodic refresh, up to ten minutes later.
+- Turning on the Vacation Responder on a server that allows only one
+  active Sieve script at a time deactivates your own filter script, and
+  turning Vacation off again does not restore it.
+
 ## 0.7.1 (2026-11-23)
 
 - Shared mailboxes: a mailbox another user shares with you now appears in

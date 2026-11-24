@@ -7,7 +7,7 @@ mock server in the repository (`jmap-mockd`).
 
 ## Where it stands
 
-v0.7.1 was released on 2026-11-23. Mail, contacts, calendars and the
+v0.7.2 was released on 2026-11-24. Mail, contacts, calendars and the
 collection account work end to end in Evolution against real JMAP servers.
 This includes OAuth 2.0 sign-in, JMAP Push and server-side free/busy in the
 meeting scheduler. It also includes the creation and deletion of calendars and

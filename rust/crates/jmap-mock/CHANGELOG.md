@@ -13,6 +13,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- `--mailbox-get-omits-unnamed-share-with` and
+  `MockServerBuilder::mailbox_get_omits_unnamed_share_with()`: omit
+  `shareWith` from `Mailbox/get` unless a caller names it in
+  `properties`, matching a real server's quirk. (`6027de11`)
 - RFC 9610 contact query filter properties and sort. (`0230cb2b`)
 - RFC 9670 principals filter properties, `Principal/set`, `ShareNotification/set`
   and sort; `currentUserPrincipalId` in the capability; the account owner is
