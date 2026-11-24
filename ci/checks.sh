@@ -169,12 +169,14 @@ boundary_lint_exclude=(
 # Matches any mention of these filenames, not only a "<name> item N" shape.
 # A narrower pattern would silently undercount real references.
 boundary_lint_pattern='NIGHT-LOG\.md|AGY-LOG\.md|AGY-TASKS\.md|BACKLOG\.md|MILESTONES\.md|ROADMAP\.md'
-boundary_lint_count=$({ grep -rnE "$boundary_lint_pattern" "${boundary_lint_paths[@]}" "${boundary_lint_exclude[@]}" 2>/dev/null || true; } | wc -l)
+# target and build hold only compiled output, never source; skipping them
+# keeps this lint fast on a runner with a large cargo or cmake build tree.
+boundary_lint_count=$({ grep -rnE "$boundary_lint_pattern" "${boundary_lint_paths[@]}" "${boundary_lint_exclude[@]}" --exclude-dir=target --exclude-dir=build 2>/dev/null || true; } | wc -l)
 if [ "$boundary_lint_count" -gt 0 ]; then
     echo "FAIL: $boundary_lint_count mention(s) of agent bookkeeping files in the product tree." >&2
     echo "The sweep reached zero on 2026-08-31 and this lint now enforces the boundary:" >&2
     echo "code and its docs must not cite ROADMAP.md, NIGHT-LOG.md, AGY-*, BACKLOG.md or MILESTONES.md." >&2
-    grep -rnE "$boundary_lint_pattern" "${boundary_lint_paths[@]}" "${boundary_lint_exclude[@]}" 2>/dev/null | head -20 >&2
+    grep -rnE "$boundary_lint_pattern" "${boundary_lint_paths[@]}" "${boundary_lint_exclude[@]}" --exclude-dir=target --exclude-dir=build 2>/dev/null | head -20 >&2
     exit 1
 fi
 echo "-- boundary clean: 0 mentions --"
