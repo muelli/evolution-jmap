@@ -72,38 +72,43 @@ usage() {
 }
 
 # The host build links against the EUIManager or GtkUIManager API by the
-# installed Evolution version (evo-sys/build.rs). A container whose own
-# Evolution is a different major.minor silently crashes every scenario at
-# module load, with a cryptic "undefined symbol" error far from this cause.
-# Catches that early, including a cached image left over from before a host
-# upgrade: rebuilds once, then fails with a clear message instead.
+# installed Evolution version (evo-sys/build.rs), so the container needs the
+# Evolution of the same major.minor. Pick the Ubuntu base by the host's
+# version, and rebuild a cached image that has a different one.
 evo_major_minor() { cut -d. -f1,2 <<<"$1"; }
 
-check_evolution_version_match() {
-	local image="$1" host_version container_version
+ubuntu_for_evolution() {
+	case "$1" in
+	3.52) echo "docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea" ;;
+	3.56) echo "docker.io/library/ubuntu:26.04@sha256:0d5255be560e2d2ddcfbfda88549e9e815ef29e7cd7fc62183d5709e6e2963c6" ;;
+	*) return 1 ;;
+	esac
+}
+
+image_evolution() {
+	podman run --rm "$1" dpkg-query -W -f='${Version}' evolution-data-server 2>/dev/null
+}
+
+prepare_image() {
+	local image="$1" host_version wanted base
 	host_version="$(pkg-config --modversion evolution-shell-3.0 2>/dev/null)" || {
 		echo "gui-scenario: pkg-config has no evolution-shell-3.0 on this host" >&2
 		exit 2
 	}
-	container_version="$(podman run --rm "$image" dpkg-query -W -f='${Version}' evolution-data-server 2>/dev/null)" || {
-		echo "gui-scenario: could not read evolution-data-server's version from $image" >&2
+	wanted="$(evo_major_minor "$host_version")"
+	base="$(ubuntu_for_evolution "$wanted")" || {
+		echo "gui-scenario: no Ubuntu base image known for the host's Evolution $host_version; add one to ubuntu_for_evolution()" >&2
 		exit 2
 	}
-	if [ "$(evo_major_minor "$host_version")" = "$(evo_major_minor "$container_version")" ]; then
+	if podman image exists "$image" && [ "$(evo_major_minor "$(image_evolution "$image")")" = "$wanted" ]; then
 		return 0
 	fi
-	echo "gui-scenario: $image has Evolution $container_version, the host has $host_version; rebuilding" >&2
-	podman build -f "$ROOT/ci/gui-scenario/Containerfile" -t "$image" "$ROOT/ci" || exit 2
-	container_version="$(podman run --rm "$image" dpkg-query -W -f='${Version}' evolution-data-server 2>/dev/null)" || {
-		echo "gui-scenario: could not read evolution-data-server's version from $image" >&2
+	echo "gui-scenario: building image $image for Evolution $wanted"
+	podman build --build-arg "UBUNTU=$base" -f "$ROOT/ci/gui-scenario/Containerfile" -t "$image" "$ROOT/ci" || exit 2
+	if [ "$(evo_major_minor "$(image_evolution "$image")")" != "$wanted" ]; then
+		echo "gui-scenario: $image does not have Evolution $wanted after a build from $base" >&2
 		exit 2
-	}
-	if [ "$(evo_major_minor "$host_version")" = "$(evo_major_minor "$container_version")" ]; then
-		return 0
 	fi
-	echo "gui-scenario: $image still has Evolution $container_version after a rebuild, the host has $host_version." >&2
-	echo "gui-scenario: update ci/gui-scenario/Containerfile's ARG UBUNTU to a base image with a matching Evolution." >&2
-	exit 2
 }
 
 host=0
@@ -153,11 +158,7 @@ if [ "$host" -eq 0 ]; then
 		echo "gui-scenario: no jmap-mockd at $mock. Build the tree first." >&2
 		exit 2
 	fi
-	if ! podman image exists "$IMAGE"; then
-		echo "gui-scenario: building image $IMAGE"
-		podman build -f "$ROOT/ci/gui-scenario/Containerfile" -t "$IMAGE" "$ROOT/ci" || exit 2
-	fi
-	check_evolution_version_match "$IMAGE"
+	prepare_image "$IMAGE"
 	stage="$(mktemp -d)"
 	trap 'rm -rf "$stage"' EXIT
 	for component in "${COMPONENTS[@]}"; do
