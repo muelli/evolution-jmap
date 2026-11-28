@@ -729,10 +729,6 @@ unsafe fn transport_of(
     (!transport.is_null()).then_some(transport)
 }
 
-/// Applies the level-2 answer, but only if no newer gate run replaced it.
-///
-/// # Safety
-///
 /// Sets the sensitivity of the submenu and of each of its items. On 3.55+ a
 /// submenu row ignores its own action, so only the items can stop a click.
 ///
@@ -780,6 +776,10 @@ unsafe fn group_action(action_group: MenuActionGroup, name: &CStr) -> MenuAction
     unsafe { e_ui_action_group_get_action(action_group, name.as_ptr()) }
 }
 
+/// Applies the level-2 answer, but only if no newer gate run replaced it.
+///
+/// # Safety
+///
 /// `composer` must be the live composer for which the gate ran, on the main
 /// loop.
 unsafe fn apply_gate(

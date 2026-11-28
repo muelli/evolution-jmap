@@ -106,8 +106,8 @@ fn gsettings_string(schema_id: &CStr, key: &CStr) -> Option<String> {
             }
             // SAFETY: `settings` is non-null; `key` was just confirmed
             // present on its schema. Transfer full: null when the user
-            // never set the key, otherwise a floating reference this call
-            // owns until the unref below.
+            // never set the key, otherwise a reference this call owns until
+            // the unref below.
             let variant = unsafe { g_settings_get_user_value(settings, key.as_ptr()) };
             let value = if variant.is_null() {
                 None
