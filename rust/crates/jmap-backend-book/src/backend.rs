@@ -238,7 +238,11 @@ unsafe extern "C" fn connect_sync(
                 "address book backend connected"
             );
             // Connection must be stored before starting push to avoid race with incoming refresh.
-            backend.install_connection(open.sync, |sync| start_push(meta_backend, sync));
+            backend.install_connection(
+                open.sync,
+                |sync| start_push(meta_backend, sync),
+                |sync| push::authorization_headers(sync.client()),
+            );
             // Mark backend writable on EBookBackend according to its server rights.
             e_book_backend_set_writable(
                 meta_backend.cast(),

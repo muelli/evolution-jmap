@@ -475,14 +475,18 @@ fn install_connection_installs_connection_before_starting_push() {
     let backend = Detached::new();
     let mut order = Vec::new();
 
-    backend.0.install_connection(fixture.sync(), |_sync| {
-        if backend.0.is_connected() {
-            order.push("connected_before_push");
-        } else {
-            order.push("push_before_connected");
-        }
-        None
-    });
+    backend.0.install_connection(
+        fixture.sync(),
+        |_sync| {
+            if backend.0.is_connected() {
+                order.push("connected_before_push");
+            } else {
+                order.push("push_before_connected");
+            }
+            None
+        },
+        |_sync| Vec::new(),
+    );
 
     assert_eq!(order, vec!["connected_before_push"]);
     assert!(backend.0.is_connected());
@@ -497,7 +501,7 @@ fn install_connection_stores_push_subscription() {
 
     backend
         .0
-        .install_connection(fixture.sync(), |_sync| Some(sub));
+        .install_connection(fixture.sync(), |_sync| Some(sub), |_sync| Vec::new());
 
     assert!(backend.0.is_connected());
     assert!(backend.0.is_pushing());

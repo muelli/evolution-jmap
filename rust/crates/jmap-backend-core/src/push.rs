@@ -77,6 +77,15 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// timeouts in common use.
 const PING_SECONDS: u32 = 120;
 
+/// The `Authorization` header that `client` sends now, as push headers.
+/// Returns no header for an unauthenticated client.
+pub fn authorization_headers(client: &Client) -> Vec<(String, String)> {
+    client
+        .authorization_header()
+        .map(|value| vec![("Authorization".to_owned(), value)])
+        .unwrap_or_default()
+}
+
 /// Starts to push refreshes at `backend`, preferring RFC 8887 WebSocket when
 /// `urn:ietf:params:jmap:websocket` advertises `supportsPush: true` and
 /// falling back to `eventSourceUrl` (RFC 8620 §7.3). If neither is available
@@ -352,10 +361,7 @@ impl PushRefresh {
             return None;
         }
         let url = expand_url(template, types, false, PING_SECONDS);
-        let headers = client
-            .authorization_header()
-            .map(|value| vec![("Authorization".to_owned(), value)])
-            .unwrap_or_default();
+        let headers = authorization_headers(client);
 
         tracing::debug!(
             account_id = account_id.as_str(),

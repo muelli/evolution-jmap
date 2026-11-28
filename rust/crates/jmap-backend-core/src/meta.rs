@@ -72,15 +72,34 @@ impl<S> MetaState<S> {
     }
 
     /// Installs `sync` as the live connection and starts the push subscription.
-    pub fn install_connection(&self, sync: S, start_push: impl FnOnce(&S) -> Option<PushRefresh>) {
+    ///
+    /// `headers` reads the current `Authorization` header from `sync`.
+    pub fn install_connection(
+        &self,
+        sync: S,
+        start_push: impl FnOnce(&S) -> Option<PushRefresh>,
+        headers: impl FnOnce(&S) -> Vec<(String, String)>,
+    ) {
         self.store_connection(sync);
-        let push = self.session.get().and_then(|session| {
-            let guard = read(session);
-            guard.as_ref().and_then(start_push)
-        });
-        if let Some(push) = push {
-            self.store_push(push);
-        }
+        let (Some(session), Some(slot)) = (self.session.get(), self.push.get()) else {
+            return;
+        };
+        let guard = read(session);
+        let Some(sync) = guard.as_ref() else {
+            return;
+        };
+        let Some(push) = start_push(sync) else {
+            return;
+        };
+        let previous = {
+            let mut live = lock(slot);
+            // A refresh can install a new token after `start_push` copied the header.
+            // `refresh_push_headers` takes this lock, so read the header again under it.
+            push.set_headers(headers(sync));
+            live.replace(push)
+        };
+        drop(guard);
+        drop(previous);
     }
 
     /// Drops the connection, reporting whether there was one.
@@ -176,7 +195,7 @@ mod tests {
     fn install_connection_without_push_stores_connection_only() {
         let state = detached();
 
-        state.install_connection(StubSync(7), |_sync| None);
+        state.install_connection(StubSync(7), |_sync| None, |_sync| Vec::new());
 
         assert!(state.is_connected());
         assert!(!state.is_pushing());
@@ -232,6 +251,53 @@ mod tests {
         assert!(!state.stop_push());
     }
 
+    /// A token refresh can land after `start_push` copied the old header and
+    /// before the push is stored. The stored push must still use the new token.
+    #[test]
+    fn a_refresh_during_install_reaches_the_new_push() {
+        let server = MockServer::builder().bearer_token("fresh-token").start();
+        let state = detached();
+        let client_header = Mutex::new("Bearer stale-token".to_owned());
+        let url = jmap_client::eventsource::expand_url(
+            &format!("{}/eventsource", server.origin()),
+            &["ContactCard"],
+            false,
+            0,
+        );
+
+        state.install_connection(
+            StubSync(5),
+            |_sync| {
+                let push = PushRefresh::start(
+                    url.clone(),
+                    vec![(
+                        "Authorization".to_owned(),
+                        client_header.lock().unwrap().clone(),
+                    )],
+                    server.account_id(),
+                    vec!["ContactCard".to_owned()],
+                    |_types: &[String]| {},
+                );
+                // The refresh of another thread: a new token, then its header.
+                *client_header.lock().unwrap() = "Bearer fresh-token".to_owned();
+                state.refresh_push_headers(vec![(
+                    "Authorization".to_owned(),
+                    "Bearer fresh-token".to_owned(),
+                )]);
+                Some(push)
+            },
+            |_sync| {
+                vec![(
+                    "Authorization".to_owned(),
+                    client_header.lock().unwrap().clone(),
+                )]
+            },
+        );
+
+        server.wait_for_event_source_subscriber(std::time::Duration::from_secs(5));
+        assert!(state.stop_push());
+    }
+
     #[test]
     fn install_connection_with_push_stores_both_connection_and_push() {
         let server = MockServer::builder().bearer_token("fresh-token").start();
@@ -243,15 +309,19 @@ mod tests {
             false,
             0,
         );
-        state.install_connection(StubSync(3), |_sync| {
-            Some(PushRefresh::start(
-                url.clone(),
-                vec![],
-                server.account_id(),
-                vec!["ContactCard".to_owned()],
-                |_types: &[String]| {},
-            ))
-        });
+        state.install_connection(
+            StubSync(3),
+            |_sync| {
+                Some(PushRefresh::start(
+                    url.clone(),
+                    vec![],
+                    server.account_id(),
+                    vec!["ContactCard".to_owned()],
+                    |_types: &[String]| {},
+                ))
+            },
+            |_sync| Vec::new(),
+        );
 
         assert!(state.is_connected());
         assert!(state.is_pushing());

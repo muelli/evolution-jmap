@@ -223,7 +223,11 @@ unsafe extern "C" fn connect_sync(
                 "calendar backend connected"
             );
             // Push starts after connection is stored so refreshes find a live session.
-            backend.install_connection(sync, |sync| start_push(meta_backend, sync));
+            backend.install_connection(
+                sync,
+                |sync| start_push(meta_backend, sync),
+                |sync| push::authorization_headers(sync.client()),
+            );
             // Sets writable on the backend; EDS overwrites connected-writable from this value.
             e_cal_backend_set_writable(
                 meta_backend.cast(),

@@ -117,7 +117,7 @@ fn install_connection_without_push_stores_connection_only() {
     let fixture = Fixture::start();
     let backend = JmapBookBackend::detached();
 
-    backend.install_connection(fixture.sync(), |_sync| None);
+    backend.install_connection(fixture.sync(), |_sync| None, |_sync| Vec::new());
 
     assert!(backend.is_connected());
     assert!(!backend.is_pushing());
@@ -131,7 +131,11 @@ fn install_connection_with_push_stores_both_connection_and_push() {
     let fixture = Fixture::start();
     let backend = JmapBookBackend::detached();
 
-    backend.install_connection(fixture.sync(), |_sync| Some(fixture.push_subscription()));
+    backend.install_connection(
+        fixture.sync(),
+        |_sync| Some(fixture.push_subscription()),
+        |_sync| Vec::new(),
+    );
 
     assert!(backend.is_connected());
     assert!(backend.is_pushing());
