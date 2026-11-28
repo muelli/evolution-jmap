@@ -79,6 +79,7 @@ use crate::delegation::{
     PrincipalSearch,
 };
 use crate::dispatch;
+use crate::hold::Hold;
 use crate::link::{self, AccountLink, LoadOutcome, SendSource};
 use crate::widget;
 
@@ -1608,7 +1609,10 @@ unsafe fn ask_for_grant(
 /// connection: the page the button belongs to.
 unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
     guard("JmapDelegatesPage::add", (), || {
-        // SAFETY: the page is live, because its descendant emitted.
+        // SAFETY: the page is live, because its descendant emitted. The hold
+        // keeps the page and its state alive through the dialog below.
+        let hold = unsafe { Hold::new(page.cast()) };
+        // SAFETY: as above.
         let Some(cell) = (unsafe { state(page.cast()) }) else {
             return;
         };
@@ -1617,14 +1621,20 @@ unsafe extern "C" fn on_add(_button: *mut GObject, page: gpointer) {
         };
         // SAFETY: the page is live, and this runs on the main thread, per
         // the signal handler contract.
-        let Some(result) = (unsafe {
+        let answer = unsafe {
             ask_for_grant(
                 page.cast(),
                 ADD_DIALOG_TITLE,
                 ADD_CONFIRM_LABEL,
                 &GrantDraft::new_delegate(),
             )
-        }) else {
+        };
+        // The shell can destroy the page while the dialog runs. Its children
+        // are then gone.
+        if hold.disposed() {
+            return;
+        }
+        let Some(result) = answer else {
             return;
         };
         let (view, revoke, add, change) = {
@@ -1750,6 +1760,9 @@ unsafe extern "C" fn on_row_activated(
 ///
 /// `page` must be the live page, on the main thread.
 unsafe fn act_change(page: *mut GObject) {
+    // SAFETY: the page is live, per the contract. The hold keeps the page and
+    // its state alive through the dialog below.
+    let hold = unsafe { Hold::new(page) };
     // SAFETY: the page is live, per the contract.
     let Some(cell) = (unsafe { state(page) }) else {
         return;
@@ -1784,9 +1797,13 @@ unsafe fn act_change(page: *mut GObject) {
     let draft = GrantDraft::existing(&principal_display, calendar, book, mail);
     // SAFETY: the page is live, and this runs on the main thread, per the
     // signal handler contract.
-    let Some(result) =
-        (unsafe { ask_for_grant(page, CHANGE_DIALOG_TITLE, CHANGE_CONFIRM_LABEL, &draft) })
-    else {
+    let answer = unsafe { ask_for_grant(page, CHANGE_DIALOG_TITLE, CHANGE_CONFIRM_LABEL, &draft) };
+    // The shell can destroy the page while the dialog runs. Its children are
+    // then gone.
+    if hold.disposed() {
+        return;
+    }
+    let Some(result) = answer else {
         return;
     };
     let (view, revoke, add, change) = {
@@ -3120,5 +3137,183 @@ mod tests {
             letters.len(),
             "Add, Change and Revoke do not each have their own mnemonic: {letters:?}"
         );
+    }
+
+    /// A page destroyed while a nested dialog runs, the way the shell
+    /// destroys every window on quit: the probes below record the order.
+    mod modal {
+        use std::sync::Mutex;
+
+        use glib_sys::{G_SOURCE_REMOVE, GList, g_idle_add, g_list_free};
+        use gobject_sys::g_object_set_data_full;
+
+        use super::*;
+
+        unsafe extern "C" {
+            fn gtk_window_new(kind: c_int) -> *mut GtkWidget;
+            fn gtk_window_list_toplevels() -> *mut GList;
+            fn gtk_dialog_response(dialog: *mut GtkWidget, response: c_int);
+            fn gtk_container_get_children(container: *mut GtkWidget) -> *mut GList;
+        }
+
+        static EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+        fn note(event: &'static str) {
+            EVENTS.lock().unwrap().push(event);
+        }
+
+        unsafe extern "C" fn page_finalized(_data: gpointer) {
+            note("page finalized");
+        }
+
+        unsafe extern "C" fn close_window(window: gpointer) -> glib_sys::gboolean {
+            // SAFETY: the test window is live until this call destroys it.
+            unsafe { gtk_widget_destroy(window.cast()) };
+            note("window destroyed");
+            G_SOURCE_REMOVE
+        }
+
+        /// The first `GtkEntry` below `widget`, or NULL.
+        ///
+        /// # Safety
+        ///
+        /// `widget` must be a live widget on this thread.
+        unsafe fn find_entry(widget: *mut GtkWidget) -> *mut GtkWidget {
+            // SAFETY: per the contract. Every list is freed once walked; GTK
+            // owns the widgets.
+            unsafe {
+                let entry_type = g_type_from_name(c"GtkEntry".as_ptr());
+                if g_type_check_instance_is_a(widget.cast(), entry_type) != GFALSE {
+                    return widget;
+                }
+                let container_type = g_type_from_name(c"GtkContainer".as_ptr());
+                if g_type_check_instance_is_a(widget.cast(), container_type) == GFALSE {
+                    return ptr::null_mut();
+                }
+                let list = gtk_container_get_children(widget);
+                let mut found: *mut GtkWidget = ptr::null_mut();
+                let mut node = list;
+                while !node.is_null() && found.is_null() {
+                    found = find_entry((*node).data.cast());
+                    node = (*node).next;
+                }
+                g_list_free(list);
+                found
+            }
+        }
+
+        /// Types a principal into the open grant dialog if its entry is
+        /// empty, then answers OK.
+        unsafe extern "C" fn answer_ok(_data: gpointer) -> glib_sys::gboolean {
+            // SAFETY: the dialog is live on this thread, inside the nested
+            // main loop this idle runs in. The list is freed below.
+            unsafe {
+                let dialog_type = g_type_from_name(c"GtkDialog".as_ptr());
+                let list = gtk_window_list_toplevels();
+                let mut node = list;
+                while !node.is_null() {
+                    let window: *mut GtkWidget = (*node).data.cast();
+                    if g_type_check_instance_is_a(window.cast(), dialog_type) != GFALSE {
+                        let entry = find_entry(gtk_dialog_get_content_area(window.cast()));
+                        if !entry.is_null() && widget::get_text(entry.cast()).is_empty() {
+                            widget::set_text(entry.cast(), "P-carol");
+                        }
+                        note("dialog answered");
+                        gtk_dialog_response(window, GTK_RESPONSE_OK);
+                    }
+                    node = (*node).next;
+                }
+                g_list_free(list);
+            }
+            G_SOURCE_REMOVE
+        }
+
+        /// Puts a loaded page with one selected delegate into a shown window
+        /// that owns the page's only reference, as the account editor does,
+        /// and queues the destroy and the answer for the dialog's own loop.
+        /// Then runs `act` on the page. `None` without a display.
+        fn destroy_during_dialog(act: unsafe fn(*mut GObject)) -> Option<Vec<&'static str>> {
+            use jmap_client::{Client, Credentials};
+            use jmap_mock::MockServer;
+
+            EVENTS.lock().unwrap().clear();
+            // SAFETY: no arguments. GTK stays on this thread for the whole test.
+            if unsafe { gtk_init_check(ptr::null_mut(), ptr::null_mut()) } == GFALSE {
+                eprintln!("skipped: no display for GTK");
+                return None;
+            }
+            let server = MockServer::builder().start();
+            let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+            let features =
+                crate::session_cache::AccountFeatures::from_session(&client.session()).unwrap();
+            let link = Arc::new(AccountLink::without_refresh(client, features));
+            let loaded = Loaded {
+                delegates: vec![Delegate {
+                    principal_id: Id::new("P-bob"),
+                    calendar_level: CalendarDelegationLevel::Reviewer,
+                    address_book_level: AddressBookDelegationLevel::None,
+                    mail_level: MailDelegationLevel::None,
+                }],
+                offered: true,
+                labels: Default::default(),
+            };
+            // SAFETY: the window sinks the floating page and owns its only
+            // reference. Both idles run inside the dialog's nested loop.
+            unsafe {
+                let window = gtk_window_new(0);
+                let page = gtk_scrolled_window_new(ptr::null_mut(), ptr::null_mut());
+                build_widgets(page.cast());
+                apply_outcome(page.cast(), LoadOutcome::Loaded((link, loaded)));
+                // GObject frees qdata in finalize, not in dispose. A NULL value
+                // would remove the key, so the probe stores a dummy one.
+                g_object_set_data_full(
+                    page.cast(),
+                    c"probe".as_ptr(),
+                    page.cast(),
+                    Some(page_finalized),
+                );
+                gtk_container_add(window.cast(), page);
+                gtk_widget_show_all(window);
+                let view = state(page.cast()).unwrap().borrow().view;
+                let path = evo_sys::gtk_tree_path_new_from_indicesv([0].as_mut_ptr(), 1);
+                evo_sys::gtk_tree_view_set_cursor(view.cast(), path, ptr::null_mut(), GFALSE);
+                evo_sys::gtk_tree_path_free(path);
+
+                g_idle_add(Some(close_window), window.cast());
+                g_idle_add(Some(answer_ok), ptr::null_mut());
+                act(page.cast());
+            }
+            note("action returned");
+            Some(EVENTS.lock().unwrap().clone())
+        }
+
+        const KEPT_UNTIL_THE_ACTION_ENDS: [&str; 4] = [
+            "window destroyed",
+            "dialog answered",
+            "page finalized",
+            "action returned",
+        ];
+
+        #[test]
+        fn destroying_the_page_during_the_change_dialog_keeps_it_until_the_action_ends() {
+            crate::gtk_test_main::run(|| {
+                if let Some(events) = destroy_during_dialog(act_change) {
+                    assert_eq!(events, KEPT_UNTIL_THE_ACTION_ENDS);
+                }
+            });
+        }
+
+        #[test]
+        fn destroying_the_page_during_the_add_dialog_keeps_it_until_the_action_ends() {
+            unsafe fn add(page: *mut GObject) {
+                // SAFETY: the caller passes the live page.
+                unsafe { on_add(ptr::null_mut(), page.cast()) };
+            }
+            crate::gtk_test_main::run(|| {
+                if let Some(events) = destroy_during_dialog(add) {
+                    assert_eq!(events, KEPT_UNTIL_THE_ACTION_ENDS);
+                }
+            });
+        }
     }
 }
