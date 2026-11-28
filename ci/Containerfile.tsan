@@ -5,7 +5,7 @@
 # built with ThreadSanitizer. With it, ThreadSanitizer sees the locks of GLib,
 # Camel and EDS, and the FFI crates can run their tests under it.
 #
-# The versions are the ones that Ubuntu 24.04 ships. The build installs them
+# The versions are the ones that Ubuntu 26.04 ships. The build installs them
 # over the Ubuntu files, so every library that links GLib or EDS uses them.
 # clang compiles them, because rustc links the ThreadSanitizer runtime of
 # LLVM. A shared library that clang instruments contains no runtime. The test
@@ -18,10 +18,10 @@
 # Build the image once and keep it. A build takes about 15 minutes.
 #
 # Give "--security-opt seccomp=unconfined" to "podman run" too. The runtime of
-# clang 18 restarts the program with address randomization off. It calls
+# clang 21 restarts the program with address randomization off. It calls
 # personality(ADDR_NO_RANDOMIZE), and the default seccomp profile blocks it.
 
-ARG UBUNTU=docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+ARG UBUNTU=docker.io/library/ubuntu:26.04@sha256:0d5255be560e2d2ddcfbfda88549e9e815ef29e7cd7fc62183d5709e6e2963c6
 
 FROM ${UBUNTU} AS build
 
@@ -38,7 +38,7 @@ RUN apt-get update -q && apt-get install -y --no-install-recommends \
         bison \
         gettext \
         gperf \
-        libclang-rt-18-dev \
+        libclang-rt-21-dev \
         meson \
         ninja-build \
         pkg-config \
@@ -58,14 +58,15 @@ RUN apt-get update -q && apt-get install -y --no-install-recommends \
         libsoup-3.0-dev \
         libsqlite3-dev \
         libxml2-dev \
+        uuid-dev \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # The source tarballs, pinned by the SHA-256 that GNOME publishes.
-ARG GLIB_VERSION=2.80.0
-ARG GLIB_SHA256=8228a92f92a412160b139ae68b6345bd28f24434a7b5af150ebe21ff587a561d
-ARG EDS_VERSION=3.52.3
-ARG EDS_SHA256=e9f6c80c142033b1801bccaa6221c453de34ead4ea089b2086b19086f9a9c2e4
+ARG GLIB_VERSION=2.88.0
+ARG GLIB_SHA256=3546251ccbb3744d4bc4eb48354540e1f6200846572bab68e3a2b7b2b64dfd07
+ARG EDS_VERSION=3.56.2
+ARG EDS_SHA256=df4ec29950f29a76eac6fbe0f814c48d2cef7d3fdb905002a4a883dd761ce93c
 
 WORKDIR /src
 RUN curl -sSfLO "https://download.gnome.org/sources/glib/${GLIB_VERSION%.*}/glib-${GLIB_VERSION}.tar.xz" \
@@ -89,7 +90,7 @@ RUN meson setup glib-build "glib-${GLIB_VERSION}" \
         -Dmultiarch=true \
         -Dtests=false \
         -Dintrospection=disabled \
-        -Dman=false \
+        -Dman-pages=disabled \
         -Ddocumentation=false \
         -Dselinux=disabled \
         -Dlibelf=disabled \
@@ -151,7 +152,7 @@ RUN apt-get update -q && apt-get install -y --no-install-recommends \
         curl \
         git \
         libclang-dev \
-        libclang-rt-18-dev \
+        libclang-rt-21-dev \
         pkg-config \
         libglib2.0-dev \
         libgtk-3-dev \

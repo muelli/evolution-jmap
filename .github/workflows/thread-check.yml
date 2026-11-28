@@ -24,7 +24,7 @@ env:
 
 jobs:
   thread-check:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - run: ci/install-deps.sh
@@ -38,7 +38,7 @@ jobs:
   # help: GitHub removes a cache entry after 7 days without access, and the
   # job runs every 7 days. The hosted runner has rootless podman.
   thread-check-eds:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4

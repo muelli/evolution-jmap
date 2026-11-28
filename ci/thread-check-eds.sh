@@ -38,7 +38,7 @@ else
     packages=("${DEFAULT_PACKAGES[@]}")
 fi
 
-# The runtime of clang 18 turns address randomization off with personality().
+# The runtime of clang 21 turns address randomization off with personality().
 # The default seccomp profile of podman blocks that call.
 podman_args=(--security-opt seccomp=unconfined)
 
