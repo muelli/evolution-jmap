@@ -71,6 +71,11 @@ race_top:^camel_db_create_folders_table$
 # pooled string to free proves that the pool exists already.
 race_top:^camel_pstring_free$
 
+# Camel: cfs_schedule_info_release_timer reads CAMEL_FREE_INFOS into the
+# lazy statics know_can_do and can_do with no lock. Each thread holds the
+# lock of its own summary only. Every thread computes the same value.
+race_top:^cfs_schedule_info_release_timer$
+
 # Camel: the "loaded" flag has no lock. The tests call this from parallel
 # threads. Evolution and EDS call it once, on one thread.
 race_top:^camel_provider_init$
