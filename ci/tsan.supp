@@ -107,3 +107,7 @@ race:^camel_mktime_utc$
 # glibc: gmtime_r, called here, sets up its time zone state under the same
 # internal lock as mktime.
 race:^icaltime_from_timet_with_zone$
+
+# glibc: GLib 2.88 calls tzset for the time stamp of each log line. tzset
+# frees and copies the zone name under the same internal lock as mktime.
+race:^log_writer_format_fields_internal$
