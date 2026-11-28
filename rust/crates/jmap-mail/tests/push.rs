@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 
 use jmap_backend_core::push::PushRefresh;
 use jmap_client::eventsource::expand_url;
+use jmap_client::{Client, Credentials};
 use jmap_mail::store::JmapStore;
+use jmap_mail_sync::MailSync;
 use jmap_mock::MockServer;
 
 /// A subscription of the shape `JmapStore::start_push` makes, against
@@ -109,6 +111,35 @@ fn refreshing_the_push_headers_lets_a_stalled_subscription_reconnect() {
     )]);
 
     server.wait_for_event_source_subscriber(Duration::from_secs(5));
+}
+
+/// A token refresh can land after the new subscription copied the old header
+/// and before the store holds the subscription. The stored subscription must
+/// still send the new token.
+#[test]
+fn a_refresh_while_the_push_starts_reaches_the_new_push() {
+    let server = MockServer::builder().bearer_token("fresh-token").start();
+    let store = JmapStore::detached();
+    let client =
+        Client::connect(server.origin(), Credentials::bearer("fresh-token")).expect("connected");
+    store.store_connection(MailSync::new(client, server.account_id()));
+
+    let started = store.start_push_over_connection(|sync| {
+        // The subscription copied the header before the refresh.
+        let push = subscription(&server, "stale-token");
+        // The refresh of another thread: a new token, then its header.
+        sync.client()
+            .set_credentials(Credentials::bearer("fresh-token"));
+        store.refresh_push_headers(vec![(
+            "Authorization".to_owned(),
+            "Bearer fresh-token".to_owned(),
+        )]);
+        Some(push)
+    });
+
+    assert!(started, "the store did not keep the subscription");
+    server.wait_for_event_source_subscriber(Duration::from_secs(5));
+    assert!(store.stop_push());
 }
 
 /// A push that arrives at a store with no coalescing worker installed must be

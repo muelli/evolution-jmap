@@ -231,28 +231,59 @@ impl JmapStore {
             // below promises, and `dispatch` accepts exactly this type.
             unsafe { crate::push::dispatch(object, types) }
         };
-        let started = self.connection().and_then(|connection| {
-            let guard = read(connection);
-            guard.as_ref().and_then(|sync| {
-                // SAFETY: `store` is a valid GObject, referenced as above, and
-                // `action` accepts exactly this type.
-                unsafe {
-                    push::start_for_with(
-                        store.cast(),
-                        sync.client(),
-                        sync.account_id(),
-                        &watched,
-                        action,
-                    )
-                }
-            })
+        let started = self.start_push_over(|sync| {
+            // SAFETY: `store` is a valid GObject, referenced as above, and
+            // `action` accepts exactly this type.
+            unsafe {
+                push::start_for_with(
+                    store.cast(),
+                    sync.client(),
+                    sync.account_id(),
+                    &watched,
+                    action,
+                )
+            }
         });
 
-        if started.is_none() {
+        if !started {
             // Without a stream, nothing asks the worker for a pass.
             self.install_refresher(None);
         }
-        self.replace_push(started);
+    }
+
+    /// Calls `start` with the live connection and stores the subscription
+    /// that it returns. Tells if `start` returned a subscription.
+    #[cfg(feature = "testing")]
+    pub fn start_push_over_connection(
+        &self,
+        start: impl FnOnce(&MailSync) -> Option<PushRefresh>,
+    ) -> bool {
+        self.start_push_over(start)
+    }
+
+    /// Stores the subscription that `start` makes over the live connection.
+    /// Without a subscription, it stops the previous one.
+    fn start_push_over(&self, start: impl FnOnce(&MailSync) -> Option<PushRefresh>) -> bool {
+        let Some(slot) = self.push.get() else {
+            return false;
+        };
+        let guard = self.connection().map(read);
+        let sync = guard.as_ref().and_then(|guard| guard.as_ref());
+        let started = sync.and_then(|sync| start(sync));
+        let is_started = started.is_some();
+        let previous = {
+            let mut live = lock(slot);
+            if let (Some(push), Some(sync)) = (started.as_ref(), sync) {
+                // A refresh can install a new token after `start` copied the header.
+                // `refresh_push_headers` takes this lock, so read the header again under it.
+                push.set_headers(push::authorization_headers(sync.client()));
+            }
+            std::mem::replace(&mut *live, started)
+        };
+        drop(guard);
+        // Dropping the previous subscription joins its pump. Do it without the locks.
+        drop(previous);
+        is_started
     }
 
     /// Installs `push` as the live subscription, and stops and drops the
