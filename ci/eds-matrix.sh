@@ -7,7 +7,7 @@
 # CTest target runs, including the layout checks in eds-sys and evo-sys.
 # It runs that crate set against whatever EDS pkg-config resolves, inside
 # the container the script runs in.
-# The 3.52 leg is the existing build job's ctest run, on the pinned Ubuntu
+# The 3.56 leg is the existing build job's ctest run, on the Ubuntu 26.04
 # headers.
 # This script covers the other legs.
 # ci.yml's eds-version-matrix job invokes this script.

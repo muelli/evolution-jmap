@@ -33,7 +33,7 @@ env:
 
 jobs:
   checks:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,7 +45,7 @@ jobs:
       - run: ci/checks.sh
 
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,7 +65,7 @@ jobs:
           if-no-files-found: error
 
   reproducible:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - run: ci/reproducible.sh
@@ -75,7 +75,7 @@ jobs:
   # the same command a developer runs locally. Every push, like `build`:
   # nothing else here builds against Fedora's EDS or runs rpmlint.
   rpm:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -90,7 +90,7 @@ jobs:
   # a layer (EDS's own runtime) the other jobs do not touch.
   functional:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-functional-tests')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -110,7 +110,7 @@ jobs:
   # the rest of the suite, and worth spending deliberately.
   gui-smoke:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -145,7 +145,7 @@ jobs:
   # leave the module where Evolution never scans for it.
   gui-smoke-example-module:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -179,7 +179,7 @@ jobs:
   # window manager and D-Bus activation environment the other two jobs don't.
   gui-smoke-example-module-folder-popup:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -212,7 +212,7 @@ jobs:
   # jmap-mock's own request log rather than another AT-SPI read.
   gui-smoke-collection-populate-once:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -238,13 +238,13 @@ jobs:
           if-no-files-found: ignore
 
   # The gui-smoke job's assertion against a newer Evolution: the jobs above
-  # all run Ubuntu 24.04's 3.52, so a break that only a 3.60 shell shows
+  # all run Ubuntu 26.04's 3.56, so a break that only a 3.60 shell shows
   # would pass them. ci/gui-smoke-fedora.sh runs the same ci/gui-smoke.sh in
   # the pinned Fedora image (Evolution and EDS 3.60) under rootless podman,
   # the way the rpm job runs ci/rpm.sh. Gated like the other GUI jobs.
   gui-smoke-fedora:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -259,9 +259,9 @@ jobs:
           path: ${{ github.workspace }}/build-gui-smoke-fedora/artifacts
           if-no-files-found: ignore
 
-  # M10 (docs/eds-version-matrix.md): the pinned-3.52 leg is the `build`
+  # M10 (docs/eds-version-matrix.md): the Ubuntu 3.56 leg is the `build`
   # job above (ctest there already runs rust-test-eds, layout checks
-  # included, against the Ubuntu 24.04 headers ci/install-deps.sh pins).
+  # included, against the Ubuntu 26.04 headers ci/install-deps.sh installs).
   # This job is the *other* leg: a newer EDS, so an ABI/API drift becomes a
   # red check here instead of a silent runtime segfault later. Fedora's
   # current stable covers both "current stable" and "3.56+" in one
@@ -274,7 +274,7 @@ jobs:
   # every-push signal.
   eds-version-matrix:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-eds-version-matrix')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container: docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898
     continue-on-error: true
     steps:

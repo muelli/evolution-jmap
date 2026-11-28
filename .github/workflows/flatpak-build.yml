@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   flatpak-build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
       - name: Install flatpak and flatpak-builder
@@ -30,6 +30,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends flatpak flatpak-builder
           # bubblewrap needs unprivileged user namespaces, which Ubuntu
-          # 24.04's AppArmor policy restricts by default.
+          # 26.04's AppArmor policy restricts by default.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: ci/flatpak.sh

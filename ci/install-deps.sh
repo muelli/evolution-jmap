@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # This script is the one authoritative list of Evolution/EDS build
-# dependencies, for the 3.52 series.
+# dependencies, for Ubuntu 26.04 and its 3.56 series.
 # CI's build job uses this script.
 # This script is also the reference list for the runner VM and for the CI
 # container image.

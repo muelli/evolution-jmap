@@ -94,7 +94,7 @@ artifacts of a failed run go to `build-gui-smoke-fedora/artifacts`, or to
 
 The `gui-smoke` job in `.github/workflows/ci.yml`, the `gui-smoke-fedora` job
 and the three sibling jobs below run on `workflow_dispatch` or on a pull request with the label
-`run-gui-smoke-test`. They run on a plain `ubuntu-24.04` runner. They are
+`run-gui-smoke-test`. They run on a plain `ubuntu-26.04` runner. They are
 slower than the rest of the suite. They therefore do not run on every push.
 They are not in `.gitlab-ci.yml`.
 
